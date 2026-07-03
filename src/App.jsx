@@ -130,7 +130,122 @@ const T = { ink: "#EDF1F7", sub: "#9AA6BC", faint: "#5B6778", brass: "#C8A04A", 
 const PROPERTIES = [
   { name: "Clarify Paid Search", desc: "Boutique Google Ads agency", url: "https://clarifypaidsearch.com", app: "Clarify Command Center", appUrl: "https://coruscating-sundae-f0def3.netlify.app", color: "#B68A2E" },
   { name: "Zero To Secure", desc: "Premium seed phrase backup", url: "https://zerotosecure.com", app: "ZTS Command Center", appUrl: "https://zts-command-center.netlify.app", color: "#0E9F6E" },
+  { name: "Macro Command Center", desc: "Markets, portfolio, macro thesis", url: null, app: "Macro Command Center", appUrl: "https://macro-command-center.netlify.app/", color: "#3B82F6" },
 ];
+
+
+// ─── Right rail: Bitcoin ticker + calendar link ──────────────────────────────
+// Bitcoin price + a lightweight 30-min-interval sparkline. Uses CoinGecko's free,
+// no-key public API — market_chart with 1-day range returns ~5-min candles, which
+// we downsample to roughly 30-min points for a clean, fast sparkline.
+function useBitcoinPrice() {
+  const [state, setState] = useState({ price: null, changePct: null, points: [], loading: true, error: null });
+  useEffect(() => {
+    let alive = true;
+    const load = async () => {
+      try {
+        const [priceRes, chartRes] = await Promise.all([
+          fetch("https://api.coingecko.com/api/v3/simple/price?ids=bitcoin&vs_currencies=usd&include_24hr_change=true"),
+          fetch("https://api.coingecko.com/api/v3/coins/bitcoin/market_chart?vs_currency=usd&days=1"),
+        ]);
+        const priceData = await priceRes.json();
+        const chartData = await chartRes.json();
+        const raw = (chartData.prices || []).map(([ts, p]) => ({ ts, p }));
+        // Downsample to ~30min spacing (raw is ~5min candles over 24h ≈ 288 points → keep every 6th)
+        const step = Math.max(1, Math.floor(raw.length / 48));
+        const points = raw.filter((_, i) => i % step === 0).map(r => r.p);
+        if (alive) setState({ price: priceData.bitcoin?.usd ?? null, changePct: priceData.bitcoin?.usd_24h_change ?? null, points, loading: false, error: null });
+      } catch (e) {
+        if (alive) setState(s => ({ ...s, loading: false, error: "price feed unavailable" }));
+      }
+    };
+    load();
+    const iv = setInterval(load, 30 * 60 * 1000); // refresh on the same 30min cadence as the chart granularity
+    return () => { alive = false; clearInterval(iv); };
+  }, []);
+  return state;
+}
+
+function Sparkline({ points, color }) {
+  if (!points || points.length < 2) return <div style={{ height: "44px" }} />;
+  const min = Math.min(...points), max = Math.max(...points);
+  const range = max - min || 1;
+  const w = 260, h = 44;
+  const step = w / (points.length - 1);
+  const path = points.map((p, i) => `${i === 0 ? "M" : "L"} ${(i * step).toFixed(1)} ${(h - ((p - min) / range) * h).toFixed(1)}`).join(" ");
+  const areaPath = `${path} L ${w} ${h} L 0 ${h} Z`;
+  return (
+    <svg viewBox={`0 0 ${w} ${h}`} width="100%" height={h} preserveAspectRatio="none">
+      <path d={areaPath} fill={color} opacity="0.12" />
+      <path d={path} fill="none" stroke={color} strokeWidth="1.6" strokeLinejoin="round" strokeLinecap="round" />
+    </svg>
+  );
+}
+
+function RightRail() {
+  const btc = useBitcoinPrice();
+  const [calUrl, setCalUrl] = useState(() => sm.get("calendar_url") || "");
+  const [editingCal, setEditingCal] = useState(false);
+  const [tempUrl, setTempUrl] = useState(calUrl);
+  const up = (btc.changePct || 0) >= 0;
+  const changeColor = up ? T.green : "#F87171";
+
+  const saveCal = () => { sm.set("calendar_url", tempUrl.trim()); setCalUrl(tempUrl.trim()); setEditingCal(false); };
+
+  return (
+    <div style={{ borderLeft: `1px solid ${T.line}`, padding: "22px 18px", display: "flex", flexDirection: "column", gap: "18px", height: "100vh", position: "sticky", top: 0, overflowY: "auto" }}>
+      {/* Bitcoin widget */}
+      <div style={{ padding: "16px 17px", background: T.panel, border: `1px solid ${T.line}`, borderRadius: "14px" }}>
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "10px" }}>
+          <div style={{ display: "flex", alignItems: "center", gap: "7px" }}>
+            <span style={{ width: "16px", height: "16px", borderRadius: "50%", background: "linear-gradient(135deg, #F7931A, #C77416)", display: "inline-flex", alignItems: "center", justifyContent: "center", fontSize: "9px", fontWeight: 800, color: "#1A0F00" }}>₿</span>
+            <span style={{ fontSize: "11px", fontWeight: 700, fontFamily: syne, color: T.ink }}>Bitcoin</span>
+          </div>
+          <span style={{ fontSize: "9px", color: T.faint, fontFamily: mono }}>30m</span>
+        </div>
+        {btc.loading ? (
+          <div style={{ fontSize: "12px", color: T.faint, padding: "8px 0" }}>Loading price…</div>
+        ) : btc.error ? (
+          <div style={{ fontSize: "11px", color: T.faint, padding: "8px 0" }}>{btc.error}</div>
+        ) : (
+          <>
+            <div style={{ display: "flex", alignItems: "baseline", gap: "9px", marginBottom: "8px" }}>
+              <span style={{ fontSize: "21px", fontWeight: 600, color: T.ink, fontFamily: mono }}>${btc.price?.toLocaleString(undefined, { maximumFractionDigits: 0 })}</span>
+              <span style={{ fontSize: "11px", fontWeight: 700, color: changeColor, fontFamily: mono }}>{up ? "▲" : "▼"} {Math.abs(btc.changePct || 0).toFixed(2)}%</span>
+            </div>
+            <Sparkline points={btc.points} color={changeColor} />
+            <div style={{ fontSize: "9px", color: T.faint, marginTop: "6px" }}>24h · via CoinGecko</div>
+          </>
+        )}
+      </div>
+
+      {/* Calendar link */}
+      <div style={{ padding: "16px 17px", background: T.panel, border: `1px solid ${T.line}`, borderRadius: "14px" }}>
+        <div style={{ fontSize: "11px", fontWeight: 700, fontFamily: syne, color: T.ink, marginBottom: "10px" }}>Calendar</div>
+        {!editingCal ? (
+          calUrl ? (
+            <div style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
+              <a href={calUrl} target="_blank" rel="noopener" style={{ display: "block", padding: "10px 12px", background: "rgba(255,255,255,0.05)", border: `1px solid ${T.line}`, borderRadius: "9px", color: T.brass, fontSize: "12px", fontWeight: 700, textDecoration: "none", textAlign: "center" }}>Open Calendar ›</a>
+              <span onClick={() => { setTempUrl(calUrl); setEditingCal(true); }} style={{ fontSize: "10px", color: T.faint, cursor: "pointer", textAlign: "center" }}>change link</span>
+            </div>
+          ) : (
+            <button onClick={() => setEditingCal(true)} style={{ width: "100%", padding: "10px 12px", background: "rgba(255,255,255,0.04)", border: `1px dashed ${T.line}`, borderRadius: "9px", color: T.sub, fontSize: "11px", cursor: "pointer" }}>+ Link your calendar</button>
+          )
+        ) : (
+          <div style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
+            <input value={tempUrl} onChange={e => setTempUrl(e.target.value)} placeholder="paste your calendar share/embed URL"
+              style={{ width: "100%", padding: "9px 11px", background: "rgba(255,255,255,0.04)", border: `1px solid ${T.line}`, borderRadius: "8px", color: T.ink, fontSize: "11.5px" }} />
+            <div style={{ display: "flex", gap: "6px" }}>
+              <button onClick={saveCal} style={{ flex: 1, padding: "8px", background: "linear-gradient(135deg, #C8A04A, #8A6420)", border: "none", borderRadius: "8px", color: "#0D1322", fontSize: "11px", fontWeight: 800, cursor: "pointer", fontFamily: syne }}>Save</button>
+              <button onClick={() => setEditingCal(false)} style={{ padding: "8px 12px", background: "transparent", border: `1px solid ${T.line}`, borderRadius: "8px", color: T.sub, fontSize: "11px", cursor: "pointer" }}>Cancel</button>
+            </div>
+          </div>
+        )}
+        <div style={{ fontSize: "9px", color: T.faint, marginTop: "8px", lineHeight: 1.5 }}>Works with any share link — Google Calendar, iCloud public link, or a OneCalendar share URL.</div>
+      </div>
+    </div>
+  );
+}
 
 // ─── Main app — the chat, the roster, the hub ────────────────────────────────
 export default function App() {
@@ -159,7 +274,7 @@ export default function App() {
   const totalSpend = obs.all().reduce((s, l) => s + (l.cost || 0), 0);
 
   return (
-    <div style={{ minHeight: "100vh", display: "grid", gridTemplateColumns: "300px 1fr", color: T.ink }}>
+    <div style={{ minHeight: "100vh", display: "grid", gridTemplateColumns: "300px 1fr 300px", color: T.ink }}>
       {/* ── Left rail: the board + the hub ── */}
       <div style={{ borderRight: `1px solid ${T.line}`, padding: "22px 18px", display: "flex", flexDirection: "column", gap: "20px", overflowY: "auto", height: "100vh", position: "sticky", top: 0 }}>
         <div>
@@ -196,7 +311,7 @@ export default function App() {
                 <div style={{ fontSize: "12px", fontWeight: 700, fontFamily: syne, color: T.ink }}>{p.name}</div>
                 <div style={{ fontSize: "10px", color: T.faint, margin: "2px 0 7px" }}>{p.desc}</div>
                 <div style={{ display: "flex", gap: "10px" }}>
-                  <a href={p.url} target="_blank" rel="noopener" style={{ fontSize: "10px", color: p.color, fontWeight: 700, textDecoration: "none" }}>Site ›</a>
+                  {p.url && <a href={p.url} target="_blank" rel="noopener" style={{ fontSize: "10px", color: p.color, fontWeight: 700, textDecoration: "none" }}>Site ›</a>}
                   <a href={p.appUrl} target="_blank" rel="noopener" style={{ fontSize: "10px", color: T.sub, fontWeight: 600, textDecoration: "none" }}>Command Center ›</a>
                 </div>
               </div>
@@ -215,7 +330,8 @@ export default function App() {
 
       {/* ── Main: the conversation ── */}
       <div style={{ display: "flex", flexDirection: "column", height: "100vh" }}>
-        <div style={{ flex: 1, overflowY: "auto", padding: "28px 8%", display: "flex", flexDirection: "column", gap: "18px" }}>
+        <div style={{ flex: 1, overflowY: "auto", padding: "28px 24px", display: "flex", flexDirection: "column", gap: "18px", alignItems: "center" }}>
+          <div style={{ width: "100%", maxWidth: "640px", display: "flex", flexDirection: "column", gap: "18px" }}>
           {messages.length === 0 && (
             <div style={{ margin: "auto", textAlign: "center", maxWidth: "440px" }}>
               <div style={{ fontSize: "26px", fontWeight: 700, fontFamily: syne, marginBottom: "10px" }}>The room is yours.</div>
@@ -245,8 +361,10 @@ export default function App() {
             </div>
           )}
           <div ref={endRef} />
+          </div>
         </div>
-        <div style={{ padding: "16px 8% 22px", borderTop: `1px solid ${T.line}` }}>
+        <div style={{ padding: "16px 24px 22px", borderTop: `1px solid ${T.line}`, display: "flex", justifyContent: "center" }}>
+          <div style={{ width: "100%", maxWidth: "640px" }}>
           <div style={{ display: "flex", gap: "10px", background: T.panel, border: `1px solid ${T.line}`, borderRadius: "14px", padding: "6px 6px 6px 18px" }}>
             <textarea value={input} onChange={e => setInput(e.target.value)} onKeyDown={e => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(); } }}
               placeholder="Ask the Chief of Staff…" rows={1}
@@ -254,8 +372,11 @@ export default function App() {
             <button onClick={send} disabled={!!thinking || !input.trim()} style={{ padding: "0 20px", background: thinking || !input.trim() ? "rgba(255,255,255,0.05)" : "linear-gradient(135deg, #C8A04A, #8A6420)", border: "none", borderRadius: "10px", color: thinking || !input.trim() ? T.faint : "#0D1322", fontSize: "12px", fontWeight: 800, cursor: thinking ? "default" : "pointer", fontFamily: syne }}>Ask</button>
           </div>
           <div style={{ fontSize: "10px", color: T.faint, marginTop: "8px", textAlign: "center" }}>Smart routing: quick questions stay Chief-only (1 call); cross-cutting ones convene seats in parallel.</div>
+          </div>
         </div>
       </div>
+
+      <RightRail />
 
       {editSeat && <SeatNotesModal seatKey={editSeat} onClose={() => setEditSeat(null)} />}
     </div>
