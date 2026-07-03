@@ -128,9 +128,11 @@ const T = { ink: "#EDF1F7", sub: "#9AA6BC", faint: "#5B6778", brass: "#C8A04A", 
 
 // Your properties — the hub that links everything together.
 const PROPERTIES = [
-  { name: "Clarify Paid Search", desc: "Boutique Google Ads agency", url: "https://clarifypaidsearch.com", app: "Clarify Command Center", appUrl: "https://coruscating-sundae-f0def3.netlify.app", color: "#B68A2E" },
-  { name: "Zero To Secure", desc: "Premium seed phrase backup", url: "https://zerotosecure.com", app: "ZTS Command Center", appUrl: "https://zts-command-center.netlify.app", color: "#0E9F6E" },
-  { name: "Macro Command Center", desc: "Markets, portfolio, macro thesis", url: null, app: "Macro Command Center", appUrl: "https://macro-command-center.netlify.app/", color: "#3B82F6" },
+  { name: "Clarify Paid Search", desc: "Boutique Google Ads agency", url: "https://clarifypaidsearch.com", app: "Clarify Command Center", appUrl: "https://coruscating-sundae-f0def3.netlify.app", color: "#B68A2E", repo: "camcarp14/clarify-outreach" },
+  { name: "Clarify SaaS", desc: "Multi-tenant Google Ads auditing tool", url: "https://clarify-saas.netlify.app/", app: "Clarify SaaS", appUrl: "https://clarify-saas.netlify.app/", color: "#B68A2E", repo: null },
+  { name: "Zero To Secure", desc: "Premium seed phrase backup", url: "https://zerotosecure.com", app: "ZTS Command Center", appUrl: "https://zts-command-center.netlify.app", color: "#0E9F6E", repo: "camcarp14/zts-command-center" },
+  { name: "Macro Command Center", desc: "Markets, portfolio, macro thesis", url: null, app: "Macro Command Center", appUrl: "https://macro-command-center.netlify.app/", color: "#3B82F6", repo: null },
+  { name: "Board Room", desc: "This app", url: null, app: "Board Room", appUrl: "https://board-room.netlify.app", color: "#C8A04A", repo: "camcarp14/board-room" },
 ];
 
 
@@ -179,6 +181,93 @@ function Sparkline({ points, color }) {
       <path d={areaPath} fill={color} opacity="0.12" />
       <path d={path} fill="none" stroke={color} strokeWidth="1.6" strokeLinejoin="round" strokeLinecap="round" />
     </svg>
+  );
+}
+
+
+// ─── Site Auditor — toggleable cross-property review agent ───────────────────
+// Checks each property's live site (and repo README/package.json if known) for
+// concrete improvement opportunities. Manual "Run now" always works; the toggle
+// only controls whether it also re-runs itself automatically every 6h while a
+// tab is open (same browser-loop limitation as the other engines — not truly
+// always-on unless moved server-side later).
+async function auditProperty(p) {
+  try {
+    const res = await fetch("/.netlify/functions/audit", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name: p.name, url: p.url || p.appUrl, repo: p.repo }),
+    });
+    const data = await res.json();
+    return data.success ? data.findings : [];
+  } catch { return []; }
+}
+
+function AuditorPanel() {
+  const [enabled, setEnabled] = useState(() => sm.get("auditor_enabled") || false);
+  const [findings, setFindings] = useState(() => sm.get("auditor_findings") || []);
+  const [running, setRunning] = useState(false);
+  const [lastRun, setLastRun] = useState(() => sm.get("auditor_last_run") || null);
+
+  const runAll = async () => {
+    setRunning(true);
+    const results = [];
+    for (const p of PROPERTIES) {
+      const fs = await auditProperty(p);
+      fs.forEach(f => results.push({ ...f, property: p.name, color: p.color, ts: Date.now() }));
+    }
+    const next = [...results, ...findings].slice(0, 40);
+    setFindings(next); sm.set("auditor_findings", next);
+    const now = Date.now();
+    setLastRun(now); sm.set("auditor_last_run", now);
+    setRunning(false);
+  };
+
+  // Auto-cadence — only while enabled and a tab is open.
+  useEffect(() => {
+    if (!enabled) return;
+    const iv = setInterval(() => {
+      const last = sm.get("auditor_last_run") || 0;
+      if (Date.now() - last > 6 * 3600 * 1000) runAll();
+    }, 5 * 60 * 1000); // check every 5 min whether 6h has elapsed
+    return () => clearInterval(iv);
+  }, [enabled]);
+
+  const toggle = () => { const v = !enabled; setEnabled(v); sm.set("auditor_enabled", v); };
+  const sevColor = { high: "#F87171", medium: "#F59E0B", low: T.sub };
+  const ago = (ts) => { if (!ts) return "never"; const m = Math.floor((Date.now() - ts) / 60000); return m < 1 ? "just now" : m < 60 ? `${m}m ago` : `${Math.floor(m / 60)}h ago`; };
+
+  return (
+    <div style={{ padding: "16px 17px", background: T.panel, border: `1px solid ${T.line}`, borderRadius: "14px" }}>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "10px" }}>
+        <div style={{ fontSize: "11px", fontWeight: 700, fontFamily: syne, color: T.ink }}>Site Auditor</div>
+        <div onClick={toggle} style={{ width: "34px", height: "20px", borderRadius: "11px", background: enabled ? T.green : "rgba(255,255,255,0.12)", position: "relative", cursor: "pointer" }}>
+          <div style={{ position: "absolute", top: "2px", left: enabled ? "16px" : "2px", width: "16px", height: "16px", borderRadius: "50%", background: "#0D1322", transition: "left 0.15s" }} />
+        </div>
+      </div>
+      <div style={{ fontSize: "10px", color: T.faint, lineHeight: 1.5, marginBottom: "10px" }}>
+        {enabled ? "Auto-reviews every 6h (while this tab is open)" : "Off — reviews only when you run it"} · reviews every property's live site, and code context where a repo + GitHub token is available.
+      </div>
+      <button onClick={runAll} disabled={running} style={{ width: "100%", padding: "9px", background: running ? "rgba(255,255,255,0.05)" : "rgba(200,160,74,0.12)", border: `1px solid ${running ? T.line : "rgba(200,160,74,0.3)"}`, borderRadius: "9px", color: running ? T.faint : T.brass, fontSize: "11px", fontWeight: 700, cursor: running ? "default" : "pointer", fontFamily: syne, marginBottom: "10px" }}>
+        {running ? "Auditing all properties…" : "Run audit now"}
+      </button>
+      <div style={{ fontSize: "9px", color: T.faint, marginBottom: "10px" }}>Last run: {ago(lastRun)}</div>
+      {findings.length === 0 ? (
+        <div style={{ fontSize: "10px", color: T.faint, textAlign: "center", padding: "10px 0" }}>No findings yet.</div>
+      ) : (
+        <div style={{ display: "flex", flexDirection: "column", gap: "6px", maxHeight: "260px", overflowY: "auto" }}>
+          {findings.slice(0, 12).map((f, i) => (
+            <div key={i} style={{ padding: "8px 10px", background: "rgba(255,255,255,0.03)", borderRadius: "8px", borderLeft: `2px solid ${sevColor[f.severity] || T.sub}` }}>
+              <div style={{ display: "flex", justifyContent: "space-between", marginBottom: "3px" }}>
+                <span style={{ fontSize: "9px", fontWeight: 700, color: f.color, fontFamily: syne }}>{f.property}</span>
+                <span style={{ fontSize: "8px", color: sevColor[f.severity] || T.sub, fontWeight: 700, textTransform: "uppercase" }}>{f.severity}</span>
+              </div>
+              <div style={{ fontSize: "10.5px", color: T.ink, lineHeight: 1.5 }}>{f.finding}</div>
+              <div style={{ fontSize: "10px", color: T.sub, lineHeight: 1.5, marginTop: "3px", fontStyle: "italic" }}>→ {f.suggestion}</div>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
   );
 }
 
@@ -243,6 +332,8 @@ function RightRail() {
         )}
         <div style={{ fontSize: "9px", color: T.faint, marginTop: "8px", lineHeight: 1.5 }}>Works with any share link — Google Calendar, iCloud public link, or a OneCalendar share URL.</div>
       </div>
+
+      <AuditorPanel />
     </div>
   );
 }
@@ -331,7 +422,7 @@ export default function App() {
       {/* ── Main: the conversation ── */}
       <div style={{ display: "flex", flexDirection: "column", height: "100vh" }}>
         <div style={{ flex: 1, overflowY: "auto", padding: "28px 24px", display: "flex", flexDirection: "column", gap: "18px", alignItems: "center" }}>
-          <div style={{ width: "100%", maxWidth: "640px", display: "flex", flexDirection: "column", gap: "18px" }}>
+          <div style={{ width: "100%", maxWidth: "480px", display: "flex", flexDirection: "column", gap: "14px" }}>
           {messages.length === 0 && (
             <div style={{ margin: "auto", textAlign: "center", maxWidth: "440px" }}>
               <div style={{ fontSize: "26px", fontWeight: 700, fontFamily: syne, marginBottom: "10px" }}>The room is yours.</div>
@@ -344,7 +435,7 @@ export default function App() {
             </div>
           )}
           {messages.map((m, i) => (
-            <div key={i} style={{ alignSelf: m.role === "user" ? "flex-end" : "flex-start", maxWidth: "78%", animation: "fadein 0.2s ease both" }}>
+            <div key={i} style={{ alignSelf: m.role === "user" ? "flex-end" : "flex-start", maxWidth: "88%", animation: "fadein 0.2s ease both" }}>
               {m.role === "assistant" && (m.consulted || []).length > 0 && (
                 <div style={{ display: "flex", gap: "6px", marginBottom: "7px", flexWrap: "wrap" }}>
                   {m.consulted.map((c, j) => (
@@ -352,7 +443,7 @@ export default function App() {
                   ))}
                 </div>
               )}
-              <div style={{ padding: "13px 17px", borderRadius: m.role === "user" ? "16px 16px 4px 16px" : "16px 16px 16px 4px", background: m.role === "user" ? "linear-gradient(135deg, #C8A04A22, #B68A2E15)" : T.panel, border: `1px solid ${m.role === "user" ? "rgba(200,160,74,0.3)" : T.line}`, fontSize: "13.5px", lineHeight: 1.65, whiteSpace: "pre-wrap", color: T.ink }}>{m.content}</div>
+              <div style={{ padding: "10px 14px", borderRadius: m.role === "user" ? "16px 16px 4px 16px" : "16px 16px 16px 4px", background: m.role === "user" ? "linear-gradient(135deg, #C8A04A22, #B68A2E15)" : T.panel, border: `1px solid ${m.role === "user" ? "rgba(200,160,74,0.3)" : T.line}`, fontSize: "13px", lineHeight: 1.6, whiteSpace: "pre-wrap", color: T.ink }}>{m.content}</div>
             </div>
           ))}
           {thinking && (
@@ -364,7 +455,7 @@ export default function App() {
           </div>
         </div>
         <div style={{ padding: "16px 24px 22px", borderTop: `1px solid ${T.line}`, display: "flex", justifyContent: "center" }}>
-          <div style={{ width: "100%", maxWidth: "640px" }}>
+          <div style={{ width: "100%", maxWidth: "480px" }}>
           <div style={{ display: "flex", gap: "10px", background: T.panel, border: `1px solid ${T.line}`, borderRadius: "14px", padding: "6px 6px 6px 18px" }}>
             <textarea value={input} onChange={e => setInput(e.target.value)} onKeyDown={e => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(); } }}
               placeholder="Ask the Chief of Staff…" rows={1}
