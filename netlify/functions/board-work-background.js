@@ -1,7 +1,10 @@
-// Background worker ("-background" suffix = Netlify gives it up to 15 minutes).
-// Runs the full board convening server-side, then edits Discord's deferred message.
-// Env: ANTHROPIC_API_KEY. Board charters are duplicated here so the function is
-// self-contained (serverless functions can't import from src/).
+// Background worker ("-background" = Netlify allows up to 15 minutes).
+// Phase 1 upgrade: shares ONE memory with the web app via Supabase.
+// Reads Cameron's seat notes + recent chat history before answering, and writes
+// the exchange back — so /board in Discord and the web chat are one continuous mind.
+// Env: ANTHROPIC_API_KEY (required)
+//      SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, BOARD_USER_ID (memory — server-side
+//      ONLY; the service-role key bypasses RLS and must never reach any client)
 
 const HAIKU = "claude-haiku-4-5-20251001";
 
@@ -24,10 +27,49 @@ async function claude(system, userContent, maxTokens = 700) {
   return data.content?.map(b => b.type === "text" ? b.text : "").join("") || "";
 }
 
+// Minimal Supabase REST helper using the service-role key (bypasses RLS by design).
+function sbConfig() {
+  const { SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, BOARD_USER_ID } = process.env;
+  if (!SUPABASE_URL || !SUPABASE_SERVICE_ROLE_KEY || !BOARD_USER_ID) return null;
+  return { url: SUPABASE_URL.replace(/\/$/, ""), key: SUPABASE_SERVICE_ROLE_KEY, uid: BOARD_USER_ID };
+}
+async function sbGet(cfg, path) {
+  const res = await fetch(`${cfg.url}/rest/v1/${path}`, { headers: { apikey: cfg.key, Authorization: `Bearer ${cfg.key}` } });
+  if (!res.ok) return null;
+  return res.json();
+}
+async function sbInsert(cfg, table, rows) {
+  try {
+    await fetch(`${cfg.url}/rest/v1/${table}`, {
+      method: "POST",
+      headers: { apikey: cfg.key, Authorization: `Bearer ${cfg.key}`, "Content-Type": "application/json", Prefer: "return=minimal" },
+      body: JSON.stringify(rows),
+    });
+  } catch {}
+}
+
 export default async (req) => {
   const { question, application_id, token } = await req.json();
   let answer;
+  const cfg = sbConfig();
+  let memoryOn = !!cfg;
+
   try {
+    // 0. Pull shared memory: seat notes + recent conversation (web + discord).
+    let seatNotes = {};
+    let historyBlock = "";
+    if (cfg) {
+      try {
+        const [notes, recent] = await Promise.all([
+          sbGet(cfg, `seat_notes?user_id=eq.${cfg.uid}&select=seat_key,notes`),
+          sbGet(cfg, `chat_messages?user_id=eq.${cfg.uid}&select=role,content&order=created_at.desc&limit=8`),
+        ]);
+        (notes || []).forEach(n => { if (n.notes) seatNotes[n.seat_key] = n.notes; });
+        const hist = (recent || []).reverse();
+        if (hist.length) historyBlock = `\n\nRecent conversation (web + Discord, oldest first):\n${hist.map(m => `${m.role === "user" ? "Cameron" : "You"}: ${String(m.content).slice(0, 300)}`).join("\n")}`;
+      } catch { memoryOn = false; }
+    }
+
     // 1. Route
     const routeRaw = await claude(
       `You are a router. Seats: ${BOARD.map(b => `${b.key}: ${b.domains}`).join("; ")}. Respond ONLY JSON: {"seats":["key",...]}. 0 seats if the Chief alone suffices; fewer is better.`,
@@ -36,25 +78,35 @@ export default async (req) => {
     let seats = [];
     try { seats = (JSON.parse(routeRaw.replace(/```json|```/g, "").trim()).seats || []).filter(k => BOARD.some(b => b.key === k)); } catch {}
 
-    // 2. Fan out in parallel
+    // 2. Fan out in parallel — each seat gets its Supabase context notes.
     const takes = await Promise.all(seats.map(async (k) => {
       const seat = BOARD.find(b => b.key === k);
-      const take = await claude(`${seat.charter}\nGive your seat's take to the Chief of Staff: 2-4 sentences, include disagreement or risk. No preamble.`, question, 250);
+      const notes = seatNotes[k] ? `\n\nCurrent context from Cameron (treat as ground truth):\n${seatNotes[k]}` : "";
+      const take = await claude(`${seat.charter}${notes}\nGive your seat's take to the Chief of Staff: 2-4 sentences, include disagreement or risk. No preamble.`, question, 250);
       return take ? `[${seat.name}]: ${take}` : null;
     }));
     const board = takes.filter(Boolean).join("\n\n");
 
-    // 3. Synthesize
+    // 3. Synthesize with shared history.
     answer = await claude(
-      CHIEF + (board ? `\n\nBoard takes:\n${board}\n\nSynthesize with attribution; surface conflicts; end with YOUR recommendation.` : ""),
+      CHIEF + historyBlock + (board ? `\n\nBoard takes:\n${board}\n\nSynthesize with attribution; surface conflicts; end with YOUR recommendation.` : ""),
       question, 600
     );
     if (seats.length) answer = `*Consulted: ${seats.map(k => BOARD.find(b => b.key === k).name).join(", ")}*\n\n${answer}`;
+    if (!memoryOn) answer += "\n\n*⚠ memory not connected — set SUPABASE_URL / SUPABASE_SERVICE_ROLE_KEY / BOARD_USER_ID*";
+
+    // 4. Write the exchange back to the shared mind.
+    if (cfg && answer) {
+      await sbInsert(cfg, "chat_messages", [
+        { user_id: cfg.uid, role: "user", content: question, source: "discord" },
+        { user_id: cfg.uid, role: "assistant", content: answer, consulted_seats: seats.map(k => { const s = BOARD.find(b => b.key === k); return { seat: s.key, name: s.name }; }), source: "discord" },
+      ]);
+    }
   } catch (e) {
     answer = `The board couldn't convene: ${e.message}`;
   }
 
-  // 4. Edit the deferred Discord message
+  // 5. Edit the deferred Discord message.
   await fetch(`https://discord.com/api/v10/webhooks/${application_id}/${token}/messages/@original`, {
     method: "PATCH",
     headers: { "Content-Type": "application/json" },
