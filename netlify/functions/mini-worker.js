@@ -1,24 +1,22 @@
 // Mini Me worker — the real engine behind the Mini Me page.
-// Runs: (1) scheduled nightly via netlify.toml (09:00 UTC ≈ 3–4 AM Chicago)
-// for users with the master switch on, or (2) on demand via the page's
-// buttons (run / approve / reject), authenticated with the user's Supabase
-// session token.
+// On-demand only: runs when the user hits "Run queue now", "Approve", or
+// "Reject" — nothing fires on a schedule. Authenticated with the user's
+// Supabase session token.
 //
 // Real, working controls (all read from the user's `mini` setting):
-//   enabled     - master on/off. Off means the worker skips this user
-//                 entirely, in both scheduled AND on-demand runs.
-//   night       - include this user in the nightly scheduled batch
-//                 (separate from the master switch, so you can run manually
-//                 without opting into unattended nightly runs).
+//   enabled     - master on/off. Off means Run now refuses to do anything.
 //   model       - which Claude model generates + critiques each task.
 //   budget      - caps tasks processed per run ($1->1, $3->3, $10->8).
+//   directive   - one-line mission, synthesized from the directive chat on
+//                 the page — read before every task, takes priority over role.
+//   role        - the identity/expertise Mini Me should adopt, set directly.
 //   reflectOn   - after generating a draft, Mini Me critiques its own work
 //                 and revises if the critique finds gaps.
 //   loopOn      - allow more than one critique/revise cycle (bounded by
 //                 loopMax); off means exactly one critique pass.
 //   loopMax     - hard ceiling on critique/revise cycles for loopOn.
 //   approvalOn  - finished drafts land in "review" instead of "delivered"
-//                 until the user taps Approve; XP only counts delivered work.
+//                 until the user taps Approve.
 // Needs: ANTHROPIC_API_KEY, SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY.
 const json = (code, body) => ({ statusCode: code, headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
 
@@ -62,9 +60,9 @@ async function claudeCall(cfg, modelKey, system, user, maxTokens, userId) {
 }
 
 async function loadUserBundle(cfg, userId) {
-  const res = await rest(cfg, `app_settings?user_id=eq.${userId}&setting_key=in.(mini,mini_tasks,mini_skills)&select=setting_key,setting_value`, { headers: { Prefer: "" } });
+  const res = await rest(cfg, `app_settings?user_id=eq.${userId}&setting_key=in.(mini,mini_tasks)&select=setting_key,setting_value`, { headers: { Prefer: "" } });
   const rows = await res.json();
-  const out = { mini: {}, mini_tasks: [], mini_skills: [] };
+  const out = { mini: {}, mini_tasks: [] };
   (Array.isArray(rows) ? rows : []).forEach(r => { out[r.setting_key] = r.setting_value; });
   return out;
 }
@@ -77,7 +75,8 @@ async function saveTasks(cfg, userId, tasks) {
 
 // The real agentic loop: generate, then optionally critique-and-revise up to
 // loopMax times. Stops early on an explicit DONE or two consecutive
-// no-change revisions.
+// no-change revisions. This is the "think longer" knob — Thorough effort
+// (loopOn + a higher Max passes) makes it iterate more before delivering.
 async function runTask(cfg, mini, system, taskText, userId) {
   const reflect = mini.reflectOn !== false;
   const loop = mini.loopOn !== false;
@@ -106,11 +105,10 @@ Otherwise, reply with ONLY the complete revised draft (no commentary, no prefix)
   return { draft, loops, outTok };
 }
 
-async function processUser(cfg, userId, { manual = false } = {}) {
+async function processUser(cfg, userId) {
   const bundle = await loadUserBundle(cfg, userId);
-  const mini = { model: "haiku", budget: "$3", enabled: true, night: true, reflectOn: true, loopOn: true, loopMax: "5", approvalOn: true, ...(bundle.mini || {}) };
+  const mini = { model: "haiku", budget: "$3", enabled: true, reflectOn: true, loopOn: true, loopMax: "5", approvalOn: true, ...(bundle.mini || {}) };
   if (mini.enabled === false) return { userId, processed: 0, skipped: "Mini Me is off" };
-  if (!manual && mini.night === false) return { userId, processed: 0, skipped: "nightly runs off for this user" };
 
   const tasks = (Array.isArray(bundle.mini_tasks) ? bundle.mini_tasks : []).map(t => t.id ? t : { ...t, id: t.id || `${Date.now()}-${Math.random().toString(36).slice(2, 8)}` });
   const queuedIdx = tasks.map((t, i) => (t.status === "queued" ? i : -1)).filter(i => i >= 0);
@@ -118,9 +116,9 @@ async function processUser(cfg, userId, { manual = false } = {}) {
 
   const limit = BUDGET_TASK_LIMIT[mini.budget] || 3;
   const toRun = queuedIdx.slice(0, limit);
-  const skillNotes = (Array.isArray(bundle.mini_skills) ? bundle.mini_skills : []).filter(s => s.note).map(s => `- ${s.name}: ${s.note}`).join("\n");
   const directive = (mini.directive || "").trim();
-  const system = `You are "Mini Me", the user's autonomous assistant inside their Board Room app. Produce the requested deliverable directly and completely — concrete and usable, no preamble, no clarifying questions (make reasonable assumptions and state them briefly at the end if needed).${directive ? `\n\nYour prime directive — this is the overall mission, weigh every task against it: ${directive}` : ""}${skillNotes ? `\n\nStanding guidance from the user:\n${skillNotes}` : ""}`;
+  const role = (mini.role || "").trim();
+  const system = `You are "Mini Me", the user's autonomous assistant inside their Board Room app.${role ? ` Your role: ${role}` : ""} Produce the requested deliverable directly and completely — concrete and usable, no preamble, no clarifying questions (make reasonable assumptions and state them briefly at the end if needed).${directive ? `\n\nYour prime directive — this is the overall mission, weigh every task against it: ${directive}` : ""}`;
 
   const feedRows = [];
   let processed = 0;
@@ -168,19 +166,7 @@ exports.handler = async (event) => {
   if (body.ping) return json(200, { success: true, service: "mini-worker", configured, missing: configured ? undefined : "ANTHROPIC_API_KEY / SUPABASE_URL / SUPABASE_SERVICE_ROLE_KEY" });
   if (!configured) return json(500, { success: false, error: "worker env vars not set" });
 
-  const isScheduled = !!body.next_run;
-
   try {
-    if (isScheduled) {
-      const res = await rest(cfg, "app_settings?setting_key=eq.mini_tasks&select=user_id", { headers: { Prefer: "" } });
-      const rows = await res.json();
-      const userIds = [...new Set((Array.isArray(rows) ? rows : []).map(r => r.user_id))];
-      const results = [];
-      for (const uid of userIds) results.push(await processUser(cfg, uid));
-      const total = results.reduce((s, r) => s + r.processed, 0);
-      return json(200, { success: true, scheduled: true, users: userIds.length, processed: total });
-    }
-
     const auth = event.headers?.authorization || event.headers?.Authorization || "";
     const token = auth.startsWith("Bearer ") ? auth.slice(7) : null;
     if (!token) return json(401, { success: false, error: "sign-in token required" });
@@ -192,7 +178,7 @@ exports.handler = async (event) => {
       return json(result.success ? 200 : 404, result);
     }
 
-    const result = await processUser(cfg, userId, { manual: true });
+    const result = await processUser(cfg, userId);
     return json(200, { success: true, processed: result.processed, message: result.skipped || `processed ${result.processed} task(s)` });
   } catch (e) {
     return json(502, { success: false, error: e.message });

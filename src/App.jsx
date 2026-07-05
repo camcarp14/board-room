@@ -1374,41 +1374,38 @@ function SystemsPage({ settings, updateSetting, session, btc, isMobile }) {
 
 // ─── Page: Mini Me ───────────────────────────────────────────────────────────
 const MINI_DEFAULTS = {
-  model: "haiku", enabled: true, night: true, budget: "$3", oversight: true,
-  directive: "", reflectOn: true, loopOn: true, loopMax: "5", approvalOn: true,
+  model: "haiku", enabled: true, budget: "$3", oversight: true,
+  directive: "", directiveLog: [], role: "",
+  reflectOn: true, loopOn: true, loopMax: "5", approvalOn: true,
 };
 const TASK_COLORS = { delivered: T.green, review: T.brass, queued: T.faint, failed: T.red };
-const MINI_LEVELS = ["Rookie", "Apprentice", "Operator", "Right Hand", "Shadow Chief"];
 const EFFORT_LEVELS = [
   { key: "quick", label: "Quick", desc: "One shot, no self-review — fastest and cheapest." },
   { key: "careful", label: "Careful", desc: "Reviews its own draft once before delivering." },
-  { key: "thorough", label: "Thorough", desc: "Keeps refining until satisfied, up to the pass limit." },
+  { key: "thorough", label: "Thorough", desc: "Keeps refining until satisfied, up to the pass limit — this is how you make it think longer on something." },
 ];
 
-// Mini Me is now real: a scheduled Netlify worker (mini-worker) runs the
-// queue through Claude nightly (or on demand), writes deliverables onto
-// tasks, and logs to mini_feed. Everything below reads actual activity.
+// Mini Me is now real: on-demand only — you queue work and hit Run, nothing
+// fires on a schedule. The worker (mini-worker) runs Claude against the
+// queue, writes deliverables onto tasks, and logs to mini_feed.
 function MiniMePage({ settings, updateSetting, session, onWorkerRun, isMobile }) {
   const mini = { ...MINI_DEFAULTS, ...(settings?.mini || {}) };
   const setMini = (patch) => updateSetting("mini", { ...mini, ...patch });
-  const skills = settings?.mini_skills || [];
-  const setSkills = (list) => updateSetting("mini_skills", list);
   const tasks = settings?.mini_tasks || [];
   const setTasks = (list) => updateSetting("mini_tasks", list);
 
   const [taskInput, setTaskInput] = useState("");
-  const [skillInput, setSkillInput] = useState("");
-  const [tuneIdx, setTuneIdx] = useState(null);
-  const [tuneDraft, setTuneDraft] = useState("");
   const [feed, setFeed] = useState(null); // null = loading
-  const [memCount, setMemCount] = useState(null);
   const [worker, setWorker] = useState({ state: "checking" });
   const [running, setRunning] = useState(false);
   const [runMsg, setRunMsg] = useState(null);
   const [openTask, setOpenTask] = useState(null);
   const [showCompleted, setShowCompleted] = useState(false);
-  const [editingDirective, setEditingDirective] = useState(false);
-  const [directiveDraft, setDirectiveDraft] = useState("");
+  const [editingRole, setEditingRole] = useState(false);
+  const [roleDraft, setRoleDraft] = useState("");
+  const [directiveInput, setDirectiveInput] = useState("");
+  const [directiveSending, setDirectiveSending] = useState(false);
+  const directiveEndRef = useRef(null);
 
   const loadFeed = async () => {
     try {
@@ -1421,7 +1418,6 @@ function MiniMePage({ settings, updateSetting, session, onWorkerRun, isMobile })
   useEffect(() => {
     let alive = true;
     loadFeed();
-    supabase.from("chat_messages").select("*", { count: "exact", head: true }).then(({ count }) => { if (alive) setMemCount(count ?? 0); });
     pingFn("mini-worker").then(p => {
       if (!alive) return;
       setWorker(p.status === "ok" ? { state: "ok" } : p.status === "warn" ? { state: "noenv", detail: p.detail } : { state: "off", detail: p.detail });
@@ -1429,14 +1425,12 @@ function MiniMePage({ settings, updateSetting, session, onWorkerRun, isMobile })
     return () => { alive = false; };
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
+  useEffect(() => { directiveEndRef.current?.scrollIntoView({ block: "nearest" }); }, [mini.directiveLog?.length]);
+
   const delivered = tasks.filter(t => t.status === "delivered");
   const active = tasks.filter(t => t.status !== "delivered");
-  const xp = delivered.length * 40 + Math.min(memCount || 0, 600) + skills.filter(s => s.note).length * 15;
-  const levelIdx = Math.min(MINI_LEVELS.length - 1, Math.floor(xp / 250));
-  const xpInLevel = xp - levelIdx * 250;
 
   const addTask = () => { const t = taskInput.trim(); if (!t) return; setTasks([{ id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`, text: t, status: "queued", queued_at: Date.now() }, ...tasks]); setTaskInput(""); };
-  const addSkill = () => { const t = skillInput.trim(); if (!t) return; setSkills([{ name: t, note: "" }, ...skills]); setSkillInput(""); };
   const removeTask = (id) => setTasks(tasks.filter(t => t.id !== id));
 
   const callWorker = async (payload) => {
@@ -1474,6 +1468,23 @@ function MiniMePage({ settings, updateSetting, session, onWorkerRun, isMobile })
     await loadFeed();
     await onWorkerRun?.();
     setRunning(false);
+  };
+
+  // Prime Directive is never typed directly — you talk to it, and Claude
+  // synthesizes the updated one-line mission from the conversation.
+  const sendDirectiveUpdate = async () => {
+    const msg = directiveInput.trim();
+    if (!msg || directiveSending) return;
+    setDirectiveInput("");
+    setDirectiveSending(true);
+    const log = mini.directiveLog || [];
+    const recent = log.slice(-6).map(l => `${l.role === "user" ? "Cameron" : "Directive"}: ${l.text}`).join("\n");
+    const system = `You maintain a single one-sentence "prime directive" for Cameron's autonomous assistant, Mini Me — this directive shapes every task it works on. Current directive: "${mini.directive || "none set yet"}"${recent ? `\n\nRecent conversation:\n${recent}` : ""}\n\nCameron just said: "${msg}"\n\nOutput ONLY the updated directive as one concise sentence — no preamble, no quotes, no chat reply. Fold his new input into the existing direction; refine or replace as appropriate.`;
+    const updated = await callClaude({ system, messages: [{ role: "user", content: msg }], modelKey: mini.model || "haiku", maxTokens: 100, fn: "directive_update" });
+    const clean = (updated || "").trim().replace(/^"|"$/g, "");
+    const newLog = [...log, { role: "user", text: msg, ts: Date.now() }, { role: "system", text: clean || "Couldn't update — try again", ts: Date.now() }].slice(-20);
+    setMini({ directive: clean || mini.directive, directiveLog: newLog });
+    setDirectiveSending(false);
   };
 
   const card = isMobile ? S.cardM : S.card;
@@ -1517,203 +1528,188 @@ function MiniMePage({ settings, updateSetting, session, onWorkerRun, isMobile })
     );
   };
 
+  const col = { display: "flex", flexDirection: "column", gap: isMobile ? 12 : 14 };
+
   return (
     <div style={{ flex: 1, overflowY: "auto", padding: isMobile ? "18px 16px 24px" : "30px 34px 40px" }}>
       <div style={{ maxWidth: 1020, margin: "0 auto", display: "grid", gridTemplateColumns: isMobile ? "1fr" : "1.3fr 1fr", gap: isMobile ? 12 : 14, alignItems: "start" }}>
 
-        {/* Hero — real numbers + prime directive */}
-        <div style={{ ...card, background: "linear-gradient(135deg,rgba(143,107,30,0.08),rgba(49,88,156,0.04))", border: "1px solid rgba(143,107,30,0.22)" }}>
-          <div style={{ display: "flex", alignItems: "center", gap: 16, marginBottom: 14 }}>
-            <span style={{ width: isMobile ? 48 : 56, height: isMobile ? 48 : 56, borderRadius: "50%", background: `linear-gradient(135deg, ${T.brass}, ${T.brassDeep})`, display: "inline-flex", alignItems: "center", justifyContent: "center", flex: "none", animation: "breathe 3.2s ease-in-out infinite" }}>
-              <span style={{ width: 22, height: 22, borderRadius: "50%", background: T.bg, display: "inline-flex", alignItems: "center", justifyContent: "center" }}>
-                <span style={{ width: 7, height: 7, borderRadius: "50%", background: T.brass, animation: "pulse 2.4s infinite" }} />
+        {/* Left column: identity, then the actual work surface */}
+        <div style={col}>
+
+          {/* Hero — identity, directive, role. No XP/level — just what it is and what it's doing. */}
+          <div style={{ ...card, background: "linear-gradient(135deg,rgba(143,107,30,0.08),rgba(49,88,156,0.04))", border: "1px solid rgba(143,107,30,0.22)" }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 16, marginBottom: 14 }}>
+              <span style={{ width: isMobile ? 48 : 56, height: isMobile ? 48 : 56, borderRadius: "50%", background: `linear-gradient(135deg, ${T.brass}, ${T.brassDeep})`, display: "inline-flex", alignItems: "center", justifyContent: "center", flex: "none", animation: "breathe 3.2s ease-in-out infinite" }}>
+                <span style={{ width: 22, height: 22, borderRadius: "50%", background: T.bg, display: "inline-flex", alignItems: "center", justifyContent: "center" }}>
+                  <span style={{ width: 7, height: 7, borderRadius: "50%", background: T.brass, animation: "pulse 2.4s infinite" }} />
+                </span>
               </span>
-            </span>
-            <span style={{ display: "flex", flexDirection: "column", gap: 3, flex: 1 }}>
-              <span style={{ display: "flex", alignItems: "baseline", gap: 10, flexWrap: "wrap" }}>
-                <span style={{ fontSize: 19, fontWeight: 700, fontFamily: syne, color: T.ink }}>Mini Me</span>
-                <span style={{ fontSize: 9, color: mini.enabled === false ? T.faint : pillColor, fontFamily: mono, letterSpacing: "0.08em" }}>{mini.enabled === false ? "○ OFF" : pillText}</span>
+              <span style={{ display: "flex", flexDirection: "column", gap: 3, flex: 1 }}>
+                <span style={{ display: "flex", alignItems: "baseline", gap: 10, flexWrap: "wrap" }}>
+                  <span style={{ fontSize: 19, fontWeight: 700, fontFamily: syne, color: T.ink }}>Mini Me</span>
+                  <span style={{ fontSize: 9, color: mini.enabled === false ? T.faint : pillColor, fontFamily: mono, letterSpacing: "0.08em" }}>{mini.enabled === false ? "○ OFF" : pillText}</span>
+                </span>
+                <span style={{ fontSize: 11, color: T.sub, lineHeight: 1.5 }}>Queue work below, set the dial, hit Run — nothing happens until you say so.</span>
+                {worker.state !== "ok" && worker.state !== "checking" && mini.enabled !== false && <span style={{ fontSize: 10, color: T.amber, lineHeight: 1.5 }}>{worker.detail}</span>}
               </span>
-              <span style={{ fontSize: 11, color: T.sub, lineHeight: 1.5 }}>Queue work below and it runs through Claude nightly around 3 AM CT — or hit Run now.</span>
-              {worker.state !== "ok" && worker.state !== "checking" && mini.enabled !== false && <span style={{ fontSize: 10, color: T.amber, lineHeight: 1.5 }}>{worker.detail}</span>}
-            </span>
-            <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 5, flex: "none" }}>
-              <Toggle on={mini.enabled !== false} onToggle={() => setMini({ enabled: mini.enabled === false })} size={isMobile ? 26 : 22} />
-              <span style={{ fontSize: 8, fontWeight: 700, color: mini.enabled === false ? T.faint : T.green, fontFamily: mono, letterSpacing: "0.06em" }}>{mini.enabled === false ? "OFF" : "ON"}</span>
-            </div>
-          </div>
-          {mini.enabled === false && <div style={{ ...S.inner, padding: "10px 13px", marginBottom: 14, fontSize: 10.5, color: T.faint, lineHeight: 1.5 }}>Mini Me is off — it won't touch your queue tonight or if you tap Run now. Flip it back on above when you want it working again.</div>}
-
-          {/* Prime directive — the one thing that shapes every task, not just the queue */}
-          <div style={{ marginBottom: 14 }}>
-            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 6 }}>
-              <span style={{ fontSize: 9.5, fontWeight: 700, color: T.brass, textTransform: "uppercase", letterSpacing: "0.1em", fontFamily: syne }}>Prime Directive</span>
-              {!editingDirective && <button onClick={() => { setDirectiveDraft(mini.directive || ""); setEditingDirective(true); }} style={{ ...S.ghostBtn, padding: "4px 11px", fontSize: 9, borderRadius: 7 }}>{mini.directive ? "Edit" : "Set one"}</button>}
-            </div>
-            {editingDirective ? (
-              <div style={{ display: "flex", flexDirection: "column", gap: 7 }}>
-                <textarea value={directiveDraft} onChange={e => setDirectiveDraft(e.target.value)} rows={2} autoFocus placeholder="e.g. Grow Clarify's outreach pipeline — prioritize that over admin busywork"
-                  style={{ ...S.input, padding: "10px 12px", fontSize: 12, lineHeight: 1.5, resize: "vertical", fontFamily: "inherit" }} />
-                <div style={{ display: "flex", gap: 7 }}>
-                  <button onClick={() => { setMini({ directive: directiveDraft.trim() }); setEditingDirective(false); }} style={{ ...S.brassBtn, flex: 1, padding: "8px 0", fontSize: 10.5 }}>Save</button>
-                  <button onClick={() => setEditingDirective(false)} style={{ flex: "none", padding: "8px 16px", background: "transparent", border: `1px solid rgba(34,29,20,0.12)`, borderRadius: 10, color: T.sub, fontSize: 10.5, fontWeight: 600, cursor: "pointer" }}>Cancel</button>
-                </div>
+              <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 5, flex: "none" }}>
+                <Toggle on={mini.enabled !== false} onToggle={() => setMini({ enabled: mini.enabled === false })} size={isMobile ? 26 : 22} />
+                <span style={{ fontSize: 8, fontWeight: 700, color: mini.enabled === false ? T.faint : T.green, fontFamily: mono, letterSpacing: "0.06em" }}>{mini.enabled === false ? "OFF" : "ON"}</span>
               </div>
-            ) : mini.directive ? (
-              <div style={{ ...S.inner, padding: "11px 13px", fontSize: 12, color: T.ink, lineHeight: 1.55, fontStyle: "italic" }}>"{mini.directive}"</div>
-            ) : (
-              <div style={{ ...S.inner, padding: "11px 13px", fontSize: 10.5, color: T.faint, lineHeight: 1.5, border: `1px dashed rgba(34,29,20,0.14)`, background: "transparent" }}>No directive set — Mini Me just works through whatever you queue, task by task. Set one to give it an overall mission that shapes every task.</div>
-            )}
-            <div style={{ marginTop: 5, fontSize: 9, color: T.faint, lineHeight: 1.4 }}>Read before every task the worker runs — takes priority over individual skill notes below.</div>
-          </div>
-
-          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 6 }}>
-            <span style={{ fontSize: 10, fontWeight: 700, fontFamily: syne, color: T.brass, letterSpacing: "0.08em" }}>LEVEL {levelIdx + 1} · {MINI_LEVELS[levelIdx].toUpperCase()}</span>
-            <span style={{ fontSize: 9, color: T.faint, fontFamily: mono }}>{xpInLevel} / 250 XP · FROM REAL ACTIVITY</span>
-          </div>
-          <div style={{ height: 7, background: "rgba(34,29,20,0.05)", borderRadius: 4, overflow: "hidden", marginBottom: 16, border: "1px solid rgba(34,29,20,0.05)" }}>
-            <div style={{ width: `${Math.max(2, Math.min(100, (xpInLevel / 250) * 100))}%`, height: "100%", background: `linear-gradient(90deg, ${T.brassDeep}, ${T.brass})`, borderRadius: 4, boxShadow: "0 0 12px rgba(143,107,30,0.5)" }} />
-          </div>
-          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 8, marginBottom: 4 }}>
-            <StatBox value={memCount === null ? "…" : memCount.toLocaleString()} label="memories (chat msgs)" />
-            <StatBox value={String(skills.length)} label="skills" />
-            <StatBox value={String(delivered.length)} label="tasks delivered" />
-          </div>
-        </div>
-
-        {/* Control Panel — everything that shapes how a task runs, one place */}
-        <div style={card}>
-          <div style={{ ...S.title, marginBottom: 4 }}>Control Panel</div>
-          <div style={{ fontSize: 10.5, color: T.faint, lineHeight: 1.5, marginBottom: 15 }}>Model, spend, automation, and how carefully it works — end to end.</div>
-
-          <div style={{ fontSize: 9, fontWeight: 700, color: T.brass, textTransform: "uppercase", letterSpacing: "0.1em", fontFamily: syne, marginBottom: 9 }}>Model &amp; Spend</div>
-          <div style={{ display: "flex", flexDirection: "column", gap: 7, marginBottom: 12 }}>
-            <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between" }}>
-              <span style={{ fontSize: 11, fontWeight: 700, fontFamily: syne, color: T.ink }}>Brain</span>
-              <span style={{ fontSize: 9, color: T.faint }}>model used for queued tasks</span>
             </div>
-            <Segmented value={mini.model} onChange={k => setMini({ model: k })} />
-          </div>
-          <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", marginBottom: 7 }}>
-            <span style={{ fontSize: 11, fontWeight: 700, fontFamily: syne, color: T.ink }}>Nightly budget</span>
-            <span style={{ fontSize: 9, color: T.faint }}>caps tasks per run: $1→1 · $3→3 · $10→8</span>
-          </div>
-          <Chips options={["$1", "$3", "$10"]} value={mini.budget} onChange={b => setMini({ budget: b })} fmt={v => v + "/night"} />
+            {mini.enabled === false && <div style={{ ...S.inner, padding: "10px 13px", marginBottom: 14, fontSize: 10.5, color: T.faint, lineHeight: 1.5 }}>Mini Me is off — Run now won't do anything until you flip it back on above.</div>}
 
-          <div style={{ height: 1, background: T.line, margin: "16px 0 14px" }} />
-
-          <div style={{ fontSize: 9, fontWeight: 700, color: T.brass, textTransform: "uppercase", letterSpacing: "0.1em", fontFamily: syne, marginBottom: 9 }}>Automation</div>
-          <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-            <ToggleRow title="Overnight autonomy" sub="include your queue in the nightly 3 AM run" on={mini.night} onToggle={() => setMini({ night: !mini.night })} size={toggleSize} />
-            <ToggleRow title="Full oversight" sub="audits Chief chat answers for smoothed-over board dissent" on={mini.oversight} onToggle={() => setMini({ oversight: !mini.oversight })} size={toggleSize} />
-          </div>
-
-          <div style={{ height: 1, background: T.line, margin: "16px 0 14px" }} />
-
-          <div style={{ fontSize: 9, fontWeight: 700, color: T.brass, textTransform: "uppercase", letterSpacing: "0.1em", fontFamily: syne, marginBottom: 9 }}>Quality &amp; Review</div>
-          <div style={{ display: "flex", gap: 6, marginBottom: 8 }}>
-            {EFFORT_LEVELS.map(e => (
-              <button key={e.key} onClick={() => setEffort(e.key)} style={{ flex: 1, padding: "9px 4px", background: effort === e.key ? `linear-gradient(135deg, ${T.brass}, ${T.brassDeep})` : "rgba(34,29,20,0.04)", border: effort === e.key ? "none" : "1px solid rgba(34,29,20,0.08)", borderRadius: 9, color: effort === e.key ? "#FCFBF9" : T.sub, fontSize: 10.5, fontWeight: 700, fontFamily: syne, cursor: "pointer" }}>{e.label}</button>
-            ))}
-          </div>
-          <div style={{ fontSize: 10, color: T.faint, lineHeight: 1.5, marginBottom: 13 }}>{EFFORT_LEVELS.find(e => e.key === effort)?.desc}</div>
-          {effort === "thorough" && (
-            <div style={{ marginBottom: 13 }}>
-              <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", marginBottom: 7 }}>
-                <span style={{ fontSize: 11, fontWeight: 700, fontFamily: syne, color: T.ink }}>Max passes</span>
-                <span style={{ fontSize: 9, color: T.faint }}>auto-stops early if nothing's changing</span>
-              </div>
-              <Chips options={["5", "15", "50"]} value={mini.loopMax} onChange={n => setMini({ loopMax: n })} fmt={v => v + "×"} />
-            </div>
-          )}
-          <ToggleRow title="Approval gate" sub="finished drafts wait for your tap before counting as delivered" on={mini.approvalOn} onToggle={() => setMini({ approvalOn: !mini.approvalOn })} size={toggleSize} />
-
-          <button onClick={runNow} disabled={running || worker.state === "off" || mini.enabled === false} style={{ ...S.brassBtn, width: "100%", padding: 12, fontSize: 11.5, marginTop: 17, opacity: running || worker.state === "off" || mini.enabled === false ? 0.5 : 1 }}>
-            {running ? "Working the queue…" : mini.enabled === false ? "Mini Me is off" : `Run queue now${queuedCount ? ` (${queuedCount} queued)` : ""}`}
-          </button>
-          {runMsg && <div style={{ marginTop: 8, fontSize: 10.5, color: runMsg.ok ? T.green : T.red, lineHeight: 1.5 }}>{runMsg.ok ? "✓ " : "✗ "}{runMsg.text}</div>}
-        </div>
-
-        {/* Queue */}
-        <div style={card}>
-          <CardHeader title="Task Queue" tag="NIGHTLY ~3AM CT · OR RUN NOW" />
-          <div style={{ fontSize: 10.5, color: T.faint, lineHeight: 1.5, margin: "2px 0 12px" }}>Hand it work. Tap a task with output to read it.</div>
-          <div style={{ display: "flex", gap: 8, marginBottom: 12 }}>
-            <input value={taskInput} onChange={e => setTaskInput(e.target.value)} onKeyDown={e => { if (e.key === "Enter") { e.preventDefault(); addTask(); } }} placeholder="e.g. Draft 5 outreach angles for the med-spa vertical"
-              style={{ ...S.input, flex: 1, padding: "11px 13px", fontSize: 11.5 }} />
-            <button onClick={addTask} style={{ ...S.brassBtn, padding: "0 18px", minHeight: 44, fontSize: 11 }}>Queue</button>
-          </div>
-          <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-            {active.length === 0 && delivered.length === 0 && <div style={{ fontSize: 10.5, color: T.faint, textAlign: "center", padding: "10px 0" }}>Nothing queued yet — give it something to work on.</div>}
-            {active.length === 0 && delivered.length > 0 && <div style={{ fontSize: 10.5, color: T.faint, textAlign: "center", padding: "10px 0" }}>Queue's clear — everything's been delivered. See Completed below.</div>}
-            {active.map(t => <TaskRow key={t.id} t={t} />)}
-          </div>
-
-          {delivered.length > 0 && (
-            <div style={{ marginTop: 14, paddingTop: 12, borderTop: `1px solid ${T.line}` }}>
-              <button onClick={() => setShowCompleted(!showCompleted)} style={{ width: "100%", display: "flex", alignItems: "center", justifyContent: "space-between", background: "none", border: "none", cursor: "pointer", padding: "2px 0" }}>
-                <span style={{ fontSize: 10.5, fontWeight: 700, fontFamily: syne, color: T.sub }}>Completed ({delivered.length})</span>
-                <span style={{ fontSize: 10, color: T.faint }}>{showCompleted ? "hide ▲" : "show ▼"}</span>
-              </button>
-              {showCompleted && (
-                <div style={{ display: "flex", flexDirection: "column", gap: 6, marginTop: 10 }}>
-                  {delivered.map(t => <TaskRow key={t.id} t={t} />)}
+            {/* Prime directive — chat-derived only, never typed directly */}
+            <div style={{ marginBottom: 14 }}>
+              <div style={{ fontSize: 9.5, fontWeight: 700, color: T.brass, textTransform: "uppercase", letterSpacing: "0.1em", fontFamily: syne, marginBottom: 6 }}>Prime Directive</div>
+              {mini.directive ? (
+                <div style={{ ...S.inner, padding: "11px 13px", fontSize: 12, color: T.ink, lineHeight: 1.55, fontStyle: "italic", marginBottom: 8 }}>"{mini.directive}"</div>
+              ) : (
+                <div style={{ ...S.inner, padding: "11px 13px", fontSize: 10.5, color: T.faint, lineHeight: 1.5, border: `1px dashed rgba(34,29,20,0.14)`, background: "transparent", marginBottom: 8 }}>No directive yet — tell it what matters below and it'll set its own mission from that.</div>
+              )}
+              {(mini.directiveLog || []).length > 0 && (
+                <div style={{ maxHeight: 130, overflowY: "auto", display: "flex", flexDirection: "column", gap: 6, marginBottom: 8, padding: "2px 1px" }}>
+                  {mini.directiveLog.map((l, i) => (
+                    <div key={i} style={{ fontSize: 10.5, lineHeight: 1.5, color: l.role === "user" ? T.sub : T.brass, fontStyle: l.role === "user" ? "normal" : "italic" }}>
+                      {l.role === "user" ? l.text : `→ ${l.text}`}
+                    </div>
+                  ))}
+                  <div ref={directiveEndRef} />
                 </div>
               )}
+              <div style={{ display: "flex", gap: 8 }}>
+                <input value={directiveInput} onChange={e => setDirectiveInput(e.target.value)} onKeyDown={e => { if (e.key === "Enter") { e.preventDefault(); sendDirectiveUpdate(); } }} placeholder="Tell it what matters right now…"
+                  style={{ ...S.input, flex: 1, padding: "10px 12px", fontSize: 11.5 }} disabled={directiveSending} />
+                <button onClick={sendDirectiveUpdate} disabled={directiveSending || !directiveInput.trim()} style={{ ...S.brassBtn, padding: "0 16px", minHeight: 40, fontSize: 10.5, opacity: directiveSending || !directiveInput.trim() ? 0.5 : 1 }}>{directiveSending ? "…" : "Send"}</button>
+              </div>
             </div>
-          )}
+
+            {/* Role — the one thing you do set directly */}
+            <div>
+              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 6 }}>
+                <span style={{ fontSize: 9.5, fontWeight: 700, color: T.brass, textTransform: "uppercase", letterSpacing: "0.1em", fontFamily: syne }}>Role</span>
+                {!editingRole && <button onClick={() => { setRoleDraft(mini.role || ""); setEditingRole(true); }} style={{ ...S.ghostBtn, padding: "4px 11px", fontSize: 9, borderRadius: 7 }}>{mini.role ? "Edit" : "Set one"}</button>}
+              </div>
+              {editingRole ? (
+                <div style={{ display: "flex", flexDirection: "column", gap: 7 }}>
+                  <textarea value={roleDraft} onChange={e => setRoleDraft(e.target.value)} rows={2} autoFocus placeholder="e.g. An outreach ghostwriter who knows my voice and the med-spa/legal verticals cold"
+                    style={{ ...S.input, padding: "10px 12px", fontSize: 12, lineHeight: 1.5, resize: "vertical", fontFamily: "inherit" }} />
+                  <div style={{ display: "flex", gap: 7 }}>
+                    <button onClick={() => { setMini({ role: roleDraft.trim() }); setEditingRole(false); }} style={{ ...S.brassBtn, flex: 1, padding: "8px 0", fontSize: 10.5 }}>Save</button>
+                    <button onClick={() => setEditingRole(false)} style={{ flex: "none", padding: "8px 16px", background: "transparent", border: `1px solid rgba(34,29,20,0.12)`, borderRadius: 10, color: T.sub, fontSize: 10.5, fontWeight: 600, cursor: "pointer" }}>Cancel</button>
+                  </div>
+                </div>
+              ) : mini.role ? (
+                <div style={{ ...S.inner, padding: "11px 13px", fontSize: 12, color: T.ink, lineHeight: 1.55 }}>{mini.role}</div>
+              ) : (
+                <div style={{ ...S.inner, padding: "11px 13px", fontSize: 10.5, color: T.faint, lineHeight: 1.5, border: `1px dashed rgba(34,29,20,0.14)`, background: "transparent" }}>No role set — it'll answer as a generic assistant. Give it an identity and expertise to work from.</div>
+              )}
+            </div>
+          </div>
+
+          {/* Task Queue — its own run controls, so you never have to leave this card to work the queue */}
+          <div style={card}>
+            <CardHeader title="Task Queue" tag="RUNS ONLY WHEN YOU HIT RUN" />
+            <div style={{ fontSize: 10.5, color: T.faint, lineHeight: 1.5, margin: "2px 0 12px" }}>Hand it work. Tap a task with output to read it.</div>
+            <div style={{ display: "flex", gap: 8, marginBottom: 14 }}>
+              <input value={taskInput} onChange={e => setTaskInput(e.target.value)} onKeyDown={e => { if (e.key === "Enter") { e.preventDefault(); addTask(); } }} placeholder="e.g. Draft 5 outreach angles for the med-spa vertical"
+                style={{ ...S.input, flex: 1, padding: "11px 13px", fontSize: 11.5 }} />
+              <button onClick={addTask} style={{ ...S.brassBtn, padding: "0 18px", minHeight: 44, fontSize: 11 }}>Queue</button>
+            </div>
+
+            <div style={{ ...S.inner, padding: "12px 13px", marginBottom: 14 }}>
+              <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", marginBottom: 8 }}>
+                <span style={{ fontSize: 10.5, fontWeight: 700, fontFamily: syne, color: T.ink }}>Daily budget</span>
+                <span style={{ fontSize: 8.5, color: T.faint }}>caps tasks per run: $1→1 · $3→3 · $10→8</span>
+              </div>
+              <Chips options={["$1", "$3", "$10"]} value={mini.budget} onChange={b => setMini({ budget: b })} fmt={v => v + "/day"} />
+              <button onClick={runNow} disabled={running || worker.state === "off" || mini.enabled === false} style={{ ...S.brassBtn, width: "100%", padding: 12, fontSize: 11.5, marginTop: 11, opacity: running || worker.state === "off" || mini.enabled === false ? 0.5 : 1 }}>
+                {running ? "Working the queue…" : mini.enabled === false ? "Mini Me is off" : `Run queue now${queuedCount ? ` (${queuedCount} queued)` : ""}`}
+              </button>
+              {runMsg && <div style={{ marginTop: 8, fontSize: 10.5, color: runMsg.ok ? T.green : T.red, lineHeight: 1.5 }}>{runMsg.ok ? "✓ " : "✗ "}{runMsg.text}</div>}
+            </div>
+
+            <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+              {active.length === 0 && delivered.length === 0 && <div style={{ fontSize: 10.5, color: T.faint, textAlign: "center", padding: "10px 0" }}>Nothing queued yet — give it something to work on.</div>}
+              {active.length === 0 && delivered.length > 0 && <div style={{ fontSize: 10.5, color: T.faint, textAlign: "center", padding: "10px 0" }}>Queue's clear — everything's been delivered. See Completed below.</div>}
+              {active.map(t => <TaskRow key={t.id} t={t} />)}
+            </div>
+
+            {delivered.length > 0 && (
+              <div style={{ marginTop: 14, paddingTop: 12, borderTop: `1px solid ${T.line}` }}>
+                <button onClick={() => setShowCompleted(!showCompleted)} style={{ width: "100%", display: "flex", alignItems: "center", justifyContent: "space-between", background: "none", border: "none", cursor: "pointer", padding: "2px 0" }}>
+                  <span style={{ fontSize: 10.5, fontWeight: 700, fontFamily: syne, color: T.sub }}>Completed ({delivered.length})</span>
+                  <span style={{ fontSize: 10, color: T.faint }}>{showCompleted ? "hide ▲" : "show ▼"}</span>
+                </button>
+                {showCompleted && (
+                  <div style={{ display: "flex", flexDirection: "column", gap: 6, marginTop: 10 }}>
+                    {delivered.map(t => <TaskRow key={t.id} t={t} />)}
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+
+          {/* Activity feed — real */}
+          <div style={card}>
+            <div style={{ ...S.title, marginBottom: 4 }}>Activity Feed</div>
+            <div style={{ fontSize: 10.5, color: T.faint, lineHeight: 1.5, marginBottom: 12 }}>Real worker runs, oversight findings, and your approvals — most recent first.</div>
+            <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+              {feed === null && <div style={{ fontSize: 10.5, color: T.faint, textAlign: "center", padding: "8px 0" }}>Loading…</div>}
+              {feed?.error && <div style={{ fontSize: 10.5, color: T.amber, lineHeight: 1.5 }}>{feed.error}</div>}
+              {Array.isArray(feed) && feed.length === 0 && <div style={{ fontSize: 10.5, color: T.faint, textAlign: "center", padding: "8px 0" }}>No runs yet — queue a task and hit Run now.</div>}
+              {Array.isArray(feed) && feed.map((f, i) => (
+                <div key={i} style={{ ...S.inner, display: "flex", gap: 11, padding: "10px 12px" }}>
+                  <span style={{ fontSize: 8.5, color: T.faint, fontFamily: mono, flex: "none", paddingTop: 2, width: 76 }}>{f.when}</span>
+                  <span style={{ fontSize: 10.5, color: T.sub, lineHeight: 1.55, flex: 1 }}>{f.text}</span>
+                </div>
+              ))}
+            </div>
+          </div>
         </div>
 
-        {/* Skills / standing guidance */}        {/* Skills / standing guidance */}
-        <div style={card}>
-          <CardHeader title="Standing Guidance" tag="FED TO EVERY RUN" />
-          <div style={{ fontSize: 10.5, color: T.faint, lineHeight: 1.5, margin: "2px 0 12px" }}>Skills with guidance notes are injected into the worker's system prompt on every task.</div>
-          <div style={{ display: "flex", gap: 8, marginBottom: 12 }}>
-            <input value={skillInput} onChange={e => setSkillInput(e.target.value)} onKeyDown={e => { if (e.key === "Enter") { e.preventDefault(); addSkill(); } }} placeholder="e.g. Outreach ghostwriting"
-              style={{ ...S.input, flex: 1, padding: "11px 13px", fontSize: 11.5 }} />
-            <button onClick={addSkill} style={{ ...S.brassBtn, padding: "0 18px", minHeight: 44, fontSize: 11 }}>Add</button>
-          </div>
-          <div style={{ display: "flex", flexDirection: "column", gap: 7 }}>
-            {skills.length === 0 && <div style={{ fontSize: 10.5, color: T.faint, textAlign: "center", padding: "10px 0" }}>No skills yet — add one and tune it with your voice and priorities.</div>}
-            {skills.map((sk, i) => (
-              <div key={i} style={{ ...S.inner, padding: "11px 13px", display: "flex", alignItems: "center", gap: 9 }}>
-                <span style={{ fontSize: 11.5, fontWeight: 600, color: "#3A3323", flex: 1, minWidth: 0, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{sk.name}</span>
-                {!!sk.note && <span style={{ fontSize: 8, color: T.green, fontFamily: mono, letterSpacing: "0.06em", flex: "none" }}>✓ ACTIVE</span>}
-                <button onClick={() => { setTuneIdx(i); setTuneDraft(sk.note || ""); }} style={{ ...S.ghostBtn, padding: "5px 11px", fontSize: 9, borderRadius: 7, flex: "none" }}>Tune</button>
-                <button onClick={() => setSkills(skills.filter((_, j) => j !== i))} title="Remove skill" style={{ width: 26, height: 26, background: "rgba(34,29,20,0.04)", border: `1px solid rgba(34,29,20,0.09)`, borderRadius: 7, color: T.faint, fontSize: 10, cursor: "pointer", flex: "none" }}>✕</button>
-              </div>
-            ))}
-          </div>
-        </div>
+        {/* Right column: ambient behavior settings — not tied to any one run */}
+        <div style={col}>
+          <div style={card}>
+            <div style={{ ...S.title, marginBottom: 4 }}>Control Panel</div>
+            <div style={{ fontSize: 10.5, color: T.faint, lineHeight: 1.5, marginBottom: 15 }}>How it behaves in general — separate from what happens on any one run.</div>
 
-        {/* Activity feed — real */}
-        <div style={card}>
-          <div style={{ ...S.title, marginBottom: 4 }}>Activity Feed</div>
-          <div style={{ fontSize: 10.5, color: T.faint, lineHeight: 1.5, marginBottom: 12 }}>Real worker runs, oversight findings, and your approvals — most recent first.</div>
-          <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-            {feed === null && <div style={{ fontSize: 10.5, color: T.faint, textAlign: "center", padding: "8px 0" }}>Loading…</div>}
-            {feed?.error && <div style={{ fontSize: 10.5, color: T.amber, lineHeight: 1.5 }}>{feed.error}</div>}
-            {Array.isArray(feed) && feed.length === 0 && <div style={{ fontSize: 10.5, color: T.faint, textAlign: "center", padding: "8px 0" }}>No runs yet — queue a task and hit Run now.</div>}
-            {Array.isArray(feed) && feed.map((f, i) => (
-              <div key={i} style={{ ...S.inner, display: "flex", gap: 11, padding: "10px 12px" }}>
-                <span style={{ fontSize: 8.5, color: T.faint, fontFamily: mono, flex: "none", paddingTop: 2, width: 76 }}>{f.when}</span>
-                <span style={{ fontSize: 10.5, color: T.sub, lineHeight: 1.55, flex: 1 }}>{f.text}</span>
+            <div style={{ fontSize: 9, fontWeight: 700, color: T.brass, textTransform: "uppercase", letterSpacing: "0.1em", fontFamily: syne, marginBottom: 9 }}>Brain</div>
+            <div style={{ display: "flex", flexDirection: "column", gap: 7, marginBottom: 4 }}>
+              <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between" }}>
+                <span style={{ fontSize: 9.5, color: T.faint }}>model used for queued tasks</span>
               </div>
-            ))}
+              <Segmented value={mini.model} onChange={k => setMini({ model: k })} />
+            </div>
+
+            <div style={{ height: 1, background: T.line, margin: "16px 0 14px" }} />
+
+            <div style={{ fontSize: 9, fontWeight: 700, color: T.brass, textTransform: "uppercase", letterSpacing: "0.1em", fontFamily: syne, marginBottom: 9 }}>Oversight</div>
+            <ToggleRow title="Full oversight" sub="audits Chief chat answers for smoothed-over board dissent" on={mini.oversight} onToggle={() => setMini({ oversight: !mini.oversight })} size={toggleSize} />
+
+            <div style={{ height: 1, background: T.line, margin: "16px 0 14px" }} />
+
+            <div style={{ fontSize: 9, fontWeight: 700, color: T.brass, textTransform: "uppercase", letterSpacing: "0.1em", fontFamily: syne, marginBottom: 9 }}>Quality &amp; Review</div>
+            <div style={{ display: "flex", gap: 6, marginBottom: 8 }}>
+              {EFFORT_LEVELS.map(e => (
+                <button key={e.key} onClick={() => setEffort(e.key)} style={{ flex: 1, padding: "9px 4px", background: effort === e.key ? `linear-gradient(135deg, ${T.brass}, ${T.brassDeep})` : "rgba(34,29,20,0.04)", border: effort === e.key ? "none" : "1px solid rgba(34,29,20,0.08)", borderRadius: 9, color: effort === e.key ? "#FCFBF9" : T.sub, fontSize: 10.5, fontWeight: 700, fontFamily: syne, cursor: "pointer" }}>{e.label}</button>
+              ))}
+            </div>
+            <div style={{ fontSize: 10, color: T.faint, lineHeight: 1.5, marginBottom: 13 }}>{EFFORT_LEVELS.find(e => e.key === effort)?.desc}</div>
+            {effort === "thorough" && (
+              <div style={{ marginBottom: 13 }}>
+                <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", marginBottom: 7 }}>
+                  <span style={{ fontSize: 11, fontWeight: 700, fontFamily: syne, color: T.ink }}>Max passes</span>
+                  <span style={{ fontSize: 9, color: T.faint }}>auto-stops early if nothing's changing</span>
+                </div>
+                <Chips options={["5", "15", "50"]} value={mini.loopMax} onChange={n => setMini({ loopMax: n })} fmt={v => v + "×"} />
+              </div>
+            )}
+            <ToggleRow title="Approval gate" sub="finished drafts wait for your tap before counting as delivered" on={mini.approvalOn} onToggle={() => setMini({ approvalOn: !mini.approvalOn })} size={toggleSize} />
           </div>
         </div>
       </div>
-
-      {tuneIdx !== null && (
-        <SkillTuneModal
-          name={skills[tuneIdx]?.name || ""}
-          draft={tuneDraft}
-          setDraft={setTuneDraft}
-          onSave={() => { setSkills(skills.map((s, j) => j === tuneIdx ? { ...s, note: tuneDraft.trim() } : s)); setTuneIdx(null); }}
-          onClose={() => setTuneIdx(null)}
-          isMobile={isMobile}
-        />
-      )}
     </div>
   );
 }
@@ -1747,27 +1743,6 @@ function SeatNotesModal({ seatKey, initial, onSave, onClose, isMobile }) {
         style={{ ...S.input, width: "100%", minHeight: 150, padding: "12px 14px", fontSize: 13, resize: "vertical", lineHeight: 1.6 }} />
       <div style={{ display: "flex", gap: 8, marginTop: 14 }}>
         <button onClick={save} disabled={saving} style={{ ...S.brassBtn, flex: 1, padding: 13, fontSize: 12, opacity: saving ? 0.5 : 1 }}>{saving ? "Saving…" : "Save context"}</button>
-        <button onClick={onClose} style={{ padding: "13px 18px", background: "transparent", border: `1px solid rgba(34,29,20,0.1)`, borderRadius: 10, color: T.sub, fontSize: 12, fontWeight: 600, cursor: "pointer" }}>Cancel</button>
-      </div>
-    </ModalShell>
-  );
-}
-
-function SkillTuneModal({ name, draft, setDraft, onSave, onClose, isMobile }) {
-  return (
-    <ModalShell onClose={onClose} isMobile={isMobile} z={320}>
-      <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 5 }}>
-        <span style={{ width: 34, height: 34, borderRadius: 10, background: "rgba(143,107,30,0.15)", display: "inline-flex", alignItems: "center", justifyContent: "center", fontSize: 15, color: T.brass, fontWeight: 800, fontFamily: syne }}>⟡</span>
-        <span style={{ display: "flex", flexDirection: "column", gap: 1 }}>
-          <span style={{ fontSize: 15, fontWeight: 700, fontFamily: syne }}>Tune skill</span>
-          <span style={{ fontSize: 11, color: T.brass, fontFamily: mono }}>{name}</span>
-        </span>
-      </div>
-      <div style={{ fontSize: 11, color: T.faint, lineHeight: 1.6, margin: "10px 0 14px" }}>Your guidance steers how Mini Me practices this skill. It re-reads this before every rep — be specific about voice, priorities, and what "good" looks like.</div>
-      <textarea value={draft} onChange={e => setDraft(e.target.value)} placeholder="e.g. Match my tone — direct, no fluff. Prioritize legal + med-spa verticals. Never open with 'I hope this finds you well.'"
-        style={{ ...S.input, width: "100%", minHeight: 130, padding: "12px 14px", fontSize: 13, resize: "vertical", lineHeight: 1.6 }} />
-      <div style={{ display: "flex", gap: 8, marginTop: 14 }}>
-        <button onClick={onSave} style={{ ...S.brassBtn, flex: 1, padding: 13, fontSize: 12 }}>Save guidance</button>
         <button onClick={onClose} style={{ padding: "13px 18px", background: "transparent", border: `1px solid rgba(34,29,20,0.1)`, borderRadius: 10, color: T.sub, fontSize: 12, fontWeight: 600, cursor: "pointer" }}>Cancel</button>
       </div>
     </ModalShell>
