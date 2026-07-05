@@ -12,6 +12,7 @@
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
     "tweetnacl": "^1.0.3",
+    "lightweight-charts": "^5.2.0",
     "@supabase/supabase-js": "^2.45.0"
   },
   "devDependencies": {

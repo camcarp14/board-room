@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef } from "react";
 import { createClient } from "@supabase/supabase-js";
 import GscLineChart from "./GscLineChart.jsx";
+import BtcChartModal from "./BtcChartModal.jsx";
 
 // ════════════════════════════════════════════════════════════════════════════
 // THE BOARD ROOM — modern roman edition.
@@ -596,6 +597,7 @@ function MorningBriefPage({ btc, isMobile, settings }) {
   const [meetingsStatus, setMeetingsStatus] = useState({ state: "loading" });
   const [openEventIdx, setOpenEventIdx] = useState(null);
   const [eventAnalysis, setEventAnalysis] = useState({}); // idx -> {btc, stocks} | "loading" | "error"
+  const [btcChartOpen, setBtcChartOpen] = useState(false);
 
   const toggleEvent = async (i, e) => {
     if (openEventIdx === i) { setOpenEventIdx(null); return; }
@@ -685,7 +687,7 @@ Be directional where the data supports it — don't hedge into uselessness — b
     <div style={{ flex: 1, overflowY: "auto", padding: isMobile ? "18px 16px 24px" : "30px 34px 40px" }}>
       {(() => {
       const card_bitcoin = (
-                  <div style={card}>
+                  <div style={{ ...card, cursor: "pointer" }} onClick={() => setBtcChartOpen(true)} title="Tap for the full chart">
                     <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 12 }}>
                       <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
                         <span style={{ width: 18, height: 18, borderRadius: "50%", background: "linear-gradient(135deg,#F7931A,#C77416)", display: "inline-flex", alignItems: "center", justifyContent: "center", fontSize: 9, fontWeight: 800, color: "#1A0F00" }}>₿</span>
@@ -703,7 +705,10 @@ Be directional where the data supports it — don't hedge into uselessness — b
                       <StatBox value={invalidation} label="Invalidation" valueColor={T.red} />
                     </div>
                     <div style={{ fontSize: 11.5, color: T.sub, lineHeight: 1.65 }}>{narrative}</div>
-                    <div style={{ marginTop: 9, ...S.microLabel, letterSpacing: "0.04em" }}>{todayLabel} · LEVELS DERIVED FROM LIVE 24H RANGE · NOT FINANCIAL ADVICE</div>
+                    <div style={{ marginTop: 9, display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+                      <span style={{ ...S.microLabel, letterSpacing: "0.04em" }}>{todayLabel} · LEVELS DERIVED FROM LIVE 24H RANGE · NOT FINANCIAL ADVICE</span>
+                      <span style={{ ...S.microLabel, color: T.brass, flex: "none", marginLeft: 8 }}>CHART ›</span>
+                    </div>
                   </div>
           
   );
@@ -861,6 +866,7 @@ Be directional where the data supports it — don't hedge into uselessness — b
           {sectionHeader("Ops")}
           {card_gsc}{card_clarify}{card_zts}{card_meetings}
         </div>
+        {btcChartOpen && <BtcChartModal isMobile onClose={() => setBtcChartOpen(false)} callFnFull={callFnFull} />}
       </div>
       ) : (
       <div style={grid}>
@@ -872,6 +878,7 @@ Be directional where the data supports it — don't hedge into uselessness — b
           {sectionHeader("Ops")}
           {card_gsc}{card_clarify}{card_zts}{card_meetings}
         </div>
+        {btcChartOpen && <BtcChartModal isMobile={false} onClose={() => setBtcChartOpen(false)} callFnFull={callFnFull} />}
       </div>
       );
       })()}
@@ -1291,7 +1298,7 @@ const CONN_GROUPS = [
   { title: "Core", keys: ["supabase_env", "supabase_auth", "supabase_db"] },
   { title: "AI", keys: ["anthropic"] },
   { title: "Market Data", keys: ["coingecko"] },
-  { title: "Netlify Functions", keys: ["fn_health", "fn_mini", "fn_btc", "fn_markets", "fn_calendar", "fn_calendar_events", "fn_site_status", "fn_gsc", "fn_shopify", "fn_clarify_pipeline", "fn_zts_pipeline", "fn_deploy", "fn_dbadmin", "fn_audit", "fn_autofix"] },
+  { title: "Netlify Functions", keys: ["fn_health", "fn_mini", "fn_btc", "fn_btc_candles", "fn_markets", "fn_calendar", "fn_calendar_events", "fn_site_status", "fn_gsc", "fn_shopify", "fn_clarify_pipeline", "fn_zts_pipeline", "fn_deploy", "fn_dbadmin", "fn_audit", "fn_autofix"] },
 ];
 const CONN_META = {
   supabase_env: { name: "Supabase · config", desc: "VITE_SUPABASE_URL + anon key present at build time" },
@@ -1302,6 +1309,7 @@ const CONN_META = {
   fn_health: { name: "health", desc: "reports which server-side keys are configured" },
   fn_mini: { name: "mini-worker", desc: "Mini Me engine — nightly at ~3 AM CT + on-demand runs" },
   fn_btc: { name: "btc", desc: "proxies BTC price + sparkline — avoids mobile-carrier IP rate limiting" },
+  fn_btc_candles: { name: "btc-candles", desc: "BTC/USDT candles via Binance public API (5m/15m/30m/1d/1w) — no key needed" },
   fn_markets: { name: "markets", desc: "S&P/Nasdaq futures, 10Y yield, DXY via Yahoo's public endpoint (unofficial)" },
   fn_calendar: { name: "calendar", desc: "US econ calendar, today through +7 days (unofficial free feed)" },
   fn_calendar_events: { name: "calendar-events", desc: "upcoming meetings — parses the linked iCal URL" },
