@@ -18,6 +18,10 @@ const json = (code, body) => ({ statusCode: code, headers: { "Content-Type": "ap
 let cachedToken = null;
 let tokenExpiresAt = 0;
 
+function normalizeShop(raw) {
+  return (raw || "").trim().replace(/^https?:\/\//, "").replace(/\.myshopify\.com\/?$/, "").replace(/\/$/, "");
+}
+
 async function getToken(shop, clientId, clientSecret) {
   if (cachedToken && Date.now() < tokenExpiresAt - 60_000) return cachedToken;
   const res = await fetch(`https://${shop}.myshopify.com/admin/oauth/access_token`, {
@@ -25,7 +29,12 @@ async function getToken(shop, clientId, clientSecret) {
     headers: { "Content-Type": "application/x-www-form-urlencoded" },
     body: new URLSearchParams({ grant_type: "client_credentials", client_id: clientId, client_secret: clientSecret }),
   });
-  if (!res.ok) throw new Error(`token exchange failed: ${res.status}`);
+  if (!res.ok) {
+    const raw = await res.text().catch(() => "");
+    let detail = raw;
+    try { const j = JSON.parse(raw); detail = j.error_description || j.error || raw; } catch {}
+    throw new Error(`token exchange failed (${res.status}) for shop "${shop}": ${detail || "no detail returned — check SHOPIFY_SHOP is just the subdomain, and that the app is installed on this store"}`);
+  }
   const { access_token, expires_in } = await res.json();
   cachedToken = access_token;
   tokenExpiresAt = Date.now() + (expires_in || 86399) * 1000;
@@ -37,7 +46,7 @@ exports.handler = async (event) => {
   let body = {};
   try { body = JSON.parse(event.body || "{}"); } catch {}
 
-  const shop = process.env.SHOPIFY_SHOP;
+  const shop = normalizeShop(process.env.SHOPIFY_SHOP);
   const clientId = process.env.SHOPIFY_CLIENT_ID;
   const clientSecret = process.env.SHOPIFY_CLIENT_SECRET;
   const configured = !!(shop && clientId && clientSecret);

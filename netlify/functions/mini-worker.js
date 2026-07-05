@@ -1,40 +1,45 @@
 // Mini Me worker — the real engine behind the Mini Me page.
-// Two ways it runs:
-//   1. Scheduled nightly via netlify.toml (09:00 UTC ≈ 3–4 AM Chicago) for
-//      every user whose "Overnight autonomy" toggle is on.
-//   2. On demand: POST { run: true } with the signed-in user's Supabase
-//      access token in the Authorization header ("Run queue now" button).
-// For each queued task it calls Claude (model + budget from the user's Mini
-// Me controls), writes the deliverable back onto the task, and appends a row
-// to mini_feed — so the stats/feed in the UI are real activity, not mockups.
+// Runs: (1) scheduled nightly via netlify.toml (09:00 UTC ≈ 3–4 AM Chicago)
+// for users with the master switch on, or (2) on demand via the page's
+// buttons (run / approve / reject), authenticated with the user's Supabase
+// session token.
+//
+// Real, working controls (all read from the user's `mini` setting):
+//   enabled     - master on/off. Off means the worker skips this user
+//                 entirely, in both scheduled AND on-demand runs.
+//   night       - include this user in the nightly scheduled batch
+//                 (separate from the master switch, so you can run manually
+//                 without opting into unattended nightly runs).
+//   model       - which Claude model generates + critiques each task.
+//   budget      - caps tasks processed per run ($1->1, $3->3, $10->8).
+//   reflectOn   - after generating a draft, Mini Me critiques its own work
+//                 and revises if the critique finds gaps.
+//   loopOn      - allow more than one critique/revise cycle (bounded by
+//                 loopMax); off means exactly one critique pass.
+//   loopMax     - hard ceiling on critique/revise cycles for loopOn.
+//   approvalOn  - finished drafts land in "review" instead of "delivered"
+//                 until the user taps Approve; XP only counts delivered work.
 // Needs: ANTHROPIC_API_KEY, SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY.
 const json = (code, body) => ({ statusCode: code, headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
 
 const MODEL_IDS = { haiku: "claude-haiku-4-5-20251001", sonnet: "claude-sonnet-4-6", opus: "claude-opus-4-1" };
-const BUDGET_TASK_LIMIT = { "$1": 1, "$3": 3, "$10": 8 }; // tasks per run, a rough budget proxy
+const BUDGET_TASK_LIMIT = { "$1": 1, "$3": 3, "$10": 8 };
 
 function env() {
-  return {
-    anthropic: process.env.ANTHROPIC_API_KEY,
-    url: process.env.SUPABASE_URL,
-    service: process.env.SUPABASE_SERVICE_ROLE_KEY,
-  };
+  return { anthropic: process.env.ANTHROPIC_API_KEY, url: process.env.SUPABASE_URL, service: process.env.SUPABASE_SERVICE_ROLE_KEY };
 }
-
 function rest(cfg, path, opts = {}) {
   return fetch(`${cfg.url}/rest/v1/${path}`, {
     ...opts,
     headers: { apikey: cfg.service, Authorization: `Bearer ${cfg.service}`, "Content-Type": "application/json", Prefer: "return=minimal", ...(opts.headers || {}) },
   });
 }
-
 async function verifyUser(cfg, token) {
   const res = await fetch(`${cfg.url}/auth/v1/user`, { headers: { apikey: cfg.service, Authorization: `Bearer ${token}` } });
   if (!res.ok) return null;
   const u = await res.json();
   return u?.id || null;
 }
-
 async function claudeCall(cfg, modelKey, system, user, maxTokens) {
   const res = await fetch("https://api.anthropic.com/v1/messages", {
     method: "POST",
@@ -54,30 +59,68 @@ async function loadUserBundle(cfg, userId) {
   (Array.isArray(rows) ? rows : []).forEach(r => { out[r.setting_key] = r.setting_value; });
   return out;
 }
+async function saveTasks(cfg, userId, tasks) {
+  await rest(cfg, `app_settings?user_id=eq.${userId}&setting_key=eq.mini_tasks`, {
+    method: "PATCH",
+    body: JSON.stringify({ setting_value: tasks, updated_at: new Date().toISOString() }),
+  });
+}
+
+// The real agentic loop: generate, then optionally critique-and-revise up to
+// loopMax times. Stops early on an explicit DONE or two consecutive
+// no-change revisions.
+async function runTask(cfg, mini, system, taskText) {
+  const reflect = mini.reflectOn !== false;
+  const loop = mini.loopOn !== false;
+  const maxLoops = !reflect ? 1 : (!loop ? 2 : Math.max(2, parseInt(mini.loopMax || "5", 10) || 5));
+
+  let draft = null, prevDraft = null, noProgress = 0, loops = 0, outTok = 0;
+  for (let i = 0; i < maxLoops; i++) {
+    loops++;
+    if (draft === null) {
+      const r = await claudeCall(cfg, mini.model, system, taskText, 900);
+      draft = r.text; outTok += r.outTok;
+      if (!reflect) break;
+      continue;
+    }
+    const critiqueSystem = `You are reviewing your own previous draft against the original task, as "Mini Me". If the draft fully satisfies the task and no meaningful improvement is needed, reply with exactly: DONE
+Otherwise, reply with ONLY the complete revised draft (no commentary, no prefix) — it will replace the previous draft as-is.`;
+    const r = await claudeCall(cfg, mini.model, critiqueSystem, `ORIGINAL TASK:\n${taskText}\n\nCURRENT DRAFT:\n${draft}`, 900);
+    outTok += r.outTok;
+    const reply = r.text.trim();
+    if (reply === "DONE" || reply.startsWith("DONE")) break;
+    if (prevDraft !== null && reply === prevDraft.trim()) { noProgress++; if (noProgress >= 2) break; } else noProgress = 0;
+    prevDraft = draft;
+    draft = reply;
+    if (!loop) break;
+  }
+  return { draft, loops, outTok };
+}
 
 async function processUser(cfg, userId, { manual = false } = {}) {
   const bundle = await loadUserBundle(cfg, userId);
-  const mini = { model: "haiku", budget: "$3", night: true, ...(bundle.mini || {}) };
-  if (!manual && mini.night === false) return { userId, processed: 0, skipped: "night off" };
+  const mini = { model: "haiku", budget: "$3", enabled: true, night: true, reflectOn: true, loopOn: true, loopMax: "5", approvalOn: true, ...(bundle.mini || {}) };
+  if (mini.enabled === false) return { userId, processed: 0, skipped: "Mini Me is off" };
+  if (!manual && mini.night === false) return { userId, processed: 0, skipped: "nightly runs off for this user" };
 
-  const tasks = Array.isArray(bundle.mini_tasks) ? bundle.mini_tasks : [];
+  const tasks = (Array.isArray(bundle.mini_tasks) ? bundle.mini_tasks : []).map(t => t.id ? t : { ...t, id: t.id || `${Date.now()}-${Math.random().toString(36).slice(2, 8)}` });
   const queuedIdx = tasks.map((t, i) => (t.status === "queued" ? i : -1)).filter(i => i >= 0);
-  if (!queuedIdx.length) return { userId, processed: 0, skipped: "no queued tasks" };
+  if (!queuedIdx.length) { await saveTasks(cfg, userId, tasks); return { userId, processed: 0, skipped: "no queued tasks" }; }
 
   const limit = BUDGET_TASK_LIMIT[mini.budget] || 3;
   const toRun = queuedIdx.slice(0, limit);
-  const skillNotes = (Array.isArray(bundle.mini_skills) ? bundle.mini_skills : [])
-    .filter(s => s.note).map(s => `- ${s.name}: ${s.note}`).join("\n");
-  const system = `You are "Mini Me", the user's autonomous overnight assistant inside their Board Room app. Produce the requested deliverable directly and completely — concrete and usable, no preamble, no clarifying questions (make reasonable assumptions and state them briefly at the end if needed).${skillNotes ? `\n\nStanding guidance from the user:\n${skillNotes}` : ""}`;
+  const skillNotes = (Array.isArray(bundle.mini_skills) ? bundle.mini_skills : []).filter(s => s.note).map(s => `- ${s.name}: ${s.note}`).join("\n");
+  const system = `You are "Mini Me", the user's autonomous assistant inside their Board Room app. Produce the requested deliverable directly and completely — concrete and usable, no preamble, no clarifying questions (make reasonable assumptions and state them briefly at the end if needed).${skillNotes ? `\n\nStanding guidance from the user:\n${skillNotes}` : ""}`;
 
   const feedRows = [];
   let processed = 0;
   for (const idx of toRun) {
     const t = tasks[idx];
     try {
-      const { text, outTok } = await claudeCall(cfg, mini.model, system, t.text, 900);
-      tasks[idx] = { ...t, status: "delivered", output: text, delivered_at: new Date().toISOString() };
-      feedRows.push({ user_id: userId, text: `Delivered "${t.text.slice(0, 70)}${t.text.length > 70 ? "…" : ""}" — ${outTok} tokens on ${mini.model}.` });
+      const { draft, loops, outTok } = await runTask(cfg, mini, system, t.text);
+      const status = mini.approvalOn ? "review" : "delivered";
+      tasks[idx] = { ...t, status, output: draft, loops, delivered_at: new Date().toISOString() };
+      feedRows.push({ user_id: userId, text: `${status === "review" ? "Drafted (awaiting your approval)" : "Delivered"} "${t.text.slice(0, 60)}${t.text.length > 60 ? "…" : ""}" — ${loops} loop(s), ~${outTok} tokens on ${mini.model}.` });
       processed++;
     } catch (e) {
       tasks[idx] = { ...t, status: "failed", output: `Failed: ${e.message}`, delivered_at: new Date().toISOString() };
@@ -85,13 +128,25 @@ async function processUser(cfg, userId, { manual = false } = {}) {
     }
   }
 
-  await rest(cfg, `app_settings?user_id=eq.${userId}&setting_key=eq.mini_tasks`, {
-    method: "PATCH",
-    body: JSON.stringify({ setting_value: tasks, updated_at: new Date().toISOString() }),
-  });
+  await saveTasks(cfg, userId, tasks);
   if (feedRows.length) await rest(cfg, "mini_feed", { method: "POST", body: JSON.stringify(feedRows) });
-
   return { userId, processed };
+}
+
+async function approveOrReject(cfg, userId, taskId, approve) {
+  const bundle = await loadUserBundle(cfg, userId);
+  const tasks = Array.isArray(bundle.mini_tasks) ? bundle.mini_tasks : [];
+  const idx = tasks.findIndex(t => t.id === taskId);
+  if (idx < 0) return { success: false, error: "task not found" };
+  if (approve) {
+    tasks[idx] = { ...tasks[idx], status: "delivered" };
+    await rest(cfg, "mini_feed", { method: "POST", body: JSON.stringify([{ user_id: userId, text: `You approved "${tasks[idx].text.slice(0, 60)}…".` }]) });
+  } else {
+    tasks[idx] = { ...tasks[idx], status: "queued", output: null };
+    await rest(cfg, "mini_feed", { method: "POST", body: JSON.stringify([{ user_id: userId, text: `You rejected a draft — requeued "${tasks[idx].text.slice(0, 60)}…".` }]) });
+  }
+  await saveTasks(cfg, userId, tasks);
+  return { success: true };
 }
 
 exports.handler = async (event) => {
@@ -103,7 +158,6 @@ exports.handler = async (event) => {
   if (body.ping) return json(200, { success: true, service: "mini-worker", configured, missing: configured ? undefined : "ANTHROPIC_API_KEY / SUPABASE_URL / SUPABASE_SERVICE_ROLE_KEY" });
   if (!configured) return json(500, { success: false, error: "worker env vars not set" });
 
-  // Scheduled invocations carry next_run in the body and no user auth.
   const isScheduled = !!body.next_run;
 
   try {
@@ -117,15 +171,19 @@ exports.handler = async (event) => {
       return json(200, { success: true, scheduled: true, users: userIds.length, processed: total });
     }
 
-    // On-demand: authenticate the caller.
     const auth = event.headers?.authorization || event.headers?.Authorization || "";
     const token = auth.startsWith("Bearer ") ? auth.slice(7) : null;
     if (!token) return json(401, { success: false, error: "sign-in token required" });
     const userId = await verifyUser(cfg, token);
     if (!userId) return json(401, { success: false, error: "invalid or expired session — sign in again" });
 
+    if (body.approve || body.reject) {
+      const result = await approveOrReject(cfg, userId, body.approve || body.reject, !!body.approve);
+      return json(result.success ? 200 : 404, result);
+    }
+
     const result = await processUser(cfg, userId, { manual: true });
-    return json(200, { success: true, processed: result.processed, message: result.skipped ? result.skipped : `processed ${result.processed} task(s)` });
+    return json(200, { success: true, processed: result.processed, message: result.skipped || `processed ${result.processed} task(s)` });
   } catch (e) {
     return json(502, { success: false, error: e.message });
   }

@@ -24,7 +24,8 @@ function parseRss(xml, source) {
     const block = m[1];
     const title = stripCdata((block.match(/<title>([\s\S]*?)<\/title>/) || [])[1]);
     const pubDate = (block.match(/<pubDate>([\s\S]*?)<\/pubDate>/) || [])[1] || "";
-    if (title) items.push({ title, pubDate, source });
+    const link = stripCdata((block.match(/<link>([\s\S]*?)<\/link>/) || [])[1]);
+    if (title) items.push({ title, pubDate, link, source });
   }
   return items;
 }
@@ -63,7 +64,7 @@ exports.handler = async (event) => {
       .map(it => {
         const { tag: t, color } = tag(it.title);
         const time = it.ts ? new Date(it.ts).toLocaleTimeString("en-US", { timeZone: "America/Chicago", hour: "2-digit", minute: "2-digit", hour12: false }) : "—";
-        return { time, tag: t, tagColor: color, text: `${it.title} (${it.source})` };
+        return { time, tag: t, tagColor: color, text: `${it.title} (${it.source})`, link: it.link || null };
       });
 
     const payload = { success: true, wire };
