@@ -133,6 +133,12 @@ exports.handler = async (event) => {
       pos: cur.position ? cur.position.toFixed(1) : "—",
       posD: prev.position ? `${cur.position <= prev.position ? "▲" : "▼"} from ${prev.position.toFixed(1)}` : "",
       series: curDaily.map(r => r.impressions),
+      daily: curDaily.map(r => ({
+        date: r.keys[0],
+        impressions: r.impressions,
+        clicks: r.clicks,
+        position: r.position,
+      })),
       note: `${fmtK(cur.clicks)} clicks on ${fmtK(cur.impressions)} impressions (last ${days}d, 2-day data lag).`,
     });
   } catch (e) {

@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef } from "react";
 import { createClient } from "@supabase/supabase-js";
+import GscLineChart from "./GscLineChart.jsx";
 
 // ════════════════════════════════════════════════════════════════════════════
 // THE BOARD ROOM — modern roman edition.
@@ -298,7 +299,7 @@ function useIsMobile() {
 }
 
 const PROPERTIES = [
-  { name: "Clarify Paid Search", desc: "Boutique Google Ads agency", url: "https://clarifypaidsearch.com", appUrl: "https://coruscating-sundae-f0def3.netlify.app", color: "#B68A2E", repo: "camcarp14/clarify-outreach", site: "clarify-paid-search" },
+  { name: "Clarify Paid Search", desc: "Boutique Google Ads agency", url: "https://clarifypaidsearch.com", appUrl: "https://clarify-outreach.netlify.app/", color: "#B68A2E", repo: "camcarp14/clarify-outreach", site: "clarify-paid-search" },
   { name: "Clarify SaaS", desc: "Google Ads auditing tool", url: "https://clarify-saas.netlify.app/", appUrl: "https://clarify-saas.netlify.app/", color: "#B68A2E", repo: "camcarp14/clarify-saas", site: "clarify-saas" },
   { name: "Zero To Secure", desc: "Premium seed phrase backup", url: "https://zerotosecure.com", appUrl: "https://zts-command-center.netlify.app", color: "#0E9F6E", repo: "camcarp14/zts-command-center", site: "zero-to-secure" },
   { name: "Macro Command Center", desc: "Markets, portfolio, thesis", url: null, appUrl: "https://macro-command-center.netlify.app/", color: "#31589C", repo: "camcarp14/macro-command-center", site: "macro-command-center" },
@@ -555,8 +556,7 @@ function RoomPage({ messages, thinking, loadingData, input, setInput, onSend, en
 // No fabricated fallback numbers anywhere on this page. Each card is either
 // LIVE (real data), NOT CONNECTED (with exact setup instructions), or ERROR
 // (with the actual failure). Empty dashes beat plausible-looking fake data.
-const GSC_EMPTY = { impressions: "—", impressionsD: "", clicks: "—", clicksD: "", pos: "—", posD: "", series: Array(14).fill(0), note: "" };
-const SHOP_EMPTY = { visits: "—", visitsD: "", conv: "—", convD: "", orders: "—", ordersD: "", series: Array(14).fill(0), note: "" };
+const GSC_EMPTY = { impressions: "—", impressionsD: "", clicks: "—", clicksD: "", pos: "—", posD: "", series: Array(14).fill(0), daily: [], note: "" };
 const STOCKS_EMPTY = { spx: { value: "—", up: true }, ndq: { value: "—", up: true }, tnx: { value: "—", up: true }, dxy: { value: "—", up: true } };
 
 function StancePill({ text, color }) {
@@ -577,8 +577,6 @@ function StatusTag({ status }) {
 function MorningBriefPage({ btc, isMobile, settings }) {
   const [gsc, setGsc] = useState(GSC_EMPTY);
   const [gscStatus, setGscStatus] = useState({ state: "loading" });
-  const [shop, setShop] = useState(SHOP_EMPTY);
-  const [shopStatus, setShopStatus] = useState({ state: "loading" });
   const [stocks, setStocks] = useState(STOCKS_EMPTY);
   const [stocksStatus, setStocksStatus] = useState({ state: "loading" });
   const [events, setEvents] = useState([]);
@@ -631,8 +629,6 @@ Be directional where the data supports it — don't hedge into uselessness — b
     };
     loadCredentialed("gsc", { site: "zerotosecure.com", days: 14 }, setGsc, setGscStatus,
       (m) => `Add ${m || "GSC_CLIENT_EMAIL + GSC_PRIVATE_KEY"} in Netlify env vars, share the Search Console property with the service account, then redeploy.`);
-    loadCredentialed("shopify", { days: 14 }, setShop, setShopStatus,
-      (m) => `Add ${m || "SHOPIFY_SHOP + SHOPIFY_CLIENT_ID + SHOPIFY_CLIENT_SECRET"} in Netlify env vars, then redeploy.`);
     loadCredentialed("clarify-pipeline", {}, (d) => setClarify(d), setClarifyStatus,
       (m) => `Add ${m || "CLARIFY_SUPABASE_URL + CLARIFY_SUPABASE_ANON_KEY"} in Netlify env vars, then redeploy.`);
     loadCredentialed("zts-pipeline", {}, (d) => setZtsPipe(d), setZtsPipeStatus,
@@ -760,7 +756,7 @@ Be directional where the data supports it — don't hedge into uselessness — b
                       <StatBox value={gsc.clicks} label="Clicks" delta={gsc.clicksD} />
                       <StatBox value={gsc.pos} label="Avg position" delta={gsc.posD} />
                     </div>
-                    <Bars data={gsc.series} from="#17B888" to="#0E9F6E" />
+                    <GscLineChart rows={gsc.daily} />
                     <div style={{ marginTop: 8, fontSize: 10.5, color: gscStatus.state === "live" ? T.sub : T.faint, lineHeight: 1.55 }}>{gscStatus.state === "live" ? gsc.note : gscStatus.state === "loading" ? "Loading…" : gscStatus.detail}</div>
                   </div>
           
@@ -825,25 +821,6 @@ Be directional where the data supports it — don't hedge into uselessness — b
                   </div>
           
   );
-  const card_shopify = (
-                  <div style={card}>
-                    <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 12 }}>
-                      <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                        <span style={{ width: 8, height: 8, borderRadius: "50%", background: T.brass, boxShadow: "0 0 8px rgba(217,177,94,0.5)" }} />
-                        <span style={S.title}>Zero To Secure · Shopify</span>
-                      </div>
-                      <StatusTag status={shopStatus} />
-                    </div>
-                    <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 7, marginBottom: 13 }}>
-                      <StatBox value={shop.visits} label="Visits" delta={shop.visitsD} />
-                      <StatBox value={shop.conv} label="Conversion" delta={shop.convD} />
-                      <StatBox value={shop.orders} label="Orders" delta={shop.ordersD} />
-                    </div>
-                    <Bars data={shop.series} from="#8F6B1E" to="#6A4D12" />
-                    <div style={{ marginTop: 8, fontSize: 10.5, color: shopStatus.state === "live" ? T.sub : T.faint, lineHeight: 1.55 }}>{shopStatus.state === "live" ? shop.note : shopStatus.state === "loading" ? "Loading…" : shopStatus.detail}</div>
-                  </div>
-          
-  );
   const card_zts = (
                   <div style={card}>
                     <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 12 }}>
@@ -865,12 +842,12 @@ Be directional where the data supports it — don't hedge into uselessness — b
       );
       return isMobile ? (
       <div style={grid}>
-        <div style={col}>{card_bitcoin}{card_stocks}{card_watch}{card_meetings}{card_gsc}{card_shopify}{card_clarify}{card_zts}</div>
+        <div style={col}>{card_bitcoin}{card_stocks}{card_watch}{card_meetings}{card_gsc}{card_clarify}{card_zts}</div>
       </div>
       ) : (
       <div style={grid}>
         <div style={col}>{card_bitcoin}{card_watch}{card_gsc}{card_clarify}</div>
-        <div style={col}>{card_stocks}{card_meetings}{card_shopify}{card_zts}</div>
+        <div style={col}>{card_stocks}{card_meetings}{card_zts}</div>
       </div>
       );
       })()}
