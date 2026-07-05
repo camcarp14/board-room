@@ -656,6 +656,7 @@ Be directional where the data supports it — don't hedge into uselessness — b
   const up = (btc.changePct || 0) >= 0;
   const hasRange = !btc.loading && !btc.error && btc.high24 != null && btc.low24 != null;
   const fmtK = (n) => "$" + (n / 1000).toFixed(1) + "K";
+  const todayLabel = new Date().toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric" }).toUpperCase();
   let dayTarget = "—", support = "—", invalidation = "—", stance = "NEUTRAL", stanceColor = T.sub, narrative = "Waiting on live price data to compute today's range and levels.";
   if (hasRange) {
     const range = Math.max(btc.high24 - btc.low24, btc.high24 * 0.001);
@@ -699,7 +700,7 @@ Be directional where the data supports it — don't hedge into uselessness — b
                       <StatBox value={invalidation} label="Invalidation" valueColor={T.red} />
                     </div>
                     <div style={{ fontSize: 11.5, color: T.sub, lineHeight: 1.65 }}>{narrative}</div>
-                    <div style={{ marginTop: 9, ...S.microLabel, letterSpacing: "0.04em" }}>LEVELS DERIVED FROM LIVE 24H RANGE · NOT FINANCIAL ADVICE</div>
+                    <div style={{ marginTop: 9, ...S.microLabel, letterSpacing: "0.04em" }}>{todayLabel} · LEVELS DERIVED FROM LIVE 24H RANGE · NOT FINANCIAL ADVICE</div>
                   </div>
           
   );
@@ -798,6 +799,7 @@ Be directional where the data supports it — don't hedge into uselessness — b
                       ))}
                     </div>
                     <div style={{ fontSize: 11.5, color: T.sub, lineHeight: 1.65 }}>{stocksStatus.state === "live" ? "Futures and yield pulled live via Yahoo Finance's public endpoint — unofficial, no key, refreshes on page load." : stocksStatus.state === "loading" ? "Loading live data…" : stocksStatus.detail}</div>
+                    <div style={{ marginTop: 9, ...S.microLabel, letterSpacing: "0.04em" }}>{todayLabel}</div>
                   </div>
           
   );

@@ -120,6 +120,7 @@ exports.handler = async (event) => {
     try {
       const curT = await shopifyqlTotals(shop, token, `FROM sessions SHOW online_store_visitors, conversion_rate WHERE human_or_bot_session = 'human' WITH TOTALS SINCE ${fmtDate(since)} UNTIL today`);
       const prevT = await shopifyqlTotals(shop, token, `FROM sessions SHOW online_store_visitors WHERE human_or_bot_session = 'human' WITH TOTALS SINCE ${fmtDate(prevSince)} UNTIL ${fmtDate(since)}`);
+      if (curT.online_store_visitors === undefined) throw new Error(`ShopifyQL returned no "online_store_visitors" field (got: ${Object.keys(curT).join(", ") || "nothing"}) — likely means the read_reports scope isn't active on the token yet`);
       const curVisits = Number(curT.online_store_visitors) || 0;
       const prevVisits = Number(prevT.online_store_visitors) || 0;
       visits = curVisits.toLocaleString();
