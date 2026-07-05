@@ -300,7 +300,7 @@ function useIsMobile() {
 
 const PROPERTIES = [
   { name: "Clarify Paid Search", desc: "Boutique Google Ads agency", url: "https://clarifypaidsearch.com", appUrl: "https://clarify-outreach.netlify.app/", color: "#B68A2E", repo: "camcarp14/clarify-outreach", site: "clarify-paid-search" },
-  { name: "Clarify SaaS", desc: "Google Ads auditing tool", url: "https://clarify-saas.netlify.app/", appUrl: "https://clarify-saas.netlify.app/admin", color: "#B68A2E", repo: "camcarp14/clarify-saas", site: "clarify-saas" },
+  { name: "Clarify SaaS", desc: "Google Ads auditing tool", url: null, appUrl: "https://clarify-saas.netlify.app/", color: "#B68A2E", repo: "camcarp14/clarify-saas", site: "clarify-saas" },
   { name: "Zero To Secure", desc: "Premium seed phrase backup", url: "https://zerotosecure.com", appUrl: "https://zts-command-center.netlify.app", color: "#0E9F6E", repo: "camcarp14/zts-command-center", site: "zero-to-secure" },
   { name: "Macro Command Center", desc: "Markets, portfolio, thesis", url: null, appUrl: "https://macro-command-center.netlify.app/", color: "#31589C", repo: "camcarp14/macro-command-center", site: "macro-command-center" },
 ];
@@ -433,11 +433,18 @@ function CardHeader({ title, tag, tagColor = T.faint }) {
   );
 }
 
-function StatBox({ value, label, delta, deltaColor = T.green, valueColor = T.ink }) {
+function StatBox({ value, label, delta, deltaColor = T.green, valueColor = T.ink, onClick, selected }) {
   return (
-    <div style={{ ...S.inner, padding: "10px 8px", textAlign: "center", borderRadius: 10 }}>
+    <div
+      onClick={onClick}
+      style={{
+        ...S.inner, padding: "10px 8px", textAlign: "center", borderRadius: 10,
+        ...(onClick ? { cursor: "pointer", transition: "border-color 120ms ease, box-shadow 120ms ease" } : {}),
+        ...(selected ? { border: "1px solid #9a7b4f", boxShadow: "0 0 0 1px #9a7b4f33" } : {}),
+      }}
+    >
       <div style={{ fontSize: 14, fontWeight: 700, fontFamily: mono, color: valueColor }}>{value}</div>
-      <div style={{ fontSize: 8, color: T.faint, letterSpacing: "0.08em", textTransform: "uppercase", marginTop: 2 }}>{label}</div>
+      <div style={{ fontSize: 8, color: selected ? "#9a7b4f" : T.faint, letterSpacing: "0.08em", textTransform: "uppercase", marginTop: 2 }}>{label}</div>
       {delta && <div style={{ fontSize: 9, color: deltaColor, fontFamily: mono, marginTop: 2 }}>{delta}</div>}
     </div>
   );
@@ -576,6 +583,7 @@ function StatusTag({ status }) {
 function MorningBriefPage({ btc, isMobile, settings }) {
   const [gsc, setGsc] = useState(GSC_EMPTY);
   const [gscStatus, setGscStatus] = useState({ state: "loading" });
+  const [gscMetric, setGscMetric] = useState("impressions");
   const [stocks, setStocks] = useState(STOCKS_EMPTY);
   const [stocksStatus, setStocksStatus] = useState({ state: "loading" });
   const [events, setEvents] = useState([]);
@@ -751,11 +759,11 @@ Be directional where the data supports it — don't hedge into uselessness — b
                       <StatusTag status={gscStatus} />
                     </div>
                     <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 7, marginBottom: 13 }}>
-                      <StatBox value={gsc.impressions} label="Impressions" delta={gsc.impressionsD} />
-                      <StatBox value={gsc.clicks} label="Clicks" delta={gsc.clicksD} />
-                      <StatBox value={gsc.pos} label="Avg position" delta={gsc.posD} />
+                      <StatBox value={gsc.impressions} label="Impressions" delta={gsc.impressionsD} onClick={() => setGscMetric("impressions")} selected={gscMetric === "impressions"} />
+                      <StatBox value={gsc.clicks} label="Clicks" delta={gsc.clicksD} onClick={() => setGscMetric("clicks")} selected={gscMetric === "clicks"} />
+                      <StatBox value={gsc.pos} label="Avg position" delta={gsc.posD} onClick={() => setGscMetric("position")} selected={gscMetric === "position"} />
                     </div>
-                    <GscLineChart rows={gsc.daily} />
+                    <GscLineChart rows={gsc.daily} metric={gscMetric} />
                     <div style={{ marginTop: 8, fontSize: 10.5, color: gscStatus.state === "live" ? T.sub : T.faint, lineHeight: 1.55 }}>{gscStatus.state === "live" ? gsc.note : gscStatus.state === "loading" ? "Loading…" : gscStatus.detail}</div>
                   </div>
           
@@ -839,14 +847,31 @@ Be directional where the data supports it — don't hedge into uselessness — b
                     ) : <FeedFallbackRow status={ztsPipeStatus} />}
                   </div>
       );
+      const sectionHeader = (label) => (
+        <div style={{ display: "flex", alignItems: "center", gap: 10, padding: isMobile ? "2px 2px 0" : "0 2px" }}>
+          <span style={{ fontSize: 10, fontWeight: 700, letterSpacing: "0.22em", textTransform: "uppercase", color: T.faint, fontFamily: mono }}>{label}</span>
+          <span style={{ flex: 1, height: 1, background: "rgba(34,29,20,0.1)" }} />
+        </div>
+      );
       return isMobile ? (
       <div style={grid}>
-        <div style={col}>{card_bitcoin}{card_stocks}{card_watch}{card_gsc}{card_clarify}{card_zts}{card_meetings}</div>
+        <div style={col}>
+          {sectionHeader("Market")}
+          {card_bitcoin}{card_stocks}{card_watch}
+          {sectionHeader("Ops")}
+          {card_gsc}{card_clarify}{card_zts}{card_meetings}
+        </div>
       </div>
       ) : (
       <div style={grid}>
-        <div style={col}>{card_bitcoin}{card_watch}{card_gsc}{card_clarify}</div>
-        <div style={col}>{card_stocks}{card_zts}{card_meetings}</div>
+        <div style={col}>
+          {sectionHeader("Market")}
+          {card_bitcoin}{card_stocks}{card_watch}
+        </div>
+        <div style={col}>
+          {sectionHeader("Ops")}
+          {card_gsc}{card_clarify}{card_zts}{card_meetings}
+        </div>
       </div>
       );
       })()}
