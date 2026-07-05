@@ -254,7 +254,7 @@ const PROPERTIES = [
 
 // ─── Bitcoin ──────────────────────────────────────────────────────────────────
 function useBitcoinPrice() {
-  const [state, setState] = useState({ price: null, changePct: null, points: [], loading: true, error: null, fetchedAt: null });
+  const [state, setState] = useState({ price: null, changePct: null, points: [], high24: null, low24: null, loading: true, error: null, fetchedAt: null });
   const [nonce, setNonce] = useState(0);
   useEffect(() => {
     let alive = true;
@@ -267,7 +267,7 @@ function useBitcoinPrice() {
       const chartData = await chartRes.json();
       const raw = (chartData.prices || []).map(([, p]) => p);
       const step = Math.max(1, Math.floor(raw.length / 48));
-      return { price: priceData.bitcoin?.usd ?? null, changePct: priceData.bitcoin?.usd_24h_change ?? null, points: raw.filter((_, i) => i % step === 0) };
+      return { price: priceData.bitcoin?.usd ?? null, changePct: priceData.bitcoin?.usd_24h_change ?? null, points: raw.filter((_, i) => i % step === 0), high24: raw.length ? Math.max(...raw) : null, low24: raw.length ? Math.min(...raw) : null };
     };
     const load = async () => {
       // Prefer the server-side proxy — same-origin, immune to the visitor's
@@ -276,7 +276,7 @@ function useBitcoinPrice() {
         const res = await fetch("/.netlify/functions/btc");
         if (res.ok) {
           const data = await res.json();
-          if (data?.success && alive) { setState({ price: data.price, changePct: data.changePct, points: data.points || [], loading: false, error: null, fetchedAt: Date.now() }); return; }
+          if (data?.success && alive) { setState({ price: data.price, changePct: data.changePct, points: data.points || [], high24: data.high24 ?? null, low24: data.low24 ?? null, loading: false, error: null, fetchedAt: Date.now() }); return; }
         }
         if (res.status !== 404) throw new Error(`proxy ${res.status}`);
       } catch { /* fall through to direct fetch below */ }
@@ -464,25 +464,53 @@ const BRIEF_WIRE = [
 const GSC_FALLBACK = { impressions: "12.4K", impressionsD: "▲ 18%", clicks: "486", clicksD: "▲ 9%", pos: "8.2", posD: "▲ from 9.1", series: [42, 47, 40, 52, 49, 55, 61, 51, 58, 67, 63, 72, 78, 88], note: '"steel seed phrase backup" broke into the top 10 — that\'s driving the impression lift.' };
 const SHOP_FALLBACK = { visits: "1,982", visitsD: "▲ 12%", conv: "1.9%", convD: "▲ 0.2pt", orders: "38", ordersD: "▲ 5", series: [38, 44, 41, 47, 43, 52, 58, 50, 55, 61, 57, 66, 74, 84], note: "Traffic builds into Thursday's collabs. At 1.9% conversion, a collab-day spike of 800 visits ≈ 15 extra orders." };
 
+const STOCKS_FALLBACK = { spx: { value: "+0.32%", up: true }, ndq: { value: "+0.51%", up: true }, tnx: { value: "3.92%", up: true }, dxy: { value: "101.2", up: false } };
+
 function StancePill({ text, color }) {
   return <span style={{ fontSize: 8.5, fontWeight: 700, color, background: color + "1A", border: `1px solid ${color}4D`, padding: "4px 10px", borderRadius: 12, fontFamily: mono, letterSpacing: "0.08em" }}>{text}</span>;
+}
+function SampleTag({ isSample }) {
+  return isSample
+    ? <span style={{ fontSize: 8, fontWeight: 700, color: T.faint, background: "rgba(255,255,255,0.05)", border: `1px solid rgba(255,255,255,0.12)`, padding: "3.5px 9px", borderRadius: 10, fontFamily: mono, letterSpacing: "0.06em" }}>SAMPLE</span>
+    : <span style={{ fontSize: 8, fontWeight: 700, color: T.green, background: T.green + "1A", border: `1px solid ${T.green}40`, padding: "3.5px 9px", borderRadius: 10, fontFamily: mono, letterSpacing: "0.06em" }}>● LIVE</span>;
 }
 
 function MorningBriefPage({ btc, isMobile }) {
   const [gsc, setGsc] = useState(GSC_FALLBACK);
+  const [gscLive, setGscLive] = useState(false);
   const [shop, setShop] = useState(SHOP_FALLBACK);
+  const [shopLive, setShopLive] = useState(false);
+  const [stocks, setStocks] = useState(STOCKS_FALLBACK);
+  const [stocksLive, setStocksLive] = useState(false);
+  const [events, setEvents] = useState(BRIEF_EVENTS);
+  const [eventsLive, setEventsLive] = useState(false);
+  const [wire, setWire] = useState(BRIEF_WIRE);
+  const [wireLive, setWireLive] = useState(false);
   useEffect(() => {
     let alive = true;
-    // Build these two Netlify functions to make the charts live:
-    //  gsc:     Search Console API (searchanalytics.query, last 14d, site zerotosecure.com)
-    //  shopify: Admin API (reports or analytics), visits/conversion/orders last 14d
-    callFn("gsc", { site: "zerotosecure.com", days: 14 }).then(d => { if (alive && d?.success) setGsc(d); });
-    callFn("shopify", { days: 14 }).then(d => { if (alive && d?.success) setShop(d); });
+    callFn("gsc", { site: "zerotosecure.com", days: 14 }).then(d => { if (alive && d?.success) { setGsc(d); setGscLive(true); } });
+    callFn("shopify", { days: 14 }).then(d => { if (alive && d?.success) { setShop(d); setShopLive(true); } });
+    callFn("markets", {}).then(d => { if (alive && d?.success) { setStocks(d); setStocksLive(true); } });
+    callFn("calendar", {}).then(d => { if (alive && d?.success && d.events?.length) { setEvents(d.events); setEventsLive(true); } });
+    callFn("wire", {}).then(d => { if (alive && d?.success && d.wire?.length) { setWire(d.wire); setWireLive(true); } });
     return () => { alive = false; };
   }, []);
   const price = btc.loading ? "…" : btc.error || btc.price == null ? "—" : "$" + btc.price.toLocaleString(undefined, { maximumFractionDigits: 0 });
   const hasChange = !btc.loading && !btc.error && btc.changePct !== null && btc.changePct !== undefined;
   const up = (btc.changePct || 0) >= 0;
+  const hasRange = !btc.loading && !btc.error && btc.high24 != null && btc.low24 != null;
+  const fmtK = (n) => "$" + (n / 1000).toFixed(1) + "K";
+  let dayTarget = "—", support = "—", invalidation = "—", stance = "NEUTRAL", stanceColor = T.sub, narrative = "Waiting on live price data to compute today's range and levels.";
+  if (hasRange) {
+    const range = Math.max(btc.high24 - btc.low24, btc.high24 * 0.001);
+    const target = Math.max(btc.high24, btc.price + range * 0.5);
+    const invalid = btc.low24 - range * 0.15;
+    dayTarget = fmtK(target); support = fmtK(btc.low24); invalidation = fmtK(invalid);
+    const posInRange = (btc.price - btc.low24) / range; // 0 = at 24h low, 1 = at 24h high
+    stance = up ? "CONSTRUCTIVE" : "CAUTIOUS"; stanceColor = up ? T.green : T.amber;
+    const pos = posInRange > 0.7 ? "near the top of" : posInRange < 0.3 ? "near the bottom of" : "mid";
+    narrative = `24h range ${fmtK(btc.low24)}–${fmtK(btc.high24)}, currently trading ${pos === "mid" ? "in the middle of" : pos} that range and ${up ? "up" : "down"} ${Math.abs(btc.changePct || 0).toFixed(1)}% on the day. Support sits at the 24h low (${fmtK(btc.low24)}); a break below ${invalidation} would put you outside the recent range and is worth checking your Aave health factor against.`;
+  }
   const grid = { maxWidth: 1020, margin: "0 auto", display: "grid", gridTemplateColumns: isMobile ? "1fr" : "1fr 1fr", gap: isMobile ? 12 : 14, alignItems: "start" };
   const card = isMobile ? S.cardM : S.card;
 
@@ -496,57 +524,59 @@ function MorningBriefPage({ btc, isMobile }) {
               <span style={{ width: 18, height: 18, borderRadius: "50%", background: "linear-gradient(135deg,#F7931A,#C77416)", display: "inline-flex", alignItems: "center", justifyContent: "center", fontSize: 9, fontWeight: 800, color: "#1A0F00" }}>₿</span>
               <span style={S.title}>Bitcoin · Day Outlook</span>
             </div>
-            <StancePill text="CONSTRUCTIVE" color={T.green} />
+            <StancePill text={stance} color={stanceColor} />
           </div>
           <div style={{ display: "flex", alignItems: "baseline", gap: 10, marginBottom: 13 }}>
             <span style={{ fontSize: 26, fontWeight: 500, fontFamily: mono, color: T.ink }}>{price}</span>
             {hasChange && <span style={{ fontSize: 12, fontWeight: 700, color: up ? T.green : T.red, fontFamily: mono }}>{up ? "▲" : "▼"} {Math.abs(btc.changePct || 0).toFixed(2)}%</span>}
           </div>
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 7, marginBottom: 13 }}>
-            <StatBox value="$121.5K" label="Day target" valueColor={T.brass} />
-            <StatBox value="$116.4K" label="Support" valueColor={T.green} />
-            <StatBox value="$115.0K" label="Invalidation" valueColor={T.red} />
+            <StatBox value={dayTarget} label="Day target" valueColor={T.brass} />
+            <StatBox value={support} label="Support (24h low)" valueColor={T.green} />
+            <StatBox value={invalidation} label="Invalidation" valueColor={T.red} />
           </div>
-          <div style={{ fontSize: 11.5, color: T.sub, lineHeight: 1.65 }}>Holding yesterday's breakout. ETF inflows are six green days straight and funding is neutral — no leverage froth yet. Long bias stands above $116.4K; a 4h close below $115K invalidates and your Aave health factor becomes the first thing to check.</div>
+          <div style={{ fontSize: 11.5, color: T.sub, lineHeight: 1.65 }}>{narrative}</div>
+          <div style={{ marginTop: 9, ...S.microLabel, letterSpacing: "0.04em" }}>LEVELS DERIVED FROM LIVE 24H RANGE · NOT FINANCIAL ADVICE</div>
         </div>
 
         {/* Stocks outlook */}
         <div style={card}>
           <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 12 }}>
             <span style={S.title}>Stocks · Day Outlook</span>
-            <StancePill text="CAUTIOUS" color={T.amber} />
+            <SampleTag isSample={!stocksLive} />
           </div>
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 7, marginBottom: 13 }}>
-            {[["S&P FUT", "+0.32%", T.green], ["NASDAQ FUT", "+0.51%", T.green], ["10Y YIELD", "3.92%", T.ink], ["DXY", "101.2", T.red]].map(([l, v, c], i) => (
+            {[["S&P FUT", stocks.spx], ["NASDAQ FUT", stocks.ndq], ["10Y YIELD", stocks.tnx], ["DXY", stocks.dxy]].map(([l, s], i) => (
               <div key={i} style={{ ...S.inner, padding: "10px 12px", borderRadius: 10, display: "flex", alignItems: "center", justifyContent: "space-between" }}>
                 <span style={{ fontSize: 9, color: T.faint, letterSpacing: "0.06em" }}>{l}</span>
-                <span style={{ fontSize: 11.5, fontWeight: 700, color: c, fontFamily: mono }}>{v}</span>
+                <span style={{ fontSize: 11.5, fontWeight: 700, color: s.up ? T.green : T.red, fontFamily: mono }}>{s.value}</span>
               </div>
             ))}
           </div>
-          <div style={{ fontSize: 11.5, color: T.sub, lineHeight: 1.65 }}>Futures drift higher into the jobs print, but breadth is thin — AI capex names are still carrying the whole tape. Relevant to your bubble thesis: two more hyperscalers guided capex up on private-credit financing this week. If the 10Y pops through 4.05%, expect the momentum unwind to start there.</div>
+          <div style={{ fontSize: 11.5, color: T.sub, lineHeight: 1.65 }}>{stocksLive ? "Futures and yield pulled live via Yahoo Finance's public endpoint — unofficial, no key, refreshes on page load." : "Showing sample figures — the markets function hasn't returned live data yet (check Connections)."}</div>
         </div>
 
         {/* Events */}
         <div style={card}>
-          <CardHeader title="Watch Today" tag="CT TIME" />
+          <CardHeader title="Watch Today" tag={eventsLive ? "CT TIME · LIVE" : "SAMPLE"} tagColor={eventsLive ? T.green : T.faint} />
           <div style={{ display: "flex", flexDirection: "column", gap: 7, marginTop: 10 }}>
-            {BRIEF_EVENTS.map((e, i) => (
+            {events.map((e, i) => (
               <div key={i} style={{ ...S.inner, display: "flex", alignItems: "center", gap: 11, padding: "11px 13px" }}>
                 <span style={{ width: 7, height: 7, borderRadius: "50%", background: e.color, flex: "none", boxShadow: `0 0 8px ${e.color}80` }} />
                 <span style={{ fontSize: 9, color: T.faint, fontFamily: mono, flex: "none", width: 52 }}>{e.time}</span>
                 <span style={{ fontSize: 11, color: "#C6CFDE", lineHeight: 1.5, flex: 1 }}>{e.text}</span>
               </div>
             ))}
+            {eventsLive && events.length === 0 && <div style={{ fontSize: 10.5, color: T.faint, padding: "6px 0" }}>No high/medium-impact US events scheduled today.</div>}
           </div>
         </div>
 
         {/* The Wire */}
         <div style={card}>
-          <CardHeader title="The Wire" tag="● LIVE" tagColor={T.green} />
-          <div style={{ fontSize: 10.5, color: T.faint, lineHeight: 1.5, margin: "2px 0 12px" }}>Your X replacement — curated lists + Watcher Guru–style wires, auto-summarized every 20 minutes. No feed, no doomscroll.</div>
+          <CardHeader title="The Wire" tag={wireLive ? "● LIVE" : "SAMPLE"} tagColor={wireLive ? T.green : T.faint} />
+          <div style={{ fontSize: 10.5, color: T.faint, lineHeight: 1.5, margin: "2px 0 12px" }}>{wireLive ? "Latest crypto/macro headlines, auto-tagged." : "Sample headlines — real feed hasn't loaded yet (check Connections)."}</div>
           <div style={{ display: "flex", flexDirection: "column", gap: 7 }}>
-            {BRIEF_WIRE.map((w, i) => (
+            {wire.map((w, i) => (
               <div key={i} style={{ ...S.inner, display: "flex", gap: 10, padding: "10px 12px" }}>
                 <span style={{ fontSize: 8.5, color: T.faint, fontFamily: mono, flex: "none", paddingTop: 2, width: 36 }}>{w.time}</span>
                 <span style={{ fontSize: 11, color: "#C6CFDE", lineHeight: 1.55, flex: 1 }}>
@@ -555,7 +585,7 @@ function MorningBriefPage({ btc, isMobile }) {
               </div>
             ))}
           </div>
-          <div style={{ marginTop: 10, ...S.microLabel, letterSpacing: "0.05em" }}>SOURCES · X LISTS · WATCHER GURU · BLOOMBERG WIRES</div>
+          <div style={{ marginTop: 10, ...S.microLabel, letterSpacing: "0.05em" }}>{wireLive ? "SOURCES · COINDESK · COINTELEGRAPH" : "SOURCES · SAMPLE DATA"}</div>
         </div>
 
         {/* ZTS Search Console */}
@@ -565,7 +595,7 @@ function MorningBriefPage({ btc, isMobile }) {
               <span style={{ width: 8, height: 8, borderRadius: "50%", background: "#0E9F6E", boxShadow: "0 0 8px rgba(14,159,110,0.5)" }} />
               <span style={S.title}>Zero To Secure · Search Console</span>
             </div>
-            <span style={S.microLabel}>LAST 14D</span>
+            <SampleTag isSample={!gscLive} />
           </div>
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 7, marginBottom: 13 }}>
             <StatBox value={gsc.impressions} label="Impressions" delta={gsc.impressionsD} />
@@ -583,7 +613,7 @@ function MorningBriefPage({ btc, isMobile }) {
               <span style={{ width: 8, height: 8, borderRadius: "50%", background: T.brass, boxShadow: "0 0 8px rgba(217,177,94,0.5)" }} />
               <span style={S.title}>Zero To Secure · Shopify</span>
             </div>
-            <span style={S.microLabel}>LAST 14D</span>
+            <SampleTag isSample={!shopLive} />
           </div>
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 7, marginBottom: 13 }}>
             <StatBox value={shop.visits} label="Visits" delta={shop.visitsD} />
@@ -641,11 +671,28 @@ function BoardPage({ seatNotes, onEditSeat, onEnterRoom, isMobile }) {
 
 // ─── Page: Properties ────────────────────────────────────────────────────────
 function PropertiesPage({ isMobile, btc }) {
+  const [status, setStatus] = useState({});
+  useEffect(() => {
+    let alive = true;
+    const urls = PROPERTIES.map(p => p.url || p.appUrl).filter(Boolean);
+    callFn("site-status", { urls }).then(d => {
+      if (!alive || !d?.success) return;
+      const map = {};
+      d.results.forEach(r => { map[r.url] = r; });
+      setStatus(map);
+    });
+    return () => { alive = false; };
+  }, []);
   const card = isMobile ? S.cardM : S.card;
   return (
     <div style={{ flex: 1, overflowY: "auto", padding: isMobile ? "18px 16px 24px" : "30px 34px 40px" }}>
       <div style={{ maxWidth: 920, margin: "0 auto", display: "grid", gridTemplateColumns: isMobile ? "1fr" : "1fr 1fr", gap: isMobile ? 10 : 14 }}>
-        {PROPERTIES.map((p, i) => (
+        {PROPERTIES.map((p, i) => {
+          const key = p.url || p.appUrl;
+          const s = status[key];
+          const pillColor = !s ? T.faint : s.up ? T.green : T.red;
+          const pillText = !s ? "CHECKING…" : s.up ? "● LIVE" : `● DOWN (${s.status || "unreachable"})`;
+          return (
           <div key={i} style={{ ...card, display: "flex", flexDirection: "column", gap: 12 }}>
             <div style={{ display: "flex", alignItems: "center", gap: 11 }}>
               <span style={{ width: 9, height: 9, borderRadius: "50%", background: p.color, flex: "none", boxShadow: `0 0 10px ${p.color}66` }} />
@@ -653,14 +700,15 @@ function PropertiesPage({ isMobile, btc }) {
                 <span style={{ fontSize: 13.5, fontWeight: 700, fontFamily: syne, color: T.ink }}>{p.name}</span>
                 <span style={{ fontSize: 10.5, color: T.faint }}>{p.desc}</span>
               </span>
-              <span style={{ marginLeft: "auto", fontSize: 8.5, color: T.green, fontFamily: mono, letterSpacing: "0.08em", flex: "none" }}>● LIVE</span>
+              <span style={{ marginLeft: "auto", fontSize: 8.5, color: pillColor, fontFamily: mono, letterSpacing: "0.06em", flex: "none", whiteSpace: "nowrap" }}>{pillText}</span>
             </div>
             <div style={{ display: "flex", gap: 8 }}>
               {p.url && <a href={p.url} target="_blank" rel="noopener" style={{ flex: 1, padding: 10, textAlign: "center", background: "rgba(255,255,255,0.05)", border: `1px solid rgba(255,255,255,0.1)`, borderRadius: 10, color: p.color, fontSize: 11, fontWeight: 700, textDecoration: "none" }}>Site ›</a>}
               <a href={p.appUrl} target="_blank" rel="noopener" style={{ flex: 1, padding: 10, textAlign: "center", background: "rgba(255,255,255,0.05)", border: `1px solid rgba(255,255,255,0.1)`, borderRadius: 10, color: T.sub, fontSize: 11, fontWeight: 600, textDecoration: "none" }}>Command Center ›</a>
             </div>
           </div>
-        ))}
+          );
+        })}
         {isMobile && btc && !btc.loading && !btc.error && (
           <div style={S.cardM}>
             <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 7 }}>
@@ -986,14 +1034,15 @@ function MiniMePage({ settings, updateSetting, isMobile }) {
             <span style={{ display: "flex", flexDirection: "column", gap: 3, flex: 1 }}>
               <span style={{ display: "flex", alignItems: "baseline", gap: 10 }}>
                 <span style={{ fontSize: 19, fontWeight: 800, fontFamily: syne, color: T.ink }}>Mini Me</span>
-                <span style={{ fontSize: 9, color: T.green, fontFamily: mono, letterSpacing: "0.08em" }}>● ONLINE</span>
+                <span style={{ fontSize: 9, color: T.amber, fontFamily: mono, letterSpacing: "0.08em" }}>◐ PREVIEW</span>
               </span>
               <span style={{ fontSize: 11, color: T.sub, lineHeight: 1.5 }}>Your sidekick. Oversees every seat — including the Chief — learns your patterns, and works while you sleep.</span>
+              <span style={{ fontSize: 10, color: T.amber, lineHeight: 1.5 }}>No agent is running yet — this page is a design preview. The stats, feed, and skills below are illustrative, not live telemetry.</span>
             </span>
           </div>
           <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 6 }}>
             <span style={{ fontSize: 10, fontWeight: 700, fontFamily: syne, color: T.brass, letterSpacing: "0.08em" }}>LEVEL 3 · APPRENTICE</span>
-            <span style={{ fontSize: 9, color: T.faint, fontFamily: mono }}>620 / 1000 XP</span>
+            <span style={{ fontSize: 9, color: T.faint, fontFamily: mono }}>620 / 1000 XP · MOCKUP</span>
           </div>
           <div style={{ height: 7, background: "rgba(0,0,0,0.35)", borderRadius: 4, overflow: "hidden", marginBottom: 16, border: "1px solid rgba(255,255,255,0.05)" }}>
             <div style={{ width: "62%", height: "100%", background: `linear-gradient(90deg, ${T.brassDeep}, ${T.brass})`, borderRadius: 4, boxShadow: "0 0 12px rgba(200,160,74,0.5)" }} />
@@ -1101,8 +1150,8 @@ function MiniMePage({ settings, updateSetting, isMobile }) {
 
         {/* Oversight feed */}
         <div style={card}>
-          <div style={{ ...S.title, marginBottom: 4 }}>Oversight Feed</div>
-          <div style={{ fontSize: 10.5, color: T.faint, lineHeight: 1.5, marginBottom: 12 }}>What Mini Me did on its own, most recent first.</div>
+          <div style={{ ...S.title, marginBottom: 4 }}>Oversight Feed <span style={{ color: T.amber, fontWeight: 600 }}>· example entries</span></div>
+          <div style={{ fontSize: 10.5, color: T.faint, lineHeight: 1.5, marginBottom: 12 }}>What this feed will show once an agent is wired up — not a real log yet.</div>
           <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
             {FEED.map((f, i) => (
               <div key={i} style={{ ...S.inner, display: "flex", gap: 11, padding: "10px 12px" }}>
@@ -1138,7 +1187,7 @@ const CONN_GROUPS = [
   { title: "Core", keys: ["supabase_env", "supabase_auth", "supabase_db"] },
   { title: "AI", keys: ["anthropic"] },
   { title: "Market Data", keys: ["coingecko"] },
-  { title: "Netlify Functions", keys: ["fn_health", "fn_btc", "fn_gsc", "fn_shopify", "fn_deploy", "fn_dbadmin", "fn_audit"] },
+  { title: "Netlify Functions", keys: ["fn_health", "fn_btc", "fn_markets", "fn_calendar", "fn_wire", "fn_site_status", "fn_gsc", "fn_shopify", "fn_deploy", "fn_dbadmin", "fn_audit"] },
 ];
 const CONN_META = {
   supabase_env: { name: "Supabase · config", desc: "VITE_SUPABASE_URL + anon key present at build time" },
@@ -1148,6 +1197,10 @@ const CONN_META = {
   coingecko: { name: "CoinGecko", desc: "upstream BTC source — reached via the btc proxy, not directly from the browser" },
   fn_health: { name: "health", desc: "reports which server-side keys are configured" },
   fn_btc: { name: "btc", desc: "proxies BTC price + sparkline — avoids mobile-carrier IP rate limiting" },
+  fn_markets: { name: "markets", desc: "S&P/Nasdaq futures, 10Y yield, DXY via Yahoo's public endpoint (unofficial)" },
+  fn_calendar: { name: "calendar", desc: "today's US econ calendar (unofficial free feed)" },
+  fn_wire: { name: "wire", desc: "live crypto/macro headlines from CoinDesk + Cointelegraph RSS" },
+  fn_site_status: { name: "site-status", desc: "uptime check behind the Properties page's live/down pill" },
   fn_gsc: { name: "gsc", desc: "Search Console · zerotosecure.com last 14d" },
   fn_shopify: { name: "shopify", desc: "Shopify Admin API · orders last 14d" },
   fn_deploy: { name: "deploy", desc: "Netlify API · trigger builds per property" },
@@ -1229,7 +1282,7 @@ function useConnections({ session, btc }) {
     }
 
     // Netlify functions
-    const fns = [["fn_health", "health"], ["fn_btc", "btc"], ["fn_gsc", "gsc"], ["fn_shopify", "shopify"], ["fn_deploy", "deploy"], ["fn_dbadmin", "db-admin"], ["fn_audit", "audit"]];
+    const fns = [["fn_health", "health"], ["fn_btc", "btc"], ["fn_markets", "markets"], ["fn_calendar", "calendar"], ["fn_wire", "wire"], ["fn_site_status", "site-status"], ["fn_gsc", "gsc"], ["fn_shopify", "shopify"], ["fn_deploy", "deploy"], ["fn_dbadmin", "db-admin"], ["fn_audit", "audit"]];
     if (!IS_DEPLOYED) {
       // netlify dev serves functions locally; try health first to decide
       const probe = await pingFn("health");

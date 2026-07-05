@@ -33,12 +33,16 @@ exports.handler = async (event) => {
     const raw = (chartData.prices || []).map(([, p]) => p);
     const step = Math.max(1, Math.floor(raw.length / 48));
     const points = raw.filter((_, i) => i % step === 0);
+    const high24 = raw.length ? Math.max(...raw) : null;
+    const low24 = raw.length ? Math.min(...raw) : null;
 
     const payload = {
       success: true,
       price: priceData.bitcoin?.usd ?? null,
       changePct: priceData.bitcoin?.usd_24h_change ?? null,
       points,
+      high24,
+      low24,
     };
     cache = { data: payload, ts: Date.now() };
     return json(200, payload);
