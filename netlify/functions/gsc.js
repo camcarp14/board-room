@@ -27,7 +27,15 @@ function pemShapeError(key) {
   const hasBegin = /-----BEGIN (RSA )?PRIVATE KEY-----/.test(key);
   const hasEnd = /-----END (RSA )?PRIVATE KEY-----/.test(key);
   if (!hasBegin || !hasEnd) {
-    return `GSC_PRIVATE_KEY doesn't look like a valid PEM key after cleanup (missing ${!hasBegin ? "the BEGIN" : "the END"} marker; length after cleanup: ${key.length} chars — a real key is normally 1600+ chars). Re-copy the "private_key" field from the service account JSON, including everything between the quotes, as one line with literal \\n sequences intact.`;
+    // Show exactly what's there instead of guessing again — this is just
+    // the PEM header/footer wrapper text, never the sensitive key body,
+    // so it's safe to surface. Char codes catch invisible/look-alike
+    // characters (e.g. an em-dash swapped in for a hyphen by autocorrect
+    // somewhere in the copy-paste chain) that look identical when printed.
+    const head = key.slice(0, 40);
+    const headCodes = [...head.slice(0, 10)].map(c => c.codePointAt(0).toString(16).padStart(4, "0")).join(" ");
+    const tail = key.slice(-40).trim();
+    return `GSC_PRIVATE_KEY doesn't look like a valid PEM key after cleanup (missing ${!hasBegin ? "the BEGIN" : "the END"} marker; length after cleanup: ${key.length} chars — plausible for a real key). First 40 chars as stored: "${head}" (unicode code points of the first 10: ${headCodes} — a plain hyphen is 002d; anything else there, like 2013 or 2014, means a dash got swapped by autocorrect somewhere in the copy chain). Last 40 chars: "${tail}".`;
   }
   const bodyLines = key.split("\n").filter(l => l && !l.startsWith("-----"));
   if (bodyLines.length < 10) {
