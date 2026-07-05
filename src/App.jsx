@@ -574,7 +574,7 @@ function StatusTag({ status }) {
   return <span style={{ fontSize: 8, fontWeight: 700, color: s.color, background: s.color + "1A", border: `1px solid ${s.color}40`, padding: "3.5px 9px", borderRadius: 10, fontFamily: mono, letterSpacing: "0.06em" }}>{s.label}</span>;
 }
 
-function MorningBriefPage({ btc, isMobile }) {
+function MorningBriefPage({ btc, isMobile, settings }) {
   const [gsc, setGsc] = useState(GSC_EMPTY);
   const [gscStatus, setGscStatus] = useState({ state: "loading" });
   const [shop, setShop] = useState(SHOP_EMPTY);
@@ -583,8 +583,12 @@ function MorningBriefPage({ btc, isMobile }) {
   const [stocksStatus, setStocksStatus] = useState({ state: "loading" });
   const [events, setEvents] = useState([]);
   const [eventsStatus, setEventsStatus] = useState({ state: "loading" });
-  const [wire, setWire] = useState([]);
-  const [wireStatus, setWireStatus] = useState({ state: "loading" });
+  const [clarify, setClarify] = useState(null);
+  const [clarifyStatus, setClarifyStatus] = useState({ state: "loading" });
+  const [ztsPipe, setZtsPipe] = useState(null);
+  const [ztsPipeStatus, setZtsPipeStatus] = useState({ state: "loading" });
+  const [meetings, setMeetings] = useState([]);
+  const [meetingsStatus, setMeetingsStatus] = useState({ state: "loading" });
 
   useEffect(() => {
     let alive = true;
@@ -611,11 +615,23 @@ function MorningBriefPage({ btc, isMobile }) {
       (m) => `Add ${m || "GSC_CLIENT_EMAIL + GSC_PRIVATE_KEY"} in Netlify env vars, share the Search Console property with the service account, then redeploy.`);
     loadCredentialed("shopify", { days: 14 }, setShop, setShopStatus,
       (m) => `Add ${m || "SHOPIFY_SHOP + SHOPIFY_CLIENT_ID + SHOPIFY_CLIENT_SECRET"} in Netlify env vars, then redeploy.`);
+    loadCredentialed("clarify-pipeline", {}, (d) => setClarify(d), setClarifyStatus,
+      (m) => `Add ${m || "CLARIFY_SUPABASE_URL + CLARIFY_SUPABASE_ANON_KEY"} in Netlify env vars, then redeploy.`);
+    loadCredentialed("zts-pipeline", {}, (d) => setZtsPipe(d), setZtsPipeStatus,
+      (m) => `Add ${m || "ZTS_SUPABASE_URL + ZTS_SUPABASE_ANON_KEY"} in Netlify env vars, then redeploy.`);
     loadOpen("markets", (d) => setStocks(d), setStocksStatus);
     loadOpen("calendar", (d) => setEvents(d.events || []), setEventsStatus);
-    loadOpen("wire", (d) => setWire(d.wire || []), setWireStatus);
+    // Meetings depend on a per-user setting (calendar_url), not an env var —
+    // no ping/configured gate, just try and report the real outcome.
+    (async () => {
+      if (!settings?.calendar_url) { if (alive) setMeetingsStatus({ state: "notconfigured", detail: "Link a calendar (iCal / .ics URL) in the sidebar to see meetings here." }); return; }
+      const res = await callFnFull("calendar-events", { url: settings.calendar_url });
+      if (!alive) return;
+      if (res.ok && res.data?.success) { setMeetings(res.data.events || []); setMeetingsStatus({ state: "live" }); }
+      else setMeetingsStatus({ state: "error", detail: res.data?.error || "unreachable" });
+    })();
     return () => { alive = false; };
-  }, []);
+  }, [settings?.calendar_url]);
 
   const price = btc.loading ? "…" : btc.error || btc.price == null ? "—" : "$" + btc.price.toLocaleString(undefined, { maximumFractionDigits: 0 });
   const hasChange = !btc.loading && !btc.error && btc.changePct !== null && btc.changePct !== undefined;
@@ -671,7 +687,7 @@ function MorningBriefPage({ btc, isMobile }) {
           {/* Events */}
                   <div style={card}>
                     <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-                      <span style={S.title}>Watch Today</span>
+                      <span style={S.title}>Watch This Week</span>
                       <div style={{ display: "flex", alignItems: "center", gap: 7 }}>
                         <span style={S.microLabel}>CT TIME</span>
                         <StatusTag status={eventsStatus} />
@@ -685,7 +701,7 @@ function MorningBriefPage({ btc, isMobile }) {
                             <span style={{ fontSize: 9, color: T.faint, fontFamily: mono, flex: "none", width: 52 }}>{e.time}</span>
                             <span style={{ fontSize: 11, color: "#3A3323", lineHeight: 1.5, flex: 1 }}>{e.text}</span>
                           </div>
-                        )) : <div style={{ fontSize: 10.5, color: T.faint, padding: "6px 0" }}>No high/medium-impact US events scheduled today.</div>
+                        )) : <div style={{ fontSize: 10.5, color: T.faint, padding: "6px 0" }}>No high/medium-impact US events in the next 7 days.</div>
                       ) : <FeedFallbackRow status={eventsStatus} />}
                     </div>
                   </div>
@@ -706,6 +722,28 @@ function MorningBriefPage({ btc, isMobile }) {
                     <Bars data={gsc.series} from="#17B888" to="#0E9F6E" />
                     <div style={{ marginTop: 8, fontSize: 10.5, color: gscStatus.state === "live" ? T.sub : T.faint, lineHeight: 1.55 }}>{gscStatus.state === "live" ? gsc.note : gscStatus.state === "loading" ? "Loading…" : gscStatus.detail}</div>
                   </div>
+          {/* Clarify Outreach Pipeline — bottom of column */}
+                  <div style={card}>
+                    <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 12 }}>
+                      <span style={S.title}>Clarify · Outreach Pipeline</span>
+                      <StatusTag status={clarifyStatus} />
+                    </div>
+                    {clarifyStatus.state === "live" ? (
+                      <>
+                        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr 1fr", gap: 7, marginBottom: 11 }}>
+                          <StatBox value={String(clarify.prospected)} label="Prospected" />
+                          <StatBox value={String(clarify.drafts)} label="Drafts" valueColor={T.amber} />
+                          <StatBox value={String(clarify.sent)} label="Sent" valueColor={T.blue} />
+                          <StatBox value={String(clarify.replied)} label="Replied" valueColor={T.green} />
+                        </div>
+                        <div style={{ fontSize: 11.5, color: T.sub, lineHeight: 1.6, marginBottom: 10 }}>{clarify.replyRate}% reply rate · <span style={{ color: T.green, fontWeight: 700 }}>${Math.round(clarify.valueAtStake / 1000)}k/mo at stake</span></div>
+                        <div style={{ ...S.inner, padding: "10px 13px", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+                          <span style={{ fontSize: 10, color: T.faint }}>Active inbound leads</span>
+                          <span style={{ fontSize: 14, fontWeight: 700, fontFamily: mono, color: T.ink }}>{clarify.activeInbound}</span>
+                        </div>
+                      </>
+                    ) : <FeedFallbackRow status={clarifyStatus} />}
+                  </div>
         </div>
 
         <div style={col}>
@@ -725,34 +763,25 @@ function MorningBriefPage({ btc, isMobile }) {
                     </div>
                     <div style={{ fontSize: 11.5, color: T.sub, lineHeight: 1.65 }}>{stocksStatus.state === "live" ? "Futures and yield pulled live via Yahoo Finance's public endpoint — unofficial, no key, refreshes on page load." : stocksStatus.state === "loading" ? "Loading live data…" : stocksStatus.detail}</div>
                   </div>
-          {/* The Wire */}
+          {/* Upcoming Meetings */}
                   <div style={card}>
                     <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-                      <span style={S.title}>The Wire</span>
-                      <StatusTag status={wireStatus} />
+                      <span style={S.title}>Upcoming Meetings</span>
+                      <StatusTag status={meetingsStatus} />
                     </div>
-                    <div style={{ fontSize: 10.5, color: T.faint, lineHeight: 1.5, margin: "6px 0 12px" }}>{wireStatus.state === "live" ? "Latest crypto/macro headlines, auto-tagged." : "Real headlines only — nothing shown until the feed responds."}</div>
-                    <div style={{ display: "flex", flexDirection: "column", gap: 7 }}>
-                      {wireStatus.state === "live" ? wire.map((w, i) => (
-                        w.link ? (
-                          <a key={i} href={w.link} target="_blank" rel="noopener" style={{ ...S.inner, display: "flex", gap: 10, padding: "10px 12px", textDecoration: "none", cursor: "pointer" }}>
-                            <span style={{ fontSize: 8.5, color: T.faint, fontFamily: mono, flex: "none", paddingTop: 2, width: 36 }}>{w.time}</span>
-                            <span style={{ fontSize: 11, color: "#3A3323", lineHeight: 1.55, flex: 1 }}>
-                              <span style={{ color: w.tagColor, fontWeight: 700, fontSize: 8.5, letterSpacing: "0.06em" }}>{w.tag} </span> {w.text}
-                            </span>
-                            <span style={{ color: T.faint, fontSize: 12, flex: "none", paddingTop: 1 }}>›</span>
-                          </a>
-                        ) : (
-                          <div key={i} style={{ ...S.inner, display: "flex", gap: 10, padding: "10px 12px" }}>
-                            <span style={{ fontSize: 8.5, color: T.faint, fontFamily: mono, flex: "none", paddingTop: 2, width: 36 }}>{w.time}</span>
-                            <span style={{ fontSize: 11, color: "#3A3323", lineHeight: 1.55, flex: 1 }}>
-                              <span style={{ color: w.tagColor, fontWeight: 700, fontSize: 8.5, letterSpacing: "0.06em" }}>{w.tag} </span> {w.text}
+                    <div style={{ display: "flex", flexDirection: "column", gap: 7, marginTop: 10 }}>
+                      {meetingsStatus.state === "live" ? (
+                        meetings.length ? meetings.map((m, i) => (
+                          <div key={i} style={{ ...S.inner, display: "flex", alignItems: "center", gap: 11, padding: "11px 13px" }}>
+                            <span style={{ width: 7, height: 7, borderRadius: "50%", background: T.blue, flex: "none" }} />
+                            <span style={{ display: "flex", flexDirection: "column", gap: 1, flex: 1, minWidth: 0 }}>
+                              <span style={{ fontSize: 11, color: "#3A3323", lineHeight: 1.4 }}>{m.title}</span>
+                              <span style={{ fontSize: 9, color: T.faint, fontFamily: mono }}>{m.when}{m.location ? " · " + m.location : ""}</span>
                             </span>
                           </div>
-                        )
-                      )) : <FeedFallbackRow status={wireStatus} />}
+                        )) : <div style={{ fontSize: 10.5, color: T.faint, padding: "6px 0" }}>Nothing on the calendar in the next two weeks.</div>
+                      ) : <FeedFallbackRow status={meetingsStatus} />}
                     </div>
-                    {wireStatus.state === "live" && <div style={{ marginTop: 10, ...S.microLabel, letterSpacing: "0.05em" }}>SOURCES · COINDESK · COINTELEGRAPH</div>}
                   </div>
           {/* ZTS Shopify */}
                   <div style={card}>
@@ -770,6 +799,24 @@ function MorningBriefPage({ btc, isMobile }) {
                     </div>
                     <Bars data={shop.series} from="#8F6B1E" to="#6A4D12" />
                     <div style={{ marginTop: 8, fontSize: 10.5, color: shopStatus.state === "live" ? T.sub : T.faint, lineHeight: 1.55 }}>{shopStatus.state === "live" ? shop.note : shopStatus.state === "loading" ? "Loading…" : shopStatus.detail}</div>
+                  </div>
+          {/* ZTS Creator Pipeline — bottom of column */}
+                  <div style={card}>
+                    <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 12 }}>
+                      <span style={S.title}>Zero To Secure · Creator Pipeline</span>
+                      <StatusTag status={ztsPipeStatus} />
+                    </div>
+                    {ztsPipeStatus.state === "live" ? (
+                      <>
+                        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr 1fr", gap: 7, marginBottom: 11 }}>
+                          <StatBox value={String(ztsPipe.prospected)} label="Prospected" />
+                          <StatBox value={String(ztsPipe.sent)} label="Sent" valueColor={T.blue} />
+                          <StatBox value={String(ztsPipe.replied)} label="Replied" valueColor={T.brass} />
+                          <StatBox value={String(ztsPipe.collab)} label="Collab" valueColor={T.green} />
+                        </div>
+                        <div style={{ fontSize: 11.5, color: T.sub, lineHeight: 1.6 }}><span style={{ color: T.green, fontWeight: 700 }}>{ztsPipe.weightedReach.toLocaleString()}</span> weighted reach in pipeline</div>
+                      </>
+                    ) : <FeedFallbackRow status={ztsPipeStatus} />}
                   </div>
         </div>
 
@@ -1149,7 +1196,7 @@ const CONN_GROUPS = [
   { title: "Core", keys: ["supabase_env", "supabase_auth", "supabase_db"] },
   { title: "AI", keys: ["anthropic"] },
   { title: "Market Data", keys: ["coingecko"] },
-  { title: "Netlify Functions", keys: ["fn_health", "fn_mini", "fn_btc", "fn_markets", "fn_calendar", "fn_wire", "fn_site_status", "fn_gsc", "fn_shopify", "fn_deploy", "fn_dbadmin", "fn_audit", "fn_autofix"] },
+  { title: "Netlify Functions", keys: ["fn_health", "fn_mini", "fn_btc", "fn_markets", "fn_calendar", "fn_calendar_events", "fn_site_status", "fn_gsc", "fn_shopify", "fn_clarify_pipeline", "fn_zts_pipeline", "fn_deploy", "fn_dbadmin", "fn_audit", "fn_autofix"] },
 ];
 const CONN_META = {
   supabase_env: { name: "Supabase · config", desc: "VITE_SUPABASE_URL + anon key present at build time" },
@@ -1161,8 +1208,10 @@ const CONN_META = {
   fn_mini: { name: "mini-worker", desc: "Mini Me engine — nightly at ~3 AM CT + on-demand runs" },
   fn_btc: { name: "btc", desc: "proxies BTC price + sparkline — avoids mobile-carrier IP rate limiting" },
   fn_markets: { name: "markets", desc: "S&P/Nasdaq futures, 10Y yield, DXY via Yahoo's public endpoint (unofficial)" },
-  fn_calendar: { name: "calendar", desc: "today's US econ calendar (unofficial free feed)" },
-  fn_wire: { name: "wire", desc: "live crypto/macro headlines from CoinDesk + Cointelegraph RSS" },
+  fn_calendar: { name: "calendar", desc: "US econ calendar, today through +7 days (unofficial free feed)" },
+  fn_calendar_events: { name: "calendar-events", desc: "upcoming meetings — parses the linked iCal URL" },
+  fn_clarify_pipeline: { name: "clarify-pipeline", desc: "Clarify Outreach pipeline stats (own Supabase project)" },
+  fn_zts_pipeline: { name: "zts-pipeline", desc: "ZTS creator pipeline stats (own Supabase project)" },
   fn_site_status: { name: "site-status", desc: "uptime check behind the Properties page's live/down pill" },
   fn_gsc: { name: "gsc", desc: "Search Console · zerotosecure.com last 14d" },
   fn_shopify: { name: "shopify", desc: "Shopify Admin API · orders last 14d" },
@@ -1246,7 +1295,7 @@ function useConnections({ session, btc }) {
     }
 
     // Netlify functions
-    const fns = [["fn_health", "health"], ["fn_mini", "mini-worker"], ["fn_btc", "btc"], ["fn_markets", "markets"], ["fn_calendar", "calendar"], ["fn_wire", "wire"], ["fn_site_status", "site-status"], ["fn_gsc", "gsc"], ["fn_shopify", "shopify"], ["fn_deploy", "deploy"], ["fn_dbadmin", "db-admin"], ["fn_audit", "audit"], ["fn_autofix", "auto-fix"]];
+    const fns = [["fn_health", "health"], ["fn_mini", "mini-worker"], ["fn_btc", "btc"], ["fn_markets", "markets"], ["fn_calendar", "calendar"], ["fn_calendar_events", "calendar-events"], ["fn_site_status", "site-status"], ["fn_gsc", "gsc"], ["fn_shopify", "shopify"], ["fn_clarify_pipeline", "clarify-pipeline"], ["fn_zts_pipeline", "zts-pipeline"], ["fn_deploy", "deploy"], ["fn_dbadmin", "db-admin"], ["fn_audit", "audit"], ["fn_autofix", "auto-fix"]];
     if (!IS_DEPLOYED) {
       // netlify dev serves functions locally; try health first to decide
       const probe = await pingFn("health");
@@ -2221,7 +2270,7 @@ export default function App() {
 
   const renderPage = (key) => {
     switch (key) {
-      case "brief": return <MorningBriefPage btc={btc} isMobile={isMobile} />;
+      case "brief": return <MorningBriefPage btc={btc} isMobile={isMobile} settings={settings} />;
       case "boardroom": return <BoardRoomPage messages={messages} thinking={thinking} loadingData={loadingData} input={input} setInput={setInput} onSend={send} endRef={endRef} seatNotes={seatNotes} onEditSeat={setEditSeat} isMobile={isMobile} />;
       case "assets": return <PropertiesPage isMobile={isMobile} btc={btc} settings={settings} updateSetting={updateSetting} session={session} />;
       case "systems": return <SystemsPage settings={settings} updateSetting={updateSetting} session={session} btc={btc} isMobile={isMobile} />;
