@@ -183,6 +183,16 @@ async function callFn(name, payload) {
     return await res.json();
   } catch { return null; }
 }
+// Like callFn but keeps HTTP status + error body so the UI can say WHY a card isn't live.
+async function callFnFull(name, payload) {
+  try {
+    const res = await fetch(`/.netlify/functions/${name}`, {
+      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload || {}),
+    });
+    const data = await res.json().catch(() => null);
+    return { ok: res.ok, status: res.status, data };
+  } catch { return { ok: false, status: 0, data: null }; }
+}
 
 // ─── Design system ────────────────────────────────────────────────────────────
 const syne = "'Syne', system-ui", mono = "'DM Mono', monospace";
@@ -449,52 +459,71 @@ function Composer({ input, setInput, onSend, thinking, compact }) {
 // ─── Page: Morning Brief ──────────────────────────────────────────────────────
 // Static analysis below is placeholder copy; wire /.netlify/functions/brief to
 // have the Chief regenerate it at 6:00 AM (markets APIs + X-list summarizer).
-const BRIEF_EVENTS = [
-  { color: T.red, time: "7:30 AM", text: "Jobs report — consensus 110K. Hot print pushes cuts out, hits both BTC and growth." },
-  { color: T.amber, time: "10:00 AM", text: "Fed's Waller on the policy framework — has hinted at a July cut twice." },
-  { color: T.red, time: "1:00 PM", text: "FOMC minutes — market is pricing 68% for a July cut; minutes can reprice that fast." },
-  { color: T.brass, time: "THU", text: "ZTS creator collabs go live — expect a Shopify traffic spike; hero fix must be shipped." },
-];
-const BRIEF_WIRE = [
-  { time: "07:41", tag: "BREAKING", tagColor: T.red, text: "BlackRock's IBIT crosses $100B AUM — fastest ETF to the mark in history." },
-  { time: "07:12", tag: "JUST IN", tagColor: T.amber, text: "Mt. Gox trustee moves 12,000 BTC to a new wallet — historically noise, not sells." },
-  { time: "06:55", tag: "MACRO", tagColor: T.blue, text: "Foxconn beats — AI server revenue +64% YoY. Capex supercycle intact for now." },
-  { time: "06:20", tag: "MACRO", tagColor: T.blue, text: "Private-credit AI datacenter deals hit $48B YTD — the circular-financing loop you track keeps widening." },
-];
-const GSC_FALLBACK = { impressions: "12.4K", impressionsD: "▲ 18%", clicks: "486", clicksD: "▲ 9%", pos: "8.2", posD: "▲ from 9.1", series: [42, 47, 40, 52, 49, 55, 61, 51, 58, 67, 63, 72, 78, 88], note: '"steel seed phrase backup" broke into the top 10 — that\'s driving the impression lift.' };
-const SHOP_FALLBACK = { visits: "1,982", visitsD: "▲ 12%", conv: "1.9%", convD: "▲ 0.2pt", orders: "38", ordersD: "▲ 5", series: [38, 44, 41, 47, 43, 52, 58, 50, 55, 61, 57, 66, 74, 84], note: "Traffic builds into Thursday's collabs. At 1.9% conversion, a collab-day spike of 800 visits ≈ 15 extra orders." };
-
-const STOCKS_FALLBACK = { spx: { value: "+0.32%", up: true }, ndq: { value: "+0.51%", up: true }, tnx: { value: "3.92%", up: true }, dxy: { value: "101.2", up: false } };
+// No fabricated fallback numbers anywhere on this page. Each card is either
+// LIVE (real data), NOT CONNECTED (with exact setup instructions), or ERROR
+// (with the actual failure). Empty dashes beat plausible-looking fake data.
+const GSC_EMPTY = { impressions: "—", impressionsD: "", clicks: "—", clicksD: "", pos: "—", posD: "", series: Array(14).fill(0), note: "" };
+const SHOP_EMPTY = { visits: "—", visitsD: "", conv: "—", convD: "", orders: "—", ordersD: "", series: Array(14).fill(0), note: "" };
+const STOCKS_EMPTY = { spx: { value: "—", up: true }, ndq: { value: "—", up: true }, tnx: { value: "—", up: true }, dxy: { value: "—", up: true } };
 
 function StancePill({ text, color }) {
   return <span style={{ fontSize: 8.5, fontWeight: 700, color, background: color + "1A", border: `1px solid ${color}4D`, padding: "4px 10px", borderRadius: 12, fontFamily: mono, letterSpacing: "0.08em" }}>{text}</span>;
 }
-function SampleTag({ isSample }) {
-  return isSample
-    ? <span style={{ fontSize: 8, fontWeight: 700, color: T.faint, background: "rgba(255,255,255,0.05)", border: `1px solid rgba(255,255,255,0.12)`, padding: "3.5px 9px", borderRadius: 10, fontFamily: mono, letterSpacing: "0.06em" }}>SAMPLE</span>
-    : <span style={{ fontSize: 8, fontWeight: 700, color: T.green, background: T.green + "1A", border: `1px solid ${T.green}40`, padding: "3.5px 9px", borderRadius: 10, fontFamily: mono, letterSpacing: "0.06em" }}>● LIVE</span>;
+const CARD_STATES = {
+  loading: { label: "…", color: T.faint },
+  live: { label: "● LIVE", color: T.green },
+  notconfigured: { label: "NOT CONNECTED", color: T.amber },
+  error: { label: "ERROR", color: T.red },
+  nofn: { label: "NOT DEPLOYED", color: T.red },
+};
+function StatusTag({ status }) {
+  const s = CARD_STATES[status?.state || "loading"];
+  return <span style={{ fontSize: 8, fontWeight: 700, color: s.color, background: s.color + "1A", border: `1px solid ${s.color}40`, padding: "3.5px 9px", borderRadius: 10, fontFamily: mono, letterSpacing: "0.06em" }}>{s.label}</span>;
 }
 
 function MorningBriefPage({ btc, isMobile }) {
-  const [gsc, setGsc] = useState(GSC_FALLBACK);
-  const [gscLive, setGscLive] = useState(false);
-  const [shop, setShop] = useState(SHOP_FALLBACK);
-  const [shopLive, setShopLive] = useState(false);
-  const [stocks, setStocks] = useState(STOCKS_FALLBACK);
-  const [stocksLive, setStocksLive] = useState(false);
-  const [events, setEvents] = useState(BRIEF_EVENTS);
-  const [eventsLive, setEventsLive] = useState(false);
-  const [wire, setWire] = useState(BRIEF_WIRE);
-  const [wireLive, setWireLive] = useState(false);
+  const [gsc, setGsc] = useState(GSC_EMPTY);
+  const [gscStatus, setGscStatus] = useState({ state: "loading" });
+  const [shop, setShop] = useState(SHOP_EMPTY);
+  const [shopStatus, setShopStatus] = useState({ state: "loading" });
+  const [stocks, setStocks] = useState(STOCKS_EMPTY);
+  const [stocksStatus, setStocksStatus] = useState({ state: "loading" });
+  const [events, setEvents] = useState([]);
+  const [eventsStatus, setEventsStatus] = useState({ state: "loading" });
+  const [wire, setWire] = useState([]);
+  const [wireStatus, setWireStatus] = useState({ state: "loading" });
+
   useEffect(() => {
     let alive = true;
-    callFn("gsc", { site: "zerotosecure.com", days: 14 }).then(d => { if (alive && d?.success) { setGsc(d); setGscLive(true); } });
-    callFn("shopify", { days: 14 }).then(d => { if (alive && d?.success) { setShop(d); setShopLive(true); } });
-    callFn("markets", {}).then(d => { if (alive && d?.success) { setStocks(d); setStocksLive(true); } });
-    callFn("calendar", {}).then(d => { if (alive && d?.success) { setEvents(d.events || []); setEventsLive(true); } });
-    callFn("wire", {}).then(d => { if (alive && d?.success && d.wire?.length) { setWire(d.wire); setWireLive(true); } });
+    // Credentialed cards: ping first so a missing key shows setup instructions, not an error.
+    const loadCredentialed = async (fn, payload, setData, setStatus, hint) => {
+      const ping = await callFnFull(fn, { ping: true });
+      if (!alive) return;
+      if (ping.status === 404) return setStatus({ state: "nofn", detail: `push netlify/functions/${fn}.js and redeploy` });
+      if (ping.data?.configured === false) return setStatus({ state: "notconfigured", detail: hint(ping.data.missing) });
+      const res = await callFnFull(fn, payload);
+      if (!alive) return;
+      if (res.ok && res.data?.success) { setData(res.data); setStatus({ state: "live" }); }
+      else setStatus({ state: "error", detail: res.data?.error || (res.status ? `HTTP ${res.status}` : "unreachable") });
+    };
+    // Keyless cards: just try, report the real failure if any.
+    const loadOpen = async (fn, apply, setStatus) => {
+      const res = await callFnFull(fn, {});
+      if (!alive) return;
+      if (res.status === 404) return setStatus({ state: "nofn", detail: `push netlify/functions/${fn}.js and redeploy` });
+      if (res.ok && res.data?.success) { apply(res.data); setStatus({ state: "live" }); }
+      else setStatus({ state: "error", detail: res.data?.error || (res.status ? `HTTP ${res.status}` : "unreachable") });
+    };
+    loadCredentialed("gsc", { site: "zerotosecure.com", days: 14 }, setGsc, setGscStatus,
+      (m) => `Add ${m || "GSC_CLIENT_EMAIL + GSC_PRIVATE_KEY"} in Netlify env vars, share the Search Console property with the service account, then redeploy.`);
+    loadCredentialed("shopify", { days: 14 }, setShop, setShopStatus,
+      (m) => `Add ${m || "SHOPIFY_SHOP + SHOPIFY_CLIENT_ID + SHOPIFY_CLIENT_SECRET"} in Netlify env vars, then redeploy.`);
+    loadOpen("markets", (d) => setStocks(d), setStocksStatus);
+    loadOpen("calendar", (d) => setEvents(d.events || []), setEventsStatus);
+    loadOpen("wire", (d) => setWire(d.wire || []), setWireStatus);
     return () => { alive = false; };
   }, []);
+
   const price = btc.loading ? "…" : btc.error || btc.price == null ? "—" : "$" + btc.price.toLocaleString(undefined, { maximumFractionDigits: 0 });
   const hasChange = !btc.loading && !btc.error && btc.changePct !== null && btc.changePct !== undefined;
   const up = (btc.changePct || 0) >= 0;
@@ -506,13 +535,19 @@ function MorningBriefPage({ btc, isMobile }) {
     const target = Math.max(btc.high24, btc.price + range * 0.5);
     const invalid = btc.low24 - range * 0.15;
     dayTarget = fmtK(target); support = fmtK(btc.low24); invalidation = fmtK(invalid);
-    const posInRange = (btc.price - btc.low24) / range; // 0 = at 24h low, 1 = at 24h high
+    const posInRange = (btc.price - btc.low24) / range;
     stance = up ? "CONSTRUCTIVE" : "CAUTIOUS"; stanceColor = up ? T.green : T.amber;
     const pos = posInRange > 0.7 ? "near the top of" : posInRange < 0.3 ? "near the bottom of" : "mid";
     narrative = `24h range ${fmtK(btc.low24)}–${fmtK(btc.high24)}, currently trading ${pos === "mid" ? "in the middle of" : pos} that range and ${up ? "up" : "down"} ${Math.abs(btc.changePct || 0).toFixed(1)}% on the day. Support sits at the 24h low (${fmtK(btc.low24)}); a break below ${invalidation} would put you outside the recent range and is worth checking your Aave health factor against.`;
   }
   const grid = { maxWidth: 1020, margin: "0 auto", display: "grid", gridTemplateColumns: isMobile ? "1fr" : "1fr 1fr", gap: isMobile ? 12 : 14, alignItems: "start" };
   const card = isMobile ? S.cardM : S.card;
+  const FeedFallbackRow = ({ status }) => (
+    <div style={{ ...S.inner, display: "flex", alignItems: "center", gap: 11, padding: "11px 13px" }}>
+      <span style={{ width: 7, height: 7, borderRadius: "50%", background: CARD_STATES[status.state]?.color || T.faint, flex: "none" }} />
+      <span style={{ fontSize: 10.5, color: T.faint, lineHeight: 1.5, flex: 1 }}>{status.state === "loading" ? "Loading…" : status.detail || "Feed unavailable."}</span>
+    </div>
+  );
 
   return (
     <div style={{ flex: 1, overflowY: "auto", padding: isMobile ? "18px 16px 24px" : "30px 34px 40px" }}>
@@ -543,49 +578,59 @@ function MorningBriefPage({ btc, isMobile }) {
         <div style={card}>
           <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 12 }}>
             <span style={S.title}>Stocks · Day Outlook</span>
-            <SampleTag isSample={!stocksLive} />
+            <StatusTag status={stocksStatus} />
           </div>
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 7, marginBottom: 13 }}>
             {[["S&P FUT", stocks.spx], ["NASDAQ FUT", stocks.ndq], ["10Y YIELD", stocks.tnx], ["DXY", stocks.dxy]].map(([l, s], i) => (
               <div key={i} style={{ ...S.inner, padding: "10px 12px", borderRadius: 10, display: "flex", alignItems: "center", justifyContent: "space-between" }}>
                 <span style={{ fontSize: 9, color: T.faint, letterSpacing: "0.06em" }}>{l}</span>
-                <span style={{ fontSize: 11.5, fontWeight: 700, color: s.up ? T.green : T.red, fontFamily: mono }}>{s.value}</span>
+                <span style={{ fontSize: 11.5, fontWeight: 700, color: s.value === "—" ? T.faint : s.up ? T.green : T.red, fontFamily: mono }}>{s.value}</span>
               </div>
             ))}
           </div>
-          <div style={{ fontSize: 11.5, color: T.sub, lineHeight: 1.65 }}>{stocksLive ? "Futures and yield pulled live via Yahoo Finance's public endpoint — unofficial, no key, refreshes on page load." : "Showing sample figures — the markets function hasn't returned live data yet (check Connections)."}</div>
+          <div style={{ fontSize: 11.5, color: T.sub, lineHeight: 1.65 }}>{stocksStatus.state === "live" ? "Futures and yield pulled live via Yahoo Finance's public endpoint — unofficial, no key, refreshes on page load." : stocksStatus.state === "loading" ? "Loading live data…" : stocksStatus.detail}</div>
         </div>
 
         {/* Events */}
         <div style={card}>
-          <CardHeader title="Watch Today" tag={eventsLive ? "CT TIME · LIVE" : "SAMPLE"} tagColor={eventsLive ? T.green : T.faint} />
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+            <span style={S.title}>Watch Today</span>
+            <div style={{ display: "flex", alignItems: "center", gap: 7 }}>
+              <span style={S.microLabel}>CT TIME</span>
+              <StatusTag status={eventsStatus} />
+            </div>
+          </div>
           <div style={{ display: "flex", flexDirection: "column", gap: 7, marginTop: 10 }}>
-            {events.map((e, i) => (
-              <div key={i} style={{ ...S.inner, display: "flex", alignItems: "center", gap: 11, padding: "11px 13px" }}>
-                <span style={{ width: 7, height: 7, borderRadius: "50%", background: e.color, flex: "none", boxShadow: `0 0 8px ${e.color}80` }} />
-                <span style={{ fontSize: 9, color: T.faint, fontFamily: mono, flex: "none", width: 52 }}>{e.time}</span>
-                <span style={{ fontSize: 11, color: "#C6CFDE", lineHeight: 1.5, flex: 1 }}>{e.text}</span>
-              </div>
-            ))}
-            {eventsLive && events.length === 0 && <div style={{ fontSize: 10.5, color: T.faint, padding: "6px 0" }}>No high/medium-impact US events scheduled today.</div>}
+            {eventsStatus.state === "live" ? (
+              events.length ? events.map((e, i) => (
+                <div key={i} style={{ ...S.inner, display: "flex", alignItems: "center", gap: 11, padding: "11px 13px" }}>
+                  <span style={{ width: 7, height: 7, borderRadius: "50%", background: e.color, flex: "none", boxShadow: `0 0 8px ${e.color}80` }} />
+                  <span style={{ fontSize: 9, color: T.faint, fontFamily: mono, flex: "none", width: 52 }}>{e.time}</span>
+                  <span style={{ fontSize: 11, color: "#C6CFDE", lineHeight: 1.5, flex: 1 }}>{e.text}</span>
+                </div>
+              )) : <div style={{ fontSize: 10.5, color: T.faint, padding: "6px 0" }}>No high/medium-impact US events scheduled today.</div>
+            ) : <FeedFallbackRow status={eventsStatus} />}
           </div>
         </div>
 
         {/* The Wire */}
         <div style={card}>
-          <CardHeader title="The Wire" tag={wireLive ? "● LIVE" : "SAMPLE"} tagColor={wireLive ? T.green : T.faint} />
-          <div style={{ fontSize: 10.5, color: T.faint, lineHeight: 1.5, margin: "2px 0 12px" }}>{wireLive ? "Latest crypto/macro headlines, auto-tagged." : "Sample headlines — real feed hasn't loaded yet (check Connections)."}</div>
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+            <span style={S.title}>The Wire</span>
+            <StatusTag status={wireStatus} />
+          </div>
+          <div style={{ fontSize: 10.5, color: T.faint, lineHeight: 1.5, margin: "6px 0 12px" }}>{wireStatus.state === "live" ? "Latest crypto/macro headlines, auto-tagged." : "Real headlines only — nothing shown until the feed responds."}</div>
           <div style={{ display: "flex", flexDirection: "column", gap: 7 }}>
-            {wire.map((w, i) => (
+            {wireStatus.state === "live" ? wire.map((w, i) => (
               <div key={i} style={{ ...S.inner, display: "flex", gap: 10, padding: "10px 12px" }}>
                 <span style={{ fontSize: 8.5, color: T.faint, fontFamily: mono, flex: "none", paddingTop: 2, width: 36 }}>{w.time}</span>
                 <span style={{ fontSize: 11, color: "#C6CFDE", lineHeight: 1.55, flex: 1 }}>
                   <span style={{ color: w.tagColor, fontWeight: 700, fontSize: 8.5, letterSpacing: "0.06em" }}>{w.tag} </span> {w.text}
                 </span>
               </div>
-            ))}
+            )) : <FeedFallbackRow status={wireStatus} />}
           </div>
-          <div style={{ marginTop: 10, ...S.microLabel, letterSpacing: "0.05em" }}>{wireLive ? "SOURCES · COINDESK · COINTELEGRAPH" : "SOURCES · SAMPLE DATA"}</div>
+          {wireStatus.state === "live" && <div style={{ marginTop: 10, ...S.microLabel, letterSpacing: "0.05em" }}>SOURCES · COINDESK · COINTELEGRAPH</div>}
         </div>
 
         {/* ZTS Search Console */}
@@ -595,7 +640,7 @@ function MorningBriefPage({ btc, isMobile }) {
               <span style={{ width: 8, height: 8, borderRadius: "50%", background: "#0E9F6E", boxShadow: "0 0 8px rgba(14,159,110,0.5)" }} />
               <span style={S.title}>Zero To Secure · Search Console</span>
             </div>
-            <SampleTag isSample={!gscLive} />
+            <StatusTag status={gscStatus} />
           </div>
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 7, marginBottom: 13 }}>
             <StatBox value={gsc.impressions} label="Impressions" delta={gsc.impressionsD} />
@@ -603,7 +648,7 @@ function MorningBriefPage({ btc, isMobile }) {
             <StatBox value={gsc.pos} label="Avg position" delta={gsc.posD} />
           </div>
           <Bars data={gsc.series} from="#17B888" to="#0E9F6E" />
-          <div style={{ marginTop: 8, fontSize: 10.5, color: T.sub, lineHeight: 1.55 }}>{gsc.note}</div>
+          <div style={{ marginTop: 8, fontSize: 10.5, color: gscStatus.state === "live" ? T.sub : T.faint, lineHeight: 1.55 }}>{gscStatus.state === "live" ? gsc.note : gscStatus.state === "loading" ? "Loading…" : gscStatus.detail}</div>
         </div>
 
         {/* ZTS Shopify */}
@@ -613,7 +658,7 @@ function MorningBriefPage({ btc, isMobile }) {
               <span style={{ width: 8, height: 8, borderRadius: "50%", background: T.brass, boxShadow: "0 0 8px rgba(217,177,94,0.5)" }} />
               <span style={S.title}>Zero To Secure · Shopify</span>
             </div>
-            <SampleTag isSample={!shopLive} />
+            <StatusTag status={shopStatus} />
           </div>
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 7, marginBottom: 13 }}>
             <StatBox value={shop.visits} label="Visits" delta={shop.visitsD} />
@@ -621,7 +666,7 @@ function MorningBriefPage({ btc, isMobile }) {
             <StatBox value={shop.orders} label="Orders" delta={shop.ordersD} />
           </div>
           <Bars data={shop.series} from="#D9B15E" to="#A87B2C" />
-          <div style={{ marginTop: 8, fontSize: 10.5, color: T.sub, lineHeight: 1.55 }}>{shop.note}</div>
+          <div style={{ marginTop: 8, fontSize: 10.5, color: shopStatus.state === "live" ? T.sub : T.faint, lineHeight: 1.55 }}>{shopStatus.state === "live" ? shop.note : shopStatus.state === "loading" ? "Loading…" : shopStatus.detail}</div>
         </div>
       </div>
     </div>
@@ -981,49 +1026,90 @@ const MINI_DEFAULTS = {
   model: "haiku", oversight: true, night: true, budget: "$3",
   loopOn: true, reflectOn: true, approvalOn: true, loopMax: "15",
 };
-const SKILLS_DEFAULT = [
-  { name: "Outreach ghostwriting", pct: 72, note: "Match my tone — direct, no fluff. Prioritize legal + med-spa verticals." },
-  { name: "Funding-rate monitoring", pct: 58, note: "" },
-  { name: "Google Ads audit analysis", pct: 45, note: "" },
-  { name: "Deck drafting", pct: 30, note: "" },
-];
-const TASKS_DEFAULT = [
-  { text: "Draft 5 outreach angles for the med-spa vertical", status: "delivered" },
-  { text: "Turn auditor findings into a prioritized fix list", status: "working tonight" },
-  { text: "Watch BTC funding rates, wake me if 3σ move", status: "queued" },
-];
-const FEED = [
-  { when: "07:12", text: "Compiled your overnight report: 5 outreach angles drafted, 2 flagged as strongest for med-spa vertical." },
-  { when: "03:40", text: "Revised a Chief answer — it smoothed over Macro's dissent on the leverage question. Dissent restored." },
-  { when: "01:15", text: "Compressed 214 chat messages into long-term memory. 12 new facts learned about Clarify's pipeline." },
-  { when: "23:05", text: "Noticed the ZTS hero fix shipped. Marked the task delivered and queued a conversion check for Friday." },
-];
-const TASK_COLORS = { delivered: T.green, "working tonight": T.brass, queued: T.faint };
+const TASK_COLORS = { delivered: T.green, queued: T.faint, failed: T.red };
+const MINI_LEVELS = ["Rookie", "Apprentice", "Operator", "Right Hand", "Shadow Chief"];
 
-function MiniMePage({ settings, updateSetting, isMobile }) {
+// Mini Me is now real: a scheduled Netlify worker (mini-worker) runs the
+// queue through Claude nightly (or on demand), writes deliverables onto
+// tasks, and logs to mini_feed. Everything below reads actual activity.
+function MiniMePage({ settings, updateSetting, session, onWorkerRun, isMobile }) {
   const mini = { ...MINI_DEFAULTS, ...(settings?.mini || {}) };
   const setMini = (patch) => updateSetting("mini", { ...mini, ...patch });
-  const skills = settings?.mini_skills || SKILLS_DEFAULT;
+  const skills = settings?.mini_skills || [];
   const setSkills = (list) => updateSetting("mini_skills", list);
-  const tasks = settings?.mini_tasks || TASKS_DEFAULT;
+  const tasks = settings?.mini_tasks || [];
   const setTasks = (list) => updateSetting("mini_tasks", list);
 
   const [taskInput, setTaskInput] = useState("");
   const [skillInput, setSkillInput] = useState("");
   const [tuneIdx, setTuneIdx] = useState(null);
   const [tuneDraft, setTuneDraft] = useState("");
+  const [feed, setFeed] = useState(null); // null = loading
+  const [memCount, setMemCount] = useState(null);
+  const [worker, setWorker] = useState({ state: "checking" });
+  const [running, setRunning] = useState(false);
+  const [runMsg, setRunMsg] = useState(null);
+  const [openTask, setOpenTask] = useState(null);
 
-  const addTask = () => { const t = taskInput.trim(); if (!t) return; setTasks([{ text: t, status: "queued" }, ...tasks]); setTaskInput(""); };
-  const addSkill = () => { const t = skillInput.trim(); if (!t) return; setSkills([{ name: t, pct: 4, note: "" }, ...skills]); setSkillInput(""); };
+  const loadFeed = async () => {
+    try {
+      const { data, error } = await supabase.from("mini_feed").select("text,created_at").order("created_at", { ascending: false }).limit(8);
+      if (error) { setFeed({ error: error.message.includes("mini_feed") ? "run supabase-mini-me.sql to create the feed table" : error.message }); return; }
+      setFeed((data || []).map(r => ({ when: new Date(r.created_at).toLocaleString("en-US", { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit", hour12: false }), text: r.text })));
+    } catch { setFeed({ error: "feed unavailable" }); }
+  };
+
+  useEffect(() => {
+    let alive = true;
+    loadFeed();
+    supabase.from("chat_messages").select("*", { count: "exact", head: true }).then(({ count }) => { if (alive) setMemCount(count ?? 0); });
+    pingFn("mini-worker").then(p => {
+      if (!alive) return;
+      setWorker(p.status === "ok" ? { state: "ok" } : p.status === "warn" ? { state: "noenv", detail: p.detail } : { state: "off", detail: p.detail });
+    });
+    return () => { alive = false; };
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const delivered = tasks.filter(t => t.status === "delivered").length;
+  const xp = delivered * 40 + Math.min(memCount || 0, 600) + skills.filter(s => s.note).length * 15;
+  const levelIdx = Math.min(MINI_LEVELS.length - 1, Math.floor(xp / 250));
+  const xpInLevel = xp - levelIdx * 250;
+
+  const addTask = () => { const t = taskInput.trim(); if (!t) return; setTasks([{ text: t, status: "queued", queued_at: Date.now() }, ...tasks]); setTaskInput(""); };
+  const addSkill = () => { const t = skillInput.trim(); if (!t) return; setSkills([{ name: t, note: "" }, ...skills]); setSkillInput(""); };
+  const removeTask = (i) => setTasks(tasks.filter((_, j) => j !== i));
+
+  const runNow = async () => {
+    if (running) return;
+    setRunning(true); setRunMsg(null);
+    try {
+      const res = await fetch("/.netlify/functions/mini-worker", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${session?.access_token || ""}` },
+        body: JSON.stringify({ run: true }),
+      });
+      const d = await res.json().catch(() => null);
+      if (!res.ok || !d?.success) setRunMsg({ ok: false, text: d?.error || `worker failed (${res.status || "network"})` });
+      else setRunMsg({ ok: true, text: d.message || `processed ${d.processed} task(s)` });
+    } catch { setRunMsg({ ok: false, text: "worker unreachable" }); }
+    await loadFeed();
+    await onWorkerRun?.(); // re-pulls settings so delivered tasks + outputs appear
+    setRunning(false);
+  };
 
   const card = isMobile ? S.cardM : S.card;
   const toggleSize = isMobile ? 24 : 20;
+  const queuedCount = tasks.filter(t => t.status === "queued").length;
+  const [pillText, pillColor] = worker.state === "ok" ? ["● WORKER ONLINE", T.green]
+    : worker.state === "noenv" ? ["◐ KEYS MISSING", T.amber]
+    : worker.state === "off" ? ["○ WORKER NOT DEPLOYED", T.red]
+    : ["…", T.faint];
 
   return (
     <div style={{ flex: 1, overflowY: "auto", padding: isMobile ? "18px 16px 24px" : "30px 34px 40px" }}>
       <div style={{ maxWidth: 1020, margin: "0 auto", display: "grid", gridTemplateColumns: isMobile ? "1fr" : "1.3fr 1fr", gap: isMobile ? 12 : 14, alignItems: "start" }}>
 
-        {/* Hero */}
+        {/* Hero — real numbers */}
         <div style={{ ...card, background: "linear-gradient(135deg,rgba(200,160,74,0.10),rgba(124,58,237,0.06))", border: "1px solid rgba(200,160,74,0.22)" }}>
           <div style={{ display: "flex", alignItems: "center", gap: 16, marginBottom: 16 }}>
             <span style={{ width: isMobile ? 48 : 56, height: isMobile ? 48 : 56, borderRadius: "50%", background: `linear-gradient(135deg, ${T.brass}, ${T.brassDeep})`, display: "inline-flex", alignItems: "center", justifyContent: "center", flex: "none", animation: "breathe 3.2s ease-in-out infinite" }}>
@@ -1032,31 +1118,25 @@ function MiniMePage({ settings, updateSetting, isMobile }) {
               </span>
             </span>
             <span style={{ display: "flex", flexDirection: "column", gap: 3, flex: 1 }}>
-              <span style={{ display: "flex", alignItems: "baseline", gap: 10 }}>
+              <span style={{ display: "flex", alignItems: "baseline", gap: 10, flexWrap: "wrap" }}>
                 <span style={{ fontSize: 19, fontWeight: 800, fontFamily: syne, color: T.ink }}>Mini Me</span>
-                <span style={{ fontSize: 9, color: T.amber, fontFamily: mono, letterSpacing: "0.08em" }}>◐ PREVIEW</span>
+                <span style={{ fontSize: 9, color: pillColor, fontFamily: mono, letterSpacing: "0.08em" }}>{pillText}</span>
               </span>
-              <span style={{ fontSize: 11, color: T.sub, lineHeight: 1.5 }}>Your sidekick. Oversees every seat — including the Chief — learns your patterns, and works while you sleep.</span>
-              <span style={{ fontSize: 10, color: T.amber, lineHeight: 1.5 }}>No agent is running yet — this page is a design preview. The stats, feed, and skills below are illustrative, not live telemetry.</span>
+              <span style={{ fontSize: 11, color: T.sub, lineHeight: 1.5 }}>Queue work below and it runs through Claude nightly around 3 AM CT — or hit Run now. Deliverables land back on each task.</span>
+              {worker.state !== "ok" && worker.state !== "checking" && <span style={{ fontSize: 10, color: T.amber, lineHeight: 1.5 }}>{worker.detail}</span>}
             </span>
           </div>
           <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 6 }}>
-            <span style={{ fontSize: 10, fontWeight: 700, fontFamily: syne, color: T.brass, letterSpacing: "0.08em" }}>LEVEL 3 · APPRENTICE</span>
-            <span style={{ fontSize: 9, color: T.faint, fontFamily: mono }}>620 / 1000 XP · MOCKUP</span>
+            <span style={{ fontSize: 10, fontWeight: 700, fontFamily: syne, color: T.brass, letterSpacing: "0.08em" }}>LEVEL {levelIdx + 1} · {MINI_LEVELS[levelIdx].toUpperCase()}</span>
+            <span style={{ fontSize: 9, color: T.faint, fontFamily: mono }}>{xpInLevel} / 250 XP · FROM REAL ACTIVITY</span>
           </div>
           <div style={{ height: 7, background: "rgba(0,0,0,0.35)", borderRadius: 4, overflow: "hidden", marginBottom: 16, border: "1px solid rgba(255,255,255,0.05)" }}>
-            <div style={{ width: "62%", height: "100%", background: `linear-gradient(90deg, ${T.brassDeep}, ${T.brass})`, borderRadius: 4, boxShadow: "0 0 12px rgba(200,160,74,0.5)" }} />
+            <div style={{ width: `${Math.max(2, Math.min(100, (xpInLevel / 250) * 100))}%`, height: "100%", background: `linear-gradient(90deg, ${T.brassDeep}, ${T.brass})`, borderRadius: 4, boxShadow: "0 0 12px rgba(200,160,74,0.5)" }} />
           </div>
-          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 8, marginBottom: 16 }}>
-            <StatBox value="1,284" label="memories" />
-            <StatBox value="17" label="skills" />
-            <StatBox value="42" label="tasks shipped" />
-          </div>
-          <div style={{ fontSize: 9.5, fontWeight: 700, color: "rgba(200,160,74,0.8)", textTransform: "uppercase", letterSpacing: "0.16em", fontFamily: syne, marginBottom: 8 }}>Skills learned</div>
-          <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
-            {["outreach drafting", "ad copy QA", "SQL maintenance", "deploy watching", "dissent guarding", "report writing"].map(t => (
-              <span key={t} style={{ padding: "5px 11px", background: "rgba(255,255,255,0.04)", border: `1px solid rgba(255,255,255,0.09)`, borderRadius: 13, color: T.sub, fontSize: 9.5, fontFamily: mono }}>{t}</span>
-            ))}
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 8, marginBottom: 4 }}>
+            <StatBox value={memCount === null ? "…" : memCount.toLocaleString()} label="memories (chat msgs)" />
+            <StatBox value={String(skills.length)} label="skills" />
+            <StatBox value={String(delivered)} label="tasks delivered" />
           </div>
         </div>
 
@@ -1066,96 +1146,88 @@ function MiniMePage({ settings, updateSetting, isMobile }) {
           <div style={{ display: "flex", flexDirection: "column", gap: 7, marginBottom: 14 }}>
             <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between" }}>
               <span style={{ fontSize: 11, fontWeight: 700, fontFamily: syne, color: T.ink }}>Brain</span>
-              <span style={{ fontSize: 9, color: T.faint }}>day-to-day thinking</span>
+              <span style={{ fontSize: 9, color: T.faint }}>model used for queued tasks</span>
             </div>
             <Segmented value={mini.model} onChange={k => setMini({ model: k })} />
           </div>
           <div style={{ display: "flex", flexDirection: "column", gap: 8, marginBottom: 14 }}>
-            <ToggleRow title="Full oversight" sub="May revise any seat's answer — even the Chief's" on={mini.oversight} onToggle={() => setMini({ oversight: !mini.oversight })} size={toggleSize} />
-            <ToggleRow title="Overnight autonomy" sub="Works the queue while you sleep" on={mini.night} onToggle={() => setMini({ night: !mini.night })} size={toggleSize} />
+            <ToggleRow title="Overnight autonomy" sub="include your queue in the nightly 3 AM run" on={mini.night} onToggle={() => setMini({ night: !mini.night })} size={toggleSize} />
           </div>
           <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", marginBottom: 7 }}>
             <span style={{ fontSize: 11, fontWeight: 700, fontFamily: syne, color: T.ink }}>Nightly budget</span>
-            <span style={{ fontSize: 9, color: T.faint }}>hard cap on overnight spend</span>
+            <span style={{ fontSize: 9, color: T.faint }}>caps tasks per run: $1→1 · $3→3 · $10→8</span>
           </div>
           <Chips options={["$1", "$3", "$10"]} value={mini.budget} onChange={b => setMini({ budget: b })} fmt={v => v + "/night"} />
+          <button onClick={runNow} disabled={running || worker.state === "off"} style={{ ...S.brassBtn, width: "100%", padding: 12, fontSize: 11.5, marginTop: 14, opacity: running || worker.state === "off" ? 0.5 : 1 }}>
+            {running ? "Working the queue…" : `Run queue now${queuedCount ? ` (${queuedCount} queued)` : ""}`}
+          </button>
+          {runMsg && <div style={{ marginTop: 8, fontSize: 10.5, color: runMsg.ok ? T.green : T.red, lineHeight: 1.5 }}>{runMsg.ok ? "✓ " : "✗ "}{runMsg.text}</div>}
         </div>
 
-        {/* Overnight queue */}
+        {/* Queue */}
         <div style={card}>
-          <CardHeader title="Overnight Queue" tag="RUNS 11PM–6AM" />
-          <div style={{ fontSize: 10.5, color: T.faint, lineHeight: 1.5, margin: "2px 0 12px" }}>Hand it work before bed. You get a report with your coffee.</div>
+          <CardHeader title="Task Queue" tag={`NIGHTLY ~3AM CT · OR RUN NOW`} />
+          <div style={{ fontSize: 10.5, color: T.faint, lineHeight: 1.5, margin: "2px 0 12px" }}>Hand it work. Tap a delivered task to read the output.</div>
           <div style={{ display: "flex", gap: 8, marginBottom: 12 }}>
-            <input value={taskInput} onChange={e => setTaskInput(e.target.value)} onKeyDown={e => { if (e.key === "Enter") { e.preventDefault(); addTask(); } }} placeholder="Give Mini Me something to work on tonight…"
+            <input value={taskInput} onChange={e => setTaskInput(e.target.value)} onKeyDown={e => { if (e.key === "Enter") { e.preventDefault(); addTask(); } }} placeholder="e.g. Draft 5 outreach angles for the med-spa vertical"
               style={{ ...S.input, flex: 1, padding: "11px 13px", fontSize: 11.5 }} />
             <button onClick={addTask} style={{ ...S.brassBtn, padding: "0 18px", minHeight: 44, fontSize: 11 }}>Queue</button>
           </div>
           <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+            {tasks.length === 0 && <div style={{ fontSize: 10.5, color: T.faint, textAlign: "center", padding: "10px 0" }}>Nothing queued yet — give it something to work on.</div>}
             {tasks.map((t, i) => {
               const c = TASK_COLORS[t.status] || T.faint;
+              const open = openTask === i;
               return (
-                <div key={i} style={{ ...S.inner, display: "flex", alignItems: "center", gap: 11, padding: "11px 13px" }}>
-                  <span style={{ width: 7, height: 7, borderRadius: "50%", background: c, flex: "none", boxShadow: `0 0 8px ${c}80` }} />
-                  <span style={{ flex: 1, fontSize: 11, color: "#C6CFDE", lineHeight: 1.5 }}>{t.text}</span>
-                  <span style={{ fontSize: 8.5, color: c, fontFamily: mono, letterSpacing: "0.06em", flex: "none", textTransform: "uppercase" }}>{t.status}</span>
+                <div key={i} style={{ ...S.inner, padding: "11px 13px", display: "flex", flexDirection: "column", gap: 8 }}>
+                  <div onClick={() => t.output && setOpenTask(open ? null : i)} style={{ display: "flex", alignItems: "center", gap: 11, cursor: t.output ? "pointer" : "default" }}>
+                    <span style={{ width: 7, height: 7, borderRadius: "50%", background: c, flex: "none", boxShadow: `0 0 8px ${c}80` }} />
+                    <span style={{ flex: 1, fontSize: 11, color: "#C6CFDE", lineHeight: 1.5 }}>{t.text}</span>
+                    <span style={{ fontSize: 8.5, color: c, fontFamily: mono, letterSpacing: "0.06em", flex: "none", textTransform: "uppercase" }}>{t.status}{t.output ? (open ? " ▲" : " ▼") : ""}</span>
+                    <button onClick={(e) => { e.stopPropagation(); removeTask(i); }} title="Remove" style={{ width: 24, height: 24, background: "rgba(255,255,255,0.04)", border: `1px solid rgba(255,255,255,0.09)`, borderRadius: 7, color: T.faint, fontSize: 10, cursor: "pointer", flex: "none" }}>✕</button>
+                  </div>
+                  {open && t.output && (
+                    <div style={{ background: "rgba(0,0,0,0.3)", border: "1px solid rgba(255,255,255,0.05)", borderRadius: 9, padding: "11px 13px", fontSize: 11, color: T.sub, lineHeight: 1.65, whiteSpace: "pre-wrap", maxHeight: 260, overflowY: "auto" }}>{t.output}</div>
+                  )}
                 </div>
               );
             })}
           </div>
         </div>
 
-        {/* Agent looping */}
+        {/* Skills / standing guidance */}
         <div style={card}>
-          <CardHeader title="Agent Looping" tag="AUTONOMY" />
-          <div style={{ fontSize: 10.5, color: T.faint, lineHeight: 1.5, margin: "2px 0 12px" }}>How long Mini Me grinds on a task before coming back to you.</div>
-          <div style={{ display: "flex", flexDirection: "column", gap: 8, marginBottom: 13 }}>
-            <ToggleRow title="Loop until done" sub="Keeps iterating until the success criteria pass" on={mini.loopOn} onToggle={() => setMini({ loopOn: !mini.loopOn })} size={toggleSize} />
-            <ToggleRow title="Self-critique between loops" sub="Reviews its own output each pass before continuing" on={mini.reflectOn} onToggle={() => setMini({ reflectOn: !mini.reflectOn })} size={toggleSize} />
-            <ToggleRow title="Approval gate" sub="Pauses before deploys, spend, or database writes" on={mini.approvalOn} onToggle={() => setMini({ approvalOn: !mini.approvalOn })} size={toggleSize} />
-          </div>
-          <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", marginBottom: 7 }}>
-            <span style={{ fontSize: 11, fontWeight: 700, fontFamily: syne, color: T.ink }}>Max loops per task</span>
-            <span style={{ fontSize: 9, color: T.faint }}>hard ceiling per attempt</span>
-          </div>
-          <Chips options={["5", "15", "50"]} value={mini.loopMax} onChange={n => setMini({ loopMax: n })} fmt={v => v + "×"} />
-          <div style={{ marginTop: 11, ...S.microLabel, letterSpacing: "0.04em", lineHeight: 1.6 }}>AUTO-STOPS AFTER 3 LOOPS WITH NO PROGRESS · FULL TRACE IN THE FEED</div>
-        </div>
-
-        {/* Skill development */}
-        <div style={card}>
-          <CardHeader title="Skill Development" tag="GROWING" />
-          <div style={{ fontSize: 10.5, color: T.faint, lineHeight: 1.5, margin: "2px 0 12px" }}>What Mini Me is actively learning. Tune the direction, or cut what isn't earning its keep.</div>
+          <CardHeader title="Standing Guidance" tag="FED TO EVERY RUN" />
+          <div style={{ fontSize: 10.5, color: T.faint, lineHeight: 1.5, margin: "2px 0 12px" }}>Skills with guidance notes are injected into the worker's system prompt on every task.</div>
           <div style={{ display: "flex", gap: 8, marginBottom: 12 }}>
-            <input value={skillInput} onChange={e => setSkillInput(e.target.value)} onKeyDown={e => { if (e.key === "Enter") { e.preventDefault(); addSkill(); } }} placeholder="Teach a new skill — e.g. 'write Shorts hooks in my voice'"
+            <input value={skillInput} onChange={e => setSkillInput(e.target.value)} onKeyDown={e => { if (e.key === "Enter") { e.preventDefault(); addSkill(); } }} placeholder="e.g. Outreach ghostwriting"
               style={{ ...S.input, flex: 1, padding: "11px 13px", fontSize: 11.5 }} />
-            <button onClick={addSkill} style={{ ...S.brassBtn, padding: "0 18px", minHeight: 44, fontSize: 11 }}>Teach</button>
+            <button onClick={addSkill} style={{ ...S.brassBtn, padding: "0 18px", minHeight: 44, fontSize: 11 }}>Add</button>
           </div>
           <div style={{ display: "flex", flexDirection: "column", gap: 7 }}>
+            {skills.length === 0 && <div style={{ fontSize: 10.5, color: T.faint, textAlign: "center", padding: "10px 0" }}>No skills yet — add one and tune it with your voice and priorities.</div>}
             {skills.map((sk, i) => (
-              <div key={i} style={{ ...S.inner, padding: "11px 13px", display: "flex", flexDirection: "column", gap: 8 }}>
-                <div style={{ display: "flex", alignItems: "center", gap: 9 }}>
-                  <span style={{ fontSize: 11.5, fontWeight: 600, color: "#C6CFDE", flex: 1, minWidth: 0, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{sk.name}</span>
-                  {!!sk.note && <span style={{ fontSize: 8, color: T.green, fontFamily: mono, letterSpacing: "0.06em", flex: "none" }}>✓ TUNED</span>}
-                  <span style={{ fontSize: 9, color: T.faint, fontFamily: mono, flex: "none" }}>{sk.pct}%</span>
-                  <button onClick={() => { setTuneIdx(i); setTuneDraft(sk.note || ""); }} style={{ ...S.ghostBtn, padding: "5px 11px", fontSize: 9, borderRadius: 7, flex: "none" }}>Tune</button>
-                  <button onClick={() => setSkills(skills.filter((_, j) => j !== i))} title="Remove skill" style={{ width: 26, height: 26, background: "rgba(255,255,255,0.04)", border: `1px solid rgba(255,255,255,0.09)`, borderRadius: 7, color: T.faint, fontSize: 10, cursor: "pointer", flex: "none" }}>✕</button>
-                </div>
-                <div style={{ height: 5, background: "rgba(0,0,0,0.4)", borderRadius: 3, overflow: "hidden", border: "1px solid rgba(255,255,255,0.04)" }}>
-                  <div style={{ width: `${Math.max(2, sk.pct)}%`, height: "100%", background: `linear-gradient(90deg, ${T.brassDeep}, ${T.brass})`, borderRadius: 3, boxShadow: "0 0 8px rgba(200,160,74,0.4)" }} />
-                </div>
+              <div key={i} style={{ ...S.inner, padding: "11px 13px", display: "flex", alignItems: "center", gap: 9 }}>
+                <span style={{ fontSize: 11.5, fontWeight: 600, color: "#C6CFDE", flex: 1, minWidth: 0, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{sk.name}</span>
+                {!!sk.note && <span style={{ fontSize: 8, color: T.green, fontFamily: mono, letterSpacing: "0.06em", flex: "none" }}>✓ ACTIVE</span>}
+                <button onClick={() => { setTuneIdx(i); setTuneDraft(sk.note || ""); }} style={{ ...S.ghostBtn, padding: "5px 11px", fontSize: 9, borderRadius: 7, flex: "none" }}>Tune</button>
+                <button onClick={() => setSkills(skills.filter((_, j) => j !== i))} title="Remove skill" style={{ width: 26, height: 26, background: "rgba(255,255,255,0.04)", border: `1px solid rgba(255,255,255,0.09)`, borderRadius: 7, color: T.faint, fontSize: 10, cursor: "pointer", flex: "none" }}>✕</button>
               </div>
             ))}
           </div>
         </div>
 
-        {/* Oversight feed */}
+        {/* Activity feed — real */}
         <div style={card}>
-          <div style={{ ...S.title, marginBottom: 4 }}>Oversight Feed <span style={{ color: T.amber, fontWeight: 600 }}>· example entries</span></div>
-          <div style={{ fontSize: 10.5, color: T.faint, lineHeight: 1.5, marginBottom: 12 }}>What this feed will show once an agent is wired up — not a real log yet.</div>
+          <div style={{ ...S.title, marginBottom: 4 }}>Activity Feed</div>
+          <div style={{ fontSize: 10.5, color: T.faint, lineHeight: 1.5, marginBottom: 12 }}>Actual worker runs, most recent first.</div>
           <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-            {FEED.map((f, i) => (
+            {feed === null && <div style={{ fontSize: 10.5, color: T.faint, textAlign: "center", padding: "8px 0" }}>Loading…</div>}
+            {feed?.error && <div style={{ fontSize: 10.5, color: T.amber, lineHeight: 1.5 }}>{feed.error}</div>}
+            {Array.isArray(feed) && feed.length === 0 && <div style={{ fontSize: 10.5, color: T.faint, textAlign: "center", padding: "8px 0" }}>No runs yet — queue a task and hit Run now.</div>}
+            {Array.isArray(feed) && feed.map((f, i) => (
               <div key={i} style={{ ...S.inner, display: "flex", gap: 11, padding: "10px 12px" }}>
-                <span style={{ fontSize: 8.5, color: T.faint, fontFamily: mono, flex: "none", paddingTop: 2, width: 44 }}>{f.when}</span>
+                <span style={{ fontSize: 8.5, color: T.faint, fontFamily: mono, flex: "none", paddingTop: 2, width: 76 }}>{f.when}</span>
                 <span style={{ fontSize: 10.5, color: T.sub, lineHeight: 1.55, flex: 1 }}>{f.text}</span>
               </div>
             ))}
@@ -1187,7 +1259,7 @@ const CONN_GROUPS = [
   { title: "Core", keys: ["supabase_env", "supabase_auth", "supabase_db"] },
   { title: "AI", keys: ["anthropic"] },
   { title: "Market Data", keys: ["coingecko"] },
-  { title: "Netlify Functions", keys: ["fn_health", "fn_btc", "fn_markets", "fn_calendar", "fn_wire", "fn_site_status", "fn_gsc", "fn_shopify", "fn_deploy", "fn_dbadmin", "fn_audit"] },
+  { title: "Netlify Functions", keys: ["fn_health", "fn_mini", "fn_btc", "fn_markets", "fn_calendar", "fn_wire", "fn_site_status", "fn_gsc", "fn_shopify", "fn_deploy", "fn_dbadmin", "fn_audit"] },
 ];
 const CONN_META = {
   supabase_env: { name: "Supabase · config", desc: "VITE_SUPABASE_URL + anon key present at build time" },
@@ -1196,6 +1268,7 @@ const CONN_META = {
   anthropic: { name: "Anthropic API", desc: IS_DEPLOYED ? "via /.netlify/functions/claude proxy" : "direct from localhost with VITE_ANTHROPIC_API_KEY" },
   coingecko: { name: "CoinGecko", desc: "upstream BTC source — reached via the btc proxy, not directly from the browser" },
   fn_health: { name: "health", desc: "reports which server-side keys are configured" },
+  fn_mini: { name: "mini-worker", desc: "Mini Me engine — nightly at ~3 AM CT + on-demand runs" },
   fn_btc: { name: "btc", desc: "proxies BTC price + sparkline — avoids mobile-carrier IP rate limiting" },
   fn_markets: { name: "markets", desc: "S&P/Nasdaq futures, 10Y yield, DXY via Yahoo's public endpoint (unofficial)" },
   fn_calendar: { name: "calendar", desc: "today's US econ calendar (unofficial free feed)" },
@@ -1282,7 +1355,7 @@ function useConnections({ session, btc }) {
     }
 
     // Netlify functions
-    const fns = [["fn_health", "health"], ["fn_btc", "btc"], ["fn_markets", "markets"], ["fn_calendar", "calendar"], ["fn_wire", "wire"], ["fn_site_status", "site-status"], ["fn_gsc", "gsc"], ["fn_shopify", "shopify"], ["fn_deploy", "deploy"], ["fn_dbadmin", "db-admin"], ["fn_audit", "audit"]];
+    const fns = [["fn_health", "health"], ["fn_mini", "mini-worker"], ["fn_btc", "btc"], ["fn_markets", "markets"], ["fn_calendar", "calendar"], ["fn_wire", "wire"], ["fn_site_status", "site-status"], ["fn_gsc", "gsc"], ["fn_shopify", "shopify"], ["fn_deploy", "deploy"], ["fn_dbadmin", "db-admin"], ["fn_audit", "audit"]];
     if (!IS_DEPLOYED) {
       // netlify dev serves functions locally; try health first to decide
       const probe = await pingFn("health");
@@ -1543,8 +1616,8 @@ function LoginScreen() {
 
 // ─── Navigation config ────────────────────────────────────────────────────────
 const NAV = [
-  { key: "room", label: "The Room", sub: "Chief of Staff · ask anything", mark: T.brass },
   { key: "brief", label: "Morning Brief", sub: "BTC · stocks · wires · ZTS", mark: T.amber },
+  { key: "room", label: "The Room", sub: "Chief of Staff · ask anything", mark: T.brass },
   { key: "board", label: "The Board", sub: "5 seats · charters & context", mark: "#7C3AED" },
   { key: "props", label: "Your Properties", sub: "5 live assets", mark: T.blue },
   { key: "it", label: "IT Department", sub: "deploys · database · models", mark: "#0E9F6E" },
@@ -1745,7 +1818,7 @@ export default function App() {
       case "props": return <PropertiesPage isMobile={isMobile} btc={btc} />;
       case "it": return <ITPage settings={settings} updateSetting={updateSetting} isMobile={isMobile} />;
       case "conn": return <ConnectionsPage session={session} btc={btc} isMobile={isMobile} />;
-      case "mini": return <MiniMePage settings={settings} updateSetting={updateSetting} isMobile={isMobile} />;
+      case "mini": return <MiniMePage settings={settings} updateSetting={updateSetting} session={session} onWorkerRun={refreshData} isMobile={isMobile} />;
       default: return null;
     }
   };
@@ -1785,9 +1858,9 @@ export default function App() {
             const Icon = NAV_ICONS[t.key];
             return (
               <button key={t.key} onClick={() => setTab(t.key)} title={t.label} aria-label={t.label} aria-current={active ? "page" : undefined}
-                style={{ flex: 1, minHeight: 54, background: "none", border: "none", cursor: "pointer", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 5, padding: "8px 0" }}>
-                <span style={{ width: 5, height: 5, borderRadius: "50%", background: T.brass, opacity: active ? 1 : 0, transition: "opacity 0.15s", boxShadow: "0 0 6px rgba(200,160,74,0.7)" }} />
-                <Icon width={19} height={19} color={active ? T.ink : T.faint} style={{ transition: "color 0.15s" }} />
+                style={{ flex: 1, minHeight: 64, background: active ? "linear-gradient(180deg, rgba(200,160,74,0.10), transparent)" : "none", border: "none", cursor: "pointer", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 7, padding: "10px 0" }}>
+                <span style={{ width: 6, height: 6, borderRadius: "50%", background: T.brass, opacity: active ? 1 : 0, transition: "opacity 0.15s", boxShadow: "0 0 8px rgba(200,160,74,0.85)" }} />
+                <Icon width={23} height={23} color={active ? T.ink : T.faint} style={{ transition: "color 0.15s" }} />
               </button>
             );
           })}

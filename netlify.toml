@@ -6,6 +6,10 @@
   directory = "netlify/functions"
   node_bundler = "esbuild"
 
+# Mini Me nightly run — 09:00 UTC ≈ 3–4 AM Chicago depending on DST
+[functions."mini-worker"]
+  schedule = "0 9 * * *"
+
 # SPA fallback — everything that isn't a function or asset serves index.html
 [[redirects]]
   from = "/*"
