@@ -258,22 +258,36 @@ function useBitcoinPrice() {
   const [nonce, setNonce] = useState(0);
   useEffect(() => {
     let alive = true;
+    const fetchDirect = async () => {
+      const [priceRes, chartRes] = await Promise.all([
+        fetch("https://api.coingecko.com/api/v3/simple/price?ids=bitcoin&vs_currencies=usd&include_24hr_change=true"),
+        fetch("https://api.coingecko.com/api/v3/coins/bitcoin/market_chart?vs_currency=usd&days=1"),
+      ]);
+      const priceData = await priceRes.json();
+      const chartData = await chartRes.json();
+      const raw = (chartData.prices || []).map(([, p]) => p);
+      const step = Math.max(1, Math.floor(raw.length / 48));
+      return { price: priceData.bitcoin?.usd ?? null, changePct: priceData.bitcoin?.usd_24h_change ?? null, points: raw.filter((_, i) => i % step === 0) };
+    };
     const load = async () => {
+      // Prefer the server-side proxy — same-origin, immune to the visitor's
+      // own IP being rate-limited by CoinGecko (a common mobile-carrier issue).
       try {
-        const [priceRes, chartRes] = await Promise.all([
-          fetch("https://api.coingecko.com/api/v3/simple/price?ids=bitcoin&vs_currencies=usd&include_24hr_change=true"),
-          fetch("https://api.coingecko.com/api/v3/coins/bitcoin/market_chart?vs_currency=usd&days=1"),
-        ]);
-        const priceData = await priceRes.json();
-        const chartData = await chartRes.json();
-        const raw = (chartData.prices || []).map(([ts, p]) => ({ ts, p }));
-        const step = Math.max(1, Math.floor(raw.length / 48));
-        const points = raw.filter((_, i) => i % step === 0).map(r => r.p);
-        if (alive) setState({ price: priceData.bitcoin?.usd ?? null, changePct: priceData.bitcoin?.usd_24h_change ?? null, points, loading: false, error: null, fetchedAt: Date.now() });
+        const res = await fetch("/.netlify/functions/btc");
+        if (res.ok) {
+          const data = await res.json();
+          if (data?.success && alive) { setState({ price: data.price, changePct: data.changePct, points: data.points || [], loading: false, error: null, fetchedAt: Date.now() }); return; }
+        }
+        if (res.status !== 404) throw new Error(`proxy ${res.status}`);
+      } catch { /* fall through to direct fetch below */ }
+      // Function not deployed yet (e.g. plain `vite dev`) or the proxy failed — try direct.
+      try {
+        const direct = await fetchDirect();
+        if (alive) setState({ ...direct, loading: false, error: null, fetchedAt: Date.now() });
       } catch { if (alive) setState(s => ({ ...s, loading: false, error: "price feed unavailable" })); }
     };
     load();
-    const iv = setInterval(load, 30 * 60 * 1000);
+    const iv = setInterval(load, 5 * 60 * 1000); // cheap now that it's proxied+cached
     return () => { alive = false; clearInterval(iv); };
   }, [nonce]);
   return { ...state, refresh: () => setNonce(n => n + 1) };
@@ -466,7 +480,8 @@ function MorningBriefPage({ btc, isMobile }) {
     callFn("shopify", { days: 14 }).then(d => { if (alive && d?.success) setShop(d); });
     return () => { alive = false; };
   }, []);
-  const price = btc.price ? "$" + btc.price.toLocaleString(undefined, { maximumFractionDigits: 0 }) : "—";
+  const price = btc.loading ? "…" : btc.error || btc.price == null ? "—" : "$" + btc.price.toLocaleString(undefined, { maximumFractionDigits: 0 });
+  const hasChange = !btc.loading && !btc.error && btc.changePct !== null && btc.changePct !== undefined;
   const up = (btc.changePct || 0) >= 0;
   const grid = { maxWidth: 1020, margin: "0 auto", display: "grid", gridTemplateColumns: isMobile ? "1fr" : "1fr 1fr", gap: isMobile ? 12 : 14, alignItems: "start" };
   const card = isMobile ? S.cardM : S.card;
@@ -485,7 +500,7 @@ function MorningBriefPage({ btc, isMobile }) {
           </div>
           <div style={{ display: "flex", alignItems: "baseline", gap: 10, marginBottom: 13 }}>
             <span style={{ fontSize: 26, fontWeight: 500, fontFamily: mono, color: T.ink }}>{price}</span>
-            <span style={{ fontSize: 12, fontWeight: 700, color: up ? T.green : T.red, fontFamily: mono }}>{up ? "▲" : "▼"} {Math.abs(btc.changePct || 0).toFixed(2)}%</span>
+            {hasChange && <span style={{ fontSize: 12, fontWeight: 700, color: up ? T.green : T.red, fontFamily: mono }}>{up ? "▲" : "▼"} {Math.abs(btc.changePct || 0).toFixed(2)}%</span>}
           </div>
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 7, marginBottom: 13 }}>
             <StatBox value="$121.5K" label="Day target" valueColor={T.brass} />
@@ -1123,15 +1138,16 @@ const CONN_GROUPS = [
   { title: "Core", keys: ["supabase_env", "supabase_auth", "supabase_db"] },
   { title: "AI", keys: ["anthropic"] },
   { title: "Market Data", keys: ["coingecko"] },
-  { title: "Netlify Functions", keys: ["fn_health", "fn_gsc", "fn_shopify", "fn_deploy", "fn_dbadmin", "fn_audit"] },
+  { title: "Netlify Functions", keys: ["fn_health", "fn_btc", "fn_gsc", "fn_shopify", "fn_deploy", "fn_dbadmin", "fn_audit"] },
 ];
 const CONN_META = {
   supabase_env: { name: "Supabase · config", desc: "VITE_SUPABASE_URL + anon key present at build time" },
   supabase_auth: { name: "Supabase · auth", desc: "active session for this device" },
   supabase_db: { name: "Supabase · database", desc: "read against chat_messages (tables + RLS)" },
   anthropic: { name: "Anthropic API", desc: IS_DEPLOYED ? "via /.netlify/functions/claude proxy" : "direct from localhost with VITE_ANTHROPIC_API_KEY" },
-  coingecko: { name: "CoinGecko", desc: "BTC price + 24h sparkline, refreshed every 30 min" },
+  coingecko: { name: "CoinGecko", desc: "upstream BTC source — reached via the btc proxy, not directly from the browser" },
   fn_health: { name: "health", desc: "reports which server-side keys are configured" },
+  fn_btc: { name: "btc", desc: "proxies BTC price + sparkline — avoids mobile-carrier IP rate limiting" },
   fn_gsc: { name: "gsc", desc: "Search Console · zerotosecure.com last 14d" },
   fn_shopify: { name: "shopify", desc: "Shopify Admin API · orders last 14d" },
   fn_deploy: { name: "deploy", desc: "Netlify API · trigger builds per property" },
@@ -1213,7 +1229,7 @@ function useConnections({ session, btc }) {
     }
 
     // Netlify functions
-    const fns = [["fn_health", "health"], ["fn_gsc", "gsc"], ["fn_shopify", "shopify"], ["fn_deploy", "deploy"], ["fn_dbadmin", "db-admin"], ["fn_audit", "audit"]];
+    const fns = [["fn_health", "health"], ["fn_btc", "btc"], ["fn_gsc", "gsc"], ["fn_shopify", "shopify"], ["fn_deploy", "deploy"], ["fn_dbadmin", "db-admin"], ["fn_audit", "audit"]];
     if (!IS_DEPLOYED) {
       // netlify dev serves functions locally; try health first to decide
       const probe = await pingFn("health");
@@ -1492,13 +1508,49 @@ const HEADERS = {
   mini: ["Mini Me", "your sidekick — it never sleeps"],
 };
 const MOBILE_TABS = [
-  { key: "brief", label: "Brief" },
-  { key: "board", label: "Board" },
-  { key: "props", label: "Assets" },
-  { key: "it", label: "IT Dept" },
-  { key: "conn", label: "Status" },
+  { key: "brief", label: "Morning Brief" },
+  { key: "board", label: "The Board" },
+  { key: "props", label: "Your Properties" },
+  { key: "it", label: "IT Department" },
+  { key: "conn", label: "Connections" },
   { key: "mini", label: "Mini Me" },
 ];
+// Icon-only bottom nav — labels above live in aria-label/title for a11y.
+const NAV_ICONS = {
+  brief: (p) => ( // sunrise — the morning brief
+    <svg {...p} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M17 18a5 5 0 0 0-10 0" /><line x1="12" y1="2" x2="12" y2="9" />
+      <line x1="4.2" y1="10.2" x2="5.6" y2="11.6" /><line x1="19.8" y1="10.2" x2="18.4" y2="11.6" />
+      <line x1="1" y1="18" x2="3" y2="18" /><line x1="21" y1="18" x2="23" y2="18" /><line x1="1" y1="22" x2="23" y2="22" />
+    </svg>
+  ),
+  board: (p) => ( // grid of seats — the board
+    <svg {...p} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round">
+      <rect x="3" y="3" width="7.5" height="7.5" rx="1.5" /><rect x="13.5" y="3" width="7.5" height="7.5" rx="1.5" />
+      <rect x="3" y="13.5" width="7.5" height="7.5" rx="1.5" /><rect x="13.5" y="13.5" width="7.5" height="7.5" rx="1.5" />
+    </svg>
+  ),
+  props: (p) => ( // building — your properties
+    <svg {...p} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M3 21V9l9-6 9 6v12" /><path d="M9 21v-8h6v8" />
+    </svg>
+  ),
+  it: (p) => ( // terminal — IT department
+    <svg {...p} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round">
+      <rect x="2.5" y="4" width="19" height="16" rx="2" /><polyline points="6.5 9.5 10.5 12 6.5 14.5" /><line x1="12.5" y1="15" x2="17.5" y2="15" />
+    </svg>
+  ),
+  conn: (p) => ( // pulse — connection status
+    <svg {...p} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round">
+      <polyline points="2 13 7 13 9.5 6 14 20 16.5 13 22 13" />
+    </svg>
+  ),
+  mini: (p) => ( // sparkle — mini me
+    <svg {...p} viewBox="0 0 24 24" fill="currentColor" stroke="none">
+      <path d="M12 2.5c.5 3.4 1.2 5.4 2.4 6.6 1.2 1.2 3.2 1.9 6.6 2.4-3.4.5-5.4 1.2-6.6 2.4-1.2 1.2-1.9 3.2-2.4 6.6-.5-3.4-1.2-5.4-2.4-6.6C8.4 12.7 6.4 12 3 11.5c3.4-.5 5.4-1.2 6.6-2.4 1.2-1.2 1.9-3.2 2.4-6.6z" />
+    </svg>
+  ),
+};
 
 // ─── Main app ────────────────────────────────────────────────────────────────
 export default function App() {
@@ -1677,10 +1729,12 @@ export default function App() {
         <div style={{ flex: "none", display: "flex", borderTop: `1px solid ${T.line}`, background: "rgba(10,15,28,0.92)", backdropFilter: "blur(12px)", paddingBottom: "env(safe-area-inset-bottom)" }}>
           {MOBILE_TABS.map(t => {
             const active = tab === t.key;
+            const Icon = NAV_ICONS[t.key];
             return (
-              <button key={t.key} onClick={() => setTab(t.key)} style={{ flex: 1, minHeight: 54, background: "none", border: "none", cursor: "pointer", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 4, padding: "8px 0" }}>
+              <button key={t.key} onClick={() => setTab(t.key)} title={t.label} aria-label={t.label} aria-current={active ? "page" : undefined}
+                style={{ flex: 1, minHeight: 54, background: "none", border: "none", cursor: "pointer", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 5, padding: "8px 0" }}>
                 <span style={{ width: 5, height: 5, borderRadius: "50%", background: T.brass, opacity: active ? 1 : 0, transition: "opacity 0.15s", boxShadow: "0 0 6px rgba(200,160,74,0.7)" }} />
-                <span style={{ fontSize: 9.5, fontWeight: 700, letterSpacing: "0.1em", textTransform: "uppercase", fontFamily: syne, color: active ? T.ink : T.faint, transition: "color 0.15s" }}>{t.label}</span>
+                <Icon width={19} height={19} color={active ? T.ink : T.faint} style={{ transition: "color 0.15s" }} />
               </button>
             );
           })}
