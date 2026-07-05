@@ -300,10 +300,9 @@ function useIsMobile() {
 
 const PROPERTIES = [
   { name: "Clarify Paid Search", desc: "Boutique Google Ads agency", url: "https://clarifypaidsearch.com", appUrl: "https://clarify-outreach.netlify.app/", color: "#B68A2E", repo: "camcarp14/clarify-outreach", site: "clarify-paid-search" },
-  { name: "Clarify SaaS", desc: "Google Ads auditing tool", url: "https://clarify-saas.netlify.app/", appUrl: "https://clarify-saas.netlify.app/", color: "#B68A2E", repo: "camcarp14/clarify-saas", site: "clarify-saas" },
+  { name: "Clarify SaaS", desc: "Google Ads auditing tool", url: "https://clarify-saas.netlify.app/", appUrl: "https://clarify-saas.netlify.app/admin", color: "#B68A2E", repo: "camcarp14/clarify-saas", site: "clarify-saas" },
   { name: "Zero To Secure", desc: "Premium seed phrase backup", url: "https://zerotosecure.com", appUrl: "https://zts-command-center.netlify.app", color: "#0E9F6E", repo: "camcarp14/zts-command-center", site: "zero-to-secure" },
   { name: "Macro Command Center", desc: "Markets, portfolio, thesis", url: null, appUrl: "https://macro-command-center.netlify.app/", color: "#31589C", repo: "camcarp14/macro-command-center", site: "macro-command-center" },
-  { name: "Board Room", desc: "This app", url: null, appUrl: "https://board-room.netlify.app", color: "#8F6B1E", repo: "camcarp14/board-room", site: "board-room" },
 ];
 
 // ─── Bitcoin ──────────────────────────────────────────────────────────────────
@@ -842,12 +841,12 @@ Be directional where the data supports it — don't hedge into uselessness — b
       );
       return isMobile ? (
       <div style={grid}>
-        <div style={col}>{card_bitcoin}{card_stocks}{card_watch}{card_meetings}{card_gsc}{card_clarify}{card_zts}</div>
+        <div style={col}>{card_bitcoin}{card_stocks}{card_watch}{card_gsc}{card_clarify}{card_zts}{card_meetings}</div>
       </div>
       ) : (
       <div style={grid}>
         <div style={col}>{card_bitcoin}{card_watch}{card_gsc}{card_clarify}</div>
-        <div style={col}>{card_stocks}{card_meetings}{card_zts}</div>
+        <div style={col}>{card_stocks}{card_zts}{card_meetings}</div>
       </div>
       );
       })()}
