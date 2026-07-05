@@ -2,11 +2,39 @@
 // Morning Brief card. Zero dependencies — signs the service-account JWT with
 // node:crypto.
 // Needs: GSC_CLIENT_EMAIL and GSC_PRIVATE_KEY (from a service account JSON;
-// store the key with literal \n sequences, this file converts them back).
+// store the key with literal \n sequences, this file converts them back —
+// and defensively cleans up the other common paste-mangling issues too,
+// since "re-paste it perfectly" has proven fragile in practice).
 // The service account email must be added as a user on the Search Console
 // property (sc-domain:zerotosecure.com or the URL-prefix property).
 const crypto = require("crypto");
 const json = (code, body) => ({ statusCode: code, headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+
+// Cleans up the ways a PEM key commonly gets mangled when copy-pasted
+// through a JSON file → terminal → browser text field round trip:
+// surrounding quotes accidentally included, literal \n vs real newlines,
+// Windows CRLF, stray leading/trailing whitespace.
+function normalizePrivateKey(raw) {
+  let key = (raw || "").trim();
+  if ((key.startsWith('"') && key.endsWith('"')) || (key.startsWith("'") && key.endsWith("'"))) key = key.slice(1, -1).trim();
+  key = key.replace(/\\r\\n/g, "\n").replace(/\\n/g, "\n").replace(/\r\n/g, "\n").replace(/\r/g, "\n");
+  return key.trim() + "\n";
+}
+// Checks the key at least LOOKS like valid PEM before handing it to
+// node:crypto — a shape mismatch here is what produces the cryptic
+// "error:1E08010C:DECODER routines::unsupported" with no useful detail.
+function pemShapeError(key) {
+  const hasBegin = /-----BEGIN (RSA )?PRIVATE KEY-----/.test(key);
+  const hasEnd = /-----END (RSA )?PRIVATE KEY-----/.test(key);
+  if (!hasBegin || !hasEnd) {
+    return `GSC_PRIVATE_KEY doesn't look like a valid PEM key after cleanup (missing ${!hasBegin ? "the BEGIN" : "the END"} marker; length after cleanup: ${key.length} chars — a real key is normally 1600+ chars). Re-copy the "private_key" field from the service account JSON, including everything between the quotes, as one line with literal \\n sequences intact.`;
+  }
+  const bodyLines = key.split("\n").filter(l => l && !l.startsWith("-----"));
+  if (bodyLines.length < 10) {
+    return `GSC_PRIVATE_KEY has the right BEGIN/END markers but only ${bodyLines.length} content line(s) — that's too short for a real key, likely truncated during paste. Re-copy the full "private_key" value.`;
+  }
+  return null;
+}
 
 const b64url = (buf) => Buffer.from(buf).toString("base64").replace(/=/g, "").replace(/\+/g, "-").replace(/\//g, "_");
 
@@ -21,7 +49,12 @@ async function getAccessToken(email, privateKey) {
   }));
   const signer = crypto.createSign("RSA-SHA256");
   signer.update(`${header}.${claims}`);
-  const sig = b64url(signer.sign(privateKey));
+  let sig;
+  try {
+    sig = b64url(signer.sign(privateKey));
+  } catch (e) {
+    throw new Error(`the key has valid PEM markers but node:crypto couldn't use it to sign (${e.message}) — it may be corrupted, the wrong key type, or need to be regenerated from Google Cloud (IAM & Admin → Service Accounts → your account → Keys → Add Key)`);
+  }
   const jwt = `${header}.${claims}.${sig}`;
 
   const res = await fetch("https://oauth2.googleapis.com/token", {
@@ -48,7 +81,10 @@ exports.handler = async (event) => {
   if (body.ping) return json(200, { success: true, service: "gsc", configured, missing: configured ? undefined : "GSC_CLIENT_EMAIL / GSC_PRIVATE_KEY" });
   if (!configured) return json(500, { error: "GSC env vars not set" });
 
-  const privateKey = rawKey.replace(/\\n/g, "\n");
+  const privateKey = normalizePrivateKey(rawKey);
+  const shapeError = pemShapeError(privateKey);
+  if (shapeError) return json(500, { error: shapeError });
+
   const site = process.env.GSC_SITE_URL || `sc-domain:${(body.site || "zerotosecure.com").replace(/^https?:\/\//, "")}`;
   const days = Math.min(body.days || 14, 90);
 
