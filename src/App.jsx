@@ -634,6 +634,7 @@ function MorningBriefPage({ btc, isMobile }) {
     narrative = `24h range ${fmtK(btc.low24)}–${fmtK(btc.high24)}, currently trading ${pos === "mid" ? "in the middle of" : pos} that range and ${up ? "up" : "down"} ${Math.abs(btc.changePct || 0).toFixed(1)}% on the day. Support sits at the 24h low (${fmtK(btc.low24)}); a break below ${invalidation} would put you outside the recent range and is worth checking your Aave health factor against.`;
   }
   const grid = { maxWidth: 1020, margin: "0 auto", display: "grid", gridTemplateColumns: isMobile ? "1fr" : "1fr 1fr", gap: isMobile ? 12 : 14, alignItems: "start" };
+  const col = { display: "flex", flexDirection: "column", gap: isMobile ? 12 : 14 };
   const card = isMobile ? S.cardM : S.card;
   const FeedFallbackRow = ({ status }) => (
     <div style={{ ...S.inner, display: "flex", alignItems: "center", gap: 11, padding: "11px 13px" }}>
@@ -645,132 +646,133 @@ function MorningBriefPage({ btc, isMobile }) {
   return (
     <div style={{ flex: 1, overflowY: "auto", padding: isMobile ? "18px 16px 24px" : "30px 34px 40px" }}>
       <div style={grid}>
-        {/* Bitcoin outlook */}
-        <div style={card}>
-          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 12 }}>
-            <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-              <span style={{ width: 18, height: 18, borderRadius: "50%", background: "linear-gradient(135deg,#F7931A,#C77416)", display: "inline-flex", alignItems: "center", justifyContent: "center", fontSize: 9, fontWeight: 800, color: "#1A0F00" }}>₿</span>
-              <span style={S.title}>Bitcoin · Day Outlook</span>
-            </div>
-            <StancePill text={stance} color={stanceColor} />
-          </div>
-          <div style={{ display: "flex", alignItems: "baseline", gap: 10, marginBottom: 13 }}>
-            <span style={{ fontSize: 26, fontWeight: 500, fontFamily: mono, color: T.ink }}>{price}</span>
-            {hasChange && <span style={{ fontSize: 12, fontWeight: 700, color: up ? T.green : T.red, fontFamily: mono }}>{up ? "▲" : "▼"} {Math.abs(btc.changePct || 0).toFixed(2)}%</span>}
-          </div>
-          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 7, marginBottom: 13 }}>
-            <StatBox value={dayTarget} label="Day target" valueColor={T.brass} />
-            <StatBox value={support} label="Support (24h low)" valueColor={T.green} />
-            <StatBox value={invalidation} label="Invalidation" valueColor={T.red} />
-          </div>
-          <div style={{ fontSize: 11.5, color: T.sub, lineHeight: 1.65 }}>{narrative}</div>
-          <div style={{ marginTop: 9, ...S.microLabel, letterSpacing: "0.04em" }}>LEVELS DERIVED FROM LIVE 24H RANGE · NOT FINANCIAL ADVICE</div>
+                <div style={col}>
+          {/* Bitcoin outlook */}
+                  <div style={card}>
+                    <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 12 }}>
+                      <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                        <span style={{ width: 18, height: 18, borderRadius: "50%", background: "linear-gradient(135deg,#F7931A,#C77416)", display: "inline-flex", alignItems: "center", justifyContent: "center", fontSize: 9, fontWeight: 800, color: "#1A0F00" }}>₿</span>
+                        <span style={S.title}>Bitcoin · Day Outlook</span>
+                      </div>
+                      <StancePill text={stance} color={stanceColor} />
+                    </div>
+                    <div style={{ display: "flex", alignItems: "baseline", gap: 10, marginBottom: 13 }}>
+                      <span style={{ fontSize: 26, fontWeight: 500, fontFamily: mono, color: T.ink }}>{price}</span>
+                      {hasChange && <span style={{ fontSize: 12, fontWeight: 700, color: up ? T.green : T.red, fontFamily: mono }}>{up ? "▲" : "▼"} {Math.abs(btc.changePct || 0).toFixed(2)}%</span>}
+                    </div>
+                    <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 7, marginBottom: 13 }}>
+                      <StatBox value={dayTarget} label="Day target" valueColor={T.brass} />
+                      <StatBox value={support} label="Support (24h low)" valueColor={T.green} />
+                      <StatBox value={invalidation} label="Invalidation" valueColor={T.red} />
+                    </div>
+                    <div style={{ fontSize: 11.5, color: T.sub, lineHeight: 1.65 }}>{narrative}</div>
+                    <div style={{ marginTop: 9, ...S.microLabel, letterSpacing: "0.04em" }}>LEVELS DERIVED FROM LIVE 24H RANGE · NOT FINANCIAL ADVICE</div>
+                  </div>
+          {/* Events */}
+                  <div style={card}>
+                    <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+                      <span style={S.title}>Watch Today</span>
+                      <div style={{ display: "flex", alignItems: "center", gap: 7 }}>
+                        <span style={S.microLabel}>CT TIME</span>
+                        <StatusTag status={eventsStatus} />
+                      </div>
+                    </div>
+                    <div style={{ display: "flex", flexDirection: "column", gap: 7, marginTop: 10 }}>
+                      {eventsStatus.state === "live" ? (
+                        events.length ? events.map((e, i) => (
+                          <div key={i} style={{ ...S.inner, display: "flex", alignItems: "center", gap: 11, padding: "11px 13px" }}>
+                            <span style={{ width: 7, height: 7, borderRadius: "50%", background: e.color, flex: "none", boxShadow: `0 0 8px ${e.color}80` }} />
+                            <span style={{ fontSize: 9, color: T.faint, fontFamily: mono, flex: "none", width: 52 }}>{e.time}</span>
+                            <span style={{ fontSize: 11, color: "#3A3323", lineHeight: 1.5, flex: 1 }}>{e.text}</span>
+                          </div>
+                        )) : <div style={{ fontSize: 10.5, color: T.faint, padding: "6px 0" }}>No high/medium-impact US events scheduled today.</div>
+                      ) : <FeedFallbackRow status={eventsStatus} />}
+                    </div>
+                  </div>
+          {/* ZTS Search Console */}
+                  <div style={card}>
+                    <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 12 }}>
+                      <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                        <span style={{ width: 8, height: 8, borderRadius: "50%", background: "#0E9F6E", boxShadow: "0 0 8px rgba(14,159,110,0.5)" }} />
+                        <span style={S.title}>Zero To Secure · Search Console</span>
+                      </div>
+                      <StatusTag status={gscStatus} />
+                    </div>
+                    <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 7, marginBottom: 13 }}>
+                      <StatBox value={gsc.impressions} label="Impressions" delta={gsc.impressionsD} />
+                      <StatBox value={gsc.clicks} label="Clicks" delta={gsc.clicksD} />
+                      <StatBox value={gsc.pos} label="Avg position" delta={gsc.posD} />
+                    </div>
+                    <Bars data={gsc.series} from="#17B888" to="#0E9F6E" />
+                    <div style={{ marginTop: 8, fontSize: 10.5, color: gscStatus.state === "live" ? T.sub : T.faint, lineHeight: 1.55 }}>{gscStatus.state === "live" ? gsc.note : gscStatus.state === "loading" ? "Loading…" : gscStatus.detail}</div>
+                  </div>
         </div>
 
-        {/* Stocks outlook */}
-        <div style={card}>
-          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 12 }}>
-            <span style={S.title}>Stocks · Day Outlook</span>
-            <StatusTag status={stocksStatus} />
-          </div>
-          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 7, marginBottom: 13 }}>
-            {[["S&P FUT", stocks.spx], ["NASDAQ FUT", stocks.ndq], ["10Y YIELD", stocks.tnx], ["DXY", stocks.dxy]].map(([l, s], i) => (
-              <div key={i} style={{ ...S.inner, padding: "10px 12px", borderRadius: 10, display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-                <span style={{ fontSize: 9, color: T.faint, letterSpacing: "0.06em" }}>{l}</span>
-                <span style={{ fontSize: 11.5, fontWeight: 700, color: s.value === "—" ? T.faint : s.up ? T.green : T.red, fontFamily: mono }}>{s.value}</span>
-              </div>
-            ))}
-          </div>
-          <div style={{ fontSize: 11.5, color: T.sub, lineHeight: 1.65 }}>{stocksStatus.state === "live" ? "Futures and yield pulled live via Yahoo Finance's public endpoint — unofficial, no key, refreshes on page load." : stocksStatus.state === "loading" ? "Loading live data…" : stocksStatus.detail}</div>
+        <div style={col}>
+          {/* Stocks outlook */}
+                  <div style={card}>
+                    <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 12 }}>
+                      <span style={S.title}>Stocks · Day Outlook</span>
+                      <StatusTag status={stocksStatus} />
+                    </div>
+                    <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 7, marginBottom: 13 }}>
+                      {[["S&P FUT", stocks.spx], ["NASDAQ FUT", stocks.ndq], ["10Y YIELD", stocks.tnx], ["DXY", stocks.dxy]].map(([l, s], i) => (
+                        <div key={i} style={{ ...S.inner, padding: "10px 12px", borderRadius: 10, display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+                          <span style={{ fontSize: 9, color: T.faint, letterSpacing: "0.06em" }}>{l}</span>
+                          <span style={{ fontSize: 11.5, fontWeight: 700, color: s.value === "—" ? T.faint : s.up ? T.green : T.red, fontFamily: mono }}>{s.value}</span>
+                        </div>
+                      ))}
+                    </div>
+                    <div style={{ fontSize: 11.5, color: T.sub, lineHeight: 1.65 }}>{stocksStatus.state === "live" ? "Futures and yield pulled live via Yahoo Finance's public endpoint — unofficial, no key, refreshes on page load." : stocksStatus.state === "loading" ? "Loading live data…" : stocksStatus.detail}</div>
+                  </div>
+          {/* The Wire */}
+                  <div style={card}>
+                    <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+                      <span style={S.title}>The Wire</span>
+                      <StatusTag status={wireStatus} />
+                    </div>
+                    <div style={{ fontSize: 10.5, color: T.faint, lineHeight: 1.5, margin: "6px 0 12px" }}>{wireStatus.state === "live" ? "Latest crypto/macro headlines, auto-tagged." : "Real headlines only — nothing shown until the feed responds."}</div>
+                    <div style={{ display: "flex", flexDirection: "column", gap: 7 }}>
+                      {wireStatus.state === "live" ? wire.map((w, i) => (
+                        w.link ? (
+                          <a key={i} href={w.link} target="_blank" rel="noopener" style={{ ...S.inner, display: "flex", gap: 10, padding: "10px 12px", textDecoration: "none", cursor: "pointer" }}>
+                            <span style={{ fontSize: 8.5, color: T.faint, fontFamily: mono, flex: "none", paddingTop: 2, width: 36 }}>{w.time}</span>
+                            <span style={{ fontSize: 11, color: "#3A3323", lineHeight: 1.55, flex: 1 }}>
+                              <span style={{ color: w.tagColor, fontWeight: 700, fontSize: 8.5, letterSpacing: "0.06em" }}>{w.tag} </span> {w.text}
+                            </span>
+                            <span style={{ color: T.faint, fontSize: 12, flex: "none", paddingTop: 1 }}>›</span>
+                          </a>
+                        ) : (
+                          <div key={i} style={{ ...S.inner, display: "flex", gap: 10, padding: "10px 12px" }}>
+                            <span style={{ fontSize: 8.5, color: T.faint, fontFamily: mono, flex: "none", paddingTop: 2, width: 36 }}>{w.time}</span>
+                            <span style={{ fontSize: 11, color: "#3A3323", lineHeight: 1.55, flex: 1 }}>
+                              <span style={{ color: w.tagColor, fontWeight: 700, fontSize: 8.5, letterSpacing: "0.06em" }}>{w.tag} </span> {w.text}
+                            </span>
+                          </div>
+                        )
+                      )) : <FeedFallbackRow status={wireStatus} />}
+                    </div>
+                    {wireStatus.state === "live" && <div style={{ marginTop: 10, ...S.microLabel, letterSpacing: "0.05em" }}>SOURCES · COINDESK · COINTELEGRAPH</div>}
+                  </div>
+          {/* ZTS Shopify */}
+                  <div style={card}>
+                    <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 12 }}>
+                      <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                        <span style={{ width: 8, height: 8, borderRadius: "50%", background: T.brass, boxShadow: "0 0 8px rgba(217,177,94,0.5)" }} />
+                        <span style={S.title}>Zero To Secure · Shopify</span>
+                      </div>
+                      <StatusTag status={shopStatus} />
+                    </div>
+                    <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 7, marginBottom: 13 }}>
+                      <StatBox value={shop.visits} label="Visits" delta={shop.visitsD} />
+                      <StatBox value={shop.conv} label="Conversion" delta={shop.convD} />
+                      <StatBox value={shop.orders} label="Orders" delta={shop.ordersD} />
+                    </div>
+                    <Bars data={shop.series} from="#8F6B1E" to="#6A4D12" />
+                    <div style={{ marginTop: 8, fontSize: 10.5, color: shopStatus.state === "live" ? T.sub : T.faint, lineHeight: 1.55 }}>{shopStatus.state === "live" ? shop.note : shopStatus.state === "loading" ? "Loading…" : shopStatus.detail}</div>
+                  </div>
         </div>
 
-        {/* Events */}
-        <div style={card}>
-          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-            <span style={S.title}>Watch Today</span>
-            <div style={{ display: "flex", alignItems: "center", gap: 7 }}>
-              <span style={S.microLabel}>CT TIME</span>
-              <StatusTag status={eventsStatus} />
-            </div>
-          </div>
-          <div style={{ display: "flex", flexDirection: "column", gap: 7, marginTop: 10 }}>
-            {eventsStatus.state === "live" ? (
-              events.length ? events.map((e, i) => (
-                <div key={i} style={{ ...S.inner, display: "flex", alignItems: "center", gap: 11, padding: "11px 13px" }}>
-                  <span style={{ width: 7, height: 7, borderRadius: "50%", background: e.color, flex: "none", boxShadow: `0 0 8px ${e.color}80` }} />
-                  <span style={{ fontSize: 9, color: T.faint, fontFamily: mono, flex: "none", width: 52 }}>{e.time}</span>
-                  <span style={{ fontSize: 11, color: "#3A3323", lineHeight: 1.5, flex: 1 }}>{e.text}</span>
-                </div>
-              )) : <div style={{ fontSize: 10.5, color: T.faint, padding: "6px 0" }}>No high/medium-impact US events scheduled today.</div>
-            ) : <FeedFallbackRow status={eventsStatus} />}
-          </div>
-        </div>
-
-        {/* The Wire */}
-        <div style={card}>
-          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-            <span style={S.title}>The Wire</span>
-            <StatusTag status={wireStatus} />
-          </div>
-          <div style={{ fontSize: 10.5, color: T.faint, lineHeight: 1.5, margin: "6px 0 12px" }}>{wireStatus.state === "live" ? "Latest crypto/macro headlines, auto-tagged." : "Real headlines only — nothing shown until the feed responds."}</div>
-          <div style={{ display: "flex", flexDirection: "column", gap: 7 }}>
-            {wireStatus.state === "live" ? wire.map((w, i) => (
-              w.link ? (
-                <a key={i} href={w.link} target="_blank" rel="noopener" style={{ ...S.inner, display: "flex", gap: 10, padding: "10px 12px", textDecoration: "none", cursor: "pointer" }}>
-                  <span style={{ fontSize: 8.5, color: T.faint, fontFamily: mono, flex: "none", paddingTop: 2, width: 36 }}>{w.time}</span>
-                  <span style={{ fontSize: 11, color: "#3A3323", lineHeight: 1.55, flex: 1 }}>
-                    <span style={{ color: w.tagColor, fontWeight: 700, fontSize: 8.5, letterSpacing: "0.06em" }}>{w.tag} </span> {w.text}
-                  </span>
-                  <span style={{ color: T.faint, fontSize: 12, flex: "none", paddingTop: 1 }}>›</span>
-                </a>
-              ) : (
-                <div key={i} style={{ ...S.inner, display: "flex", gap: 10, padding: "10px 12px" }}>
-                  <span style={{ fontSize: 8.5, color: T.faint, fontFamily: mono, flex: "none", paddingTop: 2, width: 36 }}>{w.time}</span>
-                  <span style={{ fontSize: 11, color: "#3A3323", lineHeight: 1.55, flex: 1 }}>
-                    <span style={{ color: w.tagColor, fontWeight: 700, fontSize: 8.5, letterSpacing: "0.06em" }}>{w.tag} </span> {w.text}
-                  </span>
-                </div>
-              )
-            )) : <FeedFallbackRow status={wireStatus} />}
-          </div>
-          {wireStatus.state === "live" && <div style={{ marginTop: 10, ...S.microLabel, letterSpacing: "0.05em" }}>SOURCES · COINDESK · COINTELEGRAPH</div>}
-        </div>
-
-        {/* ZTS Search Console */}
-        <div style={card}>
-          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 12 }}>
-            <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-              <span style={{ width: 8, height: 8, borderRadius: "50%", background: "#0E9F6E", boxShadow: "0 0 8px rgba(14,159,110,0.5)" }} />
-              <span style={S.title}>Zero To Secure · Search Console</span>
-            </div>
-            <StatusTag status={gscStatus} />
-          </div>
-          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 7, marginBottom: 13 }}>
-            <StatBox value={gsc.impressions} label="Impressions" delta={gsc.impressionsD} />
-            <StatBox value={gsc.clicks} label="Clicks" delta={gsc.clicksD} />
-            <StatBox value={gsc.pos} label="Avg position" delta={gsc.posD} />
-          </div>
-          <Bars data={gsc.series} from="#17B888" to="#0E9F6E" />
-          <div style={{ marginTop: 8, fontSize: 10.5, color: gscStatus.state === "live" ? T.sub : T.faint, lineHeight: 1.55 }}>{gscStatus.state === "live" ? gsc.note : gscStatus.state === "loading" ? "Loading…" : gscStatus.detail}</div>
-        </div>
-
-        {/* ZTS Shopify */}
-        <div style={card}>
-          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 12 }}>
-            <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-              <span style={{ width: 8, height: 8, borderRadius: "50%", background: T.brass, boxShadow: "0 0 8px rgba(217,177,94,0.5)" }} />
-              <span style={S.title}>Zero To Secure · Shopify</span>
-            </div>
-            <StatusTag status={shopStatus} />
-          </div>
-          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 7, marginBottom: 13 }}>
-            <StatBox value={shop.visits} label="Visits" delta={shop.visitsD} />
-            <StatBox value={shop.conv} label="Conversion" delta={shop.convD} />
-            <StatBox value={shop.orders} label="Orders" delta={shop.ordersD} />
-          </div>
-          <Bars data={shop.series} from="#8F6B1E" to="#6A4D12" />
-          <div style={{ marginTop: 8, fontSize: 10.5, color: shopStatus.state === "live" ? T.sub : T.faint, lineHeight: 1.55 }}>{shopStatus.state === "live" ? shop.note : shopStatus.state === "loading" ? "Loading…" : shopStatus.detail}</div>
-        </div>
       </div>
     </div>
   );
@@ -817,8 +819,24 @@ function BoardPage({ seatNotes, onEditSeat, onEnterRoom, isMobile }) {
   );
 }
 
+// ─── Page: Board Room (chat + seat roster, one page) ─────────────────────────
+const BOARDROOM_SUBTABS = [{ key: "chat", label: "Chat" }, { key: "seats", label: "Seats" }];
+function BoardRoomPage({ messages, thinking, loadingData, input, setInput, onSend, endRef, seatNotes, onEditSeat, isMobile }) {
+  const [sub, setSub] = useState("chat");
+  return (
+    <>
+      <div style={{ flex: "none", padding: isMobile ? "10px 14px 0" : "14px 34px 0" }}>
+        <SubTabs options={BOARDROOM_SUBTABS} value={sub} onChange={setSub} />
+      </div>
+      {sub === "chat"
+        ? <RoomPage messages={messages} thinking={thinking} loadingData={loadingData} input={input} setInput={setInput} onSend={onSend} endRef={endRef} isMobile={isMobile} />
+        : <BoardPage seatNotes={seatNotes} onEditSeat={onEditSeat} onEnterRoom={() => setSub("chat")} isMobile={isMobile} />}
+    </>
+  );
+}
+
 // ─── Page: Properties ────────────────────────────────────────────────────────
-function PropertiesPage({ isMobile, btc }) {
+function PropertiesPage({ isMobile, btc, settings, updateSetting, session }) {
   const [status, setStatus] = useState({});
   useEffect(() => {
     let alive = true;
@@ -869,14 +887,17 @@ function PropertiesPage({ isMobile, btc }) {
             <Sparkline points={btc.points} color={(btc.changePct || 0) >= 0 ? T.green : T.red} height={34} />
           </div>
         )}
+        <div style={{ gridColumn: isMobile ? "auto" : "1 / -1" }}>
+          <AuditorCard settings={settings} updateSetting={updateSetting} session={session} isMobile={isMobile} />
+        </div>
       </div>
     </div>
   );
 }
 
-// ─── Page: Systems (deploy, database, status, auditor, usage) ────────────────
-async function auditProperty(p, token) {
-  const data = await callFn("audit", { name: p.name, url: p.url || p.appUrl, repo: p.repo }, token ? { Authorization: `Bearer ${token}` } : undefined);
+// ─── Page: Systems (deploy, database, status, usage) ──────────────────────────
+async function auditProperty(p, token, ask) {
+  const data = await callFn("audit", { name: p.name, url: p.url || p.appUrl, repo: p.repo, ask }, token ? { Authorization: `Bearer ${token}` } : undefined);
   return data?.success ? data.findings : [];
 }
 
@@ -884,8 +905,19 @@ function AuditorCard({ settings, updateSetting, session, isMobile }) {
   const [findings, setFindings] = useState([]);
   const [running, setRunning] = useState(false);
   const [open, setOpen] = useState(false);
+  const [ask, setAsk] = useState("");
   const enabled = !!settings?.auditor_enabled;
   const lastRun = settings?.auditor_last_run || null;
+
+  // Fix proposals — read-only until Approve & Commit is clicked explicitly.
+  const [fixProp, setFixProp] = useState(PROPERTIES[0]?.name || "");
+  const [fixInstruction, setFixInstruction] = useState("");
+  const [fixBusy, setFixBusy] = useState(false);
+  const [fixProposal, setFixProposal] = useState(null);
+  const [fixExpanded, setFixExpanded] = useState(false);
+  const [fixError, setFixError] = useState(null);
+  const [committing, setCommitting] = useState(false);
+  const [committed, setCommitted] = useState(null);
 
   useEffect(() => {
     let alive = true;
@@ -893,11 +925,11 @@ function AuditorCard({ settings, updateSetting, session, isMobile }) {
     return () => { alive = false; };
   }, []);
 
-  const runAll = async () => {
+  const runAll = async (customAsk) => {
     setRunning(true);
     const results = [];
     for (const p of PROPERTIES) {
-      const fs = await auditProperty(p, session?.access_token);
+      const fs = await auditProperty(p, session?.access_token, customAsk);
       fs.forEach(f => results.push({ ...f, property: p.name, ts: Date.now() }));
     }
     await db.saveFindings(results);
@@ -916,6 +948,26 @@ function AuditorCard({ settings, updateSetting, session, isMobile }) {
     return () => clearInterval(iv);
   }, [enabled, settings?.auditor_last_run]);
 
+  const proposeFix = async () => {
+    const instruction = fixInstruction.trim();
+    const p = PROPERTIES.find(x => x.name === fixProp);
+    if (!instruction || !p?.repo || fixBusy) return;
+    setFixBusy(true); setFixError(null); setFixProposal(null); setCommitted(null);
+    const data = await callFn("auto-fix", { action: "propose", repo: p.repo, instruction });
+    if (data?.success) setFixProposal({ ...data, repo: p.repo, site: p.name });
+    else setFixError(data?.error || "couldn't propose a fix");
+    setFixBusy(false);
+  };
+  const commitFix = async () => {
+    if (!fixProposal || committing) return;
+    setCommitting(true); setFixError(null);
+    const data = await callFn("auto-fix", { action: "commit", repo: fixProposal.repo, path: fixProposal.path, content: fixProposal.after, message: `Fix via Board Room auditor: ${fixInstruction.trim().slice(0, 60)}` });
+    if (data?.success) { setCommitted(data); setFixProposal(null); setFixInstruction(""); setFixExpanded(false); }
+    else setFixError(data?.error || "commit failed");
+    setCommitting(false);
+  };
+  const discardFix = () => { setFixProposal(null); setFixExpanded(false); };
+
   const propColor = (name) => (PROPERTIES.find(p => p.name === name) || {}).color || T.sub;
   const sevColor = { high: T.red, medium: T.amber, low: T.sub };
   const ago = (ts) => { if (!ts) return "NEVER"; const m = Math.floor((Date.now() - ts) / 60000); return m < 1 ? "JUST NOW" : m < 60 ? `${m}M AGO` : `${Math.floor(m / 60)}H AGO`; };
@@ -926,9 +978,14 @@ function AuditorCard({ settings, updateSetting, session, isMobile }) {
         <span style={S.title}>Site Auditor</span>
         <Toggle on={enabled} onToggle={() => updateSetting("auditor_enabled", !enabled)} size={isMobile ? 24 : 20} />
       </div>
-      <button onClick={runAll} disabled={running} style={{ width: "100%", padding: isMobile ? 12 : 10, background: running ? "rgba(34,29,20,0.05)" : "rgba(143,107,30,0.12)", border: `1px solid ${running ? T.line : "rgba(143,107,30,0.3)"}`, borderRadius: 10, color: running ? T.faint : T.brass, fontSize: 11, fontWeight: 700, cursor: running ? "default" : "pointer", fontFamily: syne, marginBottom: 9 }}>
+      <button onClick={() => runAll()} disabled={running} style={{ width: "100%", padding: isMobile ? 12 : 10, background: running ? "rgba(34,29,20,0.05)" : "rgba(143,107,30,0.12)", border: `1px solid ${running ? T.line : "rgba(143,107,30,0.3)"}`, borderRadius: 10, color: running ? T.faint : T.brass, fontSize: 11, fontWeight: 700, cursor: running ? "default" : "pointer", fontFamily: syne, marginBottom: 9 }}>
         {running ? "Auditing all properties…" : "Run audit now"}
       </button>
+      <div style={{ display: "flex", gap: 8, marginBottom: 9 }}>
+        <input value={ask} onChange={e => setAsk(e.target.value)} onKeyDown={e => { if (e.key === "Enter") { e.preventDefault(); if (ask.trim() && !running) runAll(ask.trim()); } }} placeholder="Ask something specific (optional) — e.g. check for broken nav links"
+          style={{ ...S.input, flex: 1, padding: "9px 11px", fontSize: 10.5 }} disabled={running} />
+        <button onClick={() => ask.trim() && runAll(ask.trim())} disabled={running || !ask.trim()} style={{ ...S.ghostBtn, padding: "0 14px", minHeight: 38, fontSize: 10, opacity: running || !ask.trim() ? 0.5 : 1 }}>Ask</button>
+      </div>
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
         <span style={S.microLabel}>LAST RUN {ago(lastRun)}</span>
         <button onClick={() => setOpen(!open)} style={{ background: "none", border: "none", cursor: "pointer", display: "flex", alignItems: "center", gap: 6, padding: "2px 0", color: T.sub, fontSize: 10, fontWeight: 600 }}>
@@ -946,8 +1003,41 @@ function AuditorCard({ settings, updateSetting, session, isMobile }) {
               </div>
               <div style={{ fontSize: 10.5, color: T.ink, lineHeight: 1.5 }}>{f.finding}</div>
               <div style={{ fontSize: 10, color: T.sub, lineHeight: 1.5, marginTop: 3, fontStyle: "italic" }}>→ {f.suggestion}</div>
+              <button onClick={() => { setFixProp(f.property); setFixInstruction(`${f.finding} ${f.suggestion}`); setFixProposal(null); setFixError(null); setCommitted(null); }} style={{ background: "none", border: "none", color: T.brass, fontSize: 9, fontWeight: 700, cursor: "pointer", padding: "5px 0 0" }}>Propose fix →</button>
             </div>
           ))}
+        </div>
+      )}
+
+      <div style={{ height: 1, background: T.line, margin: "13px 0 11px" }} />
+
+      <div style={{ fontSize: 9.5, fontWeight: 700, color: T.brass, textTransform: "uppercase", letterSpacing: "0.1em", fontFamily: syne, marginBottom: 7 }}>Propose a Fix</div>
+      <div style={{ fontSize: 9.5, color: T.faint, lineHeight: 1.5, marginBottom: 9 }}>Commits straight to the site's repo — nothing goes live until you approve. Works for the static template (meta tags, title, robots.txt, sitemap) — not page content rendered by app code yet.</div>
+      <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginBottom: 8 }}>
+        {PROPERTIES.filter(p => p.repo).map(p => (
+          <button key={p.name} onClick={() => setFixProp(p.name)} style={{ padding: "6px 11px", background: fixProp === p.name ? "rgba(143,107,30,0.14)" : "rgba(34,29,20,0.035)", border: `1px solid ${fixProp === p.name ? "rgba(143,107,30,0.4)" : "rgba(34,29,20,0.09)"}`, borderRadius: 12, color: fixProp === p.name ? T.brass : T.sub, fontSize: 9.5, fontWeight: 700, cursor: "pointer", fontFamily: syne }}>{p.name}</button>
+        ))}
+      </div>
+      <div style={{ display: "flex", gap: 8 }}>
+        <input value={fixInstruction} onChange={e => setFixInstruction(e.target.value)} onKeyDown={e => { if (e.key === "Enter") { e.preventDefault(); proposeFix(); } }} placeholder="e.g. add a meta description mentioning steel seed phrase backup"
+          style={{ ...S.input, flex: 1, padding: "9px 11px", fontSize: 10.5 }} disabled={fixBusy} />
+        <button onClick={proposeFix} disabled={fixBusy || !fixInstruction.trim()} style={{ ...S.ghostBtn, padding: "0 14px", minHeight: 38, fontSize: 10, opacity: fixBusy || !fixInstruction.trim() ? 0.5 : 1 }}>{fixBusy ? "…" : "Propose"}</button>
+      </div>
+      {fixError && <div style={{ fontSize: 10.5, color: T.red, lineHeight: 1.5, marginTop: 9 }}>{fixError}</div>}
+      {committed && <div style={{ fontSize: 10.5, color: T.green, lineHeight: 1.5, marginTop: 9 }}>✓ {committed.message}</div>}
+      {fixProposal && (
+        <div style={{ background: "rgba(34,29,20,0.045)", border: "1px solid rgba(34,29,20,0.08)", borderRadius: 10, padding: "11px 13px", marginTop: 10 }}>
+          <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", marginBottom: 5 }}>
+            <span style={{ fontSize: 10.5, color: T.ink, fontWeight: 700, fontFamily: mono }}>{fixProposal.path}</span>
+            <span style={{ fontSize: 9, color: propColor(fixProposal.site), fontFamily: syne, fontWeight: 700 }}>{fixProposal.site}</span>
+          </div>
+          <div style={{ fontSize: 10.5, color: T.sub, lineHeight: 1.5, marginBottom: 8 }}>{fixProposal.note}</div>
+          <button onClick={() => setFixExpanded(!fixExpanded)} style={{ background: "none", border: "none", color: T.brass, fontSize: 9.5, cursor: "pointer", padding: 0, marginBottom: fixExpanded ? 8 : 0 }}>{fixExpanded ? "Hide full file ▲" : "Show full file ▼"}</button>
+          {fixExpanded && <pre style={{ background: "rgba(34,29,20,0.05)", border: "1px solid rgba(34,29,20,0.06)", borderRadius: 9, padding: "10px 12px", fontSize: 9.5, fontFamily: mono, color: T.sub, lineHeight: 1.5, whiteSpace: "pre-wrap", maxHeight: 220, overflowY: "auto", marginBottom: 8 }}>{fixProposal.after}</pre>}
+          <div style={{ display: "flex", gap: 8, marginTop: 8 }}>
+            <button onClick={commitFix} disabled={committing} style={{ ...S.brassBtn, flex: 1, padding: "9px 0", fontSize: 10.5, opacity: committing ? 0.6 : 1 }}>{committing ? "Committing…" : "Approve & Commit"}</button>
+            <button onClick={discardFix} disabled={committing} style={{ flex: "none", padding: "9px 16px", background: "transparent", border: `1px solid rgba(34,29,20,0.12)`, borderRadius: 10, color: T.sub, fontSize: 10.5, fontWeight: 600, cursor: "pointer" }}>Discard</button>
+          </div>
         </div>
       )}
     </div>
@@ -1059,7 +1149,7 @@ const CONN_GROUPS = [
   { title: "Core", keys: ["supabase_env", "supabase_auth", "supabase_db"] },
   { title: "AI", keys: ["anthropic"] },
   { title: "Market Data", keys: ["coingecko"] },
-  { title: "Netlify Functions", keys: ["fn_health", "fn_mini", "fn_btc", "fn_markets", "fn_calendar", "fn_wire", "fn_site_status", "fn_gsc", "fn_shopify", "fn_deploy", "fn_dbadmin", "fn_audit"] },
+  { title: "Netlify Functions", keys: ["fn_health", "fn_mini", "fn_btc", "fn_markets", "fn_calendar", "fn_wire", "fn_site_status", "fn_gsc", "fn_shopify", "fn_deploy", "fn_dbadmin", "fn_audit", "fn_autofix"] },
 ];
 const CONN_META = {
   supabase_env: { name: "Supabase · config", desc: "VITE_SUPABASE_URL + anon key present at build time" },
@@ -1079,6 +1169,7 @@ const CONN_META = {
   fn_deploy: { name: "deploy", desc: "Netlify API · trigger builds per property" },
   fn_dbadmin: { name: "db-admin", desc: "service-role maintenance, allowlisted commands" },
   fn_audit: { name: "audit", desc: "AI site auditor across all five properties" },
+  fn_autofix: { name: "auto-fix", desc: "proposes fixes to a site's static template files, commits only on approval" },
 };
 const CONN_STATUS = {
   ok: { label: "LIVE", color: T.green },
@@ -1155,7 +1246,7 @@ function useConnections({ session, btc }) {
     }
 
     // Netlify functions
-    const fns = [["fn_health", "health"], ["fn_mini", "mini-worker"], ["fn_btc", "btc"], ["fn_markets", "markets"], ["fn_calendar", "calendar"], ["fn_wire", "wire"], ["fn_site_status", "site-status"], ["fn_gsc", "gsc"], ["fn_shopify", "shopify"], ["fn_deploy", "deploy"], ["fn_dbadmin", "db-admin"], ["fn_audit", "audit"]];
+    const fns = [["fn_health", "health"], ["fn_mini", "mini-worker"], ["fn_btc", "btc"], ["fn_markets", "markets"], ["fn_calendar", "calendar"], ["fn_wire", "wire"], ["fn_site_status", "site-status"], ["fn_gsc", "gsc"], ["fn_shopify", "shopify"], ["fn_deploy", "deploy"], ["fn_dbadmin", "db-admin"], ["fn_audit", "audit"], ["fn_autofix", "auto-fix"]];
     if (!IS_DEPLOYED) {
       // netlify dev serves functions locally; try health first to decide
       const probe = await pingFn("health");
@@ -1201,18 +1292,18 @@ function SubTabs({ options, value, onChange }) {
 }
 
 const SYSTEMS_SUBTABS = [
+  { key: "usage", label: "Usage" },
   { key: "status", label: "Status" },
   { key: "deploy", label: "Deploy" },
-  { key: "database", label: "Database" },
-  { key: "auditor", label: "Auditor" },
-  { key: "usage", label: "Usage" },
+  { key: "supabase", label: "Supabase" },
 ];
 
 // Systems — everything technical in one place, behind sub-tabs so mobile
-// isn't a wall of unrelated cards: live status of every data pipe, deploy
-// triggers, the Supabase console, the site auditor, and spend/usage.
+// isn't a wall of unrelated cards: spend/usage, live status of every data
+// pipe, deploy triggers, and the Supabase console. The site auditor lives
+// on Assets now, next to the properties it actually audits.
 function SystemsPage({ settings, updateSetting, session, btc, isMobile }) {
-  const [sub, setSub] = useState("status");
+  const [sub, setSub] = useState("usage");
   const card = isMobile ? S.cardM : S.card;
 
   // ── Status (formerly the standalone Connections page) ──
@@ -1227,24 +1318,61 @@ function SystemsPage({ settings, updateSetting, session, btc, isMobile }) {
   };
   const ago = (ts) => { if (!ts) return "—"; const s = Math.floor((Date.now() - ts) / 1000); return s < 60 ? `${s}S AGO` : `${Math.floor(s / 60)}M AGO`; };
 
-  // ── Deploy — build triggers only; deploy.js rejects zip uploads by design ──
+  // ── Deploy — build triggers, plus a safe single-file replace ──
   const [deploys, setDeploys] = useState({});
   const redeploy = async (p) => {
     setDeploys(d => ({ ...d, [p.name]: { busy: true } }));
     const res = await callFn("deploy", { site: p.site, action: "build" });
     setDeploys(d => ({ ...d, [p.name]: { busy: false, ok: !!res?.success, when: "just now" } }));
   };
+  const [replaceFile, setReplaceFile] = useState(null);
+  const [replacePath, setReplacePath] = useState("");
+  const [replaceTargets, setReplaceTargets] = useState([]);
+  const [replaceBusy, setReplaceBusy] = useState(false);
+  const [replaceResults, setReplaceResults] = useState({});
+  const toggleTarget = (name) => setReplaceTargets(t => t.includes(name) ? t.filter(x => x !== name) : [...t, name]);
+  const fileToBase64 = (file) => new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result).split(",")[1] || "");
+    reader.onerror = reject;
+    reader.readAsDataURL(file);
+  });
+  const runReplace = async () => {
+    if (!replaceFile || !replacePath.trim() || !replaceTargets.length || replaceBusy) return;
+    setReplaceBusy(true);
+    setReplaceResults({});
+    const contentBase64 = await fileToBase64(replaceFile);
+    const results = {};
+    for (const name of replaceTargets) {
+      const p = PROPERTIES.find(x => x.name === name);
+      const res = await callFn("deploy", { site: p.site, action: "replace-file", path: replacePath.trim(), contentBase64 });
+      results[name] = { ok: !!res?.success, detail: res?.success ? res.message : (res?.error || "failed — see Netlify deploy log") };
+      setReplaceResults({ ...results });
+    }
+    setReplaceBusy(false);
+  };
 
-  // ── Database ──
+  // ── Supabase — which project the console commands target ──
+  const [projects, setProjects] = useState(["Board Room"]);
+  const [project, setProject] = useState("Board Room");
+  useEffect(() => {
+    let alive = true;
+    callFn("db-admin", { ping: true }).then(d => {
+      if (!alive || !d?.projects?.length) return;
+      setProjects(d.projects);
+      setProject(p => d.projects.includes(p) ? p : d.projects[0]);
+    });
+    return () => { alive = false; };
+  }, []);
   const [sqlInput, setSqlInput] = useState("");
   const [sqlBusy, setSqlBusy] = useState(false);
   const [sqlLog, setSqlLog] = useState([{ kind: "ok", text: "ready — allowlisted commands only" }]);
   const runSql = async () => {
     const q = sqlInput.trim();
     if (!q || sqlBusy) return;
-    setSqlLog(l => [...l, { kind: "cmd", text: "> " + q }]);
+    setSqlLog(l => [...l, { kind: "cmd", text: `> [${project}] ${q}` }]);
     setSqlInput(""); setSqlBusy(true);
-    const data = await callFn("db-admin", { command: q });
+    const data = await callFn("db-admin", { command: q, project });
     setSqlLog(l => [...l, { kind: data?.success ? "ok" : "err", text: data?.success ? "✓ " + (data.message || "done") : "✗ " + (data?.error || "db-admin function not deployed yet") }]);
     setSqlBusy(false);
   };
@@ -1297,31 +1425,77 @@ function SystemsPage({ settings, updateSetting, session, btc, isMobile }) {
         )}
 
         {sub === "deploy" && (
-          <div style={card}>
-            <CardHeader title="Deployments" tag="NETLIFY" />
-            <div style={{ fontSize: 10.5, color: T.faint, lineHeight: 1.5, margin: "2px 0 13px" }}>Each redeploy triggers a fresh Netlify build from the site's connected repo. Live/down state lives under the Status tab.</div>
-            <div style={{ display: "flex", flexDirection: "column", gap: 6, marginTop: 6 }}>
-              {PROPERTIES.map(p => {
-                const d = deploys[p.name] || {};
-                return (
-                  <div key={p.name} style={{ ...S.inner, display: "flex", alignItems: "center", gap: 11, padding: "11px 13px" }}>
-                    <span style={{ width: 7, height: 7, borderRadius: "50%", background: d.busy ? T.amber : d.when ? (d.ok ? T.green : T.red) : T.faint, flex: "none" }} />
-                    <span style={{ display: "flex", flexDirection: "column", gap: 1, minWidth: 0, flex: 1 }}>
-                      <span style={{ fontSize: 11.5, fontWeight: 600, color: T.ink, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{p.name}</span>
-                      <span style={{ fontSize: 9, color: d.busy ? T.amber : T.faint, fontFamily: mono, letterSpacing: "0.04em" }}>{d.busy ? "TRIGGERING BUILD…" : d.when ? (d.ok ? "BUILD TRIGGERED · " + d.when : "TRIGGER FAILED — check deploy function") : "netlify · " + p.site}</span>
-                    </span>
-                    <button onClick={() => redeploy(p)} style={{ ...S.ghostBtn, padding: "7px 13px", fontSize: 9.5, flex: "none" }}>{d.busy ? "Deploying…" : "Redeploy"}</button>
-                  </div>
-                );
-              })}
+          <>
+            <div style={card}>
+              <CardHeader title="Deployments" tag="NETLIFY" />
+              <div style={{ fontSize: 10.5, color: T.faint, lineHeight: 1.5, margin: "2px 0 13px" }}>Each redeploy triggers a fresh Netlify build from the site's connected repo. Live/down state lives under the Status tab.</div>
+              <div style={{ display: "flex", flexDirection: "column", gap: 6, marginTop: 6 }}>
+                {PROPERTIES.map(p => {
+                  const d = deploys[p.name] || {};
+                  return (
+                    <div key={p.name} style={{ ...S.inner, display: "flex", alignItems: "center", gap: 11, padding: "11px 13px" }}>
+                      <span style={{ width: 7, height: 7, borderRadius: "50%", background: d.busy ? T.amber : d.when ? (d.ok ? T.green : T.red) : T.faint, flex: "none" }} />
+                      <span style={{ display: "flex", flexDirection: "column", gap: 1, minWidth: 0, flex: 1 }}>
+                        <span style={{ fontSize: 11.5, fontWeight: 600, color: T.ink, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{p.name}</span>
+                        <span style={{ fontSize: 9, color: d.busy ? T.amber : T.faint, fontFamily: mono, letterSpacing: "0.04em" }}>{d.busy ? "TRIGGERING BUILD…" : d.when ? (d.ok ? "BUILD TRIGGERED · " + d.when : "TRIGGER FAILED — check deploy function") : "netlify · " + p.site}</span>
+                      </span>
+                      <button onClick={() => redeploy(p)} style={{ ...S.ghostBtn, padding: "7px 13px", fontSize: 9.5, flex: "none" }}>{d.busy ? "Deploying…" : "Redeploy"}</button>
+                    </div>
+                  );
+                })}
+              </div>
             </div>
-          </div>
+
+            <div style={card}>
+              <CardHeader title="Replace a File" tag="SINGLE-FILE SWAP" />
+              <div style={{ fontSize: 10.5, color: T.faint, lineHeight: 1.5, margin: "2px 0 13px" }}>Swaps one file on the sites you pick — every other file on the live site is left exactly as it is. For a full rebuild, use Deployments above instead.</div>
+              <label style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 6, padding: 16, background: "rgba(34,29,20,0.02)", border: "1px dashed rgba(143,107,30,0.35)", borderRadius: 12, cursor: "pointer", marginBottom: 10 }}>
+                <input type="file" onChange={e => { const f = e.target.files?.[0] || null; setReplaceFile(f); setReplaceResults({}); if (f && !replacePath) setReplacePath("/" + f.name); }} style={{ display: "none" }} />
+                <span style={{ fontSize: 11.5, fontWeight: 700, color: T.brass, fontFamily: syne }}>{replaceFile ? "✓ " + replaceFile.name : "Choose a file"}</span>
+                <span style={{ fontSize: 9.5, color: T.faint }}>{replaceFile ? "set the path below, pick sites, then replace" : "HTML, JS, CSS, images — keep it under 4MB"}</span>
+              </label>
+              {replaceFile && (
+                <>
+                  <div style={{ marginBottom: 10 }}>
+                    <div style={{ fontSize: 9.5, color: T.faint, marginBottom: 5 }}>Path on the site (exact, case-sensitive)</div>
+                    <input value={replacePath} onChange={e => setReplacePath(e.target.value)} placeholder="/index.html"
+                      style={{ ...S.input, width: "100%", padding: "9px 11px", fontSize: 11, fontFamily: mono }} />
+                  </div>
+                  <div style={{ fontSize: 9.5, color: T.faint, marginBottom: 6 }}>Replace on:</div>
+                  <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginBottom: 12 }}>
+                    {PROPERTIES.map(p => {
+                      const sel = replaceTargets.includes(p.name);
+                      return (
+                        <button key={p.name} onClick={() => toggleTarget(p.name)} style={{ padding: "7px 12px", background: sel ? "rgba(143,107,30,0.14)" : "rgba(34,29,20,0.035)", border: `1px solid ${sel ? "rgba(143,107,30,0.4)" : "rgba(34,29,20,0.09)"}`, borderRadius: 12, color: sel ? T.brass : T.sub, fontSize: 10, fontWeight: 700, cursor: "pointer", fontFamily: syne }}>{sel ? "✓ " : ""}{p.name}</button>
+                      );
+                    })}
+                  </div>
+                  <button onClick={runReplace} disabled={replaceBusy || !replacePath.trim() || !replaceTargets.length} style={{ ...S.brassBtn, width: "100%", padding: 12, fontSize: 11.5, opacity: replaceBusy || !replacePath.trim() || !replaceTargets.length ? 0.5 : 1 }}>
+                    {replaceBusy ? "Replacing…" : `Replace on ${replaceTargets.length || 0} site${replaceTargets.length === 1 ? "" : "s"}`}
+                  </button>
+                  {Object.keys(replaceResults).length > 0 && (
+                    <div style={{ display: "flex", flexDirection: "column", gap: 5, marginTop: 10 }}>
+                      {Object.entries(replaceResults).map(([name, r]) => (
+                        <div key={name} style={{ fontSize: 10.5, color: r.ok ? T.green : T.red, lineHeight: 1.5 }}>{r.ok ? "✓" : "✗"} {name}: {r.detail}</div>
+                      ))}
+                    </div>
+                  )}
+                </>
+              )}
+            </div>
+          </>
         )}
 
-        {sub === "database" && (
+        {sub === "supabase" && (
           <div style={card}>
             <CardHeader title="Supabase Console" tag="ALLOWLISTED OPS" />
-            <div style={{ fontSize: 10.5, color: T.faint, lineHeight: 1.5, margin: "2px 0 12px" }}>Run maintenance against the shared memory. Guardrails on — destructive ops ask twice.</div>
+            <div style={{ fontSize: 10.5, color: T.faint, lineHeight: 1.5, margin: "2px 0 12px" }}>Run maintenance against a project's shared memory. Guardrails on — destructive ops ask twice.</div>
+            <div style={{ fontSize: 9.5, color: T.faint, marginBottom: 6 }}>Project</div>
+            <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginBottom: 12 }}>
+              {projects.map(p => (
+                <button key={p} onClick={() => setProject(p)} style={{ padding: "7px 12px", background: project === p ? "rgba(143,107,30,0.14)" : "rgba(34,29,20,0.035)", border: `1px solid ${project === p ? "rgba(143,107,30,0.4)" : "rgba(34,29,20,0.09)"}`, borderRadius: 12, color: project === p ? T.brass : T.sub, fontSize: 10, fontWeight: 700, cursor: "pointer", fontFamily: syne }}>{p}</button>
+              ))}
+            </div>
             <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginBottom: 10 }}>
               {["backup chat_messages", "vacuum seat_notes", "clear findings > 30d"].map(q => (
                 <button key={q} onClick={() => setSqlInput(q)} style={{ padding: "6px 11px", background: "rgba(34,29,20,0.035)", border: `1px solid rgba(34,29,20,0.09)`, borderRadius: 14, color: T.sub, fontSize: 9.5, cursor: "pointer", fontFamily: mono }}>{q}</button>
@@ -1339,8 +1513,6 @@ function SystemsPage({ settings, updateSetting, session, btc, isMobile }) {
             </div>
           </div>
         )}
-
-        {sub === "auditor" && <AuditorCard settings={settings} updateSetting={updateSetting} session={session} isMobile={isMobile} />}
 
         {sub === "usage" && (
           <>
@@ -1375,9 +1547,10 @@ function SystemsPage({ settings, updateSetting, session, btc, isMobile }) {
 // ─── Page: Mini Me ───────────────────────────────────────────────────────────
 const MINI_DEFAULTS = {
   model: "haiku", enabled: true, budget: "$3", oversight: true,
-  directive: "", directiveLog: [], role: "",
+  directive: "", briefingLog: [], role: "",
   reflectOn: true, loopOn: true, loopMax: "5", approvalOn: true,
 };
+const BRIEFING_STARTERS = ["Act as my outreach ghostwriter", "Focus on Clarify this month", "Prioritize ZTS content over admin work"];
 const TASK_COLORS = { delivered: T.green, review: T.brass, queued: T.faint, failed: T.red };
 const EFFORT_LEVELS = [
   { key: "quick", label: "Quick", desc: "One shot, no self-review — fastest and cheapest." },
@@ -1401,8 +1574,6 @@ function MiniMePage({ settings, updateSetting, session, onWorkerRun, isMobile })
   const [runMsg, setRunMsg] = useState(null);
   const [openTask, setOpenTask] = useState(null);
   const [showCompleted, setShowCompleted] = useState(false);
-  const [editingRole, setEditingRole] = useState(false);
-  const [roleDraft, setRoleDraft] = useState("");
   const [directiveInput, setDirectiveInput] = useState("");
   const [directiveSending, setDirectiveSending] = useState(false);
   const directiveEndRef = useRef(null);
@@ -1425,7 +1596,7 @@ function MiniMePage({ settings, updateSetting, session, onWorkerRun, isMobile })
     return () => { alive = false; };
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
-  useEffect(() => { directiveEndRef.current?.scrollIntoView({ block: "nearest" }); }, [mini.directiveLog?.length]);
+  useEffect(() => { directiveEndRef.current?.scrollIntoView({ block: "nearest" }); }, [mini.briefingLog?.length]);
 
   const delivered = tasks.filter(t => t.status === "delivered");
   const active = tasks.filter(t => t.status !== "delivered");
@@ -1470,20 +1641,36 @@ function MiniMePage({ settings, updateSetting, session, onWorkerRun, isMobile })
     setRunning(false);
   };
 
-  // Prime Directive is never typed directly — you talk to it, and Claude
-  // synthesizes the updated one-line mission from the conversation.
+  // Neither field is typed directly — you talk to it, and Claude decides
+  // whether your message is about the mission (directive), the identity
+  // (role), or both, updating only what you actually addressed.
   const sendDirectiveUpdate = async () => {
     const msg = directiveInput.trim();
     if (!msg || directiveSending) return;
     setDirectiveInput("");
     setDirectiveSending(true);
-    const log = mini.directiveLog || [];
-    const recent = log.slice(-6).map(l => `${l.role === "user" ? "Cameron" : "Directive"}: ${l.text}`).join("\n");
-    const system = `You maintain a single one-sentence "prime directive" for Cameron's autonomous assistant, Mini Me — this directive shapes every task it works on. Current directive: "${mini.directive || "none set yet"}"${recent ? `\n\nRecent conversation:\n${recent}` : ""}\n\nCameron just said: "${msg}"\n\nOutput ONLY the updated directive as one concise sentence — no preamble, no quotes, no chat reply. Fold his new input into the existing direction; refine or replace as appropriate.`;
-    const updated = await callClaude({ system, messages: [{ role: "user", content: msg }], modelKey: mini.model || "haiku", maxTokens: 100, fn: "directive_update" });
-    const clean = (updated || "").trim().replace(/^"|"$/g, "");
-    const newLog = [...log, { role: "user", text: msg, ts: Date.now() }, { role: "system", text: clean || "Couldn't update — try again", ts: Date.now() }].slice(-20);
-    setMini({ directive: clean || mini.directive, directiveLog: newLog });
+    const log = mini.briefingLog || [];
+    const recent = log.slice(-6).map(l => `${l.role === "user" ? "Cameron" : l.field === "role" ? "Role" : "Directive"}: ${l.text}`).join("\n");
+    const system = `You maintain two things for Cameron's autonomous assistant, Mini Me, from an ongoing conversation:
+1. "directive" — a one-sentence overall mission that shapes every task.
+2. "role" — the identity/expertise it should adopt when doing work.
+
+Current directive: "${mini.directive || "none set"}"
+Current role: "${mini.role || "none set"}"${recent ? `\n\nRecent conversation:\n${recent}` : ""}
+
+Cameron just said: "${msg}"
+
+Decide which of the two his message actually addresses — often just one. Output ONLY a JSON object with both fields, updating whichever he addressed and copying the other UNCHANGED if he didn't mention it: {"directive": "...", "role": "..."}. No markdown, no prose, no preamble — just the JSON object.`;
+    const raw = await callClaude({ system, messages: [{ role: "user", content: msg }], modelKey: mini.model || "haiku", maxTokens: 150, fn: "briefing_update" });
+    let parsed = null;
+    try { parsed = JSON.parse((raw || "").replace(/```json|```/g, "").trim()); } catch {}
+    const newDirective = (parsed?.directive || mini.directive || "").trim();
+    const newRole = (parsed?.role || mini.role || "").trim();
+    const entries = [{ role: "user", text: msg, ts: Date.now() }];
+    if (newDirective && newDirective !== mini.directive) entries.push({ role: "system", field: "directive", text: newDirective, ts: Date.now() });
+    if (newRole && newRole !== mini.role) entries.push({ role: "system", field: "role", text: newRole, ts: Date.now() });
+    if (entries.length === 1) entries.push({ role: "system", field: "directive", text: "Couldn't parse an update — try rephrasing.", ts: Date.now() });
+    setMini({ directive: newDirective, role: newRole, briefingLog: [...log, ...entries].slice(-24) });
     setDirectiveSending(false);
   };
 
@@ -1560,52 +1747,50 @@ function MiniMePage({ settings, updateSetting, session, onWorkerRun, isMobile })
             </div>
             {mini.enabled === false && <div style={{ ...S.inner, padding: "10px 13px", marginBottom: 14, fontSize: 10.5, color: T.faint, lineHeight: 1.5 }}>Mini Me is off — Run now won't do anything until you flip it back on above.</div>}
 
-            {/* Prime directive — chat-derived only, never typed directly */}
-            <div style={{ marginBottom: 14 }}>
-              <div style={{ fontSize: 9.5, fontWeight: 700, color: T.brass, textTransform: "uppercase", letterSpacing: "0.1em", fontFamily: syne, marginBottom: 6 }}>Prime Directive</div>
-              {mini.directive ? (
-                <div style={{ ...S.inner, padding: "11px 13px", fontSize: 12, color: T.ink, lineHeight: 1.55, fontStyle: "italic", marginBottom: 8 }}>"{mini.directive}"</div>
-              ) : (
-                <div style={{ ...S.inner, padding: "11px 13px", fontSize: 10.5, color: T.faint, lineHeight: 1.5, border: `1px dashed rgba(34,29,20,0.14)`, background: "transparent", marginBottom: 8 }}>No directive yet — tell it what matters below and it'll set its own mission from that.</div>
-              )}
-              {(mini.directiveLog || []).length > 0 && (
-                <div style={{ maxHeight: 130, overflowY: "auto", display: "flex", flexDirection: "column", gap: 6, marginBottom: 8, padding: "2px 1px" }}>
-                  {mini.directiveLog.map((l, i) => (
-                    <div key={i} style={{ fontSize: 10.5, lineHeight: 1.5, color: l.role === "user" ? T.sub : T.brass, fontStyle: l.role === "user" ? "normal" : "italic" }}>
-                      {l.role === "user" ? l.text : `→ ${l.text}`}
-                    </div>
-                  ))}
-                  <div ref={directiveEndRef} />
-                </div>
-              )}
-              <div style={{ display: "flex", gap: 8 }}>
-                <input value={directiveInput} onChange={e => setDirectiveInput(e.target.value)} onKeyDown={e => { if (e.key === "Enter") { e.preventDefault(); sendDirectiveUpdate(); } }} placeholder="Tell it what matters right now…"
-                  style={{ ...S.input, flex: 1, padding: "10px 12px", fontSize: 11.5 }} disabled={directiveSending} />
-                <button onClick={sendDirectiveUpdate} disabled={directiveSending || !directiveInput.trim()} style={{ ...S.brassBtn, padding: "0 16px", minHeight: 40, fontSize: 10.5, opacity: directiveSending || !directiveInput.trim() ? 0.5 : 1 }}>{directiveSending ? "…" : "Send"}</button>
+            {/* Prime Directive + Role — one conversation shapes both */}
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginBottom: 10 }}>
+              <div>
+                <div style={{ fontSize: 9.5, fontWeight: 700, color: T.brass, textTransform: "uppercase", letterSpacing: "0.1em", fontFamily: syne, marginBottom: 6 }}>Prime Directive</div>
+                {mini.directive ? (
+                  <div style={{ ...S.inner, padding: "11px 13px", fontSize: 11.5, color: T.ink, lineHeight: 1.5, fontStyle: "italic" }}>"{mini.directive}"</div>
+                ) : (
+                  <div style={{ ...S.inner, padding: "11px 13px", fontSize: 10, color: T.faint, lineHeight: 1.45, border: `1px dashed rgba(34,29,20,0.14)`, background: "transparent" }}>No directive yet — the mission that shapes every task.</div>
+                )}
+              </div>
+              <div>
+                <div style={{ fontSize: 9.5, fontWeight: 700, color: T.brass, textTransform: "uppercase", letterSpacing: "0.1em", fontFamily: syne, marginBottom: 6 }}>Role</div>
+                {mini.role ? (
+                  <div style={{ ...S.inner, padding: "11px 13px", fontSize: 11.5, color: T.ink, lineHeight: 1.5 }}>{mini.role}</div>
+                ) : (
+                  <div style={{ ...S.inner, padding: "11px 13px", fontSize: 10, color: T.faint, lineHeight: 1.45, border: `1px dashed rgba(34,29,20,0.14)`, background: "transparent" }}>No role yet — the identity it works from.</div>
+                )}
               </div>
             </div>
 
-            {/* Role — the one thing you do set directly */}
-            <div>
-              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 6 }}>
-                <span style={{ fontSize: 9.5, fontWeight: 700, color: T.brass, textTransform: "uppercase", letterSpacing: "0.1em", fontFamily: syne }}>Role</span>
-                {!editingRole && <button onClick={() => { setRoleDraft(mini.role || ""); setEditingRole(true); }} style={{ ...S.ghostBtn, padding: "4px 11px", fontSize: 9, borderRadius: 7 }}>{mini.role ? "Edit" : "Set one"}</button>}
-              </div>
-              {editingRole ? (
-                <div style={{ display: "flex", flexDirection: "column", gap: 7 }}>
-                  <textarea value={roleDraft} onChange={e => setRoleDraft(e.target.value)} rows={2} autoFocus placeholder="e.g. An outreach ghostwriter who knows my voice and the med-spa/legal verticals cold"
-                    style={{ ...S.input, padding: "10px 12px", fontSize: 12, lineHeight: 1.5, resize: "vertical", fontFamily: "inherit" }} />
-                  <div style={{ display: "flex", gap: 7 }}>
-                    <button onClick={() => { setMini({ role: roleDraft.trim() }); setEditingRole(false); }} style={{ ...S.brassBtn, flex: 1, padding: "8px 0", fontSize: 10.5 }}>Save</button>
-                    <button onClick={() => setEditingRole(false)} style={{ flex: "none", padding: "8px 16px", background: "transparent", border: `1px solid rgba(34,29,20,0.12)`, borderRadius: 10, color: T.sub, fontSize: 10.5, fontWeight: 600, cursor: "pointer" }}>Cancel</button>
+            {(mini.briefingLog || []).length > 0 ? (
+              <div style={{ maxHeight: 150, overflowY: "auto", display: "flex", flexDirection: "column", gap: 6, marginBottom: 8, padding: "2px 1px" }}>
+                {mini.briefingLog.map((l, i) => (
+                  <div key={i} style={{ fontSize: 10.5, lineHeight: 1.5, color: l.role === "user" ? T.sub : T.brass, fontStyle: l.role === "user" ? "normal" : "italic" }}>
+                    {l.role === "user" ? l.text : `→ ${l.field === "role" ? "Role" : "Directive"}: ${l.text}`}
                   </div>
-                </div>
-              ) : mini.role ? (
-                <div style={{ ...S.inner, padding: "11px 13px", fontSize: 12, color: T.ink, lineHeight: 1.55 }}>{mini.role}</div>
-              ) : (
-                <div style={{ ...S.inner, padding: "11px 13px", fontSize: 10.5, color: T.faint, lineHeight: 1.5, border: `1px dashed rgba(34,29,20,0.14)`, background: "transparent" }}>No role set — it'll answer as a generic assistant. Give it an identity and expertise to work from.</div>
-              )}
+                ))}
+                <div ref={directiveEndRef} />
+              </div>
+            ) : (
+              <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginBottom: 9 }}>
+                {BRIEFING_STARTERS.map((s, i) => (
+                  <button key={i} onClick={() => setDirectiveInput(s)} style={{ padding: "6px 11px", background: "rgba(34,29,20,0.035)", border: `1px solid rgba(34,29,20,0.1)`, borderRadius: 12, color: T.sub, fontSize: 10, cursor: "pointer" }}>{s}</button>
+                ))}
+              </div>
+            )}
+            <div style={{ display: "flex", gap: 8 }}>
+              <input value={directiveInput} onChange={e => setDirectiveInput(e.target.value)} onKeyDown={e => { if (e.key === "Enter") { e.preventDefault(); sendDirectiveUpdate(); } }} placeholder="Tell it who it is and what matters right now…"
+                style={{ ...S.input, flex: 1, padding: "10px 12px", fontSize: 11.5 }} disabled={directiveSending} />
+              <button onClick={sendDirectiveUpdate} disabled={directiveSending || !directiveInput.trim()} style={{ ...S.brassBtn, padding: "0 16px", minHeight: 40, fontSize: 10.5, opacity: directiveSending || !directiveInput.trim() ? 0.5 : 1 }}>{directiveSending ? "…" : "Send"}</button>
             </div>
+            {(mini.briefingLog || []).length > 0 && (
+              <button onClick={() => setMini({ briefingLog: [] })} style={{ marginTop: 8, background: "none", border: "none", color: T.faint, fontSize: 9.5, cursor: "pointer", padding: 0, textDecoration: "underline" }}>Clear conversation (keeps the current directive &amp; role)</button>
+            )}
           </div>
 
           {/* Task Queue — its own run controls, so you never have to leave this card to work the queue */}
@@ -1842,19 +2027,17 @@ function LoginScreen() {
 // keys: nothing to learn twice.
 const NAV = [
   { key: "brief", label: "Brief", sub: "BTC · stocks · wires · ZTS", mark: T.amber },
-  { key: "room", label: "Room", sub: "Chief of Staff · ask anything", mark: T.brass },
-  { key: "board", label: "Board", sub: "5 seats · charters & context", mark: "#7C3AED" },
-  { key: "assets", label: "Assets", sub: "5 live properties", mark: T.blue },
-  { key: "systems", label: "Systems", sub: "status · deploy · db · usage", mark: "#0E9F6E" },
   { key: "mini", label: "Mini Me", sub: "queue · loops · oversight", mark: "#EC4899" },
+  { key: "boardroom", label: "Board Room", sub: "chat + 5 seats · charters & context", mark: T.brass },
+  { key: "assets", label: "Assets", sub: "5 live properties · site auditor", mark: T.blue },
+  { key: "systems", label: "Systems", sub: "usage · status · deploy · supabase", mark: "#0E9F6E" },
 ];
 const HEADERS = {
   brief: ["Brief", "live markets, wires, and your stores"],
-  room: ["Room", "smart routing · 5 seats on call"],
-  board: ["Board", "five specialist seats + one Chief"],
-  assets: ["Assets", "everything you run, one click away"],
-  systems: ["Systems", "status, deploys, database, auditor, and usage"],
   mini: ["Mini Me", "your sidekick — queue work and it delivers"],
+  boardroom: ["Board Room", "smart routing · 5 seats on call"],
+  assets: ["Assets", "everything you run, one click away"],
+  systems: ["Systems", "usage, status, deploys, and supabase"],
 };
 const NAV_ICONS = {
   brief: (p) => ( // sunrise — the morning brief
@@ -1864,15 +2047,9 @@ const NAV_ICONS = {
       <line x1="1" y1="18" x2="3" y2="18" /><line x1="21" y1="18" x2="23" y2="18" /><line x1="1" y1="22" x2="23" y2="22" />
     </svg>
   ),
-  room: (p) => ( // chat bubble — the room
+  boardroom: (p) => ( // chat bubble — board room (chat + seats)
     <svg {...p} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round">
       <path d="M21 11.5a8.4 8.4 0 0 1-8.4 8.4H12a8.3 8.3 0 0 1-4-1L3 20l1.1-5a8.3 8.3 0 0 1-1-4 8.4 8.4 0 0 1 8.4-8.4h.1a8.4 8.4 0 0 1 8.4 8.4z" />
-    </svg>
-  ),
-  board: (p) => ( // grid of seats — the board
-    <svg {...p} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round">
-      <rect x="3" y="3" width="7.5" height="7.5" rx="1.5" /><rect x="13.5" y="3" width="7.5" height="7.5" rx="1.5" />
-      <rect x="3" y="13.5" width="7.5" height="7.5" rx="1.5" /><rect x="13.5" y="13.5" width="7.5" height="7.5" rx="1.5" />
     </svg>
   ),
   assets: (p) => ( // building — your properties
@@ -2045,9 +2222,8 @@ export default function App() {
   const renderPage = (key) => {
     switch (key) {
       case "brief": return <MorningBriefPage btc={btc} isMobile={isMobile} />;
-      case "room": return <RoomPage messages={messages} thinking={thinking} loadingData={loadingData} input={input} setInput={setInput} onSend={send} endRef={endRef} isMobile={isMobile} />;
-      case "board": return <BoardPage seatNotes={seatNotes} onEditSeat={setEditSeat} onEnterRoom={() => setPage("room")} isMobile={isMobile} />;
-      case "assets": return <PropertiesPage isMobile={isMobile} btc={btc} />;
+      case "boardroom": return <BoardRoomPage messages={messages} thinking={thinking} loadingData={loadingData} input={input} setInput={setInput} onSend={send} endRef={endRef} seatNotes={seatNotes} onEditSeat={setEditSeat} isMobile={isMobile} />;
+      case "assets": return <PropertiesPage isMobile={isMobile} btc={btc} settings={settings} updateSetting={updateSetting} session={session} />;
       case "systems": return <SystemsPage settings={settings} updateSetting={updateSetting} session={session} btc={btc} isMobile={isMobile} />;
       case "mini": return <MiniMePage settings={settings} updateSetting={updateSetting} session={session} onWorkerRun={refreshData} isMobile={isMobile} />;
       default: return null;
