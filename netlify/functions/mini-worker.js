@@ -23,6 +23,8 @@
 const json = (code, body) => ({ statusCode: code, headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
 
 const MODEL_IDS = { haiku: "claude-haiku-4-5-20251001", sonnet: "claude-sonnet-4-6", opus: "claude-opus-4-1" };
+const PRICING = { haiku: { in: 1, out: 5 }, sonnet: { in: 3, out: 15 }, opus: { in: 15, out: 75 } }; // $ per 1M tokens
+const estCost = (mk, i, o) => (i / 1e6) * (PRICING[mk]?.in || 1) + (o / 1e6) * (PRICING[mk]?.out || 5);
 const BUDGET_TASK_LIMIT = { "$1": 1, "$3": 3, "$10": 8 };
 
 function env() {
@@ -40,16 +42,23 @@ async function verifyUser(cfg, token) {
   const u = await res.json();
   return u?.id || null;
 }
-async function claudeCall(cfg, modelKey, system, user, maxTokens) {
+async function claudeCall(cfg, modelKey, system, user, maxTokens, userId) {
+  const t0 = Date.now();
   const res = await fetch("https://api.anthropic.com/v1/messages", {
     method: "POST",
     headers: { "Content-Type": "application/json", "x-api-key": cfg.anthropic, "anthropic-version": "2023-06-01" },
     body: JSON.stringify({ model: MODEL_IDS[modelKey] || MODEL_IDS.haiku, max_tokens: maxTokens, system, messages: [{ role: "user", content: user }] }),
   });
   const data = await res.json();
-  if (!res.ok) throw new Error(data?.error?.message || `Anthropic ${res.status}`);
+  const ok = res.ok;
+  const inTok = data.usage?.input_tokens || 0, outTok = data.usage?.output_tokens || 0;
+  if (userId) {
+    rest(cfg, "usage_log", { method: "POST", body: JSON.stringify({ user_id: userId, fn: "mini-worker", kind: "anthropic", model: modelKey, in_tokens: inTok, out_tokens: outTok, cost_usd: estCost(modelKey, inTok, outTok), ms: Date.now() - t0, ok, detail: ok ? undefined : (data?.error?.message || `HTTP ${res.status}`) }) })
+      .catch(() => {}); // best-effort, fire-and-forget
+  }
+  if (!ok) throw new Error(data?.error?.message || `Anthropic ${res.status}`);
   const text = (data.content || []).map(b => (b.type === "text" ? b.text : "")).join("");
-  return { text, outTok: data.usage?.output_tokens || 0 };
+  return { text, outTok };
 }
 
 async function loadUserBundle(cfg, userId) {
@@ -69,7 +78,7 @@ async function saveTasks(cfg, userId, tasks) {
 // The real agentic loop: generate, then optionally critique-and-revise up to
 // loopMax times. Stops early on an explicit DONE or two consecutive
 // no-change revisions.
-async function runTask(cfg, mini, system, taskText) {
+async function runTask(cfg, mini, system, taskText, userId) {
   const reflect = mini.reflectOn !== false;
   const loop = mini.loopOn !== false;
   const maxLoops = !reflect ? 1 : (!loop ? 2 : Math.max(2, parseInt(mini.loopMax || "5", 10) || 5));
@@ -78,14 +87,14 @@ async function runTask(cfg, mini, system, taskText) {
   for (let i = 0; i < maxLoops; i++) {
     loops++;
     if (draft === null) {
-      const r = await claudeCall(cfg, mini.model, system, taskText, 900);
+      const r = await claudeCall(cfg, mini.model, system, taskText, 900, userId);
       draft = r.text; outTok += r.outTok;
       if (!reflect) break;
       continue;
     }
     const critiqueSystem = `You are reviewing your own previous draft against the original task, as "Mini Me". If the draft fully satisfies the task and no meaningful improvement is needed, reply with exactly: DONE
 Otherwise, reply with ONLY the complete revised draft (no commentary, no prefix) — it will replace the previous draft as-is.`;
-    const r = await claudeCall(cfg, mini.model, critiqueSystem, `ORIGINAL TASK:\n${taskText}\n\nCURRENT DRAFT:\n${draft}`, 900);
+    const r = await claudeCall(cfg, mini.model, critiqueSystem, `ORIGINAL TASK:\n${taskText}\n\nCURRENT DRAFT:\n${draft}`, 900, userId);
     outTok += r.outTok;
     const reply = r.text.trim();
     if (reply === "DONE" || reply.startsWith("DONE")) break;
@@ -117,7 +126,7 @@ async function processUser(cfg, userId, { manual = false } = {}) {
   for (const idx of toRun) {
     const t = tasks[idx];
     try {
-      const { draft, loops, outTok } = await runTask(cfg, mini, system, t.text);
+      const { draft, loops, outTok } = await runTask(cfg, mini, system, t.text, userId);
       const status = mini.approvalOn ? "review" : "delivered";
       tasks[idx] = { ...t, status, output: draft, loops, delivered_at: new Date().toISOString() };
       feedRows.push({ user_id: userId, text: `${status === "review" ? "Drafted (awaiting your approval)" : "Delivered"} "${t.text.slice(0, 60)}${t.text.length > 60 ? "…" : ""}" — ${loops} loop(s), ~${outTok} tokens on ${mini.model}.` });

@@ -94,6 +94,21 @@ const db = {
   },
 };
 
+// Durable, cross-device usage log (Supabase) — separate from the
+// localStorage-only `obs` tracker below, which resets per-browser. Every
+// Anthropic call and every Netlify function hit gets a row here, powering
+// the Usage section in IT Department. Fire-and-forget; never blocks or
+// throws into the caller.
+async function logUsage(row) {
+  if (!supabase) return;
+  try {
+    const { data } = await supabase.auth.getSession();
+    const uid = data?.session?.user?.id;
+    if (!uid) return;
+    await supabase.from("usage_log").insert({ user_id: uid, ...row });
+  } catch { /* table may not exist yet, or offline — never break the caller */ }
+}
+
 async function callClaude({ system, messages, modelKey = "haiku", maxTokens = 800, fn = "call" }) {
   const t0 = Date.now();
   const model = MODEL_IDS[modelKey] || MODEL_IDS.haiku;
@@ -106,9 +121,18 @@ async function callClaude({ system, messages, modelKey = "haiku", maxTokens = 80
     const res = await fetch(url, { method: "POST", headers, body: JSON.stringify(body) });
     const data = await res.json();
     const text = data.content?.map(b => b.type === "text" ? b.text : "").join("") || "";
-    obs.log({ fn, model, inTok: data.usage?.input_tokens || 0, outTok: data.usage?.output_tokens || 0, cost: estCost(modelKey, data.usage?.input_tokens || 0, data.usage?.output_tokens || 0), ms: Date.now() - t0, ok: !!text });
+    const inTok = data.usage?.input_tokens || 0, outTok = data.usage?.output_tokens || 0;
+    const cost = estCost(modelKey, inTok, outTok);
+    const ms = Date.now() - t0;
+    obs.log({ fn, model, inTok, outTok, cost, ms, ok: !!text });
+    logUsage({ fn, kind: "anthropic", model: modelKey, in_tokens: inTok, out_tokens: outTok, cost_usd: cost, ms, ok: !!text });
     return text;
-  } catch { obs.log({ fn, model, ok: false, ms: Date.now() - t0 }); return null; }
+  } catch {
+    const ms = Date.now() - t0;
+    obs.log({ fn, model, ok: false, ms });
+    logUsage({ fn, kind: "anthropic", model: modelKey, ms, ok: false, detail: "request failed" });
+    return null;
+  }
 }
 
 // ─── The Board ────────────────────────────────────────────────────────────────
@@ -174,24 +198,41 @@ async function convene(question, history, { models = DEFAULT_MODELS, seatNotes }
 }
 
 // ─── Netlify function helpers (graceful fallback when a fn isn't built yet) ──
-async function callFn(name, payload) {
+async function callFn(name, payload, extraHeaders) {
+  const t0 = Date.now();
+  let ok = false, detail;
   try {
     const res = await fetch(`/.netlify/functions/${name}`, {
-      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload || {}),
+      method: "POST", headers: { "Content-Type": "application/json", ...(extraHeaders || {}) }, body: JSON.stringify(payload || {}),
     });
-    if (!res.ok) throw new Error(String(res.status));
+    ok = res.ok;
+    if (!ok) { detail = `HTTP ${res.status}`; throw new Error(detail); }
     return await res.json();
-  } catch { return null; }
+  } catch {
+    if (!detail) detail = "network error";
+    return null;
+  } finally {
+    logUsage({ fn: name, kind: "call", ms: Date.now() - t0, ok, detail });
+  }
 }
 // Like callFn but keeps HTTP status + error body so the UI can say WHY a card isn't live.
 async function callFnFull(name, payload) {
+  const t0 = Date.now();
+  let ok = false, status = 0, data = null, detail;
   try {
     const res = await fetch(`/.netlify/functions/${name}`, {
       method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload || {}),
     });
-    const data = await res.json().catch(() => null);
-    return { ok: res.ok, status: res.status, data };
-  } catch { return { ok: false, status: 0, data: null }; }
+    status = res.status; ok = res.ok;
+    data = await res.json().catch(() => null);
+    if (!ok) detail = data?.error || `HTTP ${status}`;
+    return { ok, status, data };
+  } catch {
+    detail = "network error";
+    return { ok: false, status: 0, data: null };
+  } finally {
+    logUsage({ fn: name, kind: "call", ms: Date.now() - t0, ok, detail });
+  }
 }
 
 // ─── Design system ────────────────────────────────────────────────────────────
@@ -782,12 +823,12 @@ function PropertiesPage({ isMobile, btc }) {
 }
 
 // ─── Page: IT Department ─────────────────────────────────────────────────────
-async function auditProperty(p) {
-  const data = await callFn("audit", { name: p.name, url: p.url || p.appUrl, repo: p.repo });
+async function auditProperty(p, token) {
+  const data = await callFn("audit", { name: p.name, url: p.url || p.appUrl, repo: p.repo }, token ? { Authorization: `Bearer ${token}` } : undefined);
   return data?.success ? data.findings : [];
 }
 
-function AuditorCard({ settings, updateSetting, isMobile }) {
+function AuditorCard({ settings, updateSetting, session, isMobile }) {
   const [findings, setFindings] = useState([]);
   const [running, setRunning] = useState(false);
   const [open, setOpen] = useState(false);
@@ -804,7 +845,7 @@ function AuditorCard({ settings, updateSetting, isMobile }) {
     setRunning(true);
     const results = [];
     for (const p of PROPERTIES) {
-      const fs = await auditProperty(p);
+      const fs = await auditProperty(p, session?.access_token);
       fs.forEach(f => results.push({ ...f, property: p.name, ts: Date.now() }));
     }
     await db.saveFindings(results);
@@ -861,7 +902,106 @@ function AuditorCard({ settings, updateSetting, isMobile }) {
   );
 }
 
-function ITPage({ settings, updateSetting, isMobile }) {
+// Usage — durable, cross-device log of every Anthropic call and every
+// Netlify function hit, read from usage_log (populated by callClaude/callFn
+// client-side, plus mini-worker and audit server-side for scheduled/
+// cost-bearing calls those make outside a browser session).
+const USAGE_WINDOWS = [["24h", 1], ["7d", 7], ["30d", 30], ["All", 3650]];
+function UsageCard({ isMobile }) {
+  const [rows, setRows] = useState(null); // null = loading
+  const [err, setErr] = useState(null);
+  const [windowIdx, setWindowIdx] = useState(1);
+  const [showLog, setShowLog] = useState(false);
+
+  const load = async () => {
+    setRows(null); setErr(null);
+    try {
+      const since = new Date(Date.now() - USAGE_WINDOWS[windowIdx][1] * 86400000).toISOString();
+      const { data, error } = await supabase.from("usage_log").select("fn,kind,model,in_tokens,out_tokens,cost_usd,ms,ok,detail,created_at").gte("created_at", since).order("created_at", { ascending: false }).limit(1000);
+      if (error) { setErr(error.message.includes("usage_log") ? "Run supabase-usage.sql in the Supabase SQL editor to enable this." : error.message); setRows([]); return; }
+      setRows(data || []);
+    } catch { setErr("usage log unavailable"); setRows([]); }
+  };
+  useEffect(() => { load(); }, [windowIdx]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const card = isMobile ? S.cardM : S.card;
+  const totalCalls = rows?.length || 0;
+  const failed = rows?.filter(r => !r.ok).length || 0;
+  const anthropicRows = rows?.filter(r => r.kind === "anthropic") || [];
+  const totalCost = anthropicRows.reduce((s, r) => s + (r.cost_usd || 0), 0);
+  const totalIn = anthropicRows.reduce((s, r) => s + (r.in_tokens || 0), 0);
+  const totalOut = anthropicRows.reduce((s, r) => s + (r.out_tokens || 0), 0);
+  const byFn = {};
+  (rows || []).forEach(r => {
+    byFn[r.fn] = byFn[r.fn] || { calls: 0, cost: 0, failed: 0 };
+    byFn[r.fn].calls++;
+    byFn[r.fn].cost += r.cost_usd || 0;
+    if (!r.ok) byFn[r.fn].failed++;
+  });
+  const topFns = Object.entries(byFn).sort((a, b) => (b[1].cost - a[1].cost) || (b[1].calls - a[1].calls)).slice(0, 8);
+  const fmtK = (n) => n > 999 ? (n / 1000).toFixed(1) + "K" : String(n);
+  const ago = (ts) => { const s = Math.floor((Date.now() - new Date(ts).getTime()) / 1000); if (s < 60) return `${s}S`; if (s < 3600) return `${Math.floor(s / 60)}M`; if (s < 86400) return `${Math.floor(s / 3600)}H`; return `${Math.floor(s / 86400)}D`; };
+
+  return (
+    <div style={card}>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 12 }}>
+        <span style={S.title}>Usage</span>
+        <div style={{ display: "flex", gap: 4 }}>
+          {USAGE_WINDOWS.map(([label], i) => (
+            <button key={label} onClick={() => setWindowIdx(i)} style={{ padding: "4px 9px", background: windowIdx === i ? "rgba(200,160,74,0.16)" : "transparent", border: `1px solid ${windowIdx === i ? "rgba(200,160,74,0.4)" : "rgba(255,255,255,0.1)"}`, borderRadius: 8, color: windowIdx === i ? T.brass : T.faint, fontSize: 9.5, fontWeight: 700, cursor: "pointer", fontFamily: mono }}>{label}</button>
+          ))}
+        </div>
+      </div>
+
+      {err && <div style={{ fontSize: 10.5, color: T.amber, lineHeight: 1.5, padding: "8px 0" }}>{err}</div>}
+
+      {!err && (
+        <>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr 1fr", gap: 7, marginBottom: 13 }}>
+            <StatBox value={rows === null ? "…" : "$" + totalCost.toFixed(3)} label="Anthropic spend" valueColor={T.brass} />
+            <StatBox value={rows === null ? "…" : String(totalCalls)} label="total calls" />
+            <StatBox value={rows === null ? "…" : `${fmtK(totalIn)}/${fmtK(totalOut)}`} label="tokens in/out" />
+            <StatBox value={rows === null ? "…" : String(failed)} label="failed calls" valueColor={failed ? T.red : T.green} />
+          </div>
+
+          <div style={{ fontSize: 9.5, fontWeight: 700, color: "rgba(200,160,74,0.8)", textTransform: "uppercase", letterSpacing: "0.12em", fontFamily: syne, marginBottom: 8 }}>By feature</div>
+          <div style={{ display: "flex", flexDirection: "column", gap: 6, marginBottom: 13 }}>
+            {rows === null && <div style={{ fontSize: 10.5, color: T.faint, textAlign: "center", padding: "8px 0" }}>Loading…</div>}
+            {rows !== null && topFns.length === 0 && <div style={{ fontSize: 10.5, color: T.faint, textAlign: "center", padding: "8px 0" }}>No calls logged in this window yet.</div>}
+            {topFns.map(([fn, s]) => (
+              <div key={fn} style={{ ...S.inner, display: "flex", alignItems: "center", gap: 10, padding: "8px 12px" }}>
+                <span style={{ fontSize: 10.5, color: "#C6CFDE", fontFamily: mono, flex: 1, minWidth: 0, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{fn}</span>
+                {s.failed > 0 && <span style={{ fontSize: 8.5, color: T.red, fontFamily: mono, flex: "none" }}>{s.failed} FAILED</span>}
+                <span style={{ fontSize: 9.5, color: T.faint, fontFamily: mono, flex: "none" }}>{s.calls} calls</span>
+                <span style={{ fontSize: 10.5, color: T.brass, fontFamily: mono, fontWeight: 700, flex: "none", width: 56, textAlign: "right" }}>{s.cost > 0 ? "$" + s.cost.toFixed(3) : "—"}</span>
+              </div>
+            ))}
+          </div>
+
+          <button onClick={() => setShowLog(!showLog)} style={{ width: "100%", padding: 9, background: "rgba(255,255,255,0.03)", border: `1px solid rgba(255,255,255,0.08)`, borderRadius: 9, color: T.sub, fontSize: 10.5, fontWeight: 600, cursor: "pointer", marginBottom: showLog ? 9 : 0 }}>
+            {showLog ? "Hide raw log ▲" : `Show raw log (${totalCalls}) ▼`}
+          </button>
+          {showLog && (
+            <div style={{ background: "rgba(0,0,0,0.3)", border: "1px solid rgba(255,255,255,0.05)", borderRadius: 10, maxHeight: 280, overflowY: "auto", display: "flex", flexDirection: "column" }}>
+              {(rows || []).slice(0, 150).map((r, i) => (
+                <div key={i} style={{ display: "flex", alignItems: "center", gap: 9, padding: "7px 11px", borderBottom: i < rows.length - 1 ? "1px solid rgba(255,255,255,0.04)" : "none" }}>
+                  <span style={{ width: 6, height: 6, borderRadius: "50%", background: r.ok ? T.green : T.red, flex: "none" }} />
+                  <span style={{ fontSize: 9, color: T.faint, fontFamily: mono, flex: "none", width: 32 }}>{ago(r.created_at)}</span>
+                  <span style={{ fontSize: 10, color: "#C6CFDE", fontFamily: mono, flex: 1, minWidth: 0, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{r.fn}{r.model ? ` · ${r.model}` : ""}{!r.ok && r.detail ? ` · ${r.detail}` : ""}</span>
+                  <span style={{ fontSize: 9, color: T.faint, fontFamily: mono, flex: "none" }}>{r.ms ? `${r.ms}ms` : ""}</span>
+                  <span style={{ fontSize: 9.5, color: T.brass, fontFamily: mono, flex: "none", width: 48, textAlign: "right" }}>{r.cost_usd ? "$" + r.cost_usd.toFixed(4) : ""}</span>
+                </div>
+              ))}
+              {rows?.length === 0 && <div style={{ fontSize: 10.5, color: T.faint, textAlign: "center", padding: "14px 0" }}>Nothing logged yet.</div>}
+            </div>
+          )}
+        </>
+      )}
+    </div>
+  );
+}
+
+function ITPage({ settings, updateSetting, session, isMobile }) {
   const models = { ...DEFAULT_MODELS, ...(settings?.models || {}) };
   const setModel = (layer, key) => updateSetting("models", { ...models, [layer]: key });
   const mult = k => (MODEL_META.find(m => m.key === k) || {}).mult || 1;
@@ -1025,7 +1165,8 @@ function ITPage({ settings, updateSetting, isMobile }) {
           </div>
         </div>
 
-        <AuditorCard settings={settings} updateSetting={updateSetting} isMobile={isMobile} />
+        <AuditorCard settings={settings} updateSetting={updateSetting} session={session} isMobile={isMobile} />
+        <div style={{ gridColumn: isMobile ? "auto" : "1 / -1" }}><UsageCard isMobile={isMobile} /></div>
       </div>
     </div>
   );
@@ -1894,7 +2035,7 @@ export default function App() {
       case "brief": return <MorningBriefPage btc={btc} isMobile={isMobile} />;
       case "board": return <BoardPage seatNotes={seatNotes} onEditSeat={setEditSeat} onEnterRoom={() => setPage("room")} isMobile={isMobile} />;
       case "props": return <PropertiesPage isMobile={isMobile} btc={btc} />;
-      case "it": return <ITPage settings={settings} updateSetting={updateSetting} isMobile={isMobile} />;
+      case "it": return <ITPage settings={settings} updateSetting={updateSetting} session={session} isMobile={isMobile} />;
       case "conn": return <ConnectionsPage session={session} btc={btc} isMobile={isMobile} />;
       case "mini": return <MiniMePage settings={settings} updateSetting={updateSetting} session={session} onWorkerRun={refreshData} isMobile={isMobile} />;
       default: return null;
