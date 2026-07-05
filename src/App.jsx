@@ -1581,43 +1581,44 @@ function MiniMePage({ settings, updateSetting, session, onWorkerRun, isMobile })
           </div>
         </div>
 
-        {/* Controls */}
+        {/* Control Panel — everything that shapes how a task runs, one place */}
         <div style={card}>
-          <div style={{ ...S.title, marginBottom: 13 }}>Controls</div>
-          <div style={{ display: "flex", flexDirection: "column", gap: 7, marginBottom: 14 }}>
+          <div style={{ ...S.title, marginBottom: 4 }}>Control Panel</div>
+          <div style={{ fontSize: 10.5, color: T.faint, lineHeight: 1.5, marginBottom: 15 }}>Model, spend, automation, and how carefully it works — end to end.</div>
+
+          <div style={{ fontSize: 9, fontWeight: 700, color: T.brass, textTransform: "uppercase", letterSpacing: "0.1em", fontFamily: syne, marginBottom: 9 }}>Model &amp; Spend</div>
+          <div style={{ display: "flex", flexDirection: "column", gap: 7, marginBottom: 12 }}>
             <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between" }}>
               <span style={{ fontSize: 11, fontWeight: 700, fontFamily: syne, color: T.ink }}>Brain</span>
               <span style={{ fontSize: 9, color: T.faint }}>model used for queued tasks</span>
             </div>
             <Segmented value={mini.model} onChange={k => setMini({ model: k })} />
           </div>
-          <div style={{ display: "flex", flexDirection: "column", gap: 8, marginBottom: 14 }}>
-            <ToggleRow title="Overnight autonomy" sub="include your queue in the nightly 3 AM run" on={mini.night} onToggle={() => setMini({ night: !mini.night })} size={toggleSize} />
-            <ToggleRow title="Full oversight" sub="audits Chief chat answers for smoothed-over board dissent" on={mini.oversight} onToggle={() => setMini({ oversight: !mini.oversight })} size={toggleSize} />
-          </div>
           <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", marginBottom: 7 }}>
             <span style={{ fontSize: 11, fontWeight: 700, fontFamily: syne, color: T.ink }}>Nightly budget</span>
             <span style={{ fontSize: 9, color: T.faint }}>caps tasks per run: $1→1 · $3→3 · $10→8</span>
           </div>
           <Chips options={["$1", "$3", "$10"]} value={mini.budget} onChange={b => setMini({ budget: b })} fmt={v => v + "/night"} />
-          <button onClick={runNow} disabled={running || worker.state === "off" || mini.enabled === false} style={{ ...S.brassBtn, width: "100%", padding: 12, fontSize: 11.5, marginTop: 14, opacity: running || worker.state === "off" || mini.enabled === false ? 0.5 : 1 }}>
-            {running ? "Working the queue…" : mini.enabled === false ? "Mini Me is off" : `Run queue now${queuedCount ? ` (${queuedCount} queued)` : ""}`}
-          </button>
-          {runMsg && <div style={{ marginTop: 8, fontSize: 10.5, color: runMsg.ok ? T.green : T.red, lineHeight: 1.5 }}>{runMsg.ok ? "✓ " : "✗ "}{runMsg.text}</div>}
-        </div>
 
-        {/* Effort & Review — one dial instead of three separate switches */}
-        <div style={card}>
-          <CardHeader title="Effort & Review" tag="RUNS INSIDE EVERY TASK" />
-          <div style={{ fontSize: 10.5, color: T.faint, lineHeight: 1.5, margin: "2px 0 12px" }}>How hard it works a single task, and whether you see the draft before it counts as done.</div>
+          <div style={{ height: 1, background: T.line, margin: "16px 0 14px" }} />
+
+          <div style={{ fontSize: 9, fontWeight: 700, color: T.brass, textTransform: "uppercase", letterSpacing: "0.1em", fontFamily: syne, marginBottom: 9 }}>Automation</div>
+          <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+            <ToggleRow title="Overnight autonomy" sub="include your queue in the nightly 3 AM run" on={mini.night} onToggle={() => setMini({ night: !mini.night })} size={toggleSize} />
+            <ToggleRow title="Full oversight" sub="audits Chief chat answers for smoothed-over board dissent" on={mini.oversight} onToggle={() => setMini({ oversight: !mini.oversight })} size={toggleSize} />
+          </div>
+
+          <div style={{ height: 1, background: T.line, margin: "16px 0 14px" }} />
+
+          <div style={{ fontSize: 9, fontWeight: 700, color: T.brass, textTransform: "uppercase", letterSpacing: "0.1em", fontFamily: syne, marginBottom: 9 }}>Quality &amp; Review</div>
           <div style={{ display: "flex", gap: 6, marginBottom: 8 }}>
             {EFFORT_LEVELS.map(e => (
               <button key={e.key} onClick={() => setEffort(e.key)} style={{ flex: 1, padding: "9px 4px", background: effort === e.key ? `linear-gradient(135deg, ${T.brass}, ${T.brassDeep})` : "rgba(34,29,20,0.04)", border: effort === e.key ? "none" : "1px solid rgba(34,29,20,0.08)", borderRadius: 9, color: effort === e.key ? "#FCFBF9" : T.sub, fontSize: 10.5, fontWeight: 700, fontFamily: syne, cursor: "pointer" }}>{e.label}</button>
             ))}
           </div>
-          <div style={{ fontSize: 10, color: T.faint, lineHeight: 1.5, marginBottom: 14 }}>{EFFORT_LEVELS.find(e => e.key === effort)?.desc}</div>
+          <div style={{ fontSize: 10, color: T.faint, lineHeight: 1.5, marginBottom: 13 }}>{EFFORT_LEVELS.find(e => e.key === effort)?.desc}</div>
           {effort === "thorough" && (
-            <div style={{ marginBottom: 14 }}>
+            <div style={{ marginBottom: 13 }}>
               <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", marginBottom: 7 }}>
                 <span style={{ fontSize: 11, fontWeight: 700, fontFamily: syne, color: T.ink }}>Max passes</span>
                 <span style={{ fontSize: 9, color: T.faint }}>auto-stops early if nothing's changing</span>
@@ -1626,6 +1627,11 @@ function MiniMePage({ settings, updateSetting, session, onWorkerRun, isMobile })
             </div>
           )}
           <ToggleRow title="Approval gate" sub="finished drafts wait for your tap before counting as delivered" on={mini.approvalOn} onToggle={() => setMini({ approvalOn: !mini.approvalOn })} size={toggleSize} />
+
+          <button onClick={runNow} disabled={running || worker.state === "off" || mini.enabled === false} style={{ ...S.brassBtn, width: "100%", padding: 12, fontSize: 11.5, marginTop: 17, opacity: running || worker.state === "off" || mini.enabled === false ? 0.5 : 1 }}>
+            {running ? "Working the queue…" : mini.enabled === false ? "Mini Me is off" : `Run queue now${queuedCount ? ` (${queuedCount} queued)` : ""}`}
+          </button>
+          {runMsg && <div style={{ marginTop: 8, fontSize: 10.5, color: runMsg.ok ? T.green : T.red, lineHeight: 1.5 }}>{runMsg.ok ? "✓ " : "✗ "}{runMsg.text}</div>}
         </div>
 
         {/* Queue */}
