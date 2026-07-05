@@ -491,7 +491,7 @@ function MorningBriefPage({ btc, isMobile }) {
     callFn("gsc", { site: "zerotosecure.com", days: 14 }).then(d => { if (alive && d?.success) { setGsc(d); setGscLive(true); } });
     callFn("shopify", { days: 14 }).then(d => { if (alive && d?.success) { setShop(d); setShopLive(true); } });
     callFn("markets", {}).then(d => { if (alive && d?.success) { setStocks(d); setStocksLive(true); } });
-    callFn("calendar", {}).then(d => { if (alive && d?.success && d.events?.length) { setEvents(d.events); setEventsLive(true); } });
+    callFn("calendar", {}).then(d => { if (alive && d?.success) { setEvents(d.events || []); setEventsLive(true); } });
     callFn("wire", {}).then(d => { if (alive && d?.success && d.wire?.length) { setWire(d.wire); setWireLive(true); } });
     return () => { alive = false; };
   }, []);

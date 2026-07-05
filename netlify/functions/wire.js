@@ -4,6 +4,9 @@
 // adding a dependency, consistent with the rest of this codebase.
 const json = (code, body) => ({ statusCode: code, headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
 
+let cache = { data: null, ts: 0 };
+const TTL_MS = 8 * 60 * 1000;
+
 const FEEDS = [
   { url: "https://www.coindesk.com/arc/outboundfeeds/rss/", source: "CoinDesk" },
   { url: "https://cointelegraph.com/rss", source: "Cointelegraph" },
@@ -40,6 +43,10 @@ exports.handler = async (event) => {
   try { body = JSON.parse(event.body || "{}"); } catch {}
   if (body.ping) return json(200, { success: true, service: "wire", configured: true });
 
+  if (cache.data && Date.now() - cache.ts < TTL_MS) {
+    return json(200, { ...cache.data, cached: true });
+  }
+
   try {
     const results = await Promise.allSettled(FEEDS.map(async (f) => {
       const res = await fetch(f.url, { headers: { "User-Agent": "Mozilla/5.0 (compatible; BoardRoom/1.0)" } });
@@ -59,8 +66,11 @@ exports.handler = async (event) => {
         return { time, tag: t, tagColor: color, text: `${it.title} (${it.source})` };
       });
 
-    return json(200, { success: true, wire });
+    const payload = { success: true, wire };
+    cache = { data: payload, ts: Date.now() };
+    return json(200, payload);
   } catch (e) {
+    if (cache.data) return json(200, { ...cache.data, cached: true, stale: true });
     return json(502, { success: false, error: e.message });
   }
 };
