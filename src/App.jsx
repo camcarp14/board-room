@@ -2,12 +2,11 @@ import { useState, useEffect, useRef } from "react";
 import { createClient } from "@supabase/supabase-js";
 
 // ════════════════════════════════════════════════════════════════════════════
-// THE BOARD ROOM — supercomputer edition.
-// Nav pages: The Room (chat) · Morning Brief · The Board · Your Properties ·
-// IT Department (deploys / Supabase console / model control / auditor) ·
-// Mini Me (growing sidekick: looping, skills, overnight queue, oversight).
-// Desktop: nav rail + full-width page. Mobile: bottom tabs + collapsible chat
-// pill that expands into a sheet. Supabase remains the shared brain.
+// THE BOARD ROOM — modern roman edition.
+// One NAV drives both platforms: Brief · Room · Board · Assets · Systems ·
+// Mini Me. Desktop shows a labeled rail; mobile shows the same six as icons.
+// Systems folds status/deploy/database/auditor/usage behind sub-tabs.
+// Supabase remains the shared brain; no page shows fabricated data.
 // ════════════════════════════════════════════════════════════════════════════
 
 const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL || "";
@@ -145,7 +144,7 @@ const BOARD = [
     charter: "You run Zero To Secure — a premium stainless-steel seed phrase backup kit ($150, DTC Shopify). You own creator collabs, YouTube Shorts production, SEO content, and conversion. You think in audience-fit reach, content cadence, and DTC unit economics. Bitcoin self-custody conviction, empowerment over fear.",
     blurb: "Owns creator collabs, Shorts production, SEO, and conversion for Zero To Secure. Empowerment over fear.",
     domains: "ZTS, Zero To Secure, creators, YouTube, Shorts, SEO, Shopify, ecommerce, Bitcoin product" },
-  { key: "macro", name: "Macro Strategist", emoji: "📈", color: "#3B82F6",
+  { key: "macro", name: "Macro Strategist", emoji: "📈", color: "#31589C",
     charter: "You are the markets and macro seat. Cameron holds long-term Bitcoin conviction with a leveraged WBTC position on Aave he manages carefully, and has a developed thesis about an AI investment bubble (circular hyperscaler financing, private credit exposure). Your job is honest pressure-testing, never validation. Flag risk asymmetries. He has explicitly asked you not to glaze over weaknesses.",
     blurb: "Markets and macro. Honest pressure-testing, never validation — flags risk asymmetries in the BTC position and AI-bubble thesis.",
     domains: "markets, macro, Bitcoin, BTC, crypto, investing, trading, Fed, positions, portfolio" },
@@ -236,48 +235,51 @@ async function callFnFull(name, payload) {
 }
 
 // ─── Design system ────────────────────────────────────────────────────────────
-const syne = "'Syne', system-ui", mono = "'DM Mono', monospace";
+// Modern Roman, light: marble surfaces, bronze accents, inscription capitals.
+// `syne` keeps its name (100+ call sites) but now carries Cinzel.
+const syne = "'Cinzel', 'Times New Roman', serif", mono = "'DM Mono', monospace";
 const T = {
-  bg: "#0A0F1C", ink: "#EDF1F7", sub: "#9AA6BC", faint: "#5B6778",
-  brass: "#D9B15E", brassDeep: "#8A6420", line: "rgba(255,255,255,0.08)",
-  green: "#34D399", red: "#F87171", amber: "#F59E0B", blue: "#3B82F6",
+  bg: "#F3F1EC", ink: "#221D14", sub: "#6C6455", faint: "#9A9280",
+  brass: "#8F6B1E", brassDeep: "#6A4D12", line: "rgba(34,29,20,0.10)",
+  green: "#1F7A55", red: "#B23A2E", amber: "#A2700E", blue: "#31589C",
 };
 const S = {
-  card: { padding: "19px 21px", background: "linear-gradient(180deg,rgba(255,255,255,0.05),rgba(255,255,255,0.02))", border: `1px solid ${T.line}`, borderRadius: 16, boxShadow: "0 12px 32px rgba(0,0,0,0.25), inset 0 1px 0 rgba(255,255,255,0.06)" },
-  cardM: { padding: 17, background: "linear-gradient(180deg,rgba(255,255,255,0.05),rgba(255,255,255,0.02))", border: `1px solid ${T.line}`, borderRadius: 15, boxShadow: "inset 0 1px 0 rgba(255,255,255,0.06)" },
-  inner: { background: "rgba(0,0,0,0.22)", border: "1px solid rgba(255,255,255,0.05)", borderRadius: 11 },
-  title: { fontSize: 12.5, fontWeight: 700, fontFamily: syne, color: T.ink },
+  card: { padding: "19px 21px", background: "#FCFBF9", border: `1px solid ${T.line}`, borderTop: `2px solid rgba(143,107,30,0.55)`, borderRadius: 14, boxShadow: "0 1px 2px rgba(34,29,20,0.04), 0 10px 28px rgba(34,29,20,0.06)" },
+  cardM: { padding: 17, background: "#FCFBF9", border: `1px solid ${T.line}`, borderTop: `2px solid rgba(143,107,30,0.55)`, borderRadius: 13, boxShadow: "0 1px 2px rgba(34,29,20,0.04)" },
+  inner: { background: "rgba(34,29,20,0.035)", border: "1px solid rgba(34,29,20,0.07)", borderRadius: 11 },
+  title: { fontSize: 12.5, fontWeight: 700, fontFamily: syne, color: T.ink, letterSpacing: "0.04em" },
   microLabel: { fontSize: 8.5, color: T.faint, fontFamily: mono, letterSpacing: "0.08em" },
-  brassBtn: { background: `linear-gradient(135deg, ${T.brass}, ${T.brassDeep})`, border: "none", borderRadius: 10, color: T.bg, fontWeight: 800, fontFamily: syne, cursor: "pointer", boxShadow: "inset 0 1px 0 rgba(255,255,255,0.35)" },
-  ghostBtn: { background: "rgba(200,160,74,0.1)", border: "1px solid rgba(200,160,74,0.28)", borderRadius: 8, color: T.brass, fontWeight: 700, fontFamily: syne, cursor: "pointer" },
-  input: { background: "rgba(255,255,255,0.04)", border: `1px solid rgba(255,255,255,0.1)`, borderRadius: 10, color: T.ink },
+  brassBtn: { background: `linear-gradient(135deg, ${T.brass}, ${T.brassDeep})`, border: "none", borderRadius: 10, color: "#FCFBF9", fontWeight: 700, fontFamily: syne, cursor: "pointer", boxShadow: "inset 0 1px 0 rgba(255,255,255,0.25), 0 2px 8px rgba(106,77,18,0.25)" },
+  ghostBtn: { background: "rgba(143,107,30,0.08)", border: "1px solid rgba(143,107,30,0.35)", borderRadius: 8, color: T.brass, fontWeight: 700, fontFamily: syne, cursor: "pointer" },
+  input: { background: "#FFFFFF", border: `1px solid rgba(34,29,20,0.14)`, borderRadius: 10, color: T.ink },
 };
 
 function useGlobalStyles() {
   useEffect(() => {
     const link = document.createElement("link");
     link.rel = "stylesheet";
-    link.href = "https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=Inter:wght@400;500;600;700&family=Syne:wght@600;700;800&display=swap";
+    link.href = "https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=Inter:wght@400;500;600;700&family=Cinzel:wght@500;600;700;800&display=swap";
     document.head.appendChild(link);
     const style = document.createElement("style");
     style.textContent = `
       *, *::before, *::after { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
       * { -webkit-font-smoothing: antialiased; text-rendering: optimizeLegibility; }
       html, body { margin: 0; font-family: 'Inter', system-ui, sans-serif; overscroll-behavior-y: none; }
-      body { background-color: #0A0F1C; background-image: radial-gradient(1200px 600px at 12% -8%, rgba(200,160,74,0.10), transparent 60%), radial-gradient(900px 600px at 100% 0%, rgba(59,130,246,0.05), transparent 55%), linear-gradient(180deg,#0B101E 0%,#090E1A 100%); background-attachment: fixed; }
+      body { color: #221D14; background-color: #F3F1EC; background-image: radial-gradient(1100px 560px at 10% -6%, rgba(143,107,30,0.06), transparent 60%), radial-gradient(900px 620px at 102% 4%, rgba(49,88,156,0.035), transparent 55%), linear-gradient(180deg,#F5F3EE 0%,#F1EEE7 100%); background-attachment: fixed; }
       ::-webkit-scrollbar { width: 8px; height: 8px; } ::-webkit-scrollbar-track { background: transparent; }
-      ::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.12); border-radius: 10px; }
+      ::-webkit-scrollbar-thumb { background: rgba(34,29,20,0.18); border-radius: 10px; }
       textarea, input, select, button { font-family: 'Inter', system-ui, sans-serif; }
-      ::selection { background: rgba(200,160,74,0.35); color: #FFF; }
+      ::selection { background: rgba(143,107,30,0.22); color: #221D14; }
       button, a, input, textarea { transition: all 0.16s ease; }
-      button:focus-visible, input:focus-visible, textarea:focus-visible { outline: none; box-shadow: 0 0 0 3px rgba(200,160,74,0.4); }
-      input::placeholder, textarea::placeholder { color: #5B6778; }
+      button:focus-visible, input:focus-visible, textarea:focus-visible { outline: none; box-shadow: 0 0 0 3px rgba(143,107,30,0.35); }
+      input::placeholder, textarea::placeholder { color: #9A9280; }
       textarea:focus, input:focus { outline: none; }
       @media (max-width: 760px) { input, textarea, select { font-size: 16px !important; } }
+      @media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation-duration: 0.01ms !important; transition-duration: 0.01ms !important; } }
       @keyframes fadein { from { opacity: 0; transform: translateY(5px); } to { opacity: 1; transform: none; } }
       @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.35; } }
       @keyframes sheetup { from { opacity: 0; transform: translateY(40px); } to { opacity: 1; transform: none; } }
-      @keyframes breathe { 0%,100% { box-shadow: 0 0 18px rgba(200,160,74,0.35), inset 0 1px 0 rgba(255,255,255,0.4); } 50% { box-shadow: 0 0 34px rgba(200,160,74,0.6), inset 0 1px 0 rgba(255,255,255,0.4); } }
+      @keyframes breathe { 0%,100% { box-shadow: 0 0 10px rgba(143,107,30,0.25), inset 0 1px 0 rgba(255,255,255,0.3); } 50% { box-shadow: 0 0 22px rgba(143,107,30,0.4), inset 0 1px 0 rgba(255,255,255,0.3); } }
       @keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
     `;
     document.head.appendChild(style);
@@ -299,8 +301,8 @@ const PROPERTIES = [
   { name: "Clarify Paid Search", desc: "Boutique Google Ads agency", url: "https://clarifypaidsearch.com", appUrl: "https://coruscating-sundae-f0def3.netlify.app", color: "#B68A2E", repo: "camcarp14/clarify-outreach", site: "clarify-paid-search" },
   { name: "Clarify SaaS", desc: "Google Ads auditing tool", url: "https://clarify-saas.netlify.app/", appUrl: "https://clarify-saas.netlify.app/", color: "#B68A2E", repo: "camcarp14/clarify-saas", site: "clarify-saas" },
   { name: "Zero To Secure", desc: "Premium seed phrase backup", url: "https://zerotosecure.com", appUrl: "https://zts-command-center.netlify.app", color: "#0E9F6E", repo: "camcarp14/zts-command-center", site: "zero-to-secure" },
-  { name: "Macro Command Center", desc: "Markets, portfolio, thesis", url: null, appUrl: "https://macro-command-center.netlify.app/", color: "#3B82F6", repo: "camcarp14/macro-command-center", site: "macro-command-center" },
-  { name: "Board Room", desc: "This app", url: null, appUrl: "https://board-room.netlify.app", color: "#C8A04A", repo: "camcarp14/board-room", site: "board-room" },
+  { name: "Macro Command Center", desc: "Markets, portfolio, thesis", url: null, appUrl: "https://macro-command-center.netlify.app/", color: "#31589C", repo: "camcarp14/macro-command-center", site: "macro-command-center" },
+  { name: "Board Room", desc: "This app", url: null, appUrl: "https://board-room.netlify.app", color: "#8F6B1E", repo: "camcarp14/board-room", site: "board-room" },
 ];
 
 // ─── Bitcoin ──────────────────────────────────────────────────────────────────
@@ -375,8 +377,8 @@ function Bars({ data, from, to, height = 54 }) {
 function Toggle({ on, onToggle, size = 20 }) {
   const w = size * 1.7, knob = size - 4;
   return (
-    <span onClick={onToggle} style={{ width: w, height: size, borderRadius: size / 2 + 1, background: on ? "linear-gradient(135deg, #2BB786, #1E8F68)" : "rgba(255,255,255,0.12)", position: "relative", cursor: "pointer", display: "inline-block", flex: "none", transition: "background 0.15s", boxShadow: "inset 0 1px 2px rgba(0,0,0,0.3)" }}>
-      <span style={{ position: "absolute", top: 2, left: on ? w - knob - 2 : 2, width: knob, height: knob, borderRadius: "50%", background: T.ink, transition: "left 0.15s", boxShadow: "0 1px 3px rgba(0,0,0,0.4)" }} />
+    <span onClick={onToggle} style={{ width: w, height: size, borderRadius: size / 2 + 1, background: on ? "linear-gradient(135deg, #1F7A55, #166042)" : "rgba(34,29,20,0.15)", position: "relative", cursor: "pointer", display: "inline-block", flex: "none", transition: "background 0.15s", boxShadow: "inset 0 1px 2px rgba(34,29,20,0.12)" }}>
+      <span style={{ position: "absolute", top: 2, left: on ? w - knob - 2 : 2, width: knob, height: knob, borderRadius: "50%", background: "#FFFFFF", transition: "left 0.15s", boxShadow: "0 1px 3px rgba(34,29,20,0.18)" }} />
     </span>
   );
 }
@@ -395,13 +397,13 @@ function ToggleRow({ title, sub, on, onToggle, size }) {
 
 function Segmented({ value, onChange }) {
   return (
-    <div style={{ display: "flex", gap: 4, background: "rgba(0,0,0,0.28)", border: "1px solid rgba(255,255,255,0.06)", borderRadius: 11, padding: 3 }}>
+    <div style={{ display: "flex", gap: 4, background: "rgba(34,29,20,0.05)", border: "1px solid rgba(34,29,20,0.06)", borderRadius: 11, padding: 3 }}>
       {MODEL_META.map(m => {
         const active = value === m.key;
         return (
-          <button key={m.key} onClick={() => onChange(m.key)} style={{ flex: 1, padding: "7px 0 6px", background: active ? `linear-gradient(135deg, ${T.brass}, ${T.brassDeep})` : "transparent", border: "none", borderRadius: 8, cursor: "pointer", display: "flex", flexDirection: "column", alignItems: "center", gap: 1, boxShadow: active ? "inset 0 1px 0 rgba(255,255,255,0.35), 0 2px 8px rgba(200,160,74,0.3)" : "none" }}>
+          <button key={m.key} onClick={() => onChange(m.key)} style={{ flex: 1, padding: "7px 0 6px", background: active ? `linear-gradient(135deg, ${T.brass}, ${T.brassDeep})` : "transparent", border: "none", borderRadius: 8, cursor: "pointer", display: "flex", flexDirection: "column", alignItems: "center", gap: 1, boxShadow: active ? "inset 0 1px 0 rgba(255,255,255,0.35), 0 2px 8px rgba(143,107,30,0.3)" : "none" }}>
             <span style={{ fontSize: 10, fontWeight: 800, fontFamily: syne, color: active ? T.bg : T.sub }}>{m.label}</span>
-            <span style={{ fontSize: 7.5, fontFamily: mono, color: active ? "rgba(10,15,28,0.7)" : T.faint }}>{m.price}</span>
+            <span style={{ fontSize: 7.5, fontFamily: mono, color: active ? "rgba(252,251,249,0.78)" : T.faint }}>{m.price}</span>
           </button>
         );
       })}
@@ -415,7 +417,7 @@ function Chips({ options, value, onChange, fmt = (v) => v }) {
       {options.map(o => {
         const active = value === o;
         return (
-          <button key={o} onClick={() => onChange(o)} style={{ flex: 1, padding: "9px 0", background: active ? "rgba(200,160,74,0.14)" : "rgba(0,0,0,0.22)", border: `1px solid ${active ? "rgba(200,160,74,0.4)" : "rgba(255,255,255,0.06)"}`, borderRadius: 10, color: active ? T.brass : T.sub, fontSize: 11, fontWeight: 700, cursor: "pointer", fontFamily: mono }}>{fmt(o)}</button>
+          <button key={o} onClick={() => onChange(o)} style={{ flex: 1, padding: "9px 0", background: active ? "rgba(143,107,30,0.14)" : "rgba(34,29,20,0.045)", border: `1px solid ${active ? "rgba(143,107,30,0.4)" : "rgba(34,29,20,0.06)"}`, borderRadius: 10, color: active ? T.brass : T.sub, fontSize: 11, fontWeight: 700, cursor: "pointer", fontFamily: mono }}>{fmt(o)}</button>
         );
       })}
     </div>
@@ -450,11 +452,11 @@ function ChatThread({ messages, thinking, loadingData, setInput, endRef, compact
       {loadingData && <div style={{ fontSize: 11, color: T.faint, textAlign: "center", animation: "pulse 1.4s infinite" }}>Loading your memory…</div>}
       {!loadingData && messages.length === 0 && !thinking && (
         <div style={{ margin: "auto", textAlign: "center", maxWidth: 460, paddingTop: compact ? "7vh" : "14vh", display: "flex", flexDirection: "column", alignItems: "center", gap: 12 }}>
-          <div style={{ fontSize: compact ? 23 : 34, fontWeight: 800, fontFamily: syne, color: T.ink, letterSpacing: "-0.01em" }}>The room is yours.</div>
+          <div style={{ fontSize: compact ? 22 : 32, fontWeight: 700, fontFamily: syne, color: T.ink, letterSpacing: "0.03em" }}>The room is yours.</div>
           <div style={{ fontSize: compact ? 12.5 : 13, color: T.sub, lineHeight: 1.7 }}>Ask the Chief of Staff anything. It routes each question to the seats that matter and brings back one synthesized answer — with the disagreements left in.</div>
           <div style={{ display: "flex", flexDirection: compact ? "column" : "row", flexWrap: "wrap", gap: 8, justifyContent: "center", marginTop: 8, width: "100%" }}>
             {SUGGESTIONS.map((s, i) => (
-              <button key={i} onClick={() => setInput(s)} style={{ padding: compact ? "12px 15px" : "10px 16px", background: "rgba(255,255,255,0.035)", border: `1px solid rgba(255,255,255,0.1)`, borderRadius: compact ? 12 : 20, color: T.sub, fontSize: 11.5, cursor: "pointer", textAlign: compact ? "left" : "center" }}>{s}</button>
+              <button key={i} onClick={() => setInput(s)} style={{ padding: compact ? "12px 15px" : "10px 16px", background: "rgba(34,29,20,0.035)", border: `1px solid rgba(34,29,20,0.1)`, borderRadius: compact ? 12 : 20, color: T.sub, fontSize: 11.5, cursor: "pointer", textAlign: compact ? "left" : "center" }}>{s}</button>
             ))}
           </div>
         </div>
@@ -470,13 +472,13 @@ function ChatThread({ messages, thinking, loadingData, setInput, endRef, compact
                 ))}
               </div>
             )}
-            <div style={{ padding: compact ? "11px 14px" : "13px 17px", borderRadius: user ? "16px 16px 5px 16px" : "16px 16px 16px 5px", background: user ? "linear-gradient(135deg, rgba(200,160,74,0.16), rgba(182,138,46,0.08))" : "linear-gradient(180deg, rgba(255,255,255,0.05), rgba(255,255,255,0.025))", border: `1px solid ${user ? "rgba(200,160,74,0.32)" : T.line}`, fontSize: 13.5, lineHeight: 1.68, whiteSpace: "pre-wrap", color: T.ink, boxShadow: "0 8px 24px rgba(0,0,0,0.22)" }}>{m.content}</div>
+            <div style={{ padding: compact ? "11px 14px" : "13px 17px", borderRadius: user ? "16px 16px 5px 16px" : "16px 16px 16px 5px", background: user ? "linear-gradient(135deg, rgba(143,107,30,0.14), rgba(143,107,30,0.06))" : "#FFFFFF", border: `1px solid ${user ? "rgba(143,107,30,0.32)" : T.line}`, fontSize: 13.5, lineHeight: 1.68, whiteSpace: "pre-wrap", color: T.ink, boxShadow: "0 8px 24px rgba(34,29,20,0.045)" }}>{m.content}</div>
             {m.source === "discord" && <div style={{ fontSize: 8.5, color: T.faint, fontFamily: mono, letterSpacing: "0.06em" }}>VIA DISCORD</div>}
           </div>
         );
       })}
       {thinking && (
-        <div style={{ alignSelf: "flex-start", padding: "12px 16px", borderRadius: "16px 16px 16px 5px", background: "rgba(255,255,255,0.04)", border: `1px solid ${T.line}`, fontSize: 12, color: T.sub }}>
+        <div style={{ alignSelf: "flex-start", padding: "12px 16px", borderRadius: "16px 16px 16px 5px", background: "rgba(34,29,20,0.04)", border: `1px solid ${T.line}`, fontSize: 12, color: T.sub }}>
           <span style={{ animation: "pulse 1.4s infinite" }}>Convening the room…</span>
         </div>
       )}
@@ -488,11 +490,11 @@ function ChatThread({ messages, thinking, loadingData, setInput, endRef, compact
 function Composer({ input, setInput, onSend, thinking, compact }) {
   const canSend = !!input.trim() && !thinking;
   return (
-    <div style={{ display: "flex", gap: compact ? 8 : 10, background: "linear-gradient(180deg,rgba(255,255,255,0.06),rgba(255,255,255,0.03))", border: "1px solid rgba(255,255,255,0.11)", borderRadius: 16, padding: compact ? "5px 5px 5px 16px" : "6px 6px 6px 20px", boxShadow: compact ? "inset 0 1px 0 rgba(255,255,255,0.07)" : "0 20px 50px rgba(0,0,0,0.40), inset 0 1px 0 rgba(255,255,255,0.07)" }}>
+    <div style={{ display: "flex", gap: compact ? 8 : 10, background: "#FFFFFF", border: "1px solid rgba(34,29,20,0.12)", borderRadius: 16, padding: compact ? "5px 5px 5px 16px" : "6px 6px 6px 20px", boxShadow: compact ? "0 1px 3px rgba(34,29,20,0.06)" : "0 2px 6px rgba(34,29,20,0.05), 0 14px 36px rgba(34,29,20,0.08)" }}>
       <textarea value={input} onChange={e => setInput(e.target.value)} onKeyDown={e => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); onSend(); } }}
         placeholder={compact ? "Ask the Chief…" : "Ask the Chief of Staff…"} rows={1}
         style={{ flex: 1, background: "transparent", border: "none", color: T.ink, fontSize: 13.5, resize: "none", padding: compact ? "11px 0" : "12px 0", lineHeight: 1.5, outline: "none" }} />
-      <button onClick={onSend} disabled={!canSend} style={{ padding: compact ? "0 18px" : "0 26px", minHeight: compact ? 44 : undefined, background: canSend ? `linear-gradient(135deg, ${T.brass}, ${T.brassDeep})` : "rgba(255,255,255,0.05)", border: "none", borderRadius: 11, color: canSend ? T.bg : T.faint, fontSize: 12, fontWeight: 800, cursor: canSend ? "pointer" : "default", fontFamily: syne, boxShadow: canSend ? "0 4px 14px rgba(200,160,74,0.35), inset 0 1px 0 rgba(255,255,255,0.35)" : "none" }}>Ask</button>
+      <button onClick={onSend} disabled={!canSend} style={{ padding: compact ? "0 18px" : "0 26px", minHeight: compact ? 44 : undefined, background: canSend ? `linear-gradient(135deg, ${T.brass}, ${T.brassDeep})` : "rgba(34,29,20,0.05)", border: "none", borderRadius: 11, color: canSend ? T.bg : T.faint, fontSize: 12, fontWeight: 800, cursor: canSend ? "pointer" : "default", fontFamily: syne, boxShadow: canSend ? "0 4px 14px rgba(143,107,30,0.35), inset 0 1px 0 rgba(255,255,255,0.35)" : "none" }}>Ask</button>
     </div>
   );
 }
@@ -516,7 +518,7 @@ function TopStatus({ now, dataStamp, refreshing, onRefresh, compact }) {
         <span style={{ fontSize: 8, fontWeight: 700, color: freshColor, fontFamily: mono, letterSpacing: "0.08em", whiteSpace: "nowrap" }}>{compact ? fresh : `DATA ${fresh}`}</span>
       </span>
       <button onClick={onRefresh} disabled={refreshing} title="Refresh data" aria-label="Refresh data"
-        style={{ width: compact ? 34 : 30, height: compact ? 34 : 30, display: "inline-flex", alignItems: "center", justifyContent: "center", background: "rgba(200,160,74,0.1)", border: "1px solid rgba(200,160,74,0.3)", borderRadius: 9, cursor: refreshing ? "default" : "pointer", flex: "none", padding: 0 }}>
+        style={{ width: compact ? 34 : 30, height: compact ? 34 : 30, display: "inline-flex", alignItems: "center", justifyContent: "center", background: "rgba(143,107,30,0.1)", border: "1px solid rgba(143,107,30,0.3)", borderRadius: 9, cursor: refreshing ? "default" : "pointer", flex: "none", padding: 0 }}>
         <svg width={compact ? 15 : 14} height={compact ? 15 : 14} viewBox="0 0 24 24" fill="none" stroke={T.brass} strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round"
           style={{ animation: refreshing ? "spin 0.9s linear infinite" : "none", opacity: refreshing ? 0.7 : 1 }}>
           <path d="M21 12a9 9 0 1 1-2.64-6.36" />
@@ -549,8 +551,7 @@ function RoomPage({ messages, thinking, loadingData, input, setInput, onSend, en
 }
 
 // ─── Page: Morning Brief ──────────────────────────────────────────────────────
-// Static analysis below is placeholder copy; wire /.netlify/functions/brief to
-// have the Chief regenerate it at 6:00 AM (markets APIs + X-list summarizer).
+// Everything on this page is fetched live on load through Netlify functions.
 // No fabricated fallback numbers anywhere on this page. Each card is either
 // LIVE (real data), NOT CONNECTED (with exact setup instructions), or ERROR
 // (with the actual failure). Empty dashes beat plausible-looking fake data.
@@ -698,7 +699,7 @@ function MorningBriefPage({ btc, isMobile }) {
                 <div key={i} style={{ ...S.inner, display: "flex", alignItems: "center", gap: 11, padding: "11px 13px" }}>
                   <span style={{ width: 7, height: 7, borderRadius: "50%", background: e.color, flex: "none", boxShadow: `0 0 8px ${e.color}80` }} />
                   <span style={{ fontSize: 9, color: T.faint, fontFamily: mono, flex: "none", width: 52 }}>{e.time}</span>
-                  <span style={{ fontSize: 11, color: "#C6CFDE", lineHeight: 1.5, flex: 1 }}>{e.text}</span>
+                  <span style={{ fontSize: 11, color: "#3A3323", lineHeight: 1.5, flex: 1 }}>{e.text}</span>
                 </div>
               )) : <div style={{ fontSize: 10.5, color: T.faint, padding: "6px 0" }}>No high/medium-impact US events scheduled today.</div>
             ) : <FeedFallbackRow status={eventsStatus} />}
@@ -717,7 +718,7 @@ function MorningBriefPage({ btc, isMobile }) {
               w.link ? (
                 <a key={i} href={w.link} target="_blank" rel="noopener" style={{ ...S.inner, display: "flex", gap: 10, padding: "10px 12px", textDecoration: "none", cursor: "pointer" }}>
                   <span style={{ fontSize: 8.5, color: T.faint, fontFamily: mono, flex: "none", paddingTop: 2, width: 36 }}>{w.time}</span>
-                  <span style={{ fontSize: 11, color: "#C6CFDE", lineHeight: 1.55, flex: 1 }}>
+                  <span style={{ fontSize: 11, color: "#3A3323", lineHeight: 1.55, flex: 1 }}>
                     <span style={{ color: w.tagColor, fontWeight: 700, fontSize: 8.5, letterSpacing: "0.06em" }}>{w.tag} </span> {w.text}
                   </span>
                   <span style={{ color: T.faint, fontSize: 12, flex: "none", paddingTop: 1 }}>›</span>
@@ -725,7 +726,7 @@ function MorningBriefPage({ btc, isMobile }) {
               ) : (
                 <div key={i} style={{ ...S.inner, display: "flex", gap: 10, padding: "10px 12px" }}>
                   <span style={{ fontSize: 8.5, color: T.faint, fontFamily: mono, flex: "none", paddingTop: 2, width: 36 }}>{w.time}</span>
-                  <span style={{ fontSize: 11, color: "#C6CFDE", lineHeight: 1.55, flex: 1 }}>
+                  <span style={{ fontSize: 11, color: "#3A3323", lineHeight: 1.55, flex: 1 }}>
                     <span style={{ color: w.tagColor, fontWeight: 700, fontSize: 8.5, letterSpacing: "0.06em" }}>{w.tag} </span> {w.text}
                   </span>
                 </div>
@@ -767,7 +768,7 @@ function MorningBriefPage({ btc, isMobile }) {
             <StatBox value={shop.conv} label="Conversion" delta={shop.convD} />
             <StatBox value={shop.orders} label="Orders" delta={shop.ordersD} />
           </div>
-          <Bars data={shop.series} from="#D9B15E" to="#A87B2C" />
+          <Bars data={shop.series} from="#8F6B1E" to="#6A4D12" />
           <div style={{ marginTop: 8, fontSize: 10.5, color: shopStatus.state === "live" ? T.sub : T.faint, lineHeight: 1.55 }}>{shopStatus.state === "live" ? shop.note : shopStatus.state === "loading" ? "Loading…" : shopStatus.detail}</div>
         </div>
       </div>
@@ -782,8 +783,8 @@ function BoardPage({ seatNotes, onEditSeat, onEnterRoom, isMobile }) {
     <div style={{ flex: 1, overflowY: "auto", padding: isMobile ? "18px 16px 24px" : "30px 34px 40px" }}>
       <div style={{ maxWidth: 920, margin: "0 auto", display: "flex", flexDirection: "column", gap: isMobile ? 10 : 14 }}>
         {!isMobile && (
-          <div style={{ padding: "20px 24px", background: "linear-gradient(135deg,rgba(200,160,74,0.10),rgba(200,160,74,0.03))", border: "1px solid rgba(200,160,74,0.22)", borderRadius: 18, display: "flex", alignItems: "center", gap: 18, boxShadow: "inset 0 1px 0 rgba(255,255,255,0.06)" }}>
-            <span style={{ width: 44, height: 44, borderRadius: 13, background: `linear-gradient(135deg, ${T.brass}, ${T.brassDeep})`, display: "inline-flex", alignItems: "center", justifyContent: "center", fontSize: 20, flex: "none", boxShadow: "0 4px 16px rgba(200,160,74,0.4), inset 0 1px 0 rgba(255,255,255,0.4)" }}>♛</span>
+          <div style={{ padding: "20px 24px", background: "linear-gradient(135deg,rgba(143,107,30,0.10),rgba(143,107,30,0.03))", border: "1px solid rgba(143,107,30,0.22)", borderRadius: 18, display: "flex", alignItems: "center", gap: 18, boxShadow: "inset 0 1px 0 rgba(255,255,255,0.06)" }}>
+            <span style={{ width: 44, height: 44, borderRadius: 13, background: `linear-gradient(135deg, ${T.brass}, ${T.brassDeep})`, display: "inline-flex", alignItems: "center", justifyContent: "center", fontSize: 20, flex: "none", boxShadow: "0 4px 16px rgba(143,107,30,0.4), inset 0 1px 0 rgba(255,255,255,0.4)" }}>♛</span>
             <span style={{ display: "flex", flexDirection: "column", gap: 3, flex: 1 }}>
               <span style={{ fontSize: 15, fontWeight: 700, fontFamily: syne, color: T.ink }}>Chief of Staff</span>
               <span style={{ fontSize: 11.5, color: T.sub, lineHeight: 1.5 }}>Your single point of contact. Routes every question to the seats below, synthesizes, and keeps the disagreements visible.</span>
@@ -850,8 +851,8 @@ function PropertiesPage({ isMobile, btc }) {
               <span style={{ marginLeft: "auto", fontSize: 8.5, color: pillColor, fontFamily: mono, letterSpacing: "0.06em", flex: "none", whiteSpace: "nowrap" }}>{pillText}</span>
             </div>
             <div style={{ display: "flex", gap: 8 }}>
-              {p.url && <a href={p.url} target="_blank" rel="noopener" style={{ flex: 1, padding: 10, textAlign: "center", background: "rgba(255,255,255,0.05)", border: `1px solid rgba(255,255,255,0.1)`, borderRadius: 10, color: p.color, fontSize: 11, fontWeight: 700, textDecoration: "none" }}>Site ›</a>}
-              <a href={p.appUrl} target="_blank" rel="noopener" style={{ flex: 1, padding: 10, textAlign: "center", background: "rgba(255,255,255,0.05)", border: `1px solid rgba(255,255,255,0.1)`, borderRadius: 10, color: T.sub, fontSize: 11, fontWeight: 600, textDecoration: "none" }}>Command Center ›</a>
+              {p.url && <a href={p.url} target="_blank" rel="noopener" style={{ flex: 1, padding: 10, textAlign: "center", background: "rgba(34,29,20,0.05)", border: `1px solid rgba(34,29,20,0.1)`, borderRadius: 10, color: p.color, fontSize: 11, fontWeight: 700, textDecoration: "none" }}>Site ›</a>}
+              <a href={p.appUrl} target="_blank" rel="noopener" style={{ flex: 1, padding: 10, textAlign: "center", background: "rgba(34,29,20,0.05)", border: `1px solid rgba(34,29,20,0.1)`, borderRadius: 10, color: T.sub, fontSize: 11, fontWeight: 600, textDecoration: "none" }}>Command Center ›</a>
             </div>
           </div>
           );
@@ -925,7 +926,7 @@ function AuditorCard({ settings, updateSetting, session, isMobile }) {
         <span style={S.title}>Site Auditor</span>
         <Toggle on={enabled} onToggle={() => updateSetting("auditor_enabled", !enabled)} size={isMobile ? 24 : 20} />
       </div>
-      <button onClick={runAll} disabled={running} style={{ width: "100%", padding: isMobile ? 12 : 10, background: running ? "rgba(255,255,255,0.05)" : "rgba(200,160,74,0.12)", border: `1px solid ${running ? T.line : "rgba(200,160,74,0.3)"}`, borderRadius: 10, color: running ? T.faint : T.brass, fontSize: 11, fontWeight: 700, cursor: running ? "default" : "pointer", fontFamily: syne, marginBottom: 9 }}>
+      <button onClick={runAll} disabled={running} style={{ width: "100%", padding: isMobile ? 12 : 10, background: running ? "rgba(34,29,20,0.05)" : "rgba(143,107,30,0.12)", border: `1px solid ${running ? T.line : "rgba(143,107,30,0.3)"}`, borderRadius: 10, color: running ? T.faint : T.brass, fontSize: 11, fontWeight: 700, cursor: running ? "default" : "pointer", fontFamily: syne, marginBottom: 9 }}>
         {running ? "Auditing all properties…" : "Run audit now"}
       </button>
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
@@ -938,7 +939,7 @@ function AuditorCard({ settings, updateSetting, session, isMobile }) {
         <div style={{ display: "flex", flexDirection: "column", gap: 7, marginTop: 10, maxHeight: 230, overflowY: "auto" }}>
           {findings.length === 0 && <div style={{ fontSize: 10, color: T.faint, textAlign: "center", padding: "8px 0" }}>No findings yet.</div>}
           {findings.slice(0, 12).map((f, i) => (
-            <div key={i} style={{ padding: "10px 12px", background: "rgba(0,0,0,0.22)", borderRadius: 10, border: "1px solid rgba(255,255,255,0.05)", borderLeft: `2px solid ${sevColor[f.severity] || T.sub}` }}>
+            <div key={i} style={{ padding: "10px 12px", background: "rgba(34,29,20,0.045)", borderRadius: 10, border: "1px solid rgba(34,29,20,0.05)", borderLeft: `2px solid ${sevColor[f.severity] || T.sub}` }}>
               <div style={{ display: "flex", justifyContent: "space-between", gap: 8, marginBottom: 4 }}>
                 <span style={{ fontSize: 9, fontWeight: 700, color: propColor(f.property), fontFamily: syne }}>{f.property}</span>
                 <span style={{ fontSize: 8, color: sevColor[f.severity] || T.sub, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.1em" }}>{f.severity}</span>
@@ -999,7 +1000,7 @@ function UsageCard({ isMobile }) {
         <span style={S.title}>Usage</span>
         <div style={{ display: "flex", gap: 4 }}>
           {USAGE_WINDOWS.map(([label], i) => (
-            <button key={label} onClick={() => setWindowIdx(i)} style={{ padding: "4px 9px", background: windowIdx === i ? "rgba(200,160,74,0.16)" : "transparent", border: `1px solid ${windowIdx === i ? "rgba(200,160,74,0.4)" : "rgba(255,255,255,0.1)"}`, borderRadius: 8, color: windowIdx === i ? T.brass : T.faint, fontSize: 9.5, fontWeight: 700, cursor: "pointer", fontFamily: mono }}>{label}</button>
+            <button key={label} onClick={() => setWindowIdx(i)} style={{ padding: "4px 9px", background: windowIdx === i ? "rgba(143,107,30,0.16)" : "transparent", border: `1px solid ${windowIdx === i ? "rgba(143,107,30,0.4)" : "rgba(34,29,20,0.1)"}`, borderRadius: 8, color: windowIdx === i ? T.brass : T.faint, fontSize: 9.5, fontWeight: 700, cursor: "pointer", fontFamily: mono }}>{label}</button>
           ))}
         </div>
       </div>
@@ -1015,13 +1016,13 @@ function UsageCard({ isMobile }) {
             <StatBox value={rows === null ? "…" : String(failed)} label="failed calls" valueColor={failed ? T.red : T.green} />
           </div>
 
-          <div style={{ fontSize: 9.5, fontWeight: 700, color: "rgba(200,160,74,0.8)", textTransform: "uppercase", letterSpacing: "0.12em", fontFamily: syne, marginBottom: 8 }}>By feature</div>
+          <div style={{ fontSize: 9.5, fontWeight: 700, color: "rgba(143,107,30,0.8)", textTransform: "uppercase", letterSpacing: "0.12em", fontFamily: syne, marginBottom: 8 }}>By feature</div>
           <div style={{ display: "flex", flexDirection: "column", gap: 6, marginBottom: 13 }}>
             {rows === null && <div style={{ fontSize: 10.5, color: T.faint, textAlign: "center", padding: "8px 0" }}>Loading…</div>}
             {rows !== null && topFns.length === 0 && <div style={{ fontSize: 10.5, color: T.faint, textAlign: "center", padding: "8px 0" }}>No calls logged in this window yet.</div>}
             {topFns.map(([fn, s]) => (
               <div key={fn} style={{ ...S.inner, display: "flex", alignItems: "center", gap: 10, padding: "8px 12px" }}>
-                <span style={{ fontSize: 10.5, color: "#C6CFDE", fontFamily: mono, flex: 1, minWidth: 0, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{fn}</span>
+                <span style={{ fontSize: 10.5, color: "#3A3323", fontFamily: mono, flex: 1, minWidth: 0, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{fn}</span>
                 {s.failed > 0 && <span style={{ fontSize: 8.5, color: T.red, fontFamily: mono, flex: "none" }}>{s.failed} FAILED</span>}
                 <span style={{ fontSize: 9.5, color: T.faint, fontFamily: mono, flex: "none" }}>{s.calls} calls</span>
                 <span style={{ fontSize: 10.5, color: T.brass, fontFamily: mono, fontWeight: 700, flex: "none", width: 56, textAlign: "right" }}>{s.cost > 0 ? "$" + s.cost.toFixed(3) : "—"}</span>
@@ -1029,16 +1030,16 @@ function UsageCard({ isMobile }) {
             ))}
           </div>
 
-          <button onClick={() => setShowLog(!showLog)} style={{ width: "100%", padding: 9, background: "rgba(255,255,255,0.03)", border: `1px solid rgba(255,255,255,0.08)`, borderRadius: 9, color: T.sub, fontSize: 10.5, fontWeight: 600, cursor: "pointer", marginBottom: showLog ? 9 : 0 }}>
+          <button onClick={() => setShowLog(!showLog)} style={{ width: "100%", padding: 9, background: "rgba(34,29,20,0.03)", border: `1px solid rgba(34,29,20,0.08)`, borderRadius: 9, color: T.sub, fontSize: 10.5, fontWeight: 600, cursor: "pointer", marginBottom: showLog ? 9 : 0 }}>
             {showLog ? "Hide raw log ▲" : `Show raw log (${totalCalls}) ▼`}
           </button>
           {showLog && (
-            <div style={{ background: "rgba(0,0,0,0.3)", border: "1px solid rgba(255,255,255,0.05)", borderRadius: 10, maxHeight: 280, overflowY: "auto", display: "flex", flexDirection: "column" }}>
+            <div style={{ background: "rgba(34,29,20,0.045)", border: "1px solid rgba(34,29,20,0.05)", borderRadius: 10, maxHeight: 280, overflowY: "auto", display: "flex", flexDirection: "column" }}>
               {(rows || []).slice(0, 150).map((r, i) => (
-                <div key={i} style={{ display: "flex", alignItems: "center", gap: 9, padding: "7px 11px", borderBottom: i < rows.length - 1 ? "1px solid rgba(255,255,255,0.04)" : "none" }}>
+                <div key={i} style={{ display: "flex", alignItems: "center", gap: 9, padding: "7px 11px", borderBottom: i < rows.length - 1 ? "1px solid rgba(34,29,20,0.04)" : "none" }}>
                   <span style={{ width: 6, height: 6, borderRadius: "50%", background: r.ok ? T.green : T.red, flex: "none" }} />
                   <span style={{ fontSize: 9, color: T.faint, fontFamily: mono, flex: "none", width: 32 }}>{ago(r.created_at)}</span>
-                  <span style={{ fontSize: 10, color: "#C6CFDE", fontFamily: mono, flex: 1, minWidth: 0, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{r.fn}{r.model ? ` · ${r.model}` : ""}{!r.ok && r.detail ? ` · ${r.detail}` : ""}</span>
+                  <span style={{ fontSize: 10, color: "#3A3323", fontFamily: mono, flex: 1, minWidth: 0, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{r.fn}{r.model ? ` · ${r.model}` : ""}{!r.ok && r.detail ? ` · ${r.detail}` : ""}</span>
                   <span style={{ fontSize: 9, color: T.faint, fontFamily: mono, flex: "none" }}>{r.ms ? `${r.ms}ms` : ""}</span>
                   <span style={{ fontSize: 9.5, color: T.brass, fontFamily: mono, flex: "none", width: 48, textAlign: "right" }}>{r.cost_usd ? "$" + r.cost_usd.toFixed(4) : ""}</span>
                 </div>
@@ -1193,7 +1194,7 @@ function SubTabs({ options, value, onChange }) {
   return (
     <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
       {options.map(o => (
-        <button key={o.key} onClick={() => onChange(o.key)} style={{ padding: "7px 13px", background: value === o.key ? "linear-gradient(135deg, rgba(200,160,74,0.22), rgba(200,160,74,0.1))" : "rgba(255,255,255,0.03)", border: `1px solid ${value === o.key ? "rgba(200,160,74,0.4)" : "rgba(255,255,255,0.09)"}`, borderRadius: 10, color: value === o.key ? T.brass : T.sub, fontSize: 11, fontWeight: 700, fontFamily: syne, cursor: "pointer" }}>{o.label}</button>
+        <button key={o.key} onClick={() => onChange(o.key)} style={{ padding: "7px 13px", background: value === o.key ? "linear-gradient(135deg, rgba(143,107,30,0.22), rgba(143,107,30,0.1))" : "rgba(34,29,20,0.03)", border: `1px solid ${value === o.key ? "rgba(143,107,30,0.4)" : "rgba(34,29,20,0.09)"}`, borderRadius: 10, color: value === o.key ? T.brass : T.sub, fontSize: 11, fontWeight: 700, fontFamily: syne, cursor: "pointer" }}>{o.label}</button>
       ))}
     </div>
   );
@@ -1226,34 +1227,18 @@ function SystemsPage({ settings, updateSetting, session, btc, isMobile }) {
   };
   const ago = (ts) => { if (!ts) return "—"; const s = Math.floor((Date.now() - ts) / 1000); return s < 60 ? `${s}S AGO` : `${Math.floor(s / 60)}M AGO`; };
 
-  // ── Deploy ──
+  // ── Deploy — build triggers only; deploy.js rejects zip uploads by design ──
   const [deploys, setDeploys] = useState({});
-  const [uploadFile, setUploadFile] = useState(null);
-  const [uploadTarget, setUploadTarget] = useState(PROPERTIES[0].name);
-  const [uploadBusy, setUploadBusy] = useState(false);
   const redeploy = async (p) => {
     setDeploys(d => ({ ...d, [p.name]: { busy: true } }));
-    await callFn("deploy", { site: p.site, action: "build" });
-    setTimeout(() => setDeploys(d => ({ ...d, [p.name]: { busy: false, when: "JUST NOW" } })), 2000);
-  };
-  const deployUpload = async () => {
-    if (!uploadFile || uploadBusy) return;
-    setUploadBusy(true);
-    const target = PROPERTIES.find(p => p.name === uploadTarget);
-    const form = new FormData();
-    form.append("site", target?.site || "");
-    form.append("zip", uploadFile);
-    try { await fetch("/.netlify/functions/deploy", { method: "POST", body: form }); } catch {}
-    setTimeout(() => {
-      setUploadBusy(false); setUploadFile(null);
-      setDeploys(d => ({ ...d, [uploadTarget]: { busy: false, when: "JUST NOW" } }));
-    }, 2200);
+    const res = await callFn("deploy", { site: p.site, action: "build" });
+    setDeploys(d => ({ ...d, [p.name]: { busy: false, ok: !!res?.success, when: "just now" } }));
   };
 
   // ── Database ──
   const [sqlInput, setSqlInput] = useState("");
   const [sqlBusy, setSqlBusy] = useState(false);
-  const [sqlLog, setSqlLog] = useState([{ kind: "ok", text: "✓ connected — guardrails on" }]);
+  const [sqlLog, setSqlLog] = useState([{ kind: "ok", text: "ready — allowlisted commands only" }]);
   const runSql = async () => {
     const q = sqlInput.trim();
     if (!q || sqlBusy) return;
@@ -1314,29 +1299,16 @@ function SystemsPage({ settings, updateSetting, session, btc, isMobile }) {
         {sub === "deploy" && (
           <div style={card}>
             <CardHeader title="Deployments" tag="NETLIFY" />
-            <div style={{ fontSize: 10.5, color: T.faint, lineHeight: 1.5, margin: "2px 0 13px" }}>Push a fresh build or redeploy any property without leaving the room.</div>
-            <label style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 6, padding: 18, background: "rgba(255,255,255,0.02)", border: "1px dashed rgba(200,160,74,0.35)", borderRadius: 12, cursor: "pointer", marginBottom: 8 }}>
-              <input type="file" accept=".zip" onChange={e => setUploadFile(e.target.files?.[0] || null)} style={{ display: "none" }} />
-              <span style={{ fontSize: 11.5, fontWeight: 700, color: T.brass, fontFamily: syne }}>{uploadFile ? "✓ " + uploadFile.name : "Drop a build .zip — or click to browse"}</span>
-              <span style={{ fontSize: 9.5, color: T.faint }}>{uploadFile ? "ready to deploy · pick a target below" : "uploads straight to Netlify, atomic swap on success"}</span>
-            </label>
-            {uploadFile && (
-              <div style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: 8 }}>
-                <select value={uploadTarget} onChange={e => setUploadTarget(e.target.value)} style={{ flex: 1, padding: "10px 11px", background: "#141C2E", border: `1px solid rgba(255,255,255,0.1)`, borderRadius: 9, color: T.ink, fontSize: 11 }}>
-                  {PROPERTIES.map(p => <option key={p.name}>{p.name}</option>)}
-                </select>
-                <button onClick={deployUpload} disabled={uploadBusy} style={{ ...S.brassBtn, padding: "10px 18px", fontSize: 11, opacity: uploadBusy ? 0.5 : 1 }}>{uploadBusy ? "Deploying…" : "Deploy"}</button>
-              </div>
-            )}
+            <div style={{ fontSize: 10.5, color: T.faint, lineHeight: 1.5, margin: "2px 0 13px" }}>Each redeploy triggers a fresh Netlify build from the site's connected repo. Live/down state lives under the Status tab.</div>
             <div style={{ display: "flex", flexDirection: "column", gap: 6, marginTop: 6 }}>
               {PROPERTIES.map(p => {
                 const d = deploys[p.name] || {};
                 return (
                   <div key={p.name} style={{ ...S.inner, display: "flex", alignItems: "center", gap: 11, padding: "11px 13px" }}>
-                    <span style={{ width: 7, height: 7, borderRadius: "50%", background: d.busy ? T.amber : T.green, flex: "none", boxShadow: `0 0 8px ${d.busy ? "rgba(245,158,11,0.5)" : "rgba(52,211,153,0.5)"}` }} />
+                    <span style={{ width: 7, height: 7, borderRadius: "50%", background: d.busy ? T.amber : d.when ? (d.ok ? T.green : T.red) : T.faint, flex: "none" }} />
                     <span style={{ display: "flex", flexDirection: "column", gap: 1, minWidth: 0, flex: 1 }}>
-                      <span style={{ fontSize: 11.5, fontWeight: 600, color: "#C6CFDE", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{p.name}</span>
-                      <span style={{ fontSize: 9, color: d.busy ? T.amber : T.faint, fontFamily: mono, letterSpacing: "0.04em" }}>{d.busy ? "BUILDING…" : `LIVE${d.when ? " · DEPLOYED " + d.when : ""}`}</span>
+                      <span style={{ fontSize: 11.5, fontWeight: 600, color: T.ink, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{p.name}</span>
+                      <span style={{ fontSize: 9, color: d.busy ? T.amber : T.faint, fontFamily: mono, letterSpacing: "0.04em" }}>{d.busy ? "TRIGGERING BUILD…" : d.when ? (d.ok ? "BUILD TRIGGERED · " + d.when : "TRIGGER FAILED — check deploy function") : "netlify · " + p.site}</span>
                     </span>
                     <button onClick={() => redeploy(p)} style={{ ...S.ghostBtn, padding: "7px 13px", fontSize: 9.5, flex: "none" }}>{d.busy ? "Deploying…" : "Redeploy"}</button>
                   </div>
@@ -1348,14 +1320,14 @@ function SystemsPage({ settings, updateSetting, session, btc, isMobile }) {
 
         {sub === "database" && (
           <div style={card}>
-            <CardHeader title="Supabase Console" tag="● CONNECTED" tagColor={T.green} />
+            <CardHeader title="Supabase Console" tag="ALLOWLISTED OPS" />
             <div style={{ fontSize: 10.5, color: T.faint, lineHeight: 1.5, margin: "2px 0 12px" }}>Run maintenance against the shared memory. Guardrails on — destructive ops ask twice.</div>
             <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginBottom: 10 }}>
               {["backup chat_messages", "vacuum seat_notes", "clear findings > 30d"].map(q => (
-                <button key={q} onClick={() => setSqlInput(q)} style={{ padding: "6px 11px", background: "rgba(255,255,255,0.035)", border: `1px solid rgba(255,255,255,0.09)`, borderRadius: 14, color: T.sub, fontSize: 9.5, cursor: "pointer", fontFamily: mono }}>{q}</button>
+                <button key={q} onClick={() => setSqlInput(q)} style={{ padding: "6px 11px", background: "rgba(34,29,20,0.035)", border: `1px solid rgba(34,29,20,0.09)`, borderRadius: 14, color: T.sub, fontSize: 9.5, cursor: "pointer", fontFamily: mono }}>{q}</button>
               ))}
             </div>
-            <div style={{ background: "rgba(0,0,0,0.35)", border: "1px solid rgba(255,255,255,0.06)", borderRadius: 11, padding: "12px 14px", minHeight: 110, maxHeight: 180, overflowY: "auto", display: "flex", flexDirection: "column", gap: 5, marginBottom: 9 }}>
+            <div style={{ background: "rgba(34,29,20,0.05)", border: "1px solid rgba(34,29,20,0.06)", borderRadius: 11, padding: "12px 14px", minHeight: 110, maxHeight: 180, overflowY: "auto", display: "flex", flexDirection: "column", gap: 5, marginBottom: 9 }}>
               {sqlLog.map((l, i) => (
                 <div key={i} style={{ fontSize: 10, fontFamily: mono, color: l.kind === "cmd" ? T.sub : l.kind === "err" ? T.red : T.green, lineHeight: 1.5, whiteSpace: "pre-wrap" }}>{l.text}</div>
               ))}
@@ -1508,7 +1480,7 @@ function MiniMePage({ settings, updateSetting, session, onWorkerRun, isMobile })
       <div style={{ maxWidth: 1020, margin: "0 auto", display: "grid", gridTemplateColumns: isMobile ? "1fr" : "1.3fr 1fr", gap: isMobile ? 12 : 14, alignItems: "start" }}>
 
         {/* Hero — real numbers */}
-        <div style={{ ...card, background: "linear-gradient(135deg,rgba(200,160,74,0.10),rgba(124,58,237,0.06))", border: "1px solid rgba(200,160,74,0.22)" }}>
+        <div style={{ ...card, background: "linear-gradient(135deg,rgba(143,107,30,0.10),rgba(124,58,237,0.06))", border: "1px solid rgba(143,107,30,0.22)" }}>
           <div style={{ display: "flex", alignItems: "center", gap: 16, marginBottom: 16 }}>
             <span style={{ width: isMobile ? 48 : 56, height: isMobile ? 48 : 56, borderRadius: "50%", background: `linear-gradient(135deg, ${T.brass}, ${T.brassDeep})`, display: "inline-flex", alignItems: "center", justifyContent: "center", flex: "none", animation: "breathe 3.2s ease-in-out infinite" }}>
               <span style={{ width: 22, height: 22, borderRadius: "50%", background: T.bg, display: "inline-flex", alignItems: "center", justifyContent: "center" }}>
@@ -1533,8 +1505,8 @@ function MiniMePage({ settings, updateSetting, session, onWorkerRun, isMobile })
             <span style={{ fontSize: 10, fontWeight: 700, fontFamily: syne, color: T.brass, letterSpacing: "0.08em" }}>LEVEL {levelIdx + 1} · {MINI_LEVELS[levelIdx].toUpperCase()}</span>
             <span style={{ fontSize: 9, color: T.faint, fontFamily: mono }}>{xpInLevel} / 250 XP · FROM REAL ACTIVITY</span>
           </div>
-          <div style={{ height: 7, background: "rgba(0,0,0,0.35)", borderRadius: 4, overflow: "hidden", marginBottom: 16, border: "1px solid rgba(255,255,255,0.05)" }}>
-            <div style={{ width: `${Math.max(2, Math.min(100, (xpInLevel / 250) * 100))}%`, height: "100%", background: `linear-gradient(90deg, ${T.brassDeep}, ${T.brass})`, borderRadius: 4, boxShadow: "0 0 12px rgba(200,160,74,0.5)" }} />
+          <div style={{ height: 7, background: "rgba(34,29,20,0.05)", borderRadius: 4, overflow: "hidden", marginBottom: 16, border: "1px solid rgba(34,29,20,0.05)" }}>
+            <div style={{ width: `${Math.max(2, Math.min(100, (xpInLevel / 250) * 100))}%`, height: "100%", background: `linear-gradient(90deg, ${T.brassDeep}, ${T.brass})`, borderRadius: 4, boxShadow: "0 0 12px rgba(143,107,30,0.5)" }} />
           </div>
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 8, marginBottom: 4 }}>
             <StatBox value={memCount === null ? "…" : memCount.toLocaleString()} label="memories (chat msgs)" />
@@ -1604,17 +1576,17 @@ function MiniMePage({ settings, updateSetting, session, onWorkerRun, isMobile })
                 <div key={rowKey} style={{ ...S.inner, padding: "11px 13px", display: "flex", flexDirection: "column", gap: 8 }}>
                   <div onClick={() => t.output && setOpenTask(open ? null : rowKey)} style={{ display: "flex", alignItems: "center", gap: 11, cursor: t.output ? "pointer" : "default" }}>
                     <span style={{ width: 7, height: 7, borderRadius: "50%", background: c, flex: "none", boxShadow: `0 0 8px ${c}80` }} />
-                    <span style={{ flex: 1, fontSize: 11, color: "#C6CFDE", lineHeight: 1.5 }}>{t.text}</span>
+                    <span style={{ flex: 1, fontSize: 11, color: "#3A3323", lineHeight: 1.5 }}>{t.text}</span>
                     <span style={{ fontSize: 8.5, color: c, fontFamily: mono, letterSpacing: "0.06em", flex: "none", textTransform: "uppercase" }}>{t.status}{t.output ? (open ? " ▲" : " ▼") : ""}</span>
-                    <button onClick={(e) => { e.stopPropagation(); removeTask(i); }} title="Remove" style={{ width: 24, height: 24, background: "rgba(255,255,255,0.04)", border: `1px solid rgba(255,255,255,0.09)`, borderRadius: 7, color: T.faint, fontSize: 10, cursor: "pointer", flex: "none" }}>✕</button>
+                    <button onClick={(e) => { e.stopPropagation(); removeTask(i); }} title="Remove" style={{ width: 24, height: 24, background: "rgba(34,29,20,0.04)", border: `1px solid rgba(34,29,20,0.09)`, borderRadius: 7, color: T.faint, fontSize: 10, cursor: "pointer", flex: "none" }}>✕</button>
                   </div>
                   {open && t.output && (
-                    <div style={{ background: "rgba(0,0,0,0.3)", border: "1px solid rgba(255,255,255,0.05)", borderRadius: 9, padding: "11px 13px", fontSize: 11, color: T.sub, lineHeight: 1.65, whiteSpace: "pre-wrap", maxHeight: 260, overflowY: "auto" }}>{t.output}</div>
+                    <div style={{ background: "rgba(34,29,20,0.045)", border: "1px solid rgba(34,29,20,0.05)", borderRadius: 9, padding: "11px 13px", fontSize: 11, color: T.sub, lineHeight: 1.65, whiteSpace: "pre-wrap", maxHeight: 260, overflowY: "auto" }}>{t.output}</div>
                   )}
                   {t.status === "review" && (
                     <div style={{ display: "flex", gap: 8 }}>
                       <button onClick={() => approveTask(t.id)} disabled={running} style={{ ...S.brassBtn, flex: 1, padding: "8px 0", fontSize: 10.5, opacity: running ? 0.5 : 1 }}>Approve</button>
-                      <button onClick={() => rejectTask(t.id)} disabled={running} style={{ flex: 1, padding: "8px 0", background: "transparent", border: `1px solid rgba(255,255,255,0.12)`, borderRadius: 10, color: T.sub, fontSize: 10.5, fontWeight: 600, cursor: running ? "default" : "pointer" }}>Reject &amp; redo</button>
+                      <button onClick={() => rejectTask(t.id)} disabled={running} style={{ flex: 1, padding: "8px 0", background: "transparent", border: `1px solid rgba(34,29,20,0.12)`, borderRadius: 10, color: T.sub, fontSize: 10.5, fontWeight: 600, cursor: running ? "default" : "pointer" }}>Reject &amp; redo</button>
                     </div>
                   )}
                 </div>
@@ -1636,10 +1608,10 @@ function MiniMePage({ settings, updateSetting, session, onWorkerRun, isMobile })
             {skills.length === 0 && <div style={{ fontSize: 10.5, color: T.faint, textAlign: "center", padding: "10px 0" }}>No skills yet — add one and tune it with your voice and priorities.</div>}
             {skills.map((sk, i) => (
               <div key={i} style={{ ...S.inner, padding: "11px 13px", display: "flex", alignItems: "center", gap: 9 }}>
-                <span style={{ fontSize: 11.5, fontWeight: 600, color: "#C6CFDE", flex: 1, minWidth: 0, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{sk.name}</span>
+                <span style={{ fontSize: 11.5, fontWeight: 600, color: "#3A3323", flex: 1, minWidth: 0, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{sk.name}</span>
                 {!!sk.note && <span style={{ fontSize: 8, color: T.green, fontFamily: mono, letterSpacing: "0.06em", flex: "none" }}>✓ ACTIVE</span>}
                 <button onClick={() => { setTuneIdx(i); setTuneDraft(sk.note || ""); }} style={{ ...S.ghostBtn, padding: "5px 11px", fontSize: 9, borderRadius: 7, flex: "none" }}>Tune</button>
-                <button onClick={() => setSkills(skills.filter((_, j) => j !== i))} title="Remove skill" style={{ width: 26, height: 26, background: "rgba(255,255,255,0.04)", border: `1px solid rgba(255,255,255,0.09)`, borderRadius: 7, color: T.faint, fontSize: 10, cursor: "pointer", flex: "none" }}>✕</button>
+                <button onClick={() => setSkills(skills.filter((_, j) => j !== i))} title="Remove skill" style={{ width: 26, height: 26, background: "rgba(34,29,20,0.04)", border: `1px solid rgba(34,29,20,0.09)`, borderRadius: 7, color: T.faint, fontSize: 10, cursor: "pointer", flex: "none" }}>✕</button>
               </div>
             ))}
           </div>
@@ -1681,7 +1653,7 @@ function MiniMePage({ settings, updateSetting, session, onWorkerRun, isMobile })
 function ModalShell({ onClose, children, isMobile, z = 300 }) {
   return (
     <div onClick={onClose} style={{ position: "fixed", inset: 0, background: "rgba(4,7,14,0.72)", zIndex: z, display: "flex", alignItems: isMobile ? "flex-end" : "center", justifyContent: "center", animation: "fadein 0.15s ease both" }}>
-      <div onClick={e => e.stopPropagation()} style={{ background: "linear-gradient(180deg,#141C2E,#101726)", borderRadius: isMobile ? "20px 20px 0 0" : 18, padding: "24px 24px calc(24px + env(safe-area-inset-bottom))", width: isMobile ? "100%" : 560, maxWidth: 560, border: `1px solid rgba(255,255,255,0.1)`, boxShadow: "0 32px 80px rgba(0,0,0,0.55), inset 0 1px 0 rgba(255,255,255,0.07)", animation: "sheetup 0.2s ease both", color: T.ink }}>
+      <div onClick={e => e.stopPropagation()} style={{ background: "linear-gradient(180deg,#FFFFFF,#F6F3ED)", borderRadius: isMobile ? "20px 20px 0 0" : 18, padding: "24px 24px calc(24px + env(safe-area-inset-bottom))", width: isMobile ? "100%" : 560, maxWidth: 560, border: `1px solid rgba(34,29,20,0.1)`, boxShadow: "0 32px 80px rgba(30,25,17,0.42), inset 0 1px 0 rgba(255,255,255,0.07)", animation: "sheetup 0.2s ease both", color: T.ink }}>
         {children}
       </div>
     </div>
@@ -1701,12 +1673,12 @@ function SeatNotesModal({ seatKey, initial, onSave, onClose, isMobile }) {
         <span style={{ fontSize: 16, fontWeight: 700, fontFamily: syne }}>{seat.name}</span>
       </div>
       <div style={{ fontSize: 11, color: T.faint, lineHeight: 1.6, marginBottom: 15 }}>{seat.charter.slice(0, 160)}…</div>
-      <div style={{ fontSize: 9.5, fontWeight: 700, color: "rgba(200,160,74,0.8)", textTransform: "uppercase", letterSpacing: "0.14em", fontFamily: syne, marginBottom: 8 }}>Current context · treated as ground truth · synced everywhere</div>
+      <div style={{ fontSize: 9.5, fontWeight: 700, color: "rgba(143,107,30,0.8)", textTransform: "uppercase", letterSpacing: "0.14em", fontFamily: syne, marginBottom: 8 }}>Current context · treated as ground truth · synced everywhere</div>
       <textarea value={notes} onChange={e => setNotes(e.target.value)} placeholder="Paste what's current — pipeline numbers, open questions, this week's state. The fresher this is, the sharper the seat's takes."
         style={{ ...S.input, width: "100%", minHeight: 150, padding: "12px 14px", fontSize: 13, resize: "vertical", lineHeight: 1.6 }} />
       <div style={{ display: "flex", gap: 8, marginTop: 14 }}>
         <button onClick={save} disabled={saving} style={{ ...S.brassBtn, flex: 1, padding: 13, fontSize: 12, opacity: saving ? 0.5 : 1 }}>{saving ? "Saving…" : "Save context"}</button>
-        <button onClick={onClose} style={{ padding: "13px 18px", background: "transparent", border: `1px solid rgba(255,255,255,0.1)`, borderRadius: 10, color: T.sub, fontSize: 12, fontWeight: 600, cursor: "pointer" }}>Cancel</button>
+        <button onClick={onClose} style={{ padding: "13px 18px", background: "transparent", border: `1px solid rgba(34,29,20,0.1)`, borderRadius: 10, color: T.sub, fontSize: 12, fontWeight: 600, cursor: "pointer" }}>Cancel</button>
       </div>
     </ModalShell>
   );
@@ -1716,7 +1688,7 @@ function SkillTuneModal({ name, draft, setDraft, onSave, onClose, isMobile }) {
   return (
     <ModalShell onClose={onClose} isMobile={isMobile} z={320}>
       <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 5 }}>
-        <span style={{ width: 34, height: 34, borderRadius: 10, background: "rgba(200,160,74,0.15)", display: "inline-flex", alignItems: "center", justifyContent: "center", fontSize: 15, color: T.brass, fontWeight: 800, fontFamily: syne }}>⟡</span>
+        <span style={{ width: 34, height: 34, borderRadius: 10, background: "rgba(143,107,30,0.15)", display: "inline-flex", alignItems: "center", justifyContent: "center", fontSize: 15, color: T.brass, fontWeight: 800, fontFamily: syne }}>⟡</span>
         <span style={{ display: "flex", flexDirection: "column", gap: 1 }}>
           <span style={{ fontSize: 15, fontWeight: 700, fontFamily: syne }}>Tune skill</span>
           <span style={{ fontSize: 11, color: T.brass, fontFamily: mono }}>{name}</span>
@@ -1727,7 +1699,7 @@ function SkillTuneModal({ name, draft, setDraft, onSave, onClose, isMobile }) {
         style={{ ...S.input, width: "100%", minHeight: 130, padding: "12px 14px", fontSize: 13, resize: "vertical", lineHeight: 1.6 }} />
       <div style={{ display: "flex", gap: 8, marginTop: 14 }}>
         <button onClick={onSave} style={{ ...S.brassBtn, flex: 1, padding: 13, fontSize: 12 }}>Save guidance</button>
-        <button onClick={onClose} style={{ padding: "13px 18px", background: "transparent", border: `1px solid rgba(255,255,255,0.1)`, borderRadius: 10, color: T.sub, fontSize: 12, fontWeight: 600, cursor: "pointer" }}>Cancel</button>
+        <button onClick={onClose} style={{ padding: "13px 18px", background: "transparent", border: `1px solid rgba(34,29,20,0.1)`, borderRadius: 10, color: T.sub, fontSize: 12, fontWeight: 600, cursor: "pointer" }}>Cancel</button>
       </div>
     </ModalShell>
   );
@@ -1736,7 +1708,7 @@ function SkillTuneModal({ name, draft, setDraft, onSave, onClose, isMobile }) {
 function MigrationModal({ counts, onImport, onSkip, importing }) {
   return (
     <div style={{ position: "fixed", inset: 0, background: "rgba(5,8,16,0.75)", zIndex: 400, display: "flex", alignItems: "center", justifyContent: "center", animation: "fadein 0.15s ease both" }}>
-      <div style={{ background: "linear-gradient(180deg,#141C2E,#101726)", borderRadius: 18, padding: "26px 28px", width: 440, maxWidth: "94vw", border: `1px solid rgba(255,255,255,0.1)`, boxShadow: "0 32px 80px rgba(0,0,0,0.5)", color: T.ink }}>
+      <div style={{ background: "linear-gradient(180deg,#FFFFFF,#F6F3ED)", borderRadius: 18, padding: "26px 28px", width: 440, maxWidth: "94vw", border: `1px solid rgba(34,29,20,0.1)`, boxShadow: "0 32px 80px rgba(30,25,17,0.38)", color: T.ink }}>
         <div style={{ fontSize: 16, fontWeight: 700, fontFamily: syne, marginBottom: 8 }}>Import your existing memory?</div>
         <div style={{ fontSize: 12.5, color: T.sub, lineHeight: 1.7, marginBottom: 18 }}>
           This browser has data from before your account existed:{" "}
@@ -1746,7 +1718,7 @@ function MigrationModal({ counts, onImport, onSkip, importing }) {
         </div>
         <div style={{ display: "flex", gap: 8 }}>
           <button onClick={onImport} disabled={importing} style={{ ...S.brassBtn, flex: 1, padding: 12, fontSize: 12, opacity: importing ? 0.5 : 1 }}>{importing ? "Importing…" : "Import"}</button>
-          <button onClick={onSkip} disabled={importing} style={{ padding: "12px 18px", background: "transparent", border: `1px solid rgba(255,255,255,0.1)`, borderRadius: 10, color: T.sub, fontSize: 12, fontWeight: 600, cursor: "pointer" }}>Skip</button>
+          <button onClick={onSkip} disabled={importing} style={{ padding: "12px 18px", background: "transparent", border: `1px solid rgba(34,29,20,0.1)`, borderRadius: 10, color: T.sub, fontSize: 12, fontWeight: 600, cursor: "pointer" }}>Skip</button>
         </div>
       </div>
     </div>
@@ -1757,7 +1729,7 @@ function MigrationModal({ counts, onImport, onSkip, importing }) {
 function SetupNotice() {
   return (
     <div style={{ minHeight: "100vh", display: "flex", alignItems: "center", justifyContent: "center", color: T.ink, padding: 20 }}>
-      <div style={{ maxWidth: 480, padding: "28px 30px", background: "#131A2B", border: `1px solid ${T.line}`, borderRadius: 18 }}>
+      <div style={{ maxWidth: 480, padding: "28px 30px", background: "#FCFBF9", border: `1px solid ${T.line}`, borderRadius: 18 }}>
         <div style={{ fontSize: 16, fontWeight: 700, fontFamily: syne, marginBottom: 10 }}>Supabase not configured</div>
         <div style={{ fontSize: 13, color: T.sub, lineHeight: 1.7 }}>
           This build expects two environment variables on the Netlify site:<br />
@@ -1793,9 +1765,9 @@ function LoginScreen() {
 
   return (
     <div style={{ minHeight: "100vh", display: "flex", alignItems: "center", justifyContent: "center", color: T.ink, padding: 20 }}>
-      <div style={{ width: 380, maxWidth: "94vw", padding: "30px 32px", background: "linear-gradient(180deg,#141C2E,#101726)", border: `1px solid ${T.line}`, borderRadius: 18, boxShadow: "0 32px 80px rgba(0,0,0,0.5), inset 0 1px 0 rgba(255,255,255,0.07)" }}>
+      <div style={{ width: 380, maxWidth: "94vw", padding: "30px 32px", background: "linear-gradient(180deg,#FFFFFF,#F6F3ED)", border: `1px solid ${T.line}`, borderRadius: 18, boxShadow: "0 32px 80px rgba(30,25,17,0.38), inset 0 1px 0 rgba(255,255,255,0.07)" }}>
         <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 6 }}>
-          <span style={{ width: 22, height: 22, borderRadius: 7, background: `linear-gradient(135deg, ${T.brass} 0%, ${T.brassDeep} 100%)`, boxShadow: "0 2px 8px rgba(200,160,74,0.45), inset 0 1px 0 rgba(255,255,255,0.4)" }} />
+          <span style={{ width: 22, height: 22, borderRadius: 7, background: `linear-gradient(135deg, ${T.brass} 0%, ${T.brassDeep} 100%)`, boxShadow: "0 2px 8px rgba(143,107,30,0.45), inset 0 1px 0 rgba(255,255,255,0.4)" }} />
           <span style={{ fontSize: 13, fontWeight: 800, letterSpacing: "0.15em", textTransform: "uppercase", fontFamily: syne }}>The Board Room</span>
         </div>
         <div style={{ fontSize: 12, color: T.faint, marginBottom: 22 }}>One mind, any device. Sign in to continue.</div>
@@ -1808,7 +1780,7 @@ function LoginScreen() {
         {err && <div style={{ fontSize: 11, color: T.red, marginBottom: 10 }}>{err}</div>}
         {sent && <div style={{ fontSize: 11, color: T.green, marginBottom: 10 }}>Login link sent — check your email.</div>}
         <button onClick={mode === "password" ? signIn : sendMagic} disabled={disabled}
-          style={{ ...(disabled ? { background: "rgba(255,255,255,0.06)", color: T.faint, border: "none", borderRadius: 10, fontFamily: syne, fontWeight: 800 } : S.brassBtn), width: "100%", padding: 12, fontSize: 12, cursor: disabled ? "default" : "pointer" }}>
+          style={{ ...(disabled ? { background: "rgba(34,29,20,0.06)", color: T.faint, border: "none", borderRadius: 10, fontFamily: syne, fontWeight: 800 } : S.brassBtn), width: "100%", padding: 12, fontSize: 12, cursor: disabled ? "default" : "pointer" }}>
           {busy ? (mode === "password" ? "Signing in…" : "Sending…") : (mode === "password" ? "Sign in" : "Email me a login link")}
         </button>
         <div onClick={() => { setMode(mode === "password" ? "magic" : "password"); setErr(null); setSent(false); }}
@@ -1833,7 +1805,7 @@ const NAV = [
   { key: "mini", label: "Mini Me", sub: "queue · loops · oversight", mark: "#EC4899" },
 ];
 const HEADERS = {
-  brief: ["Brief", "generated 6:00 AM · markets, wires, and your stores"],
+  brief: ["Brief", "live markets, wires, and your stores"],
   room: ["Room", "smart routing · 5 seats on call"],
   board: ["Board", "five specialist seats + one Chief"],
   assets: ["Assets", "everything you run, one click away"],
@@ -2045,9 +2017,9 @@ export default function App() {
   if (isMobile) {
     return (
       <div style={{ height: "100dvh", display: "flex", flexDirection: "column", color: T.ink, position: "relative", overflow: "hidden" }}>
-        <div style={{ flex: "none", height: 54, display: "flex", alignItems: "center", justifyContent: "space-between", padding: "0 16px", borderBottom: `1px solid ${T.line}`, background: "rgba(10,15,28,0.85)", backdropFilter: "blur(14px)" }}>
+        <div style={{ flex: "none", height: 54, display: "flex", alignItems: "center", justifyContent: "space-between", padding: "0 16px", borderBottom: `1px solid ${T.line}`, background: "rgba(243,241,236,0.9)", backdropFilter: "blur(14px)" }}>
           <div style={{ display: "flex", alignItems: "center", gap: 9 }}>
-            <span style={{ width: 20, height: 20, borderRadius: 6, background: `linear-gradient(135deg, ${T.brass} 0%, ${T.brassDeep} 100%)`, boxShadow: "0 2px 6px rgba(200,160,74,0.45), inset 0 1px 0 rgba(255,255,255,0.4)" }} />
+            <span style={{ width: 20, height: 20, borderRadius: 6, background: `linear-gradient(135deg, ${T.brass} 0%, ${T.brassDeep} 100%)`, boxShadow: "0 2px 6px rgba(143,107,30,0.45), inset 0 1px 0 rgba(255,255,255,0.4)" }} />
             <span style={{ fontSize: 11.5, fontWeight: 800, letterSpacing: "0.15em", textTransform: "uppercase", fontFamily: syne }}>Board Room</span>
           </div>
           <TopStatus now={now} dataStamp={dataStamp} refreshing={refreshing} onRefresh={refreshData} compact />
@@ -2056,14 +2028,14 @@ export default function App() {
         {renderPage(page)}
 
         {/* Bottom nav — icon-only, same 6 destinations as the desktop rail */}
-        <div style={{ flex: "none", display: "flex", borderTop: `1px solid ${T.line}`, background: "rgba(10,15,28,0.92)", backdropFilter: "blur(12px)", paddingBottom: "env(safe-area-inset-bottom)" }}>
+        <div style={{ flex: "none", display: "flex", borderTop: `1px solid ${T.line}`, background: "rgba(243,241,236,0.94)", backdropFilter: "blur(12px)", paddingBottom: "env(safe-area-inset-bottom)" }}>
           {NAV.map(n => {
             const active = page === n.key;
             const Icon = NAV_ICONS[n.key];
             return (
               <button key={n.key} onClick={() => setPage(n.key)} title={n.label} aria-label={n.label} aria-current={active ? "page" : undefined}
-                style={{ flex: 1, minHeight: 64, background: active ? "linear-gradient(180deg, rgba(200,160,74,0.10), transparent)" : "none", border: "none", cursor: "pointer", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 7, padding: "10px 0" }}>
-                <span style={{ width: 6, height: 6, borderRadius: "50%", background: T.brass, opacity: active ? 1 : 0, transition: "opacity 0.15s", boxShadow: "0 0 8px rgba(200,160,74,0.85)" }} />
+                style={{ flex: 1, minHeight: 64, background: active ? "linear-gradient(180deg, rgba(143,107,30,0.10), transparent)" : "none", border: "none", cursor: "pointer", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 7, padding: "10px 0" }}>
+                <span style={{ width: 6, height: 6, borderRadius: "50%", background: T.brass, opacity: active ? 1 : 0, transition: "opacity 0.15s", boxShadow: "0 0 8px rgba(143,107,30,0.85)" }} />
                 <Icon width={23} height={23} color={active ? T.ink : T.faint} style={{ transition: "color 0.15s" }} />
               </button>
             );
@@ -2080,21 +2052,21 @@ export default function App() {
   return (
     <div style={{ minHeight: "100vh", display: "grid", gridTemplateColumns: "264px minmax(0,1fr)", color: T.ink }}>
       {/* Nav rail */}
-      <div style={{ borderRight: `1px solid ${T.line}`, padding: "26px 16px 16px", display: "flex", flexDirection: "column", gap: 20, height: "100vh", position: "sticky", top: 0, overflowY: "auto", background: "linear-gradient(180deg,rgba(255,255,255,0.015),transparent 30%)" }}>
+      <div style={{ borderRight: `1px solid ${T.line}`, padding: "26px 16px 16px", display: "flex", flexDirection: "column", gap: 20, height: "100vh", position: "sticky", top: 0, overflowY: "auto", background: "linear-gradient(180deg,rgba(34,29,20,0.015),transparent 30%)" }}>
         <div style={{ padding: "0 6px" }}>
           <div style={{ display: "flex", alignItems: "center", gap: 11 }}>
-            <span style={{ width: 24, height: 24, borderRadius: 7, background: `linear-gradient(135deg, ${T.brass} 0%, ${T.brassDeep} 100%)`, boxShadow: "0 2px 8px rgba(200,160,74,0.45), inset 0 1px 0 rgba(255,255,255,0.4)" }} />
+            <span style={{ width: 24, height: 24, borderRadius: 7, background: `linear-gradient(135deg, ${T.brass} 0%, ${T.brassDeep} 100%)`, boxShadow: "0 2px 8px rgba(143,107,30,0.45), inset 0 1px 0 rgba(255,255,255,0.4)" }} />
             <span style={{ fontSize: 13, fontWeight: 800, letterSpacing: "0.15em", textTransform: "uppercase", fontFamily: syne }}>Board Room</span>
           </div>
-          <div style={{ height: 1, background: "linear-gradient(90deg,rgba(200,160,74,0.45),transparent)", marginTop: 16 }} />
+          <div style={{ height: 1, background: "linear-gradient(90deg,rgba(143,107,30,0.45),transparent)", marginTop: 16 }} />
         </div>
 
         <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
           {NAV.map(n => {
             const active = page === n.key;
             return (
-              <div key={n.key} onClick={() => setPage(n.key)} style={{ display: "flex", alignItems: "center", gap: 12, padding: "12px 13px", borderRadius: 12, cursor: "pointer", background: active ? "linear-gradient(180deg, rgba(200,160,74,0.13), rgba(200,160,74,0.05))" : "transparent", border: `1px solid ${active ? "rgba(200,160,74,0.3)" : "transparent"}` }}>
-                <span style={{ width: 8, height: 8, transform: "rotate(45deg)", background: active ? n.mark : "rgba(255,255,255,0.18)", boxShadow: active ? `0 0 10px ${n.mark}99` : "none", flex: "none", borderRadius: 2 }} />
+              <div key={n.key} onClick={() => setPage(n.key)} style={{ display: "flex", alignItems: "center", gap: 12, padding: "12px 13px", borderRadius: 12, cursor: "pointer", background: active ? "linear-gradient(180deg, rgba(143,107,30,0.13), rgba(143,107,30,0.05))" : "transparent", border: `1px solid ${active ? "rgba(143,107,30,0.3)" : "transparent"}` }}>
+                <span style={{ width: 8, height: 8, transform: "rotate(45deg)", background: active ? n.mark : "rgba(34,29,20,0.18)", boxShadow: active ? `0 0 10px ${n.mark}99` : "none", flex: "none", borderRadius: 2 }} />
                 <span style={{ display: "flex", flexDirection: "column", gap: 2, minWidth: 0 }}>
                   <span style={{ fontSize: 12.5, fontWeight: 700, fontFamily: syne, color: active ? T.ink : T.sub, letterSpacing: "0.02em" }}>{n.label}</span>
                   <span style={{ fontSize: 9.5, color: T.faint, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{n.sub}</span>
@@ -2106,7 +2078,7 @@ export default function App() {
 
         {/* Signals cluster */}
         <div style={{ marginTop: "auto", display: "flex", flexDirection: "column", gap: 10 }}>
-          <div style={{ padding: "13px 14px", background: "linear-gradient(180deg,rgba(255,255,255,0.05),rgba(255,255,255,0.02))", border: `1px solid ${T.line}`, borderRadius: 14, boxShadow: "inset 0 1px 0 rgba(255,255,255,0.06)" }}>
+          <div style={{ padding: "13px 14px", background: "linear-gradient(180deg,rgba(34,29,20,0.05),rgba(34,29,20,0.02))", border: `1px solid ${T.line}`, borderRadius: 14, boxShadow: "inset 0 1px 0 rgba(255,255,255,0.06)" }}>
             <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 7 }}>
               <div style={{ display: "flex", alignItems: "center", gap: 7 }}>
                 <span style={{ width: 15, height: 15, borderRadius: "50%", background: "linear-gradient(135deg,#F7931A,#C77416)", display: "inline-flex", alignItems: "center", justifyContent: "center", fontSize: 8, fontWeight: 800, color: "#1A0F00" }}>₿</span>
@@ -2120,29 +2092,29 @@ export default function App() {
           </div>
 
           {calUrl && !editingCal ? (
-            <a href={calUrl} target="_blank" rel="noopener" style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "11px 14px", background: "rgba(200,160,74,0.08)", border: "1px solid rgba(200,160,74,0.25)", borderRadius: 12, color: T.brass, fontSize: 11, fontWeight: 700, textDecoration: "none" }}>Open Calendar <span>›</span></a>
+            <a href={calUrl} target="_blank" rel="noopener" style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "11px 14px", background: "rgba(143,107,30,0.08)", border: "1px solid rgba(143,107,30,0.25)", borderRadius: 12, color: T.brass, fontSize: 11, fontWeight: 700, textDecoration: "none" }}>Open Calendar <span>›</span></a>
           ) : !editingCal ? (
-            <button onClick={() => { setEditingCal(true); setCalDraft(calUrl); }} style={{ width: "100%", padding: "11px 14px", background: "rgba(255,255,255,0.02)", border: "1px dashed rgba(255,255,255,0.14)", borderRadius: 12, color: T.sub, fontSize: 10.5, cursor: "pointer", textAlign: "left" }}>+ Link your calendar</button>
+            <button onClick={() => { setEditingCal(true); setCalDraft(calUrl); }} style={{ width: "100%", padding: "11px 14px", background: "rgba(34,29,20,0.02)", border: "1px dashed rgba(34,29,20,0.14)", borderRadius: 12, color: T.sub, fontSize: 10.5, cursor: "pointer", textAlign: "left" }}>+ Link your calendar</button>
           ) : (
             <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
               <input value={calDraft} onChange={e => setCalDraft(e.target.value)} placeholder="calendar share URL" style={{ ...S.input, width: "100%", padding: "9px 11px", fontSize: 11, borderRadius: 9 }} />
               <div style={{ display: "flex", gap: 6 }}>
                 <button onClick={() => { updateSetting("calendar_url", calDraft.trim()); setEditingCal(false); }} style={{ ...S.brassBtn, flex: 1, padding: 8, fontSize: 10.5, borderRadius: 8 }}>Save</button>
-                <button onClick={() => setEditingCal(false)} style={{ padding: "8px 11px", background: "transparent", border: `1px solid rgba(255,255,255,0.1)`, borderRadius: 8, color: T.sub, fontSize: 10.5, cursor: "pointer" }}>Cancel</button>
+                <button onClick={() => setEditingCal(false)} style={{ padding: "8px 11px", background: "transparent", border: `1px solid rgba(34,29,20,0.1)`, borderRadius: 8, color: T.sub, fontSize: 10.5, cursor: "pointer" }}>Cancel</button>
               </div>
             </div>
           )}
 
           <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8, borderTop: `1px solid ${T.line}`, paddingTop: 12 }}>
             <span style={{ fontSize: 9.5, color: T.faint, fontFamily: mono, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{session.user?.email}</span>
-            <button onClick={() => supabase.auth.signOut()} style={{ background: "none", border: `1px solid rgba(255,255,255,0.1)`, borderRadius: 7, color: T.sub, fontSize: 9, padding: "4px 9px", cursor: "pointer", fontWeight: 600 }}>Sign out</button>
+            <button onClick={() => supabase.auth.signOut()} style={{ background: "none", border: `1px solid rgba(34,29,20,0.1)`, borderRadius: 7, color: T.sub, fontSize: 9, padding: "4px 9px", cursor: "pointer", fontWeight: 600 }}>Sign out</button>
           </div>
         </div>
       </div>
 
       {/* Main column */}
       <div style={{ display: "flex", flexDirection: "column", height: "100vh", minWidth: 0 }}>
-        <div style={{ height: 58, flex: "none", borderBottom: `1px solid ${T.line}`, display: "flex", alignItems: "center", justifyContent: "space-between", padding: "0 34px", background: "linear-gradient(180deg,rgba(255,255,255,0.02),transparent)" }}>
+        <div style={{ height: 58, flex: "none", borderBottom: `1px solid ${T.line}`, display: "flex", alignItems: "center", justifyContent: "space-between", padding: "0 34px", background: "linear-gradient(180deg,rgba(34,29,20,0.02),transparent)" }}>
           <div style={{ display: "flex", alignItems: "baseline", gap: 12 }}>
             <span style={{ fontSize: 14, fontWeight: 700, fontFamily: syne, letterSpacing: "0.02em" }}>{HEADERS[page][0]}</span>
             <span style={{ fontSize: 10.5, color: T.faint }}>{HEADERS[page][1]}</span>
