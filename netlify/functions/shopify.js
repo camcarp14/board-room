@@ -65,10 +65,10 @@ exports.handler = async (event) => {
         edges { node { createdAt totalPriceSet { shopMoney { amount } } } }
       }
     }`;
-    const res = await fetch(`https://${shop}.myshopify.com/admin/api/2025-01/graphql.json`, {
+    const res = await fetch(`https://${shop}.myshopify.com/admin/api/2026-04/graphql.json`, {
       method: "POST",
       headers: { "Content-Type": "application/json", "X-Shopify-Access-Token": token },
-      body: JSON.stringify({ query, variables: { q: `created_at:>=${prevSince.toISOString()}` } }),
+      body: JSON.stringify({ query, variables: { q: `created_at:>='${prevSince.toISOString()}'` } }),
     });
     if (!res.ok) return json(res.status, { error: `Shopify API ${res.status}` });
     const data = await res.json();
