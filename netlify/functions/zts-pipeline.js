@@ -1,16 +1,46 @@
 // Zero To Secure creator-outreach pipeline stats, pulled directly from the
 // ZTS Creator Registry app's own Supabase project.
 //
-// IMPORTANT — same caveat as clarify-pipeline.js: this schema is an
-// educated guess, not a confirmed contract. It assumes a `creators` table
-// shaped like:
-//   status text    — 'prospected' | 'sent' | 'replied' | 'collab' | 'closed' | 'lost'
-//   reach  numeric — follower count / weighted reach for that creator
-// If the real table/column names differ, tell Claude and this gets fixed
-// in one pass rather than silently showing wrong numbers.
+// Real schema, confirmed against an actual export (2026-07-05) — this
+// replaces an earlier version that guessed at flat status/reach columns
+// and got it wrong. The real table is `creators`, and everything lives in
+// a JSONB `payload` column rather than flat columns:
+//   payload.stage     text  — free-text funnel stage, e.g. "prospect",
+//                             "vetted", "outreach sent", "in conversation",
+//                             "negotiating", "active partner" (only
+//                             "prospect" was confirmed against real data —
+//                             the rest are inferred from an activity log
+//                             on a single test row, so the stage→bucket
+//                             mapping below uses loose keyword matching
+//                             rather than exact string equality, to be
+//                             more resilient to slug formatting I couldn't
+//                             directly confirm)
+//   payload.audience  text  — formatted follower count, e.g. "5K", "1.2M"
+//                             — not a number, has to be parsed
+//   payload.log       array — activity entries; a {"type":"reply"} entry
+//                             is a more reliable "they replied" signal
+//                             than any stage value
+// PostgREST can't filter/aggregate JSONB text like this cleanly, so this
+// fetches all rows and classifies them in code instead.
 // Needs: ZTS_SUPABASE_URL, ZTS_SUPABASE_ANON_KEY (or a service role key if
 // RLS blocks anon reads on this table).
 const json = (code, body) => ({ statusCode: code, headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+
+function parseAudience(raw) {
+  if (!raw) return 0;
+  const m = String(raw).trim().match(/^([\d.]+)\s*([KkMmBb]?)$/);
+  if (!m) return Number(raw) || 0;
+  const mult = { k: 1e3, m: 1e6, b: 1e9 }[m[2].toLowerCase()] || 1;
+  return parseFloat(m[1]) * mult;
+}
+function bucketOf(payload) {
+  const stage = String(payload.stage || "").toLowerCase();
+  const replied = Array.isArray(payload.log) && payload.log.some(l => l.type === "reply");
+  if (stage.includes("partner")) return "collab";
+  if (replied || stage.includes("negotiat") || stage.includes("conversation")) return "replied";
+  if (stage.includes("outreach") || stage.includes("sent")) return "sent";
+  return "prospected"; // prospect, vetted, or anything else early-funnel
+}
 
 exports.handler = async (event) => {
   let body = {};
@@ -23,28 +53,20 @@ exports.handler = async (event) => {
   if (body.ping) return json(200, { success: true, service: "zts-pipeline", configured, missing: configured ? undefined : "ZTS_SUPABASE_URL / ZTS_SUPABASE_ANON_KEY" });
   if (!configured) return json(500, { error: "ZTS Supabase env vars not set" });
 
-  const headers = { apikey: key, Authorization: `Bearer ${key}` };
-  const count = async (query) => {
-    const res = await fetch(`${url}/rest/v1/creators?${query}&select=id`, { headers: { ...headers, Prefer: "count=exact", Range: "0-0" } });
-    if (!res.ok) throw new Error(`creators query failed (${res.status}) — check the "creators" table exists with the expected columns`);
-    return parseInt(res.headers.get("content-range")?.split("/")[1] || "0", 10);
-  };
-  const sum = async (query, column) => {
-    const res = await fetch(`${url}/rest/v1/creators?${query}&select=${column}`, { headers });
-    if (!res.ok) throw new Error(`creators query failed (${res.status})`);
-    const rows = await res.json();
-    return (Array.isArray(rows) ? rows : []).reduce((s, r) => s + (Number(r[column]) || 0), 0);
-  };
-
   try {
-    const [prospected, sent, replied, collab, weightedReach] = await Promise.all([
-      count("status=eq.prospected"),
-      count("status=eq.sent"),
-      count("status=eq.replied"),
-      count("status=eq.collab"),
-      sum("status=not.in.(closed,lost)", "reach"),
-    ]);
-    return json(200, { success: true, prospected, sent, replied, collab, weightedReach });
+    const res = await fetch(`${url}/rest/v1/creators?select=payload`, { headers: { apikey: key, Authorization: `Bearer ${key}` } });
+    if (!res.ok) throw new Error(`creators query failed (${res.status}) — check the "creators" table still has a "payload" column`);
+    const rows = await res.json();
+
+    const counts = { prospected: 0, sent: 0, replied: 0, collab: 0 };
+    let weightedReach = 0;
+    for (const row of (Array.isArray(rows) ? rows : [])) {
+      const payload = row.payload || {};
+      counts[bucketOf(payload)]++;
+      weightedReach += parseAudience(payload.audience);
+    }
+
+    return json(200, { success: true, ...counts, weightedReach: Math.round(weightedReach) });
   } catch (e) {
     return json(502, { success: false, error: e.message });
   }

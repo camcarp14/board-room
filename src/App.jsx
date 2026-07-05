@@ -589,6 +589,24 @@ function MorningBriefPage({ btc, isMobile, settings }) {
   const [ztsPipeStatus, setZtsPipeStatus] = useState({ state: "loading" });
   const [meetings, setMeetings] = useState([]);
   const [meetingsStatus, setMeetingsStatus] = useState({ state: "loading" });
+  const [openEventIdx, setOpenEventIdx] = useState(null);
+  const [eventAnalysis, setEventAnalysis] = useState({}); // idx -> {btc, stocks} | "loading" | "error"
+
+  const toggleEvent = async (i, e) => {
+    if (openEventIdx === i) { setOpenEventIdx(null); return; }
+    setOpenEventIdx(i);
+    if (eventAnalysis[i]) return; // already have a read on this one
+    setEventAnalysis(prev => ({ ...prev, [i]: "loading" }));
+    const system = `You give quick, concrete market-impact reads for a solo trader/investor watching Bitcoin and equities. Given a US economic calendar event (with forecast/prior if given), respond with ONLY:
+BTC: <one concise sentence on the likely Bitcoin impact and why>
+STOCKS: <one concise sentence on the likely equities impact and why>
+Be directional where the data supports it — don't hedge into uselessness — but don't overstate certainty on an event that hasn't happened yet.`;
+    const raw = await callClaude({ system, messages: [{ role: "user", content: e.text }], modelKey: "haiku", maxTokens: 200, fn: "event_impact" });
+    const btcMatch = (raw || "").match(/BTC:\s*(.+)/i);
+    const stocksMatch = (raw || "").match(/STOCKS:\s*(.+)/i);
+    if (btcMatch || stocksMatch) setEventAnalysis(prev => ({ ...prev, [i]: { btc: btcMatch?.[1]?.trim() || "—", stocks: stocksMatch?.[1]?.trim() || "—" } }));
+    else setEventAnalysis(prev => ({ ...prev, [i]: "error" }));
+  };
 
   useEffect(() => {
     let alive = true;
@@ -661,9 +679,8 @@ function MorningBriefPage({ btc, isMobile, settings }) {
 
   return (
     <div style={{ flex: 1, overflowY: "auto", padding: isMobile ? "18px 16px 24px" : "30px 34px 40px" }}>
-      <div style={grid}>
-                <div style={col}>
-          {/* Bitcoin outlook */}
+      {(() => {
+      const card_bitcoin = (
                   <div style={card}>
                     <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 12 }}>
                       <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
@@ -684,7 +701,9 @@ function MorningBriefPage({ btc, isMobile, settings }) {
                     <div style={{ fontSize: 11.5, color: T.sub, lineHeight: 1.65 }}>{narrative}</div>
                     <div style={{ marginTop: 9, ...S.microLabel, letterSpacing: "0.04em" }}>LEVELS DERIVED FROM LIVE 24H RANGE · NOT FINANCIAL ADVICE</div>
                   </div>
-          {/* Events */}
+          
+  );
+  const card_watch = (
                   <div style={card}>
                     <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
                       <span style={S.title}>Watch This Week</span>
@@ -695,17 +714,38 @@ function MorningBriefPage({ btc, isMobile, settings }) {
                     </div>
                     <div style={{ display: "flex", flexDirection: "column", gap: 7, marginTop: 10 }}>
                       {eventsStatus.state === "live" ? (
-                        events.length ? events.map((e, i) => (
-                          <div key={i} style={{ ...S.inner, display: "flex", alignItems: "center", gap: 11, padding: "11px 13px" }}>
-                            <span style={{ width: 7, height: 7, borderRadius: "50%", background: e.color, flex: "none", boxShadow: `0 0 8px ${e.color}80` }} />
-                            <span style={{ fontSize: 9, color: T.faint, fontFamily: mono, flex: "none", width: 52 }}>{e.time}</span>
-                            <span style={{ fontSize: 11, color: "#3A3323", lineHeight: 1.5, flex: 1 }}>{e.text}</span>
-                          </div>
-                        )) : <div style={{ fontSize: 10.5, color: T.faint, padding: "6px 0" }}>No high/medium-impact US events in the next 7 days.</div>
+                        events.length ? events.map((e, i) => {
+                          const open = openEventIdx === i;
+                          const analysis = eventAnalysis[i];
+                          return (
+                            <div key={i} style={{ ...S.inner, padding: "11px 13px", display: "flex", flexDirection: "column", gap: 8 }}>
+                              <div onClick={() => toggleEvent(i, e)} style={{ display: "flex", alignItems: "center", gap: 11, cursor: "pointer" }}>
+                                <span style={{ width: 7, height: 7, borderRadius: "50%", background: e.color, flex: "none", boxShadow: `0 0 8px ${e.color}80` }} />
+                                <span style={{ fontSize: 9, color: T.faint, fontFamily: mono, flex: "none", whiteSpace: "nowrap" }}>{e.time}</span>
+                                <span style={{ fontSize: 11, color: "#3A3323", lineHeight: 1.5, flex: 1 }}>{e.text}</span>
+                                <span style={{ fontSize: 9, color: T.brass, flex: "none" }}>{open ? "▲" : "▼"}</span>
+                              </div>
+                              {open && (
+                                <div style={{ background: "rgba(34,29,20,0.04)", border: "1px solid rgba(34,29,20,0.05)", borderRadius: 9, padding: "10px 12px", display: "flex", flexDirection: "column", gap: 6 }}>
+                                  {analysis === "loading" && <span style={{ fontSize: 10.5, color: T.faint, animation: "pulse 1.4s infinite" }}>Thinking through the likely impact…</span>}
+                                  {analysis === "error" && <span style={{ fontSize: 10.5, color: T.faint }}>Couldn't get a read on this one — tap to try again.</span>}
+                                  {analysis && typeof analysis === "object" && (
+                                    <>
+                                      <div style={{ fontSize: 10.5, color: T.sub, lineHeight: 1.5 }}><span style={{ color: "#C77416", fontWeight: 700 }}>₿ Bitcoin — </span>{analysis.btc}</div>
+                                      <div style={{ fontSize: 10.5, color: T.sub, lineHeight: 1.5 }}><span style={{ color: T.blue, fontWeight: 700 }}>Stocks — </span>{analysis.stocks}</div>
+                                    </>
+                                  )}
+                                </div>
+                              )}
+                            </div>
+                          );
+                        }) : <div style={{ fontSize: 10.5, color: T.faint, padding: "6px 0" }}>No high/medium-impact US events in the next 7 days.</div>
                       ) : <FeedFallbackRow status={eventsStatus} />}
                     </div>
                   </div>
-          {/* ZTS Search Console */}
+          
+  );
+  const card_gsc = (
                   <div style={card}>
                     <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 12 }}>
                       <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
@@ -722,7 +762,9 @@ function MorningBriefPage({ btc, isMobile, settings }) {
                     <Bars data={gsc.series} from="#17B888" to="#0E9F6E" />
                     <div style={{ marginTop: 8, fontSize: 10.5, color: gscStatus.state === "live" ? T.sub : T.faint, lineHeight: 1.55 }}>{gscStatus.state === "live" ? gsc.note : gscStatus.state === "loading" ? "Loading…" : gscStatus.detail}</div>
                   </div>
-          {/* Clarify Outreach Pipeline — bottom of column */}
+          
+  );
+  const card_clarify = (
                   <div style={card}>
                     <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 12 }}>
                       <span style={S.title}>Clarify · Outreach Pipeline</span>
@@ -736,18 +778,12 @@ function MorningBriefPage({ btc, isMobile, settings }) {
                           <StatBox value={String(clarify.sent)} label="Sent" valueColor={T.blue} />
                           <StatBox value={String(clarify.replied)} label="Replied" valueColor={T.green} />
                         </div>
-                        <div style={{ fontSize: 11.5, color: T.sub, lineHeight: 1.6, marginBottom: 10 }}>{clarify.replyRate}% reply rate · <span style={{ color: T.green, fontWeight: 700 }}>${Math.round(clarify.valueAtStake / 1000)}k/mo at stake</span></div>
-                        <div style={{ ...S.inner, padding: "10px 13px", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-                          <span style={{ fontSize: 10, color: T.faint }}>Active inbound leads</span>
-                          <span style={{ fontSize: 14, fontWeight: 700, fontFamily: mono, color: T.ink }}>{clarify.activeInbound}</span>
-                        </div>
+                        <div style={{ fontSize: 11.5, color: T.sub, lineHeight: 1.6 }}>{clarify.replyRate}% reply rate</div>
                       </>
                     ) : <FeedFallbackRow status={clarifyStatus} />}
                   </div>
-        </div>
-
-        <div style={col}>
-          {/* Stocks outlook */}
+  );
+  const card_stocks = (
                   <div style={card}>
                     <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 12 }}>
                       <span style={S.title}>Stocks · Day Outlook</span>
@@ -763,7 +799,9 @@ function MorningBriefPage({ btc, isMobile, settings }) {
                     </div>
                     <div style={{ fontSize: 11.5, color: T.sub, lineHeight: 1.65 }}>{stocksStatus.state === "live" ? "Futures and yield pulled live via Yahoo Finance's public endpoint — unofficial, no key, refreshes on page load." : stocksStatus.state === "loading" ? "Loading live data…" : stocksStatus.detail}</div>
                   </div>
-          {/* Upcoming Meetings */}
+          
+  );
+  const card_meetings = (
                   <div style={card}>
                     <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
                       <span style={S.title}>Upcoming Meetings</span>
@@ -783,7 +821,9 @@ function MorningBriefPage({ btc, isMobile, settings }) {
                       ) : <FeedFallbackRow status={meetingsStatus} />}
                     </div>
                   </div>
-          {/* ZTS Shopify */}
+          
+  );
+  const card_shopify = (
                   <div style={card}>
                     <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 12 }}>
                       <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
@@ -800,7 +840,9 @@ function MorningBriefPage({ btc, isMobile, settings }) {
                     <Bars data={shop.series} from="#8F6B1E" to="#6A4D12" />
                     <div style={{ marginTop: 8, fontSize: 10.5, color: shopStatus.state === "live" ? T.sub : T.faint, lineHeight: 1.55 }}>{shopStatus.state === "live" ? shop.note : shopStatus.state === "loading" ? "Loading…" : shopStatus.detail}</div>
                   </div>
-          {/* ZTS Creator Pipeline — bottom of column */}
+          
+  );
+  const card_zts = (
                   <div style={card}>
                     <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 12 }}>
                       <span style={S.title}>Zero To Secure · Creator Pipeline</span>
@@ -818,9 +860,18 @@ function MorningBriefPage({ btc, isMobile, settings }) {
                       </>
                     ) : <FeedFallbackRow status={ztsPipeStatus} />}
                   </div>
-        </div>
-
+      );
+      return isMobile ? (
+      <div style={grid}>
+        <div style={col}>{card_bitcoin}{card_stocks}{card_watch}{card_meetings}{card_gsc}{card_shopify}{card_clarify}{card_zts}</div>
       </div>
+      ) : (
+      <div style={grid}>
+        <div style={col}>{card_bitcoin}{card_watch}{card_gsc}{card_clarify}</div>
+        <div style={col}>{card_stocks}{card_meetings}{card_shopify}{card_zts}</div>
+      </div>
+      );
+      })()}
     </div>
   );
 }
@@ -866,18 +917,59 @@ function BoardPage({ seatNotes, onEditSeat, onEnterRoom, isMobile }) {
   );
 }
 
-// ─── Page: Board Room (chat + seat roster, one page) ─────────────────────────
+// Compact single-column seat list for the desktop split view — the full
+// BoardPage (banner + 2-col grid) is built for standalone/mobile use.
+function BoardSeatsSidebar({ seatNotes, onEditSeat }) {
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 8, padding: "16px 14px", height: "100%", overflowY: "auto" }}>
+      <div style={{ fontSize: 9.5, fontWeight: 700, color: T.brass, textTransform: "uppercase", letterSpacing: "0.1em", fontFamily: syne, marginBottom: 2 }}>The Board</div>
+      {BOARD.map(b => {
+        const has = !!seatNotes[b.key];
+        return (
+          <div key={b.key} onClick={() => onEditSeat(b.key)} style={{ ...S.card, padding: "12px 13px", cursor: "pointer", display: "flex", flexDirection: "column", gap: 7 }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+              <span style={{ width: 30, height: 30, borderRadius: 9, background: b.color + "1F", display: "inline-flex", alignItems: "center", justifyContent: "center", fontSize: 14, flex: "none" }}>{b.emoji}</span>
+              <span style={{ display: "flex", flexDirection: "column", gap: 1, minWidth: 0 }}>
+                <span style={{ fontSize: 12, fontWeight: 700, fontFamily: syne, color: T.ink }}>{b.name}</span>
+                <span style={{ fontSize: 9, color: has ? T.green : T.faint }}>{has ? "✓ context loaded" : "tap to add context"}</span>
+              </span>
+            </div>
+            <div style={{ fontSize: 10, color: T.sub, lineHeight: 1.55 }}>{b.blurb}</div>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+// ─── Page: Board Room (chat + seat roster) ────────────────────────────────────
+// Desktop: split view — chat and the board are both visible, always, no
+// switching needed. Mobile: a sub-tab toggle, since there's no room for both.
 const BOARDROOM_SUBTABS = [{ key: "chat", label: "Chat" }, { key: "seats", label: "Seats" }];
 function BoardRoomPage({ messages, thinking, loadingData, input, setInput, onSend, endRef, seatNotes, onEditSeat, isMobile }) {
   const [sub, setSub] = useState("chat");
+
+  if (!isMobile) {
+    return (
+      <div style={{ flex: 1, display: "flex", minHeight: 0 }}>
+        <div style={{ flex: "1 1 auto", minWidth: 0, minHeight: 0, display: "flex", flexDirection: "column", borderRight: `1px solid ${T.line}` }}>
+          <RoomPage messages={messages} thinking={thinking} loadingData={loadingData} input={input} setInput={setInput} onSend={onSend} endRef={endRef} isMobile={false} />
+        </div>
+        <div style={{ flex: "0 0 300px", minHeight: 0 }}>
+          <BoardSeatsSidebar seatNotes={seatNotes} onEditSeat={onEditSeat} />
+        </div>
+      </div>
+    );
+  }
+
   return (
     <>
-      <div style={{ flex: "none", padding: isMobile ? "10px 14px 0" : "14px 34px 0" }}>
+      <div style={{ flex: "none", padding: "10px 14px 0" }}>
         <SubTabs options={BOARDROOM_SUBTABS} value={sub} onChange={setSub} />
       </div>
       {sub === "chat"
-        ? <RoomPage messages={messages} thinking={thinking} loadingData={loadingData} input={input} setInput={setInput} onSend={onSend} endRef={endRef} isMobile={isMobile} />
-        : <BoardPage seatNotes={seatNotes} onEditSeat={onEditSeat} onEnterRoom={() => setSub("chat")} isMobile={isMobile} />}
+        ? <RoomPage messages={messages} thinking={thinking} loadingData={loadingData} input={input} setInput={setInput} onSend={onSend} endRef={endRef} isMobile={true} />
+        : <BoardPage seatNotes={seatNotes} onEditSeat={onEditSeat} onEnterRoom={() => setSub("chat")} isMobile={true} />}
     </>
   );
 }
@@ -1599,7 +1691,6 @@ const MINI_DEFAULTS = {
   directive: "", briefingLog: [], role: "",
   reflectOn: true, loopOn: true, loopMax: "5", approvalOn: true,
 };
-const BRIEFING_STARTERS = ["Act as my outreach ghostwriter", "Focus on Clarify this month", "Prioritize ZTS content over admin work"];
 const TASK_COLORS = { delivered: T.green, review: T.brass, queued: T.faint, failed: T.red };
 const EFFORT_LEVELS = [
   { key: "quick", label: "Quick", desc: "One shot, no self-review — fastest and cheapest." },
@@ -1816,7 +1907,7 @@ Decide which of the two his message actually addresses — often just one. Outpu
               </div>
             </div>
 
-            {(mini.briefingLog || []).length > 0 ? (
+            {(mini.briefingLog || []).length > 0 && (
               <div style={{ maxHeight: 150, overflowY: "auto", display: "flex", flexDirection: "column", gap: 6, marginBottom: 8, padding: "2px 1px" }}>
                 {mini.briefingLog.map((l, i) => (
                   <div key={i} style={{ fontSize: 10.5, lineHeight: 1.5, color: l.role === "user" ? T.sub : T.brass, fontStyle: l.role === "user" ? "normal" : "italic" }}>
@@ -1824,12 +1915,6 @@ Decide which of the two his message actually addresses — often just one. Outpu
                   </div>
                 ))}
                 <div ref={directiveEndRef} />
-              </div>
-            ) : (
-              <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginBottom: 9 }}>
-                {BRIEFING_STARTERS.map((s, i) => (
-                  <button key={i} onClick={() => setDirectiveInput(s)} style={{ padding: "6px 11px", background: "rgba(34,29,20,0.035)", border: `1px solid rgba(34,29,20,0.1)`, borderRadius: 12, color: T.sub, fontSize: 10, cursor: "pointer" }}>{s}</button>
-                ))}
               </div>
             )}
             <div style={{ display: "flex", gap: 8 }}>
