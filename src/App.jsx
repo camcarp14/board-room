@@ -1375,10 +1375,15 @@ function SystemsPage({ settings, updateSetting, session, btc, isMobile }) {
 // ─── Page: Mini Me ───────────────────────────────────────────────────────────
 const MINI_DEFAULTS = {
   model: "haiku", enabled: true, night: true, budget: "$3", oversight: true,
-  reflectOn: true, loopOn: true, loopMax: "5", approvalOn: true,
+  directive: "", reflectOn: true, loopOn: true, loopMax: "5", approvalOn: true,
 };
 const TASK_COLORS = { delivered: T.green, review: T.brass, queued: T.faint, failed: T.red };
 const MINI_LEVELS = ["Rookie", "Apprentice", "Operator", "Right Hand", "Shadow Chief"];
+const EFFORT_LEVELS = [
+  { key: "quick", label: "Quick", desc: "One shot, no self-review — fastest and cheapest." },
+  { key: "careful", label: "Careful", desc: "Reviews its own draft once before delivering." },
+  { key: "thorough", label: "Thorough", desc: "Keeps refining until satisfied, up to the pass limit." },
+];
 
 // Mini Me is now real: a scheduled Netlify worker (mini-worker) runs the
 // queue through Claude nightly (or on demand), writes deliverables onto
@@ -1401,6 +1406,9 @@ function MiniMePage({ settings, updateSetting, session, onWorkerRun, isMobile })
   const [running, setRunning] = useState(false);
   const [runMsg, setRunMsg] = useState(null);
   const [openTask, setOpenTask] = useState(null);
+  const [showCompleted, setShowCompleted] = useState(false);
+  const [editingDirective, setEditingDirective] = useState(false);
+  const [directiveDraft, setDirectiveDraft] = useState("");
 
   const loadFeed = async () => {
     try {
@@ -1421,14 +1429,15 @@ function MiniMePage({ settings, updateSetting, session, onWorkerRun, isMobile })
     return () => { alive = false; };
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const delivered = tasks.filter(t => t.status === "delivered").length;
-  const xp = delivered * 40 + Math.min(memCount || 0, 600) + skills.filter(s => s.note).length * 15;
+  const delivered = tasks.filter(t => t.status === "delivered");
+  const active = tasks.filter(t => t.status !== "delivered");
+  const xp = delivered.length * 40 + Math.min(memCount || 0, 600) + skills.filter(s => s.note).length * 15;
   const levelIdx = Math.min(MINI_LEVELS.length - 1, Math.floor(xp / 250));
   const xpInLevel = xp - levelIdx * 250;
 
   const addTask = () => { const t = taskInput.trim(); if (!t) return; setTasks([{ id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`, text: t, status: "queued", queued_at: Date.now() }, ...tasks]); setTaskInput(""); };
   const addSkill = () => { const t = skillInput.trim(); if (!t) return; setSkills([{ name: t, note: "" }, ...skills]); setSkillInput(""); };
-  const removeTask = (i) => setTasks(tasks.filter((_, j) => j !== i));
+  const removeTask = (id) => setTasks(tasks.filter(t => t.id !== id));
 
   const callWorker = async (payload) => {
     try {
@@ -1475,13 +1484,46 @@ function MiniMePage({ settings, updateSetting, session, onWorkerRun, isMobile })
     : worker.state === "off" ? ["○ WORKER NOT DEPLOYED", T.red]
     : ["…", T.faint];
 
+  // Effort is a single dial derived from the underlying reflectOn/loopOn
+  // fields the worker already reads — no worker changes needed.
+  const effort = mini.reflectOn === false ? "quick" : mini.loopOn === false ? "careful" : "thorough";
+  const setEffort = (e) => {
+    if (e === "quick") setMini({ reflectOn: false, loopOn: false });
+    else if (e === "careful") setMini({ reflectOn: true, loopOn: false });
+    else setMini({ reflectOn: true, loopOn: true, loopMax: mini.loopMax || "5" });
+  };
+
+  const TaskRow = ({ t }) => {
+    const c = TASK_COLORS[t.status] || T.faint;
+    const open = openTask === t.id;
+    return (
+      <div style={{ ...S.inner, padding: "11px 13px", display: "flex", flexDirection: "column", gap: 8 }}>
+        <div onClick={() => t.output && setOpenTask(open ? null : t.id)} style={{ display: "flex", alignItems: "center", gap: 11, cursor: t.output ? "pointer" : "default" }}>
+          <span style={{ width: 7, height: 7, borderRadius: "50%", background: c, flex: "none", boxShadow: `0 0 8px ${c}80` }} />
+          <span style={{ flex: 1, fontSize: 11, color: "#3A3323", lineHeight: 1.5 }}>{t.text}</span>
+          <span style={{ fontSize: 8.5, color: c, fontFamily: mono, letterSpacing: "0.06em", flex: "none", textTransform: "uppercase" }}>{t.status}{t.output ? (open ? " ▲" : " ▼") : ""}</span>
+          <button onClick={(e) => { e.stopPropagation(); removeTask(t.id); }} title="Remove" style={{ width: 24, height: 24, background: "rgba(34,29,20,0.04)", border: `1px solid rgba(34,29,20,0.09)`, borderRadius: 7, color: T.faint, fontSize: 10, cursor: "pointer", flex: "none" }}>✕</button>
+        </div>
+        {open && t.output && (
+          <div style={{ background: "rgba(34,29,20,0.045)", border: "1px solid rgba(34,29,20,0.05)", borderRadius: 9, padding: "11px 13px", fontSize: 11, color: T.sub, lineHeight: 1.65, whiteSpace: "pre-wrap", maxHeight: 260, overflowY: "auto" }}>{t.output}</div>
+        )}
+        {t.status === "review" && (
+          <div style={{ display: "flex", gap: 8 }}>
+            <button onClick={() => approveTask(t.id)} disabled={running} style={{ ...S.brassBtn, flex: 1, padding: "8px 0", fontSize: 10.5, opacity: running ? 0.5 : 1 }}>Approve</button>
+            <button onClick={() => rejectTask(t.id)} disabled={running} style={{ flex: 1, padding: "8px 0", background: "transparent", border: `1px solid rgba(34,29,20,0.12)`, borderRadius: 10, color: T.sub, fontSize: 10.5, fontWeight: 600, cursor: running ? "default" : "pointer" }}>Reject &amp; redo</button>
+          </div>
+        )}
+      </div>
+    );
+  };
+
   return (
     <div style={{ flex: 1, overflowY: "auto", padding: isMobile ? "18px 16px 24px" : "30px 34px 40px" }}>
       <div style={{ maxWidth: 1020, margin: "0 auto", display: "grid", gridTemplateColumns: isMobile ? "1fr" : "1.3fr 1fr", gap: isMobile ? 12 : 14, alignItems: "start" }}>
 
-        {/* Hero — real numbers */}
-        <div style={{ ...card, background: "linear-gradient(135deg,rgba(143,107,30,0.10),rgba(124,58,237,0.06))", border: "1px solid rgba(143,107,30,0.22)" }}>
-          <div style={{ display: "flex", alignItems: "center", gap: 16, marginBottom: 16 }}>
+        {/* Hero — real numbers + prime directive */}
+        <div style={{ ...card, background: "linear-gradient(135deg,rgba(143,107,30,0.08),rgba(49,88,156,0.04))", border: "1px solid rgba(143,107,30,0.22)" }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 16, marginBottom: 14 }}>
             <span style={{ width: isMobile ? 48 : 56, height: isMobile ? 48 : 56, borderRadius: "50%", background: `linear-gradient(135deg, ${T.brass}, ${T.brassDeep})`, display: "inline-flex", alignItems: "center", justifyContent: "center", flex: "none", animation: "breathe 3.2s ease-in-out infinite" }}>
               <span style={{ width: 22, height: 22, borderRadius: "50%", background: T.bg, display: "inline-flex", alignItems: "center", justifyContent: "center" }}>
                 <span style={{ width: 7, height: 7, borderRadius: "50%", background: T.brass, animation: "pulse 2.4s infinite" }} />
@@ -1489,10 +1531,10 @@ function MiniMePage({ settings, updateSetting, session, onWorkerRun, isMobile })
             </span>
             <span style={{ display: "flex", flexDirection: "column", gap: 3, flex: 1 }}>
               <span style={{ display: "flex", alignItems: "baseline", gap: 10, flexWrap: "wrap" }}>
-                <span style={{ fontSize: 19, fontWeight: 800, fontFamily: syne, color: T.ink }}>Mini Me</span>
+                <span style={{ fontSize: 19, fontWeight: 700, fontFamily: syne, color: T.ink }}>Mini Me</span>
                 <span style={{ fontSize: 9, color: mini.enabled === false ? T.faint : pillColor, fontFamily: mono, letterSpacing: "0.08em" }}>{mini.enabled === false ? "○ OFF" : pillText}</span>
               </span>
-              <span style={{ fontSize: 11, color: T.sub, lineHeight: 1.5 }}>Queue work below and it runs through Claude nightly around 3 AM CT — or hit Run now. Deliverables land back on each task.</span>
+              <span style={{ fontSize: 11, color: T.sub, lineHeight: 1.5 }}>Queue work below and it runs through Claude nightly around 3 AM CT — or hit Run now.</span>
               {worker.state !== "ok" && worker.state !== "checking" && mini.enabled !== false && <span style={{ fontSize: 10, color: T.amber, lineHeight: 1.5 }}>{worker.detail}</span>}
             </span>
             <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 5, flex: "none" }}>
@@ -1501,6 +1543,30 @@ function MiniMePage({ settings, updateSetting, session, onWorkerRun, isMobile })
             </div>
           </div>
           {mini.enabled === false && <div style={{ ...S.inner, padding: "10px 13px", marginBottom: 14, fontSize: 10.5, color: T.faint, lineHeight: 1.5 }}>Mini Me is off — it won't touch your queue tonight or if you tap Run now. Flip it back on above when you want it working again.</div>}
+
+          {/* Prime directive — the one thing that shapes every task, not just the queue */}
+          <div style={{ marginBottom: 14 }}>
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 6 }}>
+              <span style={{ fontSize: 9.5, fontWeight: 700, color: T.brass, textTransform: "uppercase", letterSpacing: "0.1em", fontFamily: syne }}>Prime Directive</span>
+              {!editingDirective && <button onClick={() => { setDirectiveDraft(mini.directive || ""); setEditingDirective(true); }} style={{ ...S.ghostBtn, padding: "4px 11px", fontSize: 9, borderRadius: 7 }}>{mini.directive ? "Edit" : "Set one"}</button>}
+            </div>
+            {editingDirective ? (
+              <div style={{ display: "flex", flexDirection: "column", gap: 7 }}>
+                <textarea value={directiveDraft} onChange={e => setDirectiveDraft(e.target.value)} rows={2} autoFocus placeholder="e.g. Grow Clarify's outreach pipeline — prioritize that over admin busywork"
+                  style={{ ...S.input, padding: "10px 12px", fontSize: 12, lineHeight: 1.5, resize: "vertical", fontFamily: "inherit" }} />
+                <div style={{ display: "flex", gap: 7 }}>
+                  <button onClick={() => { setMini({ directive: directiveDraft.trim() }); setEditingDirective(false); }} style={{ ...S.brassBtn, flex: 1, padding: "8px 0", fontSize: 10.5 }}>Save</button>
+                  <button onClick={() => setEditingDirective(false)} style={{ flex: "none", padding: "8px 16px", background: "transparent", border: `1px solid rgba(34,29,20,0.12)`, borderRadius: 10, color: T.sub, fontSize: 10.5, fontWeight: 600, cursor: "pointer" }}>Cancel</button>
+                </div>
+              </div>
+            ) : mini.directive ? (
+              <div style={{ ...S.inner, padding: "11px 13px", fontSize: 12, color: T.ink, lineHeight: 1.55, fontStyle: "italic" }}>"{mini.directive}"</div>
+            ) : (
+              <div style={{ ...S.inner, padding: "11px 13px", fontSize: 10.5, color: T.faint, lineHeight: 1.5, border: `1px dashed rgba(34,29,20,0.14)`, background: "transparent" }}>No directive set — Mini Me just works through whatever you queue, task by task. Set one to give it an overall mission that shapes every task.</div>
+            )}
+            <div style={{ marginTop: 5, fontSize: 9, color: T.faint, lineHeight: 1.4 }}>Read before every task the worker runs — takes priority over individual skill notes below.</div>
+          </div>
+
           <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 6 }}>
             <span style={{ fontSize: 10, fontWeight: 700, fontFamily: syne, color: T.brass, letterSpacing: "0.08em" }}>LEVEL {levelIdx + 1} · {MINI_LEVELS[levelIdx].toUpperCase()}</span>
             <span style={{ fontSize: 9, color: T.faint, fontFamily: mono }}>{xpInLevel} / 250 XP · FROM REAL ACTIVITY</span>
@@ -1511,7 +1577,7 @@ function MiniMePage({ settings, updateSetting, session, onWorkerRun, isMobile })
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 8, marginBottom: 4 }}>
             <StatBox value={memCount === null ? "…" : memCount.toLocaleString()} label="memories (chat msgs)" />
             <StatBox value={String(skills.length)} label="skills" />
-            <StatBox value={String(delivered)} label="tasks delivered" />
+            <StatBox value={String(delivered.length)} label="tasks delivered" />
           </div>
         </div>
 
@@ -1540,62 +1606,59 @@ function MiniMePage({ settings, updateSetting, session, onWorkerRun, isMobile })
           {runMsg && <div style={{ marginTop: 8, fontSize: 10.5, color: runMsg.ok ? T.green : T.red, lineHeight: 1.5 }}>{runMsg.ok ? "✓ " : "✗ "}{runMsg.text}</div>}
         </div>
 
-        {/* Agent Looping — real: controls how the worker self-critiques each task */}
+        {/* Effort & Review — one dial instead of three separate switches */}
         <div style={card}>
-          <CardHeader title="Agent Looping" tag="RUNS INSIDE EVERY TASK" />
-          <div style={{ fontSize: 10.5, color: T.faint, lineHeight: 1.5, margin: "2px 0 12px" }}>How hard Mini Me works a single task before calling it done. More loops means better drafts and more tokens spent.</div>
-          <div style={{ display: "flex", flexDirection: "column", gap: 8, marginBottom: 13 }}>
-            <ToggleRow title="Self-critique" sub="review its own draft and revise if it finds gaps" on={mini.reflectOn} onToggle={() => setMini({ reflectOn: !mini.reflectOn })} size={toggleSize} />
-            <ToggleRow title="Loop until done" sub="allow multiple critique/revise passes, not just one" on={mini.loopOn} onToggle={() => setMini({ loopOn: !mini.loopOn })} size={toggleSize} />
-            <ToggleRow title="Approval gate" sub="finished drafts wait for your tap before counting as delivered" on={mini.approvalOn} onToggle={() => setMini({ approvalOn: !mini.approvalOn })} size={toggleSize} />
+          <CardHeader title="Effort & Review" tag="RUNS INSIDE EVERY TASK" />
+          <div style={{ fontSize: 10.5, color: T.faint, lineHeight: 1.5, margin: "2px 0 12px" }}>How hard it works a single task, and whether you see the draft before it counts as done.</div>
+          <div style={{ display: "flex", gap: 6, marginBottom: 8 }}>
+            {EFFORT_LEVELS.map(e => (
+              <button key={e.key} onClick={() => setEffort(e.key)} style={{ flex: 1, padding: "9px 4px", background: effort === e.key ? `linear-gradient(135deg, ${T.brass}, ${T.brassDeep})` : "rgba(34,29,20,0.04)", border: effort === e.key ? "none" : "1px solid rgba(34,29,20,0.08)", borderRadius: 9, color: effort === e.key ? "#FCFBF9" : T.sub, fontSize: 10.5, fontWeight: 700, fontFamily: syne, cursor: "pointer" }}>{e.label}</button>
+            ))}
           </div>
-          <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", marginBottom: 7 }}>
-            <span style={{ fontSize: 11, fontWeight: 700, fontFamily: syne, color: T.ink }}>Max critique passes</span>
-            <span style={{ fontSize: 9, color: T.faint }}>only applies if Loop until done is on</span>
-          </div>
-          <Chips options={["5", "15", "50"]} value={mini.loopMax} onChange={n => setMini({ loopMax: n })} fmt={v => v + "×"} />
-          <div style={{ marginTop: 11, ...S.microLabel, letterSpacing: "0.04em", lineHeight: 1.6 }}>AUTO-STOPS EARLY IF THE CRITIQUE SAYS "DONE" OR TWO PASSES IN A ROW CHANGE NOTHING</div>
+          <div style={{ fontSize: 10, color: T.faint, lineHeight: 1.5, marginBottom: 14 }}>{EFFORT_LEVELS.find(e => e.key === effort)?.desc}</div>
+          {effort === "thorough" && (
+            <div style={{ marginBottom: 14 }}>
+              <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", marginBottom: 7 }}>
+                <span style={{ fontSize: 11, fontWeight: 700, fontFamily: syne, color: T.ink }}>Max passes</span>
+                <span style={{ fontSize: 9, color: T.faint }}>auto-stops early if nothing's changing</span>
+              </div>
+              <Chips options={["5", "15", "50"]} value={mini.loopMax} onChange={n => setMini({ loopMax: n })} fmt={v => v + "×"} />
+            </div>
+          )}
+          <ToggleRow title="Approval gate" sub="finished drafts wait for your tap before counting as delivered" on={mini.approvalOn} onToggle={() => setMini({ approvalOn: !mini.approvalOn })} size={toggleSize} />
         </div>
 
         {/* Queue */}
         <div style={card}>
-          <CardHeader title="Task Queue" tag={`NIGHTLY ~3AM CT · OR RUN NOW`} />
-          <div style={{ fontSize: 10.5, color: T.faint, lineHeight: 1.5, margin: "2px 0 12px" }}>Hand it work. Tap a delivered task to read the output.</div>
+          <CardHeader title="Task Queue" tag="NIGHTLY ~3AM CT · OR RUN NOW" />
+          <div style={{ fontSize: 10.5, color: T.faint, lineHeight: 1.5, margin: "2px 0 12px" }}>Hand it work. Tap a task with output to read it.</div>
           <div style={{ display: "flex", gap: 8, marginBottom: 12 }}>
             <input value={taskInput} onChange={e => setTaskInput(e.target.value)} onKeyDown={e => { if (e.key === "Enter") { e.preventDefault(); addTask(); } }} placeholder="e.g. Draft 5 outreach angles for the med-spa vertical"
               style={{ ...S.input, flex: 1, padding: "11px 13px", fontSize: 11.5 }} />
             <button onClick={addTask} style={{ ...S.brassBtn, padding: "0 18px", minHeight: 44, fontSize: 11 }}>Queue</button>
           </div>
           <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-            {tasks.length === 0 && <div style={{ fontSize: 10.5, color: T.faint, textAlign: "center", padding: "10px 0" }}>Nothing queued yet — give it something to work on.</div>}
-            {tasks.map((t, i) => {
-              const c = TASK_COLORS[t.status] || T.faint;
-              const rowKey = t.id || i;
-              const open = openTask === rowKey;
-              return (
-                <div key={rowKey} style={{ ...S.inner, padding: "11px 13px", display: "flex", flexDirection: "column", gap: 8 }}>
-                  <div onClick={() => t.output && setOpenTask(open ? null : rowKey)} style={{ display: "flex", alignItems: "center", gap: 11, cursor: t.output ? "pointer" : "default" }}>
-                    <span style={{ width: 7, height: 7, borderRadius: "50%", background: c, flex: "none", boxShadow: `0 0 8px ${c}80` }} />
-                    <span style={{ flex: 1, fontSize: 11, color: "#3A3323", lineHeight: 1.5 }}>{t.text}</span>
-                    <span style={{ fontSize: 8.5, color: c, fontFamily: mono, letterSpacing: "0.06em", flex: "none", textTransform: "uppercase" }}>{t.status}{t.output ? (open ? " ▲" : " ▼") : ""}</span>
-                    <button onClick={(e) => { e.stopPropagation(); removeTask(i); }} title="Remove" style={{ width: 24, height: 24, background: "rgba(34,29,20,0.04)", border: `1px solid rgba(34,29,20,0.09)`, borderRadius: 7, color: T.faint, fontSize: 10, cursor: "pointer", flex: "none" }}>✕</button>
-                  </div>
-                  {open && t.output && (
-                    <div style={{ background: "rgba(34,29,20,0.045)", border: "1px solid rgba(34,29,20,0.05)", borderRadius: 9, padding: "11px 13px", fontSize: 11, color: T.sub, lineHeight: 1.65, whiteSpace: "pre-wrap", maxHeight: 260, overflowY: "auto" }}>{t.output}</div>
-                  )}
-                  {t.status === "review" && (
-                    <div style={{ display: "flex", gap: 8 }}>
-                      <button onClick={() => approveTask(t.id)} disabled={running} style={{ ...S.brassBtn, flex: 1, padding: "8px 0", fontSize: 10.5, opacity: running ? 0.5 : 1 }}>Approve</button>
-                      <button onClick={() => rejectTask(t.id)} disabled={running} style={{ flex: 1, padding: "8px 0", background: "transparent", border: `1px solid rgba(34,29,20,0.12)`, borderRadius: 10, color: T.sub, fontSize: 10.5, fontWeight: 600, cursor: running ? "default" : "pointer" }}>Reject &amp; redo</button>
-                    </div>
-                  )}
-                </div>
-              );
-            })}
+            {active.length === 0 && delivered.length === 0 && <div style={{ fontSize: 10.5, color: T.faint, textAlign: "center", padding: "10px 0" }}>Nothing queued yet — give it something to work on.</div>}
+            {active.length === 0 && delivered.length > 0 && <div style={{ fontSize: 10.5, color: T.faint, textAlign: "center", padding: "10px 0" }}>Queue's clear — everything's been delivered. See Completed below.</div>}
+            {active.map(t => <TaskRow key={t.id} t={t} />)}
           </div>
+
+          {delivered.length > 0 && (
+            <div style={{ marginTop: 14, paddingTop: 12, borderTop: `1px solid ${T.line}` }}>
+              <button onClick={() => setShowCompleted(!showCompleted)} style={{ width: "100%", display: "flex", alignItems: "center", justifyContent: "space-between", background: "none", border: "none", cursor: "pointer", padding: "2px 0" }}>
+                <span style={{ fontSize: 10.5, fontWeight: 700, fontFamily: syne, color: T.sub }}>Completed ({delivered.length})</span>
+                <span style={{ fontSize: 10, color: T.faint }}>{showCompleted ? "hide ▲" : "show ▼"}</span>
+              </button>
+              {showCompleted && (
+                <div style={{ display: "flex", flexDirection: "column", gap: 6, marginTop: 10 }}>
+                  {delivered.map(t => <TaskRow key={t.id} t={t} />)}
+                </div>
+              )}
+            </div>
+          )}
         </div>
 
-        {/* Skills / standing guidance */}
+        {/* Skills / standing guidance */}        {/* Skills / standing guidance */}
         <div style={card}>
           <CardHeader title="Standing Guidance" tag="FED TO EVERY RUN" />
           <div style={{ fontSize: 10.5, color: T.faint, lineHeight: 1.5, margin: "2px 0 12px" }}>Skills with guidance notes are injected into the worker's system prompt on every task.</div>
@@ -2028,14 +2091,14 @@ export default function App() {
         {renderPage(page)}
 
         {/* Bottom nav — icon-only, same 6 destinations as the desktop rail */}
-        <div style={{ flex: "none", display: "flex", borderTop: `1px solid ${T.line}`, background: "rgba(243,241,236,0.94)", backdropFilter: "blur(12px)", paddingBottom: "env(safe-area-inset-bottom)" }}>
+        <div style={{ flex: "none", display: "flex", borderTop: `1px solid ${T.line}`, background: "rgba(243,241,236,0.94)", backdropFilter: "blur(12px)" }}>
           {NAV.map(n => {
             const active = page === n.key;
             const Icon = NAV_ICONS[n.key];
             return (
               <button key={n.key} onClick={() => setPage(n.key)} title={n.label} aria-label={n.label} aria-current={active ? "page" : undefined}
-                style={{ flex: 1, minHeight: 64, background: active ? "linear-gradient(180deg, rgba(143,107,30,0.10), transparent)" : "none", border: "none", cursor: "pointer", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 7, padding: "10px 0" }}>
-                <span style={{ width: 6, height: 6, borderRadius: "50%", background: T.brass, opacity: active ? 1 : 0, transition: "opacity 0.15s", boxShadow: "0 0 8px rgba(143,107,30,0.85)" }} />
+                style={{ flex: 1, minHeight: 56, position: "relative", background: active ? "linear-gradient(180deg, rgba(143,107,30,0.10), transparent)" : "none", border: "none", cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", padding: "6px 0 calc(6px + env(safe-area-inset-bottom))" }}>
+                <span style={{ position: "absolute", top: 7, left: "50%", transform: "translateX(-50%)", width: 6, height: 6, borderRadius: "50%", background: T.brass, opacity: active ? 1 : 0, transition: "opacity 0.15s", boxShadow: "0 0 8px rgba(143,107,30,0.85)" }} />
                 <Icon width={23} height={23} color={active ? T.ink : T.faint} style={{ transition: "color 0.15s" }} />
               </button>
             );

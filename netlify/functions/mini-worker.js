@@ -119,7 +119,8 @@ async function processUser(cfg, userId, { manual = false } = {}) {
   const limit = BUDGET_TASK_LIMIT[mini.budget] || 3;
   const toRun = queuedIdx.slice(0, limit);
   const skillNotes = (Array.isArray(bundle.mini_skills) ? bundle.mini_skills : []).filter(s => s.note).map(s => `- ${s.name}: ${s.note}`).join("\n");
-  const system = `You are "Mini Me", the user's autonomous assistant inside their Board Room app. Produce the requested deliverable directly and completely — concrete and usable, no preamble, no clarifying questions (make reasonable assumptions and state them briefly at the end if needed).${skillNotes ? `\n\nStanding guidance from the user:\n${skillNotes}` : ""}`;
+  const directive = (mini.directive || "").trim();
+  const system = `You are "Mini Me", the user's autonomous assistant inside their Board Room app. Produce the requested deliverable directly and completely — concrete and usable, no preamble, no clarifying questions (make reasonable assumptions and state them briefly at the end if needed).${directive ? `\n\nYour prime directive — this is the overall mission, weigh every task against it: ${directive}` : ""}${skillNotes ? `\n\nStanding guidance from the user:\n${skillNotes}` : ""}`;
 
   const feedRows = [];
   let processed = 0;
