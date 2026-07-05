@@ -497,6 +497,27 @@ function Composer({ input, setInput, onSend, thinking, compact }) {
   );
 }
 
+// ─── Page: The Room ─────────────────────────────────────────────────────────
+// A real page now, same on both platforms — replaces the old mobile-only
+// floating-pill-that-expands-to-a-sheet mechanic. One layout to learn.
+function RoomPage({ messages, thinking, loadingData, input, setInput, onSend, endRef, isMobile }) {
+  return (
+    <>
+      <div style={{ flex: 1, overflowY: "auto", padding: isMobile ? "16px 14px 8px" : "32px 34px 10px", display: "flex", flexDirection: "column", alignItems: "center" }}>
+        <div style={{ width: "100%", maxWidth: 780, display: "flex", flexDirection: "column", gap: 18, flex: 1 }}>
+          <ChatThread messages={messages} thinking={thinking} loadingData={loadingData} setInput={setInput} endRef={endRef} compact={isMobile} />
+        </div>
+      </div>
+      <div style={{ flex: "none", padding: isMobile ? "10px 12px calc(12px + env(safe-area-inset-bottom))" : "14px 34px 24px", display: "flex", flexDirection: "column", alignItems: "center", gap: 9 }}>
+        <div style={{ width: "100%", maxWidth: 780 }}>
+          <Composer input={input} setInput={setInput} onSend={onSend} thinking={thinking} compact={isMobile} />
+        </div>
+        {!isMobile && <div style={{ fontSize: 10, color: T.faint }}>Quick questions stay Chief-only · cross-cutting ones convene seats in parallel</div>}
+      </div>
+    </>
+  );
+}
+
 // ─── Page: Morning Brief ──────────────────────────────────────────────────────
 // Static analysis below is placeholder copy; wire /.netlify/functions/brief to
 // have the Chief regenerate it at 6:00 AM (markets APIs + X-list summarizer).
@@ -822,7 +843,7 @@ function PropertiesPage({ isMobile, btc }) {
   );
 }
 
-// ─── Page: IT Department ─────────────────────────────────────────────────────
+// ─── Page: Systems (deploy, database, status, auditor, usage) ────────────────
 async function auditProperty(p, token) {
   const data = await callFn("audit", { name: p.name, url: p.url || p.appUrl, repo: p.repo }, token ? { Authorization: `Bearer ${token}` } : undefined);
   return data?.success ? data.findings : [];
@@ -1001,18 +1022,181 @@ function UsageCard({ isMobile }) {
   );
 }
 
-function ITPage({ settings, updateSetting, session, isMobile }) {
-  const models = { ...DEFAULT_MODELS, ...(settings?.models || {}) };
-  const setModel = (layer, key) => updateSetting("models", { ...models, [layer]: key });
-  const mult = k => (MODEL_META.find(m => m.key === k) || {}).mult || 1;
-  const est = 0.006 * mult(models.router) + 0.018 * mult(models.seats) + 0.012 * mult(models.chief);
-  const spendToday = obs.all().filter(l => new Date(l.ts).toDateString() === new Date().toDateString());
-  const inTok = spendToday.reduce((s, l) => s + (l.inTok || 0), 0), outTok = spendToday.reduce((s, l) => s + (l.outTok || 0), 0);
-  const cost = spendToday.reduce((s, l) => s + (l.cost || 0), 0);
-  const fmtK = n => n > 999 ? Math.round(n / 1000) + "K" : String(n);
+const IS_DEPLOYED = typeof window !== "undefined" && window.location.hostname !== "localhost";
 
-  // Deployments — wire /.netlify/functions/deploy to the Netlify API
-  // (POST /sites/{site}/builds to trigger, or /deploys with a zip payload).
+const CONN_GROUPS = [
+  { title: "Core", keys: ["supabase_env", "supabase_auth", "supabase_db"] },
+  { title: "AI", keys: ["anthropic"] },
+  { title: "Market Data", keys: ["coingecko"] },
+  { title: "Netlify Functions", keys: ["fn_health", "fn_mini", "fn_btc", "fn_markets", "fn_calendar", "fn_wire", "fn_site_status", "fn_gsc", "fn_shopify", "fn_deploy", "fn_dbadmin", "fn_audit"] },
+];
+const CONN_META = {
+  supabase_env: { name: "Supabase · config", desc: "VITE_SUPABASE_URL + anon key present at build time" },
+  supabase_auth: { name: "Supabase · auth", desc: "active session for this device" },
+  supabase_db: { name: "Supabase · database", desc: "read against chat_messages (tables + RLS)" },
+  anthropic: { name: "Anthropic API", desc: IS_DEPLOYED ? "via /.netlify/functions/claude proxy" : "direct from localhost with VITE_ANTHROPIC_API_KEY" },
+  coingecko: { name: "CoinGecko", desc: "upstream BTC source — reached via the btc proxy, not directly from the browser" },
+  fn_health: { name: "health", desc: "reports which server-side keys are configured" },
+  fn_mini: { name: "mini-worker", desc: "Mini Me engine — nightly at ~3 AM CT + on-demand runs" },
+  fn_btc: { name: "btc", desc: "proxies BTC price + sparkline — avoids mobile-carrier IP rate limiting" },
+  fn_markets: { name: "markets", desc: "S&P/Nasdaq futures, 10Y yield, DXY via Yahoo's public endpoint (unofficial)" },
+  fn_calendar: { name: "calendar", desc: "today's US econ calendar (unofficial free feed)" },
+  fn_wire: { name: "wire", desc: "live crypto/macro headlines from CoinDesk + Cointelegraph RSS" },
+  fn_site_status: { name: "site-status", desc: "uptime check behind the Properties page's live/down pill" },
+  fn_gsc: { name: "gsc", desc: "Search Console · zerotosecure.com last 14d" },
+  fn_shopify: { name: "shopify", desc: "Shopify Admin API · orders last 14d" },
+  fn_deploy: { name: "deploy", desc: "Netlify API · trigger builds per property" },
+  fn_dbadmin: { name: "db-admin", desc: "service-role maintenance, allowlisted commands" },
+  fn_audit: { name: "audit", desc: "AI site auditor across all five properties" },
+};
+const CONN_STATUS = {
+  ok: { label: "LIVE", color: T.green },
+  warn: { label: "PARTIAL", color: T.amber },
+  down: { label: "DOWN", color: T.red },
+  off: { label: "NOT CONFIGURED", color: T.faint },
+  local: { label: "DEPLOY TO TEST", color: T.blue },
+  checking: { label: "CHECKING", color: T.sub },
+};
+
+async function pingFn(name) {
+  const t0 = Date.now();
+  try {
+    const res = await fetch(`/.netlify/functions/${name}`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ ping: true }) });
+    const ms = Date.now() - t0;
+    if (res.status === 404) return { status: "off", detail: "function not deployed", ms };
+    const data = await res.json().catch(() => null);
+    if (!res.ok) return { status: "down", detail: data?.error || `HTTP ${res.status}`, ms };
+    if (data?.configured === false) return { status: "warn", detail: data?.missing ? `deployed — missing ${data.missing}` : "deployed — keys not set", ms };
+    return { status: "ok", detail: "responding", ms };
+  } catch { return { status: "down", detail: "unreachable", ms: Date.now() - t0 }; }
+}
+
+function useConnections({ session, btc }) {
+  const [checks, setChecks] = useState({});
+  const [lastRun, setLastRun] = useState(null);
+  const [running, setRunning] = useState(false);
+
+  const set = (key, val) => setChecks(prev => ({ ...prev, [key]: val }));
+
+  const runAll = async () => {
+    if (running) return;
+    setRunning(true);
+    const all = Object.keys(CONN_META);
+    setChecks(Object.fromEntries(all.map(k => [k, { status: "checking" }])));
+
+    // Supabase — config
+    set("supabase_env", supabase ? { status: "ok", detail: "url + anon key baked into build" } : { status: "off", detail: "env vars missing — see setup notice" });
+    // Supabase — auth
+    set("supabase_auth", session?.user ? { status: "ok", detail: session.user.email } : { status: "down", detail: "no session" });
+    // Supabase — db round trip
+    if (supabase) {
+      const t0 = Date.now();
+      try {
+        const { error, count } = await supabase.from("chat_messages").select("*", { count: "exact", head: true });
+        set("supabase_db", error
+          ? { status: "down", detail: error.message, ms: Date.now() - t0 }
+          : { status: "ok", detail: `${count ?? 0} messages readable`, ms: Date.now() - t0 });
+      } catch { set("supabase_db", { status: "down", detail: "query failed", ms: Date.now() - t0 }); }
+    } else set("supabase_db", { status: "off", detail: "supabase not configured" });
+
+    // Anthropic — tiny live call through whichever path this build uses
+    {
+      const t0 = Date.now();
+      if (!IS_DEPLOYED && !ANTHROPIC_API_KEY) {
+        set("anthropic", { status: "off", detail: "VITE_ANTHROPIC_API_KEY not set for local dev" });
+      } else {
+        const text = await callClaude({ messages: [{ role: "user", content: "ping" }], modelKey: "haiku", maxTokens: 1, fn: "conn_check" });
+        set("anthropic", text !== null
+          ? { status: "ok", detail: IS_DEPLOYED ? "proxy → Claude responding" : "direct → Claude responding", ms: Date.now() - t0 }
+          : { status: "down", detail: IS_DEPLOYED ? "proxy failed — check claude function + ANTHROPIC_API_KEY" : "call failed — check key", ms: Date.now() - t0 });
+      }
+    }
+
+    // CoinGecko — reuse the hook's state, verify with a light ping
+    if (btc?.error) set("coingecko", { status: "down", detail: btc.error });
+    else if (btc?.price) set("coingecko", { status: "ok", detail: `BTC $${btc.price.toLocaleString(undefined, { maximumFractionDigits: 0 })} · ${btc.points?.length || 0} chart points` });
+    else {
+      const t0 = Date.now();
+      try {
+        const r = await fetch("https://api.coingecko.com/api/v3/ping");
+        set("coingecko", r.ok ? { status: "ok", detail: "API reachable", ms: Date.now() - t0 } : { status: "down", detail: `HTTP ${r.status}`, ms: Date.now() - t0 });
+      } catch { set("coingecko", { status: "down", detail: "unreachable", ms: Date.now() - t0 }); }
+    }
+
+    // Netlify functions
+    const fns = [["fn_health", "health"], ["fn_mini", "mini-worker"], ["fn_btc", "btc"], ["fn_markets", "markets"], ["fn_calendar", "calendar"], ["fn_wire", "wire"], ["fn_site_status", "site-status"], ["fn_gsc", "gsc"], ["fn_shopify", "shopify"], ["fn_deploy", "deploy"], ["fn_dbadmin", "db-admin"], ["fn_audit", "audit"]];
+    if (!IS_DEPLOYED) {
+      // netlify dev serves functions locally; try health first to decide
+      const probe = await pingFn("health");
+      if (probe.status === "down" || probe.status === "off") {
+        fns.forEach(([k]) => set(k, { status: "local", detail: "run `netlify dev` or deploy to test functions" }));
+      } else {
+        await Promise.all(fns.map(async ([k, n]) => set(k, await pingFn(n))));
+      }
+    } else {
+      await Promise.all(fns.map(async ([k, n]) => set(k, await pingFn(n))));
+    }
+
+    setLastRun(Date.now());
+    setRunning(false);
+  };
+
+  return { checks, lastRun, running, runAll };
+}
+
+function ConnRow({ meta, check }) {
+  const st = CONN_STATUS[check?.status || "checking"];
+  return (
+    <div style={{ ...S.inner, display: "flex", alignItems: "center", gap: 12, padding: "12px 14px" }}>
+      <span style={{ width: 8, height: 8, borderRadius: "50%", background: st.color, flex: "none", boxShadow: `0 0 9px ${st.color}80`, animation: check?.status === "checking" ? "pulse 1.2s infinite" : "none" }} />
+      <span style={{ display: "flex", flexDirection: "column", gap: 2, flex: 1, minWidth: 0 }}>
+        <span style={{ fontSize: 11.5, fontWeight: 700, fontFamily: syne, color: T.ink }}>{meta.name}</span>
+        <span style={{ fontSize: 9.5, color: T.faint, lineHeight: 1.45 }}>{check?.detail || meta.desc}</span>
+      </span>
+      {typeof check?.ms === "number" && <span style={{ fontSize: 9, color: T.faint, fontFamily: mono, flex: "none" }}>{check.ms}ms</span>}
+      <span style={{ fontSize: 8, fontWeight: 700, color: st.color, background: st.color + "1A", border: `1px solid ${st.color}40`, padding: "4px 9px", borderRadius: 11, fontFamily: mono, letterSpacing: "0.08em", flex: "none" }}>{st.label}</span>
+    </div>
+  );
+}
+
+function SubTabs({ options, value, onChange }) {
+  return (
+    <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+      {options.map(o => (
+        <button key={o.key} onClick={() => onChange(o.key)} style={{ padding: "7px 13px", background: value === o.key ? "linear-gradient(135deg, rgba(200,160,74,0.22), rgba(200,160,74,0.1))" : "rgba(255,255,255,0.03)", border: `1px solid ${value === o.key ? "rgba(200,160,74,0.4)" : "rgba(255,255,255,0.09)"}`, borderRadius: 10, color: value === o.key ? T.brass : T.sub, fontSize: 11, fontWeight: 700, fontFamily: syne, cursor: "pointer" }}>{o.label}</button>
+      ))}
+    </div>
+  );
+}
+
+const SYSTEMS_SUBTABS = [
+  { key: "status", label: "Status" },
+  { key: "deploy", label: "Deploy" },
+  { key: "database", label: "Database" },
+  { key: "auditor", label: "Auditor" },
+  { key: "usage", label: "Usage" },
+];
+
+// Systems — everything technical in one place, behind sub-tabs so mobile
+// isn't a wall of unrelated cards: live status of every data pipe, deploy
+// triggers, the Supabase console, the site auditor, and spend/usage.
+function SystemsPage({ settings, updateSetting, session, btc, isMobile }) {
+  const [sub, setSub] = useState("status");
+  const card = isMobile ? S.cardM : S.card;
+
+  // ── Status (formerly the standalone Connections page) ──
+  const { checks, lastRun, running, runAll } = useConnections({ session, btc });
+  useEffect(() => { runAll(); }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  const vals = Object.values(checks);
+  const counts = {
+    ok: vals.filter(c => c?.status === "ok").length,
+    warn: vals.filter(c => c?.status === "warn").length,
+    down: vals.filter(c => c?.status === "down").length,
+    off: vals.filter(c => c?.status === "off" || c?.status === "local").length,
+  };
+  const ago = (ts) => { if (!ts) return "—"; const s = Math.floor((Date.now() - ts) / 1000); return s < 60 ? `${s}S AGO` : `${Math.floor(s / 60)}M AGO`; };
+
+  // ── Deploy ──
   const [deploys, setDeploys] = useState({});
   const [uploadFile, setUploadFile] = useState(null);
   const [uploadTarget, setUploadTarget] = useState(PROPERTIES[0].name);
@@ -1036,9 +1220,7 @@ function ITPage({ settings, updateSetting, session, isMobile }) {
     }, 2200);
   };
 
-  // Supabase console — wire /.netlify/functions/db-admin: it should hold the
-  // service-role key server-side, allowlist statements, and ask twice on
-  // destructive ops. NEVER put the service key in this file.
+  // ── Database ──
   const [sqlInput, setSqlInput] = useState("");
   const [sqlBusy, setSqlBusy] = useState(false);
   const [sqlLog, setSqlLog] = useState([{ kind: "ok", text: "✓ connected — guardrails on" }]);
@@ -1052,7 +1234,15 @@ function ITPage({ settings, updateSetting, session, isMobile }) {
     setSqlBusy(false);
   };
 
-  const card = isMobile ? S.cardM : S.card;
+  // ── Usage / Models ──
+  const models = { ...DEFAULT_MODELS, ...(settings?.models || {}) };
+  const setModel = (layer, key) => updateSetting("models", { ...models, [layer]: key });
+  const mult = k => (MODEL_META.find(m => m.key === k) || {}).mult || 1;
+  const est = 0.006 * mult(models.router) + 0.018 * mult(models.seats) + 0.012 * mult(models.chief);
+  const spendToday = obs.all().filter(l => new Date(l.ts).toDateString() === new Date().toDateString());
+  const inTok = spendToday.reduce((s, l) => s + (l.inTok || 0), 0), outTok = spendToday.reduce((s, l) => s + (l.outTok || 0), 0);
+  const cost = spendToday.reduce((s, l) => s + (l.cost || 0), 0);
+  const fmtK = n => n > 999 ? Math.round(n / 1000) + "K" : String(n);
   const layers = [
     { key: "router", name: "Router", desc: "picks which seats to wake" },
     { key: "seats", name: "Board Seats", desc: "the five specialist takes" },
@@ -1061,112 +1251,120 @@ function ITPage({ settings, updateSetting, session, isMobile }) {
 
   return (
     <div style={{ flex: 1, overflowY: "auto", padding: isMobile ? "18px 16px 24px" : "30px 34px 40px" }}>
-      <div style={{ maxWidth: 1020, margin: "0 auto", display: "grid", gridTemplateColumns: isMobile ? "1fr" : "1.15fr 1fr", gap: isMobile ? 12 : 14, alignItems: "start" }}>
+      <div style={{ maxWidth: 1020, margin: "0 auto", display: "flex", flexDirection: "column", gap: isMobile ? 12 : 14 }}>
+        <SubTabs options={SYSTEMS_SUBTABS} value={sub} onChange={setSub} />
 
-        {/* Model control (first on mobile) */}
-        {isMobile && (
-          <div style={card}>
-            <CardHeader title="Model Control" tag="TOKENS" />
-            <div style={{ fontSize: 10.5, color: T.faint, lineHeight: 1.5, margin: "2px 0 14px" }}>Start cheap. Escalate a layer only when the answers need it.</div>
-            <div style={{ display: "flex", flexDirection: "column", gap: 13 }}>
-              {layers.map(r => (
-                <div key={r.key} style={{ display: "flex", flexDirection: "column", gap: 7 }}>
-                  <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between" }}>
-                    <span style={{ fontSize: 11, fontWeight: 700, fontFamily: syne, color: T.ink }}>{r.name}</span>
-                    <span style={{ fontSize: 9, color: T.faint }}>{r.desc}</span>
-                  </div>
-                  <Segmented value={models[r.key]} onChange={k => setModel(r.key, k)} />
-                </div>
-              ))}
-            </div>
-            <div style={{ ...S.inner, marginTop: 14, padding: "11px 13px", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-              <span style={{ fontSize: 9.5, color: T.sub }}>Est. per convened question</span>
-              <span style={{ fontSize: 12, fontWeight: 700, color: T.brass, fontFamily: mono }}>${est.toFixed(3)}</span>
-            </div>
-          </div>
-        )}
-
-        {/* Deployments */}
-        <div style={card}>
-          <CardHeader title="Deployments" tag="NETLIFY" />
-          <div style={{ fontSize: 10.5, color: T.faint, lineHeight: 1.5, margin: "2px 0 13px" }}>Push a fresh build or redeploy any property without leaving the room.</div>
-          <label style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 6, padding: 18, background: "rgba(255,255,255,0.02)", border: "1px dashed rgba(200,160,74,0.35)", borderRadius: 12, cursor: "pointer", marginBottom: 8 }}>
-            <input type="file" accept=".zip" onChange={e => setUploadFile(e.target.files?.[0] || null)} style={{ display: "none" }} />
-            <span style={{ fontSize: 11.5, fontWeight: 700, color: T.brass, fontFamily: syne }}>{uploadFile ? "✓ " + uploadFile.name : "Drop a build .zip — or click to browse"}</span>
-            <span style={{ fontSize: 9.5, color: T.faint }}>{uploadFile ? "ready to deploy · pick a target below" : "uploads straight to Netlify, atomic swap on success"}</span>
-          </label>
-          {uploadFile && (
-            <div style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: 8 }}>
-              <select value={uploadTarget} onChange={e => setUploadTarget(e.target.value)} style={{ flex: 1, padding: "10px 11px", background: "#141C2E", border: `1px solid rgba(255,255,255,0.1)`, borderRadius: 9, color: T.ink, fontSize: 11 }}>
-                {PROPERTIES.map(p => <option key={p.name}>{p.name}</option>)}
-              </select>
-              <button onClick={deployUpload} disabled={uploadBusy} style={{ ...S.brassBtn, padding: "10px 18px", fontSize: 11, opacity: uploadBusy ? 0.5 : 1 }}>{uploadBusy ? "Deploying…" : "Deploy"}</button>
-            </div>
-          )}
-          <div style={{ display: "flex", flexDirection: "column", gap: 6, marginTop: 6 }}>
-            {PROPERTIES.map(p => {
-              const d = deploys[p.name] || {};
-              return (
-                <div key={p.name} style={{ ...S.inner, display: "flex", alignItems: "center", gap: 11, padding: "11px 13px" }}>
-                  <span style={{ width: 7, height: 7, borderRadius: "50%", background: d.busy ? T.amber : T.green, flex: "none", boxShadow: `0 0 8px ${d.busy ? "rgba(245,158,11,0.5)" : "rgba(52,211,153,0.5)"}` }} />
-                  <span style={{ display: "flex", flexDirection: "column", gap: 1, minWidth: 0, flex: 1 }}>
-                    <span style={{ fontSize: 11.5, fontWeight: 600, color: "#C6CFDE", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{p.name}</span>
-                    <span style={{ fontSize: 9, color: d.busy ? T.amber : T.faint, fontFamily: mono, letterSpacing: "0.04em" }}>{d.busy ? "BUILDING…" : `LIVE${d.when ? " · DEPLOYED " + d.when : ""}`}</span>
+        {sub === "status" && (
+          <>
+            <div style={{ ...card, display: "flex", alignItems: "center", gap: isMobile ? 12 : 18, flexWrap: "wrap" }}>
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(4, auto)", gap: isMobile ? 10 : 16, flex: 1 }}>
+                {[["LIVE", counts.ok, T.green], ["PARTIAL", counts.warn, T.amber], ["DOWN", counts.down, T.red], ["NOT SET", counts.off, T.faint]].map(([l, v, c]) => (
+                  <span key={l} style={{ display: "flex", flexDirection: "column", gap: 3 }}>
+                    <span style={{ fontSize: 18, fontWeight: 700, fontFamily: mono, color: c }}>{v}</span>
+                    <span style={{ ...S.microLabel }}>{l}</span>
                   </span>
-                  <button onClick={() => redeploy(p)} style={{ ...S.ghostBtn, padding: "7px 13px", fontSize: 9.5, flex: "none" }}>{d.busy ? "Deploying…" : "Redeploy"}</button>
+                ))}
+              </div>
+              <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 7 }}>
+                <button onClick={runAll} disabled={running} style={{ ...S.brassBtn, padding: "10px 20px", fontSize: 11, opacity: running ? 0.55 : 1 }}>{running ? "Checking…" : "Run checks"}</button>
+                <span style={S.microLabel}>LAST CHECK {ago(lastRun)}</span>
+              </div>
+            </div>
+            {CONN_GROUPS.map(g => (
+              <div key={g.title} style={card}>
+                <div style={{ ...S.title, marginBottom: 11 }}>{g.title}</div>
+                <div style={{ display: "flex", flexDirection: "column", gap: 7 }}>
+                  {g.keys.map(k => <ConnRow key={k} meta={CONN_META[k]} check={checks[k]} />)}
                 </div>
-              );
-            })}
-          </div>
-        </div>
+              </div>
+            ))}
+          </>
+        )}
 
-        {/* Model control (desktop position) */}
-        {!isMobile && (
+        {sub === "deploy" && (
           <div style={card}>
-            <CardHeader title="Model Control" tag="TOKENS" />
-            <div style={{ fontSize: 10.5, color: T.faint, lineHeight: 1.5, margin: "2px 0 14px" }}>Start cheap. Escalate a layer only when the answers need it.</div>
-            <div style={{ display: "flex", flexDirection: "column", gap: 13 }}>
-              {layers.map(r => (
-                <div key={r.key} style={{ display: "flex", flexDirection: "column", gap: 7 }}>
-                  <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between" }}>
-                    <span style={{ fontSize: 11, fontWeight: 700, fontFamily: syne, color: T.ink }}>{r.name}</span>
-                    <span style={{ fontSize: 9, color: T.faint }}>{r.desc}</span>
+            <CardHeader title="Deployments" tag="NETLIFY" />
+            <div style={{ fontSize: 10.5, color: T.faint, lineHeight: 1.5, margin: "2px 0 13px" }}>Push a fresh build or redeploy any property without leaving the room.</div>
+            <label style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 6, padding: 18, background: "rgba(255,255,255,0.02)", border: "1px dashed rgba(200,160,74,0.35)", borderRadius: 12, cursor: "pointer", marginBottom: 8 }}>
+              <input type="file" accept=".zip" onChange={e => setUploadFile(e.target.files?.[0] || null)} style={{ display: "none" }} />
+              <span style={{ fontSize: 11.5, fontWeight: 700, color: T.brass, fontFamily: syne }}>{uploadFile ? "✓ " + uploadFile.name : "Drop a build .zip — or click to browse"}</span>
+              <span style={{ fontSize: 9.5, color: T.faint }}>{uploadFile ? "ready to deploy · pick a target below" : "uploads straight to Netlify, atomic swap on success"}</span>
+            </label>
+            {uploadFile && (
+              <div style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: 8 }}>
+                <select value={uploadTarget} onChange={e => setUploadTarget(e.target.value)} style={{ flex: 1, padding: "10px 11px", background: "#141C2E", border: `1px solid rgba(255,255,255,0.1)`, borderRadius: 9, color: T.ink, fontSize: 11 }}>
+                  {PROPERTIES.map(p => <option key={p.name}>{p.name}</option>)}
+                </select>
+                <button onClick={deployUpload} disabled={uploadBusy} style={{ ...S.brassBtn, padding: "10px 18px", fontSize: 11, opacity: uploadBusy ? 0.5 : 1 }}>{uploadBusy ? "Deploying…" : "Deploy"}</button>
+              </div>
+            )}
+            <div style={{ display: "flex", flexDirection: "column", gap: 6, marginTop: 6 }}>
+              {PROPERTIES.map(p => {
+                const d = deploys[p.name] || {};
+                return (
+                  <div key={p.name} style={{ ...S.inner, display: "flex", alignItems: "center", gap: 11, padding: "11px 13px" }}>
+                    <span style={{ width: 7, height: 7, borderRadius: "50%", background: d.busy ? T.amber : T.green, flex: "none", boxShadow: `0 0 8px ${d.busy ? "rgba(245,158,11,0.5)" : "rgba(52,211,153,0.5)"}` }} />
+                    <span style={{ display: "flex", flexDirection: "column", gap: 1, minWidth: 0, flex: 1 }}>
+                      <span style={{ fontSize: 11.5, fontWeight: 600, color: "#C6CFDE", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{p.name}</span>
+                      <span style={{ fontSize: 9, color: d.busy ? T.amber : T.faint, fontFamily: mono, letterSpacing: "0.04em" }}>{d.busy ? "BUILDING…" : `LIVE${d.when ? " · DEPLOYED " + d.when : ""}`}</span>
+                    </span>
+                    <button onClick={() => redeploy(p)} style={{ ...S.ghostBtn, padding: "7px 13px", fontSize: 9.5, flex: "none" }}>{d.busy ? "Deploying…" : "Redeploy"}</button>
                   </div>
-                  <Segmented value={models[r.key]} onChange={k => setModel(r.key, k)} />
-                </div>
-              ))}
+                );
+              })}
             </div>
-            <div style={{ ...S.inner, marginTop: 15, padding: "11px 13px", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-              <span style={{ fontSize: 9.5, color: T.sub }}>Est. per convened question</span>
-              <span style={{ fontSize: 12, fontWeight: 700, color: T.brass, fontFamily: mono }}>${est.toFixed(3)}</span>
-            </div>
-            <div style={{ marginTop: 7, ...S.microLabel, letterSpacing: "0.04em" }}>TODAY · {fmtK(inTok)} IN · {fmtK(outTok)} OUT · ${cost.toFixed(2)}</div>
           </div>
         )}
 
-        {/* Supabase console */}
-        <div style={card}>
-          <CardHeader title="Supabase Console" tag="● CONNECTED" tagColor={T.green} />
-          <div style={{ fontSize: 10.5, color: T.faint, lineHeight: 1.5, margin: "2px 0 12px" }}>Run maintenance against the shared memory. Guardrails on — destructive ops ask twice.</div>
-          <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginBottom: 10 }}>
-            {["backup chat_messages", "vacuum seat_notes", "clear findings > 30d"].map(q => (
-              <button key={q} onClick={() => setSqlInput(q)} style={{ padding: "6px 11px", background: "rgba(255,255,255,0.035)", border: `1px solid rgba(255,255,255,0.09)`, borderRadius: 14, color: T.sub, fontSize: 9.5, cursor: "pointer", fontFamily: mono }}>{q}</button>
-            ))}
+        {sub === "database" && (
+          <div style={card}>
+            <CardHeader title="Supabase Console" tag="● CONNECTED" tagColor={T.green} />
+            <div style={{ fontSize: 10.5, color: T.faint, lineHeight: 1.5, margin: "2px 0 12px" }}>Run maintenance against the shared memory. Guardrails on — destructive ops ask twice.</div>
+            <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginBottom: 10 }}>
+              {["backup chat_messages", "vacuum seat_notes", "clear findings > 30d"].map(q => (
+                <button key={q} onClick={() => setSqlInput(q)} style={{ padding: "6px 11px", background: "rgba(255,255,255,0.035)", border: `1px solid rgba(255,255,255,0.09)`, borderRadius: 14, color: T.sub, fontSize: 9.5, cursor: "pointer", fontFamily: mono }}>{q}</button>
+              ))}
+            </div>
+            <div style={{ background: "rgba(0,0,0,0.35)", border: "1px solid rgba(255,255,255,0.06)", borderRadius: 11, padding: "12px 14px", minHeight: 110, maxHeight: 180, overflowY: "auto", display: "flex", flexDirection: "column", gap: 5, marginBottom: 9 }}>
+              {sqlLog.map((l, i) => (
+                <div key={i} style={{ fontSize: 10, fontFamily: mono, color: l.kind === "cmd" ? T.sub : l.kind === "err" ? T.red : T.green, lineHeight: 1.5, whiteSpace: "pre-wrap" }}>{l.text}</div>
+              ))}
+            </div>
+            <div style={{ display: "flex", gap: 8 }}>
+              <input value={sqlInput} onChange={e => setSqlInput(e.target.value)} onKeyDown={e => { if (e.key === "Enter") { e.preventDefault(); runSql(); } }} placeholder="update seat_notes set …"
+                style={{ ...S.input, flex: 1, padding: "11px 13px", fontSize: 11, fontFamily: mono }} />
+              <button onClick={runSql} style={{ ...S.ghostBtn, padding: "0 18px", minHeight: 44, borderRadius: 10, fontSize: 11, fontWeight: 800 }}>Run</button>
+            </div>
           </div>
-          <div style={{ background: "rgba(0,0,0,0.35)", border: "1px solid rgba(255,255,255,0.06)", borderRadius: 11, padding: "12px 14px", minHeight: 110, maxHeight: 180, overflowY: "auto", display: "flex", flexDirection: "column", gap: 5, marginBottom: 9 }}>
-            {sqlLog.map((l, i) => (
-              <div key={i} style={{ fontSize: 10, fontFamily: mono, color: l.kind === "cmd" ? T.sub : l.kind === "err" ? T.red : T.green, lineHeight: 1.5, whiteSpace: "pre-wrap" }}>{l.text}</div>
-            ))}
-          </div>
-          <div style={{ display: "flex", gap: 8 }}>
-            <input value={sqlInput} onChange={e => setSqlInput(e.target.value)} onKeyDown={e => { if (e.key === "Enter") { e.preventDefault(); runSql(); } }} placeholder="update seat_notes set …"
-              style={{ ...S.input, flex: 1, padding: "11px 13px", fontSize: 11, fontFamily: mono }} />
-            <button onClick={runSql} style={{ ...S.ghostBtn, padding: "0 18px", minHeight: 44, borderRadius: 10, fontSize: 11, fontWeight: 800 }}>Run</button>
-          </div>
-        </div>
+        )}
 
-        <AuditorCard settings={settings} updateSetting={updateSetting} session={session} isMobile={isMobile} />
-        <div style={{ gridColumn: isMobile ? "auto" : "1 / -1" }}><UsageCard isMobile={isMobile} /></div>
+        {sub === "auditor" && <AuditorCard settings={settings} updateSetting={updateSetting} session={session} isMobile={isMobile} />}
+
+        {sub === "usage" && (
+          <>
+            <div style={card}>
+              <CardHeader title="Model Control" tag="TOKENS" />
+              <div style={{ fontSize: 10.5, color: T.faint, lineHeight: 1.5, margin: "2px 0 14px" }}>Start cheap. Escalate a layer only when the answers need it.</div>
+              <div style={{ display: "flex", flexDirection: "column", gap: 13 }}>
+                {layers.map(r => (
+                  <div key={r.key} style={{ display: "flex", flexDirection: "column", gap: 7 }}>
+                    <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between" }}>
+                      <span style={{ fontSize: 11, fontWeight: 700, fontFamily: syne, color: T.ink }}>{r.name}</span>
+                      <span style={{ fontSize: 9, color: T.faint }}>{r.desc}</span>
+                    </div>
+                    <Segmented value={models[r.key]} onChange={k => setModel(r.key, k)} />
+                  </div>
+                ))}
+              </div>
+              <div style={{ ...S.inner, marginTop: 14, padding: "11px 13px", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+                <span style={{ fontSize: 9.5, color: T.sub }}>Est. per convened question</span>
+                <span style={{ fontSize: 12, fontWeight: 700, color: T.brass, fontFamily: mono }}>${est.toFixed(3)}</span>
+              </div>
+              <div style={{ marginTop: 7, ...S.microLabel, letterSpacing: "0.04em" }}>TODAY · {fmtK(inTok)} IN · {fmtK(outTok)} OUT · ${cost.toFixed(2)}</div>
+            </div>
+            <UsageCard isMobile={isMobile} />
+          </>
+        )}
       </div>
     </div>
   );
@@ -1449,228 +1647,6 @@ function MiniMePage({ settings, updateSetting, session, onWorkerRun, isMobile })
   );
 }
 
-// ─── Page: Connections ───────────────────────────────────────────────────────
-// Live status of every data pipe the app depends on. Client-side pipes are
-// checked directly; server-side pipes are pinged through their Netlify
-// functions ({ ping: true } returns { success, configured } without doing work).
-const IS_DEPLOYED = typeof window !== "undefined" && window.location.hostname !== "localhost";
-
-const CONN_GROUPS = [
-  { title: "Core", keys: ["supabase_env", "supabase_auth", "supabase_db"] },
-  { title: "AI", keys: ["anthropic"] },
-  { title: "Market Data", keys: ["coingecko"] },
-  { title: "Netlify Functions", keys: ["fn_health", "fn_mini", "fn_btc", "fn_markets", "fn_calendar", "fn_wire", "fn_site_status", "fn_gsc", "fn_shopify", "fn_deploy", "fn_dbadmin", "fn_audit"] },
-];
-const CONN_META = {
-  supabase_env: { name: "Supabase · config", desc: "VITE_SUPABASE_URL + anon key present at build time" },
-  supabase_auth: { name: "Supabase · auth", desc: "active session for this device" },
-  supabase_db: { name: "Supabase · database", desc: "read against chat_messages (tables + RLS)" },
-  anthropic: { name: "Anthropic API", desc: IS_DEPLOYED ? "via /.netlify/functions/claude proxy" : "direct from localhost with VITE_ANTHROPIC_API_KEY" },
-  coingecko: { name: "CoinGecko", desc: "upstream BTC source — reached via the btc proxy, not directly from the browser" },
-  fn_health: { name: "health", desc: "reports which server-side keys are configured" },
-  fn_mini: { name: "mini-worker", desc: "Mini Me engine — nightly at ~3 AM CT + on-demand runs" },
-  fn_btc: { name: "btc", desc: "proxies BTC price + sparkline — avoids mobile-carrier IP rate limiting" },
-  fn_markets: { name: "markets", desc: "S&P/Nasdaq futures, 10Y yield, DXY via Yahoo's public endpoint (unofficial)" },
-  fn_calendar: { name: "calendar", desc: "today's US econ calendar (unofficial free feed)" },
-  fn_wire: { name: "wire", desc: "live crypto/macro headlines from CoinDesk + Cointelegraph RSS" },
-  fn_site_status: { name: "site-status", desc: "uptime check behind the Properties page's live/down pill" },
-  fn_gsc: { name: "gsc", desc: "Search Console · zerotosecure.com last 14d" },
-  fn_shopify: { name: "shopify", desc: "Shopify Admin API · orders last 14d" },
-  fn_deploy: { name: "deploy", desc: "Netlify API · trigger builds per property" },
-  fn_dbadmin: { name: "db-admin", desc: "service-role maintenance, allowlisted commands" },
-  fn_audit: { name: "audit", desc: "AI site auditor across all five properties" },
-};
-const CONN_STATUS = {
-  ok: { label: "LIVE", color: T.green },
-  warn: { label: "PARTIAL", color: T.amber },
-  down: { label: "DOWN", color: T.red },
-  off: { label: "NOT CONFIGURED", color: T.faint },
-  local: { label: "DEPLOY TO TEST", color: T.blue },
-  checking: { label: "CHECKING", color: T.sub },
-};
-
-async function pingFn(name) {
-  const t0 = Date.now();
-  try {
-    const res = await fetch(`/.netlify/functions/${name}`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ ping: true }) });
-    const ms = Date.now() - t0;
-    if (res.status === 404) return { status: "off", detail: "function not deployed", ms };
-    const data = await res.json().catch(() => null);
-    if (!res.ok) return { status: "down", detail: data?.error || `HTTP ${res.status}`, ms };
-    if (data?.configured === false) return { status: "warn", detail: data?.missing ? `deployed — missing ${data.missing}` : "deployed — keys not set", ms };
-    return { status: "ok", detail: "responding", ms };
-  } catch { return { status: "down", detail: "unreachable", ms: Date.now() - t0 }; }
-}
-
-function useConnections({ session, btc }) {
-  const [checks, setChecks] = useState({});
-  const [lastRun, setLastRun] = useState(null);
-  const [running, setRunning] = useState(false);
-
-  const set = (key, val) => setChecks(prev => ({ ...prev, [key]: val }));
-
-  const runAll = async () => {
-    if (running) return;
-    setRunning(true);
-    const all = Object.keys(CONN_META);
-    setChecks(Object.fromEntries(all.map(k => [k, { status: "checking" }])));
-
-    // Supabase — config
-    set("supabase_env", supabase ? { status: "ok", detail: "url + anon key baked into build" } : { status: "off", detail: "env vars missing — see setup notice" });
-    // Supabase — auth
-    set("supabase_auth", session?.user ? { status: "ok", detail: session.user.email } : { status: "down", detail: "no session" });
-    // Supabase — db round trip
-    if (supabase) {
-      const t0 = Date.now();
-      try {
-        const { error, count } = await supabase.from("chat_messages").select("*", { count: "exact", head: true });
-        set("supabase_db", error
-          ? { status: "down", detail: error.message, ms: Date.now() - t0 }
-          : { status: "ok", detail: `${count ?? 0} messages readable`, ms: Date.now() - t0 });
-      } catch { set("supabase_db", { status: "down", detail: "query failed", ms: Date.now() - t0 }); }
-    } else set("supabase_db", { status: "off", detail: "supabase not configured" });
-
-    // Anthropic — tiny live call through whichever path this build uses
-    {
-      const t0 = Date.now();
-      if (!IS_DEPLOYED && !ANTHROPIC_API_KEY) {
-        set("anthropic", { status: "off", detail: "VITE_ANTHROPIC_API_KEY not set for local dev" });
-      } else {
-        const text = await callClaude({ messages: [{ role: "user", content: "ping" }], modelKey: "haiku", maxTokens: 1, fn: "conn_check" });
-        set("anthropic", text !== null
-          ? { status: "ok", detail: IS_DEPLOYED ? "proxy → Claude responding" : "direct → Claude responding", ms: Date.now() - t0 }
-          : { status: "down", detail: IS_DEPLOYED ? "proxy failed — check claude function + ANTHROPIC_API_KEY" : "call failed — check key", ms: Date.now() - t0 });
-      }
-    }
-
-    // CoinGecko — reuse the hook's state, verify with a light ping
-    if (btc?.error) set("coingecko", { status: "down", detail: btc.error });
-    else if (btc?.price) set("coingecko", { status: "ok", detail: `BTC $${btc.price.toLocaleString(undefined, { maximumFractionDigits: 0 })} · ${btc.points?.length || 0} chart points` });
-    else {
-      const t0 = Date.now();
-      try {
-        const r = await fetch("https://api.coingecko.com/api/v3/ping");
-        set("coingecko", r.ok ? { status: "ok", detail: "API reachable", ms: Date.now() - t0 } : { status: "down", detail: `HTTP ${r.status}`, ms: Date.now() - t0 });
-      } catch { set("coingecko", { status: "down", detail: "unreachable", ms: Date.now() - t0 }); }
-    }
-
-    // Netlify functions
-    const fns = [["fn_health", "health"], ["fn_mini", "mini-worker"], ["fn_btc", "btc"], ["fn_markets", "markets"], ["fn_calendar", "calendar"], ["fn_wire", "wire"], ["fn_site_status", "site-status"], ["fn_gsc", "gsc"], ["fn_shopify", "shopify"], ["fn_deploy", "deploy"], ["fn_dbadmin", "db-admin"], ["fn_audit", "audit"]];
-    if (!IS_DEPLOYED) {
-      // netlify dev serves functions locally; try health first to decide
-      const probe = await pingFn("health");
-      if (probe.status === "down" || probe.status === "off") {
-        fns.forEach(([k]) => set(k, { status: "local", detail: "run `netlify dev` or deploy to test functions" }));
-      } else {
-        await Promise.all(fns.map(async ([k, n]) => set(k, await pingFn(n))));
-      }
-    } else {
-      await Promise.all(fns.map(async ([k, n]) => set(k, await pingFn(n))));
-    }
-
-    setLastRun(Date.now());
-    setRunning(false);
-  };
-
-  return { checks, lastRun, running, runAll };
-}
-
-function ConnRow({ meta, check }) {
-  const st = CONN_STATUS[check?.status || "checking"];
-  return (
-    <div style={{ ...S.inner, display: "flex", alignItems: "center", gap: 12, padding: "12px 14px" }}>
-      <span style={{ width: 8, height: 8, borderRadius: "50%", background: st.color, flex: "none", boxShadow: `0 0 9px ${st.color}80`, animation: check?.status === "checking" ? "pulse 1.2s infinite" : "none" }} />
-      <span style={{ display: "flex", flexDirection: "column", gap: 2, flex: 1, minWidth: 0 }}>
-        <span style={{ fontSize: 11.5, fontWeight: 700, fontFamily: syne, color: T.ink }}>{meta.name}</span>
-        <span style={{ fontSize: 9.5, color: T.faint, lineHeight: 1.45 }}>{check?.detail || meta.desc}</span>
-      </span>
-      {typeof check?.ms === "number" && <span style={{ fontSize: 9, color: T.faint, fontFamily: mono, flex: "none" }}>{check.ms}ms</span>}
-      <span style={{ fontSize: 8, fontWeight: 700, color: st.color, background: st.color + "1A", border: `1px solid ${st.color}40`, padding: "4px 9px", borderRadius: 11, fontFamily: mono, letterSpacing: "0.08em", flex: "none" }}>{st.label}</span>
-    </div>
-  );
-}
-
-function ConnectionsPage({ session, btc, isMobile }) {
-  const { checks, lastRun, running, runAll } = useConnections({ session, btc });
-  useEffect(() => { runAll(); }, []); // eslint-disable-line react-hooks/exhaustive-deps
-
-  const vals = Object.values(checks);
-  const counts = {
-    ok: vals.filter(c => c?.status === "ok").length,
-    warn: vals.filter(c => c?.status === "warn").length,
-    down: vals.filter(c => c?.status === "down").length,
-    off: vals.filter(c => c?.status === "off" || c?.status === "local").length,
-  };
-  const ago = (ts) => { if (!ts) return "—"; const s = Math.floor((Date.now() - ts) / 1000); return s < 60 ? `${s}S AGO` : `${Math.floor(s / 60)}M AGO`; };
-  const card = isMobile ? S.cardM : S.card;
-
-  return (
-    <div style={{ flex: 1, overflowY: "auto", padding: isMobile ? "18px 16px 24px" : "30px 34px 40px" }}>
-      <div style={{ maxWidth: 920, margin: "0 auto", display: "flex", flexDirection: "column", gap: isMobile ? 12 : 14 }}>
-
-        {/* Summary strip */}
-        <div style={{ ...card, display: "flex", alignItems: "center", gap: isMobile ? 12 : 18, flexWrap: "wrap" }}>
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(4, auto)", gap: isMobile ? 10 : 16, flex: 1 }}>
-            {[["LIVE", counts.ok, T.green], ["PARTIAL", counts.warn, T.amber], ["DOWN", counts.down, T.red], ["NOT SET", counts.off, T.faint]].map(([l, v, c]) => (
-              <span key={l} style={{ display: "flex", flexDirection: "column", gap: 3 }}>
-                <span style={{ fontSize: 18, fontWeight: 700, fontFamily: mono, color: c }}>{v}</span>
-                <span style={{ ...S.microLabel }}>{l}</span>
-              </span>
-            ))}
-          </div>
-          <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 7 }}>
-            <button onClick={runAll} disabled={running} style={{ ...S.brassBtn, padding: "10px 20px", fontSize: 11, opacity: running ? 0.55 : 1 }}>{running ? "Checking…" : "Run checks"}</button>
-            <span style={S.microLabel}>LAST CHECK {ago(lastRun)}</span>
-          </div>
-        </div>
-
-        {CONN_GROUPS.map(g => (
-          <div key={g.title} style={card}>
-            <div style={{ ...S.title, marginBottom: 11 }}>{g.title}</div>
-            <div style={{ display: "flex", flexDirection: "column", gap: 7 }}>
-              {g.keys.map(k => <ConnRow key={k} meta={CONN_META[k]} check={checks[k]} />)}
-            </div>
-          </div>
-        ))}
-
-        <div style={{ fontSize: 10, color: T.faint, lineHeight: 1.6, padding: "0 4px" }}>
-          Server-side keys never touch this file — the health function only reports which are set. Fix anything red in Netlify → Site configuration → Environment variables, then redeploy and re-run checks.
-        </div>
-      </div>
-    </div>
-  );
-}
-
-// ─── Top bar status: clock · data freshness · manual refresh ────────────────
-function TopStatus({ now, dataStamp, refreshing, onRefresh, compact }) {
-  const d = new Date(now);
-  const date = d.toLocaleDateString(undefined, compact ? { month: "short", day: "numeric" } : { weekday: "short", month: "short", day: "numeric" });
-  const time = d.toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" });
-  const ageMin = dataStamp ? Math.floor((now - dataStamp) / 60000) : null;
-  const fresh = ageMin === null ? "—" : ageMin < 1 ? "LIVE" : ageMin < 60 ? `${ageMin}M OLD` : `${Math.floor(ageMin / 60)}H OLD`;
-  const freshColor = ageMin === null ? T.faint : ageMin < 5 ? T.green : ageMin < 30 ? T.amber : T.red;
-  return (
-    <div style={{ display: "flex", alignItems: "center", gap: compact ? 8 : 12, flex: "none" }}>
-      <span style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 1 }}>
-        <span style={{ fontSize: compact ? 10 : 11, fontWeight: 600, color: T.ink, fontFamily: mono, lineHeight: 1 }}>{time}</span>
-        <span style={{ fontSize: compact ? 8 : 8.5, color: T.faint, fontFamily: mono, letterSpacing: "0.06em", lineHeight: 1.3, textTransform: "uppercase" }}>{date}</span>
-      </span>
-      <span style={{ display: "flex", alignItems: "center", gap: 5, padding: compact ? "4px 8px" : "5px 10px", background: freshColor + "14", border: `1px solid ${freshColor}35`, borderRadius: 11 }}>
-        <span style={{ width: 5, height: 5, borderRadius: "50%", background: freshColor, boxShadow: `0 0 6px ${freshColor}90`, animation: ageMin !== null && ageMin < 1 ? "pulse 2s infinite" : "none" }} />
-        <span style={{ fontSize: 8, fontWeight: 700, color: freshColor, fontFamily: mono, letterSpacing: "0.08em", whiteSpace: "nowrap" }}>{compact ? fresh : `DATA ${fresh}`}</span>
-      </span>
-      <button onClick={onRefresh} disabled={refreshing} title="Refresh data" aria-label="Refresh data"
-        style={{ width: compact ? 34 : 30, height: compact ? 34 : 30, display: "inline-flex", alignItems: "center", justifyContent: "center", background: "rgba(200,160,74,0.1)", border: "1px solid rgba(200,160,74,0.3)", borderRadius: 9, cursor: refreshing ? "default" : "pointer", flex: "none", padding: 0 }}>
-        <svg width={compact ? 15 : 14} height={compact ? 15 : 14} viewBox="0 0 24 24" fill="none" stroke={T.brass} strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round"
-          style={{ animation: refreshing ? "spin 0.9s linear infinite" : "none", opacity: refreshing ? 0.7 : 1 }}>
-          <path d="M21 12a9 9 0 1 1-2.64-6.36" />
-          <path d="M21 3v6h-6" />
-        </svg>
-      </button>
-    </div>
-  );
-}
-
 // ─── Modals ──────────────────────────────────────────────────────────────────
 function ModalShell({ onClose, children, isMobile, z = 300 }) {
   return (
@@ -1815,33 +1791,25 @@ function LoginScreen() {
 }
 
 // ─── Navigation config ────────────────────────────────────────────────────────
+// One list drives both platforms — desktop shows label+sub, mobile shows the
+// icon only (label lives in aria-label/title). Same order, same set, same
+// keys: nothing to learn twice.
 const NAV = [
-  { key: "brief", label: "Morning Brief", sub: "BTC · stocks · wires · ZTS", mark: T.amber },
-  { key: "room", label: "The Room", sub: "Chief of Staff · ask anything", mark: T.brass },
-  { key: "board", label: "The Board", sub: "5 seats · charters & context", mark: "#7C3AED" },
-  { key: "props", label: "Your Properties", sub: "5 live assets", mark: T.blue },
-  { key: "it", label: "IT Department", sub: "deploys · database · models", mark: "#0E9F6E" },
-  { key: "conn", label: "Connections", sub: "every data pipe, status-checked", mark: "#38BDF8" },
-  { key: "mini", label: "Mini Me", sub: "level 3 · online", mark: "#EC4899" },
+  { key: "brief", label: "Brief", sub: "BTC · stocks · wires · ZTS", mark: T.amber },
+  { key: "room", label: "Room", sub: "Chief of Staff · ask anything", mark: T.brass },
+  { key: "board", label: "Board", sub: "5 seats · charters & context", mark: "#7C3AED" },
+  { key: "assets", label: "Assets", sub: "5 live properties", mark: T.blue },
+  { key: "systems", label: "Systems", sub: "status · deploy · db · usage", mark: "#0E9F6E" },
+  { key: "mini", label: "Mini Me", sub: "queue · loops · oversight", mark: "#EC4899" },
 ];
 const HEADERS = {
-  room: ["The Room", "smart routing · 5 seats on call"],
-  brief: ["Morning Brief", "generated 6:00 AM · markets, wires, and your stores"],
-  board: ["The Board", "five specialist seats + one Chief"],
-  props: ["Your Properties", "everything you run, one click away"],
-  it: ["IT Department", "deploys, database, and token spend"],
-  conn: ["Connections", "live status of every pipe the room depends on"],
-  mini: ["Mini Me", "your sidekick — it never sleeps"],
+  brief: ["Brief", "generated 6:00 AM · markets, wires, and your stores"],
+  room: ["Room", "smart routing · 5 seats on call"],
+  board: ["Board", "five specialist seats + one Chief"],
+  assets: ["Assets", "everything you run, one click away"],
+  systems: ["Systems", "status, deploys, database, auditor, and usage"],
+  mini: ["Mini Me", "your sidekick — queue work and it delivers"],
 };
-const MOBILE_TABS = [
-  { key: "brief", label: "Morning Brief" },
-  { key: "board", label: "The Board" },
-  { key: "props", label: "Your Properties" },
-  { key: "it", label: "IT Department" },
-  { key: "conn", label: "Connections" },
-  { key: "mini", label: "Mini Me" },
-];
-// Icon-only bottom nav — labels above live in aria-label/title for a11y.
 const NAV_ICONS = {
   brief: (p) => ( // sunrise — the morning brief
     <svg {...p} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round">
@@ -1850,25 +1818,25 @@ const NAV_ICONS = {
       <line x1="1" y1="18" x2="3" y2="18" /><line x1="21" y1="18" x2="23" y2="18" /><line x1="1" y1="22" x2="23" y2="22" />
     </svg>
   ),
+  room: (p) => ( // chat bubble — the room
+    <svg {...p} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M21 11.5a8.4 8.4 0 0 1-8.4 8.4H12a8.3 8.3 0 0 1-4-1L3 20l1.1-5a8.3 8.3 0 0 1-1-4 8.4 8.4 0 0 1 8.4-8.4h.1a8.4 8.4 0 0 1 8.4 8.4z" />
+    </svg>
+  ),
   board: (p) => ( // grid of seats — the board
     <svg {...p} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round">
       <rect x="3" y="3" width="7.5" height="7.5" rx="1.5" /><rect x="13.5" y="3" width="7.5" height="7.5" rx="1.5" />
       <rect x="3" y="13.5" width="7.5" height="7.5" rx="1.5" /><rect x="13.5" y="13.5" width="7.5" height="7.5" rx="1.5" />
     </svg>
   ),
-  props: (p) => ( // building — your properties
+  assets: (p) => ( // building — your properties
     <svg {...p} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round">
       <path d="M3 21V9l9-6 9 6v12" /><path d="M9 21v-8h6v8" />
     </svg>
   ),
-  it: (p) => ( // terminal — IT department
+  systems: (p) => ( // terminal — systems
     <svg {...p} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round">
       <rect x="2.5" y="4" width="19" height="16" rx="2" /><polyline points="6.5 9.5 10.5 12 6.5 14.5" /><line x1="12.5" y1="15" x2="17.5" y2="15" />
-    </svg>
-  ),
-  conn: (p) => ( // pulse — connection status
-    <svg {...p} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round">
-      <polyline points="2 13 7 13 9.5 6 14 20 16.5 13 22 13" />
     </svg>
   ),
   mini: (p) => ( // sparkle — mini me
@@ -1895,9 +1863,7 @@ export default function App() {
   const [migration, setMigration] = useState(null);
   const [importing, setImporting] = useState(false);
   const [loadingData, setLoadingData] = useState(false);
-  const [page, setPage] = useState("room");
-  const [tab, setTab] = useState("brief");
-  const [chatOpen, setChatOpen] = useState(false);
+  const [page, setPage] = useState("brief"); // single nav state — same source of truth on mobile and desktop
   const [editingCal, setEditingCal] = useState(false);
   const [calDraft, setCalDraft] = useState("");
   const [dataStamp, setDataStamp] = useState(null);
@@ -1956,7 +1922,7 @@ export default function App() {
   useEffect(() => {
     const el = endRef.current;
     if (el && el.parentElement) el.parentElement.scrollTop = el.parentElement.scrollHeight;
-  }, [messages, thinking, chatOpen]);
+  }, [messages, thinking, page]);
 
   const updateSetting = (key, value) => {
     setSettings(prev => ({ ...(prev || {}), [key]: value }));
@@ -2033,16 +1999,19 @@ export default function App() {
   const renderPage = (key) => {
     switch (key) {
       case "brief": return <MorningBriefPage btc={btc} isMobile={isMobile} />;
+      case "room": return <RoomPage messages={messages} thinking={thinking} loadingData={loadingData} input={input} setInput={setInput} onSend={send} endRef={endRef} isMobile={isMobile} />;
       case "board": return <BoardPage seatNotes={seatNotes} onEditSeat={setEditSeat} onEnterRoom={() => setPage("room")} isMobile={isMobile} />;
-      case "props": return <PropertiesPage isMobile={isMobile} btc={btc} />;
-      case "it": return <ITPage settings={settings} updateSetting={updateSetting} session={session} isMobile={isMobile} />;
-      case "conn": return <ConnectionsPage session={session} btc={btc} isMobile={isMobile} />;
+      case "assets": return <PropertiesPage isMobile={isMobile} btc={btc} />;
+      case "systems": return <SystemsPage settings={settings} updateSetting={updateSetting} session={session} btc={btc} isMobile={isMobile} />;
       case "mini": return <MiniMePage settings={settings} updateSetting={updateSetting} session={session} onWorkerRun={refreshData} isMobile={isMobile} />;
       default: return null;
     }
   };
 
   // ═══ MOBILE SHELL ═══
+  // Same NAV, same pages, same order as desktop — only the chrome differs
+  // (icons instead of labels). Room used to be a special floating pill that
+  // expanded into a sheet; it's now a normal tab like everything else.
   if (isMobile) {
     return (
       <div style={{ height: "100dvh", display: "flex", flexDirection: "column", color: T.ink, position: "relative", overflow: "hidden" }}>
@@ -2054,29 +2023,15 @@ export default function App() {
           <TopStatus now={now} dataStamp={dataStamp} refreshing={refreshing} onRefresh={refreshData} compact />
         </div>
 
-        {renderPage(tab)}
+        {renderPage(page)}
 
-        {/* Collapsed chat pill */}
-        {!chatOpen && (
-          <div style={{ flex: "none", padding: "10px 12px 8px", background: "linear-gradient(180deg,transparent,rgba(9,14,26,0.9) 40%)" }}>
-            <div onClick={() => setChatOpen(true)} style={{ display: "flex", alignItems: "center", gap: 11, padding: "13px 16px", background: "linear-gradient(180deg,rgba(255,255,255,0.07),rgba(255,255,255,0.035))", border: "1px solid rgba(200,160,74,0.25)", borderRadius: 999, cursor: "pointer", boxShadow: "0 14px 40px rgba(0,0,0,0.45), inset 0 1px 0 rgba(255,255,255,0.08)" }}>
-              <span style={{ width: 22, height: 22, borderRadius: "50%", background: `linear-gradient(135deg, ${T.brass}, ${T.brassDeep})`, display: "inline-flex", alignItems: "center", justifyContent: "center", flex: "none", boxShadow: "inset 0 1px 0 rgba(255,255,255,0.4)" }}>
-                <span style={{ width: 6, height: 6, borderRadius: "50%", background: T.bg }} />
-              </span>
-              <span style={{ flex: 1, fontSize: 13, color: T.sub }}>Ask the Chief of Staff…</span>
-              <span style={{ fontSize: 10, color: T.faint, fontFamily: mono }}>{messages.length}</span>
-              <span style={{ color: T.brass, fontSize: 13, lineHeight: 1 }}>▲</span>
-            </div>
-          </div>
-        )}
-
-        {/* Bottom nav */}
+        {/* Bottom nav — icon-only, same 6 destinations as the desktop rail */}
         <div style={{ flex: "none", display: "flex", borderTop: `1px solid ${T.line}`, background: "rgba(10,15,28,0.92)", backdropFilter: "blur(12px)", paddingBottom: "env(safe-area-inset-bottom)" }}>
-          {MOBILE_TABS.map(t => {
-            const active = tab === t.key;
-            const Icon = NAV_ICONS[t.key];
+          {NAV.map(n => {
+            const active = page === n.key;
+            const Icon = NAV_ICONS[n.key];
             return (
-              <button key={t.key} onClick={() => setTab(t.key)} title={t.label} aria-label={t.label} aria-current={active ? "page" : undefined}
+              <button key={n.key} onClick={() => setPage(n.key)} title={n.label} aria-label={n.label} aria-current={active ? "page" : undefined}
                 style={{ flex: 1, minHeight: 64, background: active ? "linear-gradient(180deg, rgba(200,160,74,0.10), transparent)" : "none", border: "none", cursor: "pointer", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 7, padding: "10px 0" }}>
                 <span style={{ width: 6, height: 6, borderRadius: "50%", background: T.brass, opacity: active ? 1 : 0, transition: "opacity 0.15s", boxShadow: "0 0 8px rgba(200,160,74,0.85)" }} />
                 <Icon width={23} height={23} color={active ? T.ink : T.faint} style={{ transition: "color 0.15s" }} />
@@ -2084,28 +2039,6 @@ export default function App() {
             );
           })}
         </div>
-
-        {/* Expanded chat sheet */}
-        {chatOpen && (
-          <>
-            <div onClick={() => setChatOpen(false)} style={{ position: "absolute", inset: 0, background: "rgba(4,7,14,0.6)", zIndex: 190, animation: "fadein 0.15s ease both" }} />
-            <div style={{ position: "absolute", left: 0, right: 0, bottom: 0, top: 56, zIndex: 200, background: "linear-gradient(180deg,#101828,#0C1220)", border: `1px solid rgba(255,255,255,0.09)`, borderBottom: "none", borderRadius: "22px 22px 0 0", boxShadow: "0 -24px 70px rgba(0,0,0,0.6)", display: "flex", flexDirection: "column", animation: "sheetup 0.22s ease both" }}>
-              <div onClick={() => setChatOpen(false)} style={{ flex: "none", display: "flex", flexDirection: "column", alignItems: "center", gap: 8, padding: "10px 16px 12px", cursor: "pointer", borderBottom: "1px solid rgba(255,255,255,0.06)" }}>
-                <span style={{ width: 40, height: 4, borderRadius: 2, background: "rgba(255,255,255,0.18)" }} />
-                <div style={{ width: "100%", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-                  <span style={{ fontSize: 13, fontWeight: 700, fontFamily: syne }}>Chief of Staff</span>
-                  <span style={{ fontSize: 10, color: T.faint, display: "flex", alignItems: "center", gap: 6 }}>collapse <span style={{ color: T.brass, fontSize: 12 }}>▼</span></span>
-                </div>
-              </div>
-              <div style={{ flex: 1, overflowY: "auto", padding: "16px 14px 8px", display: "flex", flexDirection: "column", gap: 14, minHeight: 0 }}>
-                <ChatThread messages={messages} thinking={thinking} loadingData={loadingData} setInput={setInput} endRef={endRef} compact />
-              </div>
-              <div style={{ flex: "none", padding: "10px 12px calc(12px + env(safe-area-inset-bottom))", borderTop: "1px solid rgba(255,255,255,0.07)" }}>
-                <Composer input={input} setInput={setInput} onSend={send} thinking={thinking} compact />
-              </div>
-            </div>
-          </>
-        )}
 
         {editSeat && <SeatNotesModal seatKey={editSeat} initial={seatNotes[editSeat]} onSave={saveSeatNote} onClose={() => setEditSeat(null)} isMobile />}
         {migration && <MigrationModal counts={migration} onImport={runImport} onSkip={skipImport} importing={importing} />}
@@ -2191,21 +2124,7 @@ export default function App() {
           </div>
         </div>
 
-        {page === "room" ? (
-          <>
-            <div style={{ flex: 1, overflowY: "auto", padding: "32px 34px 10px", display: "flex", flexDirection: "column", alignItems: "center" }}>
-              <div style={{ width: "100%", maxWidth: 780, display: "flex", flexDirection: "column", gap: 18, flex: 1 }}>
-                <ChatThread messages={messages} thinking={thinking} loadingData={loadingData} setInput={setInput} endRef={endRef} />
-              </div>
-            </div>
-            <div style={{ flex: "none", padding: "14px 34px 24px", display: "flex", flexDirection: "column", alignItems: "center", gap: 9 }}>
-              <div style={{ width: "100%", maxWidth: 780 }}>
-                <Composer input={input} setInput={setInput} onSend={send} thinking={thinking} />
-              </div>
-              <div style={{ fontSize: 10, color: T.faint }}>Quick questions stay Chief-only · cross-cutting ones convene seats in parallel</div>
-            </div>
-          </>
-        ) : renderPage(page)}
+        {renderPage(page)}
       </div>
 
       {editSeat && <SeatNotesModal seatKey={editSeat} initial={seatNotes[editSeat]} onSave={saveSeatNote} onClose={() => setEditSeat(null)} />}
