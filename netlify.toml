@@ -1,7 +1,12 @@
 [build]
-  command = "npm install && npm run build"
+  command = "npm run build"
   publish = "dist"
 
+[functions]
+  directory = "netlify/functions"
+  node_bundler = "esbuild"
+
+# SPA fallback — everything that isn't a function or asset serves index.html
 [[redirects]]
   from = "/*"
   to = "/index.html"

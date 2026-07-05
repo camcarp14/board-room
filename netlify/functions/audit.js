@@ -1,50 +1,45 @@
-// Site + code auditor. Fetches a property's live site (server-side, avoids CORS)
-// and, if a repo is known and GITHUB_TOKEN is set, pulls its README + package.json
-// for light code-context review. One Claude call turns it into concrete findings.
-// Env: ANTHROPIC_API_KEY (required), GITHUB_TOKEN (optional, unlocks repo context).
-export default async (req) => {
-  if (req.method !== "POST") return Response.json({ error: "POST only" }, { status: 405 });
-  const { name, url, repo } = await req.json();
-  const { ANTHROPIC_API_KEY, GITHUB_TOKEN } = process.env;
-  if (!ANTHROPIC_API_KEY) return Response.json({ error: "Missing ANTHROPIC_API_KEY" }, { status: 500 });
+// Fetches a property's live HTML and has Haiku audit it, returning structured
+// findings for the Site Auditor card. Needs: ANTHROPIC_API_KEY.
+const json = (code, body) => ({ statusCode: code, headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
 
-  let siteText = "(no public URL to check)";
-  if (url) {
-    try {
-      const res = await fetch(url, { headers: { "User-Agent": "Mozilla/5.0 (BoardRoomAuditor)" } });
-      const html = await res.text();
-      siteText = html.replace(/<script[\s\S]*?<\/script>/gi, "").replace(/<style[\s\S]*?<\/style>/gi, "").replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim().slice(0, 6000);
-    } catch (e) { siteText = `(could not fetch site: ${e.message})`; }
-  }
+exports.handler = async (event) => {
+  if (event.httpMethod !== "POST") return json(405, { error: "POST only" });
+  let body = {};
+  try { body = JSON.parse(event.body || "{}"); } catch {}
 
-  let repoText = "";
-  if (repo && GITHUB_TOKEN) {
-    try {
-      const readmeRes = await fetch(`https://api.github.com/repos/${repo}/readme`, { headers: { Authorization: `Bearer ${GITHUB_TOKEN}`, Accept: "application/vnd.github.raw" } });
-      const readme = readmeRes.ok ? await readmeRes.text() : "";
-      const pkgRes = await fetch(`https://raw.githubusercontent.com/${repo}/main/package.json`);
-      const pkg = pkgRes.ok ? await pkgRes.text() : "";
-      repoText = `README (truncated):\n${readme.slice(0, 1500)}\n\npackage.json:\n${pkg.slice(0, 800)}`;
-    } catch (e) { repoText = `(could not fetch repo: ${e.message})`; }
-  } else if (repo) {
-    repoText = "(repo known but GITHUB_TOKEN not set — code-level review skipped, site-only review below)";
-  }
-
-  const system = `You are a sharp, senior product + growth + code reviewer auditing one of Cameron's live business tools. Be specific and concrete — no generic advice. Look for: conversion or UX issues on the live page, obvious risks or gaps if repo context is present, and the single highest-leverage improvement. Respond ONLY with valid JSON, no preamble: {"findings":[{"severity":"high|medium|low","area":"short label","finding":"what you noticed","suggestion":"the concrete fix"}]} Max 5 findings, fewer is fine if there's little to flag.`;
-  const userMsg = `Property: ${name}\nURL: ${url || "none"}\n\nSite content (HTML stripped):\n${siteText}\n\n${repoText}`;
+  const key = process.env.ANTHROPIC_API_KEY;
+  if (body.ping) return json(200, { success: true, service: "audit", configured: !!key, missing: key ? undefined : "ANTHROPIC_API_KEY" });
+  if (!key) return json(500, { error: "ANTHROPIC_API_KEY not set" });
+  if (!body.url) return json(400, { error: "url is required" });
 
   try {
-    const res = await fetch("https://api.anthropic.com/v1/messages", {
+    // 1. Fetch the live page (truncate — enough signal, controlled tokens)
+    const pageRes = await fetch(body.url, { headers: { "User-Agent": "BoardRoom-Auditor/1.0" }, redirect: "follow" });
+    const status = pageRes.status;
+    const html = (await pageRes.text()).slice(0, 25000);
+
+    // 2. Ask Haiku for findings as strict JSON
+    const system = `You audit websites for a solo founder. Given raw HTML and HTTP status, return ONLY a JSON array (no markdown, no prose) of 0-4 findings. Each finding: {"severity":"high"|"medium"|"low","area":"seo"|"performance"|"conversion"|"content"|"technical","finding":"one specific sentence","suggestion":"one actionable sentence"}. Only report things actually visible in the HTML. If the site looks healthy, return [].`;
+    const aiRes = await fetch("https://api.anthropic.com/v1/messages", {
       method: "POST",
-      headers: { "Content-Type": "application/json", "x-api-key": ANTHROPIC_API_KEY, "anthropic-version": "2023-06-01" },
-      body: JSON.stringify({ model: "claude-haiku-4-5-20251001", max_tokens: 900, system, messages: [{ role: "user", content: userMsg }] }),
+      headers: { "Content-Type": "application/json", "x-api-key": key, "anthropic-version": "2023-06-01" },
+      body: JSON.stringify({
+        model: "claude-haiku-4-5-20251001",
+        max_tokens: 800,
+        system,
+        messages: [{ role: "user", content: `Site: ${body.name || body.url}\nHTTP status: ${status}\n\nHTML (truncated):\n${html}` }],
+      }),
     });
-    const data = await res.json();
-    const text = data.content?.map(b => b.type === "text" ? b.text : "").join("") || "";
-    let parsed;
-    try { parsed = JSON.parse(text.replace(/```json|```/g, "").trim()); } catch { parsed = { findings: [] }; }
-    return Response.json({ success: true, findings: parsed.findings || [], hadRepoContext: !!(repo && GITHUB_TOKEN) });
+    const aiData = await aiRes.json();
+    const text = (aiData.content || []).map(b => b.type === "text" ? b.text : "").join("");
+    let findings = [];
+    try { findings = JSON.parse(text.replace(/```json|```/g, "").trim()); } catch {}
+    if (!Array.isArray(findings)) findings = [];
+
+    if (status >= 400) findings.unshift({ severity: "high", area: "technical", finding: `Site returned HTTP ${status}.`, suggestion: "Check the deploy status and DNS immediately." });
+
+    return json(200, { success: true, findings: findings.slice(0, 4) });
   } catch (e) {
-    return Response.json({ success: false, error: e.message }, { status: 500 });
+    return json(200, { success: true, findings: [{ severity: "high", area: "technical", finding: `Site unreachable: ${e.message}`, suggestion: "Verify the URL resolves and the Netlify deploy is live." }] });
   }
 };

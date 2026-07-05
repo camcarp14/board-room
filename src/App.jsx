@@ -227,6 +227,7 @@ function useGlobalStyles() {
       @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.35; } }
       @keyframes sheetup { from { opacity: 0; transform: translateY(40px); } to { opacity: 1; transform: none; } }
       @keyframes breathe { 0%,100% { box-shadow: 0 0 18px rgba(200,160,74,0.35), inset 0 1px 0 rgba(255,255,255,0.4); } 50% { box-shadow: 0 0 34px rgba(200,160,74,0.6), inset 0 1px 0 rgba(255,255,255,0.4); } }
+      @keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
     `;
     document.head.appendChild(style);
   }, []);
@@ -253,7 +254,8 @@ const PROPERTIES = [
 
 // ─── Bitcoin ──────────────────────────────────────────────────────────────────
 function useBitcoinPrice() {
-  const [state, setState] = useState({ price: null, changePct: null, points: [], loading: true, error: null });
+  const [state, setState] = useState({ price: null, changePct: null, points: [], loading: true, error: null, fetchedAt: null });
+  const [nonce, setNonce] = useState(0);
   useEffect(() => {
     let alive = true;
     const load = async () => {
@@ -267,14 +269,14 @@ function useBitcoinPrice() {
         const raw = (chartData.prices || []).map(([ts, p]) => ({ ts, p }));
         const step = Math.max(1, Math.floor(raw.length / 48));
         const points = raw.filter((_, i) => i % step === 0).map(r => r.p);
-        if (alive) setState({ price: priceData.bitcoin?.usd ?? null, changePct: priceData.bitcoin?.usd_24h_change ?? null, points, loading: false, error: null });
+        if (alive) setState({ price: priceData.bitcoin?.usd ?? null, changePct: priceData.bitcoin?.usd_24h_change ?? null, points, loading: false, error: null, fetchedAt: Date.now() });
       } catch { if (alive) setState(s => ({ ...s, loading: false, error: "price feed unavailable" })); }
     };
     load();
     const iv = setInterval(load, 30 * 60 * 1000);
     return () => { alive = false; clearInterval(iv); };
-  }, []);
-  return state;
+  }, [nonce]);
+  return { ...state, refresh: () => setNonce(n => n + 1) };
 }
 
 function Sparkline({ points, color, height = 44 }) {
@@ -1111,6 +1113,222 @@ function MiniMePage({ settings, updateSetting, isMobile }) {
   );
 }
 
+// ─── Page: Connections ───────────────────────────────────────────────────────
+// Live status of every data pipe the app depends on. Client-side pipes are
+// checked directly; server-side pipes are pinged through their Netlify
+// functions ({ ping: true } returns { success, configured } without doing work).
+const IS_DEPLOYED = typeof window !== "undefined" && window.location.hostname !== "localhost";
+
+const CONN_GROUPS = [
+  { title: "Core", keys: ["supabase_env", "supabase_auth", "supabase_db"] },
+  { title: "AI", keys: ["anthropic"] },
+  { title: "Market Data", keys: ["coingecko"] },
+  { title: "Netlify Functions", keys: ["fn_health", "fn_gsc", "fn_shopify", "fn_deploy", "fn_dbadmin", "fn_audit"] },
+];
+const CONN_META = {
+  supabase_env: { name: "Supabase · config", desc: "VITE_SUPABASE_URL + anon key present at build time" },
+  supabase_auth: { name: "Supabase · auth", desc: "active session for this device" },
+  supabase_db: { name: "Supabase · database", desc: "read against chat_messages (tables + RLS)" },
+  anthropic: { name: "Anthropic API", desc: IS_DEPLOYED ? "via /.netlify/functions/claude proxy" : "direct from localhost with VITE_ANTHROPIC_API_KEY" },
+  coingecko: { name: "CoinGecko", desc: "BTC price + 24h sparkline, refreshed every 30 min" },
+  fn_health: { name: "health", desc: "reports which server-side keys are configured" },
+  fn_gsc: { name: "gsc", desc: "Search Console · zerotosecure.com last 14d" },
+  fn_shopify: { name: "shopify", desc: "Shopify Admin API · orders last 14d" },
+  fn_deploy: { name: "deploy", desc: "Netlify API · trigger builds per property" },
+  fn_dbadmin: { name: "db-admin", desc: "service-role maintenance, allowlisted commands" },
+  fn_audit: { name: "audit", desc: "AI site auditor across all five properties" },
+};
+const CONN_STATUS = {
+  ok: { label: "LIVE", color: T.green },
+  warn: { label: "PARTIAL", color: T.amber },
+  down: { label: "DOWN", color: T.red },
+  off: { label: "NOT CONFIGURED", color: T.faint },
+  local: { label: "DEPLOY TO TEST", color: T.blue },
+  checking: { label: "CHECKING", color: T.sub },
+};
+
+async function pingFn(name) {
+  const t0 = Date.now();
+  try {
+    const res = await fetch(`/.netlify/functions/${name}`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ ping: true }) });
+    const ms = Date.now() - t0;
+    if (res.status === 404) return { status: "off", detail: "function not deployed", ms };
+    const data = await res.json().catch(() => null);
+    if (!res.ok) return { status: "down", detail: data?.error || `HTTP ${res.status}`, ms };
+    if (data?.configured === false) return { status: "warn", detail: data?.missing ? `deployed — missing ${data.missing}` : "deployed — keys not set", ms };
+    return { status: "ok", detail: "responding", ms };
+  } catch { return { status: "down", detail: "unreachable", ms: Date.now() - t0 }; }
+}
+
+function useConnections({ session, btc }) {
+  const [checks, setChecks] = useState({});
+  const [lastRun, setLastRun] = useState(null);
+  const [running, setRunning] = useState(false);
+
+  const set = (key, val) => setChecks(prev => ({ ...prev, [key]: val }));
+
+  const runAll = async () => {
+    if (running) return;
+    setRunning(true);
+    const all = Object.keys(CONN_META);
+    setChecks(Object.fromEntries(all.map(k => [k, { status: "checking" }])));
+
+    // Supabase — config
+    set("supabase_env", supabase ? { status: "ok", detail: "url + anon key baked into build" } : { status: "off", detail: "env vars missing — see setup notice" });
+    // Supabase — auth
+    set("supabase_auth", session?.user ? { status: "ok", detail: session.user.email } : { status: "down", detail: "no session" });
+    // Supabase — db round trip
+    if (supabase) {
+      const t0 = Date.now();
+      try {
+        const { error, count } = await supabase.from("chat_messages").select("*", { count: "exact", head: true });
+        set("supabase_db", error
+          ? { status: "down", detail: error.message, ms: Date.now() - t0 }
+          : { status: "ok", detail: `${count ?? 0} messages readable`, ms: Date.now() - t0 });
+      } catch { set("supabase_db", { status: "down", detail: "query failed", ms: Date.now() - t0 }); }
+    } else set("supabase_db", { status: "off", detail: "supabase not configured" });
+
+    // Anthropic — tiny live call through whichever path this build uses
+    {
+      const t0 = Date.now();
+      if (!IS_DEPLOYED && !ANTHROPIC_API_KEY) {
+        set("anthropic", { status: "off", detail: "VITE_ANTHROPIC_API_KEY not set for local dev" });
+      } else {
+        const text = await callClaude({ messages: [{ role: "user", content: "ping" }], modelKey: "haiku", maxTokens: 1, fn: "conn_check" });
+        set("anthropic", text !== null
+          ? { status: "ok", detail: IS_DEPLOYED ? "proxy → Claude responding" : "direct → Claude responding", ms: Date.now() - t0 }
+          : { status: "down", detail: IS_DEPLOYED ? "proxy failed — check claude function + ANTHROPIC_API_KEY" : "call failed — check key", ms: Date.now() - t0 });
+      }
+    }
+
+    // CoinGecko — reuse the hook's state, verify with a light ping
+    if (btc?.error) set("coingecko", { status: "down", detail: btc.error });
+    else if (btc?.price) set("coingecko", { status: "ok", detail: `BTC $${btc.price.toLocaleString(undefined, { maximumFractionDigits: 0 })} · ${btc.points?.length || 0} chart points` });
+    else {
+      const t0 = Date.now();
+      try {
+        const r = await fetch("https://api.coingecko.com/api/v3/ping");
+        set("coingecko", r.ok ? { status: "ok", detail: "API reachable", ms: Date.now() - t0 } : { status: "down", detail: `HTTP ${r.status}`, ms: Date.now() - t0 });
+      } catch { set("coingecko", { status: "down", detail: "unreachable", ms: Date.now() - t0 }); }
+    }
+
+    // Netlify functions
+    const fns = [["fn_health", "health"], ["fn_gsc", "gsc"], ["fn_shopify", "shopify"], ["fn_deploy", "deploy"], ["fn_dbadmin", "db-admin"], ["fn_audit", "audit"]];
+    if (!IS_DEPLOYED) {
+      // netlify dev serves functions locally; try health first to decide
+      const probe = await pingFn("health");
+      if (probe.status === "down" || probe.status === "off") {
+        fns.forEach(([k]) => set(k, { status: "local", detail: "run `netlify dev` or deploy to test functions" }));
+      } else {
+        await Promise.all(fns.map(async ([k, n]) => set(k, await pingFn(n))));
+      }
+    } else {
+      await Promise.all(fns.map(async ([k, n]) => set(k, await pingFn(n))));
+    }
+
+    setLastRun(Date.now());
+    setRunning(false);
+  };
+
+  return { checks, lastRun, running, runAll };
+}
+
+function ConnRow({ meta, check }) {
+  const st = CONN_STATUS[check?.status || "checking"];
+  return (
+    <div style={{ ...S.inner, display: "flex", alignItems: "center", gap: 12, padding: "12px 14px" }}>
+      <span style={{ width: 8, height: 8, borderRadius: "50%", background: st.color, flex: "none", boxShadow: `0 0 9px ${st.color}80`, animation: check?.status === "checking" ? "pulse 1.2s infinite" : "none" }} />
+      <span style={{ display: "flex", flexDirection: "column", gap: 2, flex: 1, minWidth: 0 }}>
+        <span style={{ fontSize: 11.5, fontWeight: 700, fontFamily: syne, color: T.ink }}>{meta.name}</span>
+        <span style={{ fontSize: 9.5, color: T.faint, lineHeight: 1.45 }}>{check?.detail || meta.desc}</span>
+      </span>
+      {typeof check?.ms === "number" && <span style={{ fontSize: 9, color: T.faint, fontFamily: mono, flex: "none" }}>{check.ms}ms</span>}
+      <span style={{ fontSize: 8, fontWeight: 700, color: st.color, background: st.color + "1A", border: `1px solid ${st.color}40`, padding: "4px 9px", borderRadius: 11, fontFamily: mono, letterSpacing: "0.08em", flex: "none" }}>{st.label}</span>
+    </div>
+  );
+}
+
+function ConnectionsPage({ session, btc, isMobile }) {
+  const { checks, lastRun, running, runAll } = useConnections({ session, btc });
+  useEffect(() => { runAll(); }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const vals = Object.values(checks);
+  const counts = {
+    ok: vals.filter(c => c?.status === "ok").length,
+    warn: vals.filter(c => c?.status === "warn").length,
+    down: vals.filter(c => c?.status === "down").length,
+    off: vals.filter(c => c?.status === "off" || c?.status === "local").length,
+  };
+  const ago = (ts) => { if (!ts) return "—"; const s = Math.floor((Date.now() - ts) / 1000); return s < 60 ? `${s}S AGO` : `${Math.floor(s / 60)}M AGO`; };
+  const card = isMobile ? S.cardM : S.card;
+
+  return (
+    <div style={{ flex: 1, overflowY: "auto", padding: isMobile ? "18px 16px 24px" : "30px 34px 40px" }}>
+      <div style={{ maxWidth: 920, margin: "0 auto", display: "flex", flexDirection: "column", gap: isMobile ? 12 : 14 }}>
+
+        {/* Summary strip */}
+        <div style={{ ...card, display: "flex", alignItems: "center", gap: isMobile ? 12 : 18, flexWrap: "wrap" }}>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(4, auto)", gap: isMobile ? 10 : 16, flex: 1 }}>
+            {[["LIVE", counts.ok, T.green], ["PARTIAL", counts.warn, T.amber], ["DOWN", counts.down, T.red], ["NOT SET", counts.off, T.faint]].map(([l, v, c]) => (
+              <span key={l} style={{ display: "flex", flexDirection: "column", gap: 3 }}>
+                <span style={{ fontSize: 18, fontWeight: 700, fontFamily: mono, color: c }}>{v}</span>
+                <span style={{ ...S.microLabel }}>{l}</span>
+              </span>
+            ))}
+          </div>
+          <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 7 }}>
+            <button onClick={runAll} disabled={running} style={{ ...S.brassBtn, padding: "10px 20px", fontSize: 11, opacity: running ? 0.55 : 1 }}>{running ? "Checking…" : "Run checks"}</button>
+            <span style={S.microLabel}>LAST CHECK {ago(lastRun)}</span>
+          </div>
+        </div>
+
+        {CONN_GROUPS.map(g => (
+          <div key={g.title} style={card}>
+            <div style={{ ...S.title, marginBottom: 11 }}>{g.title}</div>
+            <div style={{ display: "flex", flexDirection: "column", gap: 7 }}>
+              {g.keys.map(k => <ConnRow key={k} meta={CONN_META[k]} check={checks[k]} />)}
+            </div>
+          </div>
+        ))}
+
+        <div style={{ fontSize: 10, color: T.faint, lineHeight: 1.6, padding: "0 4px" }}>
+          Server-side keys never touch this file — the health function only reports which are set. Fix anything red in Netlify → Site configuration → Environment variables, then redeploy and re-run checks.
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ─── Top bar status: clock · data freshness · manual refresh ────────────────
+function TopStatus({ now, dataStamp, refreshing, onRefresh, compact }) {
+  const d = new Date(now);
+  const date = d.toLocaleDateString(undefined, compact ? { month: "short", day: "numeric" } : { weekday: "short", month: "short", day: "numeric" });
+  const time = d.toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" });
+  const ageMin = dataStamp ? Math.floor((now - dataStamp) / 60000) : null;
+  const fresh = ageMin === null ? "—" : ageMin < 1 ? "LIVE" : ageMin < 60 ? `${ageMin}M OLD` : `${Math.floor(ageMin / 60)}H OLD`;
+  const freshColor = ageMin === null ? T.faint : ageMin < 5 ? T.green : ageMin < 30 ? T.amber : T.red;
+  return (
+    <div style={{ display: "flex", alignItems: "center", gap: compact ? 8 : 12, flex: "none" }}>
+      <span style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 1 }}>
+        <span style={{ fontSize: compact ? 10 : 11, fontWeight: 600, color: T.ink, fontFamily: mono, lineHeight: 1 }}>{time}</span>
+        <span style={{ fontSize: compact ? 8 : 8.5, color: T.faint, fontFamily: mono, letterSpacing: "0.06em", lineHeight: 1.3, textTransform: "uppercase" }}>{date}</span>
+      </span>
+      <span style={{ display: "flex", alignItems: "center", gap: 5, padding: compact ? "4px 8px" : "5px 10px", background: freshColor + "14", border: `1px solid ${freshColor}35`, borderRadius: 11 }}>
+        <span style={{ width: 5, height: 5, borderRadius: "50%", background: freshColor, boxShadow: `0 0 6px ${freshColor}90`, animation: ageMin !== null && ageMin < 1 ? "pulse 2s infinite" : "none" }} />
+        <span style={{ fontSize: 8, fontWeight: 700, color: freshColor, fontFamily: mono, letterSpacing: "0.08em", whiteSpace: "nowrap" }}>{compact ? fresh : `DATA ${fresh}`}</span>
+      </span>
+      <button onClick={onRefresh} disabled={refreshing} title="Refresh data" aria-label="Refresh data"
+        style={{ width: compact ? 34 : 30, height: compact ? 34 : 30, display: "inline-flex", alignItems: "center", justifyContent: "center", background: "rgba(200,160,74,0.1)", border: "1px solid rgba(200,160,74,0.3)", borderRadius: 9, cursor: refreshing ? "default" : "pointer", flex: "none", padding: 0 }}>
+        <svg width={compact ? 15 : 14} height={compact ? 15 : 14} viewBox="0 0 24 24" fill="none" stroke={T.brass} strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round"
+          style={{ animation: refreshing ? "spin 0.9s linear infinite" : "none", opacity: refreshing ? 0.7 : 1 }}>
+          <path d="M21 12a9 9 0 1 1-2.64-6.36" />
+          <path d="M21 3v6h-6" />
+        </svg>
+      </button>
+    </div>
+  );
+}
+
 // ─── Modals ──────────────────────────────────────────────────────────────────
 function ModalShell({ onClose, children, isMobile, z = 300 }) {
   return (
@@ -1261,6 +1479,7 @@ const NAV = [
   { key: "board", label: "The Board", sub: "5 seats · charters & context", mark: "#7C3AED" },
   { key: "props", label: "Your Properties", sub: "5 live assets", mark: T.blue },
   { key: "it", label: "IT Department", sub: "deploys · database · models", mark: "#0E9F6E" },
+  { key: "conn", label: "Connections", sub: "every data pipe, status-checked", mark: "#38BDF8" },
   { key: "mini", label: "Mini Me", sub: "level 3 · online", mark: "#EC4899" },
 ];
 const HEADERS = {
@@ -1269,6 +1488,7 @@ const HEADERS = {
   board: ["The Board", "five specialist seats + one Chief"],
   props: ["Your Properties", "everything you run, one click away"],
   it: ["IT Department", "deploys, database, and token spend"],
+  conn: ["Connections", "live status of every pipe the room depends on"],
   mini: ["Mini Me", "your sidekick — it never sleeps"],
 };
 const MOBILE_TABS = [
@@ -1276,6 +1496,7 @@ const MOBILE_TABS = [
   { key: "board", label: "Board" },
   { key: "props", label: "Assets" },
   { key: "it", label: "IT Dept" },
+  { key: "conn", label: "Status" },
   { key: "mini", label: "Mini Me" },
 ];
 
@@ -1301,7 +1522,29 @@ export default function App() {
   const [chatOpen, setChatOpen] = useState(false);
   const [editingCal, setEditingCal] = useState(false);
   const [calDraft, setCalDraft] = useState("");
+  const [dataStamp, setDataStamp] = useState(null);
+  const [refreshing, setRefreshing] = useState(false);
+  const [now, setNow] = useState(Date.now());
   const endRef = useRef(null);
+
+  // Tick every 30s so the clock and freshness pill stay current.
+  useEffect(() => {
+    const iv = setInterval(() => setNow(Date.now()), 30 * 1000);
+    return () => clearInterval(iv);
+  }, []);
+
+  const refreshData = async () => {
+    if (refreshing || !supabase || !session?.user) return;
+    setRefreshing(true);
+    btc.refresh();
+    try {
+      const [chat, notes, sets] = await Promise.all([db.loadChat(), db.loadSeatNotes(), db.loadSettings()]);
+      setMessages(chat); setSeatNotes(notes); setSettings(sets);
+    } catch {}
+    setDataStamp(Date.now());
+    setNow(Date.now());
+    setRefreshing(false);
+  };
 
   useEffect(() => {
     if (!supabase) { setAuthChecked(true); return; }
@@ -1319,6 +1562,7 @@ export default function App() {
       const [chat, notes, sets] = await Promise.all([db.loadChat(), db.loadSeatNotes(), db.loadSettings()]);
       if (!alive) return;
       setMessages(chat); setSeatNotes(notes); setSettings(sets);
+      setDataStamp(Date.now());
       setLoadingData(false);
       if (!sm.get("migrated")) {
         const localChat = sm.get("chat") || [];
@@ -1395,6 +1639,7 @@ export default function App() {
       case "board": return <BoardPage seatNotes={seatNotes} onEditSeat={setEditSeat} onEnterRoom={() => setPage("room")} isMobile={isMobile} />;
       case "props": return <PropertiesPage isMobile={isMobile} btc={btc} />;
       case "it": return <ITPage settings={settings} updateSetting={updateSetting} isMobile={isMobile} />;
+      case "conn": return <ConnectionsPage session={session} btc={btc} isMobile={isMobile} />;
       case "mini": return <MiniMePage settings={settings} updateSetting={updateSetting} isMobile={isMobile} />;
       default: return null;
     }
@@ -1409,10 +1654,7 @@ export default function App() {
             <span style={{ width: 20, height: 20, borderRadius: 6, background: `linear-gradient(135deg, ${T.brass} 0%, ${T.brassDeep} 100%)`, boxShadow: "0 2px 6px rgba(200,160,74,0.45), inset 0 1px 0 rgba(255,255,255,0.4)" }} />
             <span style={{ fontSize: 11.5, fontWeight: 800, letterSpacing: "0.15em", textTransform: "uppercase", fontFamily: syne }}>Board Room</span>
           </div>
-          <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-            <span style={{ width: 6, height: 6, borderRadius: "50%", background: T.green, boxShadow: "0 0 8px rgba(52,211,153,0.6)" }} />
-            <span style={{ fontSize: 9, color: T.faint, fontFamily: mono, letterSpacing: "0.05em" }}>ALL SYSTEMS LIVE</span>
-          </div>
+          <TopStatus now={now} dataStamp={dataStamp} refreshing={refreshing} onRefresh={refreshData} compact />
         </div>
 
         {renderPage(tab)}
@@ -1543,7 +1785,11 @@ export default function App() {
             <span style={{ fontSize: 14, fontWeight: 700, fontFamily: syne, letterSpacing: "0.02em" }}>{HEADERS[page][0]}</span>
             <span style={{ fontSize: 10.5, color: T.faint }}>{HEADERS[page][1]}</span>
           </div>
-          <span style={{ fontSize: 9.5, color: T.faint, fontFamily: mono, letterSpacing: "0.05em" }}>SESSION ${totalSpend.toFixed(3)} · {obs.all().length} CALLS</span>
+          <div style={{ display: "flex", alignItems: "center", gap: 16 }}>
+            <span style={{ fontSize: 9.5, color: T.faint, fontFamily: mono, letterSpacing: "0.05em" }}>SESSION ${totalSpend.toFixed(3)} · {obs.all().length} CALLS</span>
+            <span style={{ width: 1, height: 22, background: T.line, flex: "none" }} />
+            <TopStatus now={now} dataStamp={dataStamp} refreshing={refreshing} onRefresh={refreshData} />
+          </div>
         </div>
 
         {page === "room" ? (

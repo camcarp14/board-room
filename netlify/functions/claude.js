@@ -1,19 +1,45 @@
-// Generic Claude proxy — the web app calls this instead of hitting Anthropic
-// directly, so the API key stays server-side. Env: ANTHROPIC_API_KEY.
-export default async (req) => {
-  if (req.method !== "POST") return Response.json({ error: "POST only" }, { status: 405 });
-  const { ANTHROPIC_API_KEY } = process.env;
-  if (!ANTHROPIC_API_KEY) return Response.json({ error: "Missing ANTHROPIC_API_KEY env var on this site" }, { status: 500 });
+// Proxies /v1/messages so ANTHROPIC_API_KEY stays server-side.
+// { ping: true } → config status only, no API call, no spend.
+const json = (statusCode, body) => ({
+  statusCode,
+  headers: { "Content-Type": "application/json" },
+  body: JSON.stringify(body),
+});
+
+exports.handler = async (event) => {
+  if (event.httpMethod !== "POST") return json(405, { error: "POST only" });
+
+  let body;
+  try { body = JSON.parse(event.body || "{}"); } catch { return json(400, { error: "invalid JSON" }); }
+
+  const key = process.env.ANTHROPIC_API_KEY;
+
+  if (body.ping) {
+    return json(200, { success: true, service: "claude", configured: !!key, missing: key ? undefined : "ANTHROPIC_API_KEY" });
+  }
+  if (!key) return json(500, { error: "ANTHROPIC_API_KEY is not set on this site" });
+
+  // Only forward the fields the app actually uses.
+  const payload = {
+    model: body.model,
+    max_tokens: Math.min(body.max_tokens || 800, 4096),
+    messages: body.messages,
+  };
+  if (body.system) payload.system = body.system;
+
   try {
-    const body = await req.text();
     const res = await fetch("https://api.anthropic.com/v1/messages", {
       method: "POST",
-      headers: { "Content-Type": "application/json", "x-api-key": ANTHROPIC_API_KEY, "anthropic-version": "2023-06-01" },
-      body,
+      headers: {
+        "Content-Type": "application/json",
+        "x-api-key": key,
+        "anthropic-version": "2023-06-01",
+      },
+      body: JSON.stringify(payload),
     });
     const data = await res.json();
-    return Response.json(data, { status: res.status });
+    return json(res.status, data);
   } catch (e) {
-    return Response.json({ error: e.message }, { status: 500 });
+    return json(502, { error: "upstream request failed: " + e.message });
   }
 };
