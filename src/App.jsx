@@ -93,6 +93,24 @@ const db = {
     if (!rows || !rows.length) return;
     try { await supabase.from("auditor_findings").insert(rows.map(r => ({ property: r.property, severity: r.severity, area: r.area || null, finding: r.finding, suggestion: r.suggestion }))); } catch {}
   },
+  async loadNotes() {
+    const { data, error } = await supabase.from("personal_notes")
+      .select("id,title,body,updated_at,created_at")
+      .order("updated_at", { ascending: false });
+    if (error) throw error;
+    return data || [];
+  },
+  async saveNote(note) {
+    const user_id = await db.uid();
+    if (!user_id) throw new Error("Not signed in");
+    const row = { id: note.id, user_id, title: note.title, body: note.body, updated_at: new Date().toISOString() };
+    const { data, error } = await supabase.from("personal_notes").upsert(row, { onConflict: "id" }).select().single();
+    if (error) throw error;
+    return data;
+  },
+  async deleteNote(id) {
+    try { await supabase.from("personal_notes").delete().eq("id", id); } catch {}
+  },
 };
 
 // Durable, cross-device usage log (Supabase) — separate from the
@@ -981,6 +999,169 @@ function BoardRoomPage({ messages, thinking, loadingData, input, setInput, onSen
         ? <RoomPage messages={messages} thinking={thinking} loadingData={loadingData} input={input} setInput={setInput} onSend={onSend} endRef={endRef} isMobile={true} />
         : <BoardPage seatNotes={seatNotes} onEditSeat={onEditSeat} onEnterRoom={() => setSub("chat")} isMobile={true} />}
     </>
+  );
+}
+
+// ─── Page: Personal (Notes + Calendar) ────────────────────────────────────────
+const PERSONAL_SUBTABS = [{ key: "notes", label: "Notes" }, { key: "calendar", label: "Calendar" }];
+
+function PersonalPage({ isMobile }) {
+  const [sub, setSub] = useState("notes");
+  return (
+    <div style={{ maxWidth: 900, margin: "0 auto", padding: isMobile ? "10px 14px 24px" : "20px 24px 40px", display: "flex", flexDirection: "column", gap: 14 }}>
+      <SubTabs options={PERSONAL_SUBTABS} value={sub} onChange={setSub} />
+      {sub === "notes" ? <NotesPanel isMobile={isMobile} /> : <CalendarPanel isMobile={isMobile} />}
+    </div>
+  );
+}
+
+function NotesPanel({ isMobile }) {
+  const card = isMobile ? S.cardM : S.card;
+  const [notes, setNotes] = useState(null); // null = loading
+  const [loadErr, setLoadErr] = useState(null);
+  const [activeId, setActiveId] = useState(null);
+  const [draft, setDraft] = useState({ title: "", body: "" });
+  const [saveState, setSaveState] = useState("idle"); // idle | saving | saved | error
+  const saveTimer = useRef(null);
+  const skipNextAutosave = useRef(false); // true right after loading a note, so opening it doesn't immediately "save"
+
+  const refresh = () => {
+    db.loadNotes()
+      .then(rows => setNotes(rows))
+      .catch(e => setLoadErr(e.message || "Couldn't load notes."));
+  };
+  useEffect(() => { refresh(); }, []);
+
+  const openNote = (n) => {
+    skipNextAutosave.current = true;
+    setActiveId(n.id);
+    setDraft({ title: n.title || "", body: n.body || "" });
+    setSaveState("idle");
+  };
+
+  const newNote = () => {
+    skipNextAutosave.current = true;
+    setActiveId(crypto.randomUUID());
+    setDraft({ title: "", body: "" });
+    setSaveState("idle");
+  };
+
+  const closeEditor = () => {
+    setActiveId(null);
+    setDraft({ title: "", body: "" });
+  };
+
+  // Autosave — 800ms after typing stops, and only once there's something to save
+  useEffect(() => {
+    if (!activeId) return;
+    if (skipNextAutosave.current) { skipNextAutosave.current = false; return; }
+    if (!draft.title.trim() && !draft.body.trim()) return; // don't save a blank note
+    setSaveState("saving");
+    clearTimeout(saveTimer.current);
+    saveTimer.current = setTimeout(() => {
+      db.saveNote({ id: activeId, title: draft.title, body: draft.body })
+        .then(() => { setSaveState("saved"); refresh(); })
+        .catch(() => setSaveState("error"));
+    }, 800);
+    return () => clearTimeout(saveTimer.current);
+  }, [draft, activeId]);
+
+  const removeNote = (id, e) => {
+    e.stopPropagation();
+    if (!window.confirm("Delete this note? This can't be undone.")) return;
+    db.deleteNote(id).then(() => {
+      if (activeId === id) closeEditor();
+      refresh();
+    });
+  };
+
+  const snippet = (body) => (body || "").replace(/\s+/g, " ").trim().slice(0, 90);
+  const fmtWhen = (iso) => {
+    const d = new Date(iso);
+    const sameDay = d.toDateString() === new Date().toDateString();
+    return sameDay
+      ? d.toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" })
+      : d.toLocaleDateString("en-US", { month: "short", day: "numeric" });
+  };
+
+  // ─── Editor view ───
+  if (activeId) {
+    return (
+      <div style={{ ...card }}>
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 10 }}>
+          <button onClick={closeEditor} style={{ background: "none", border: "none", color: T.brass, fontFamily: syne, fontWeight: 700, fontSize: 12, cursor: "pointer", padding: 0 }}>‹ All notes</button>
+          <span style={{ ...S.microLabel }}>
+            {saveState === "saving" && "Saving…"}
+            {saveState === "saved" && "Saved"}
+            {saveState === "error" && <span style={{ color: "#B23A2E" }}>Couldn't save — check your connection</span>}
+          </span>
+        </div>
+        <input
+          value={draft.title}
+          onChange={e => setDraft(d => ({ ...d, title: e.target.value }))}
+          placeholder="Untitled note"
+          style={{ ...S.input, width: "100%", padding: "10px 12px", fontSize: 15, fontWeight: 700, fontFamily: syne, marginBottom: 8 }}
+        />
+        <textarea
+          value={draft.body}
+          onChange={e => setDraft(d => ({ ...d, body: e.target.value }))}
+          placeholder="Start typing — this saves automatically."
+          rows={isMobile ? 14 : 18}
+          style={{ ...S.input, width: "100%", padding: "10px 12px", fontSize: 13.5, lineHeight: 1.6, resize: "vertical" }}
+        />
+      </div>
+    );
+  }
+
+  // ─── List view ───
+  return (
+    <div style={{ ...card }}>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 12 }}>
+        <span style={S.title}>Notes</span>
+        <button onClick={newNote} style={{ ...S.brassBtn, padding: "7px 14px", fontSize: 11.5 }}>+ New note</button>
+      </div>
+
+      {loadErr && <div style={{ fontSize: 11.5, color: T.faint, padding: "20px 0", textAlign: "center" }}>{loadErr}</div>}
+      {!loadErr && notes === null && <div style={{ fontSize: 11.5, color: T.faint, padding: "20px 0", textAlign: "center", animation: "pulse 1.4s infinite" }}>Loading notes…</div>}
+      {!loadErr && notes && notes.length === 0 && (
+        <div style={{ fontSize: 11.5, color: T.faint, padding: "24px 0", textAlign: "center" }}>No notes yet — tap "+ New note" to start one.</div>
+      )}
+      {!loadErr && notes && notes.length > 0 && (
+        <div style={{ display: "flex", flexDirection: "column", gap: 7 }}>
+          {notes.map(n => (
+            <div key={n.id} onClick={() => openNote(n)}
+              style={{ ...S.inner, padding: "10px 12px", cursor: "pointer", display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 10 }}>
+              <div style={{ minWidth: 0, flex: 1 }}>
+                <div style={{ fontSize: 12.5, fontWeight: 700, fontFamily: syne, color: T.ink, marginBottom: 2, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+                  {n.title?.trim() || "Untitled note"}
+                </div>
+                <div style={{ fontSize: 11, color: T.sub, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+                  {snippet(n.body) || "No additional text"}
+                </div>
+              </div>
+              <div style={{ display: "flex", alignItems: "center", gap: 10, flex: "none" }}>
+                <span style={{ ...S.microLabel }}>{fmtWhen(n.updated_at)}</span>
+                <button onClick={(e) => removeNote(n.id, e)} aria-label="Delete note" style={{ background: "none", border: "none", color: T.faint, cursor: "pointer", fontSize: 14, padding: 2, lineHeight: 1 }}>×</button>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function CalendarPanel({ isMobile }) {
+  const card = isMobile ? S.cardM : S.card;
+  return (
+    <div style={card}>
+      <span style={S.title}>Calendar</span>
+      <div style={{ fontSize: 11.5, color: T.sub, lineHeight: 1.7, marginTop: 10 }}>
+        Not built yet — this is next in line after Notes. It'll let you add your own events here,
+        backed by Supabase the same way Notes is, and will likely feed into the Watch This Week /
+        Upcoming Meetings cards on the Brief.
+      </div>
+    </div>
   );
 }
 
@@ -2174,13 +2355,15 @@ const NAV = [
   { key: "brief", label: "Brief", sub: "BTC · stocks · wires · ZTS", mark: T.amber },
   { key: "mini", label: "Mini Me", sub: "queue · loops · oversight", mark: "#EC4899" },
   { key: "boardroom", label: "Board Room", sub: "chat + 5 seats · charters & context", mark: T.brass },
-  { key: "assets", label: "Assets", sub: "5 live properties · site auditor", mark: T.blue },
+  { key: "personal", label: "Personal", sub: "notes · calendar", mark: "#8B5CF6" },
+  { key: "assets", label: "Assets", sub: "4 live properties · site auditor", mark: T.blue },
   { key: "systems", label: "Systems", sub: "usage · status · deploy · supabase", mark: "#0E9F6E" },
 ];
 const HEADERS = {
   brief: ["Brief", "live markets, wires, and your stores"],
   mini: ["Mini Me", "your sidekick — queue work and it delivers"],
   boardroom: ["Board Room", "smart routing · 5 seats on call"],
+  personal: ["Personal", "notes and calendar, just for you"],
   assets: ["Assets", "everything you run, one click away"],
   systems: ["Systems", "usage, status, deploys, and supabase"],
 };
@@ -2210,6 +2393,13 @@ const NAV_ICONS = {
   mini: (p) => ( // sparkle — mini me
     <svg {...p} viewBox="0 0 24 24" fill="currentColor" stroke="none">
       <path d="M12 2.5c.5 3.4 1.2 5.4 2.4 6.6 1.2 1.2 3.2 1.9 6.6 2.4-3.4.5-5.4 1.2-6.6 2.4-1.2 1.2-1.9 3.2-2.4 6.6-.5-3.4-1.2-5.4-2.4-6.6C8.4 12.7 6.4 12 3 11.5c3.4-.5 5.4-1.2 6.6-2.4 1.2-1.2 1.9-3.2 2.4-6.6z" />
+    </svg>
+  ),
+  personal: (p) => ( // notebook — personal notes + calendar
+    <svg {...p} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M4 4.5A2.5 2.5 0 0 1 6.5 2H18a1 1 0 0 1 1 1v17a1 1 0 0 1-1 1H6.5A2.5 2.5 0 0 1 4 18.5v-14z" />
+      <path d="M4 18.5A2.5 2.5 0 0 1 6.5 16H19" />
+      <line x1="8" y1="7" x2="14" y2="7" /><line x1="8" y1="10.5" x2="14" y2="10.5" />
     </svg>
   ),
 };
@@ -2368,6 +2558,7 @@ export default function App() {
     switch (key) {
       case "brief": return <MorningBriefPage btc={btc} isMobile={isMobile} settings={settings} />;
       case "boardroom": return <BoardRoomPage messages={messages} thinking={thinking} loadingData={loadingData} input={input} setInput={setInput} onSend={send} endRef={endRef} seatNotes={seatNotes} onEditSeat={setEditSeat} isMobile={isMobile} />;
+      case "personal": return <PersonalPage isMobile={isMobile} />;
       case "assets": return <PropertiesPage isMobile={isMobile} btc={btc} settings={settings} updateSetting={updateSetting} session={session} />;
       case "systems": return <SystemsPage settings={settings} updateSetting={updateSetting} session={session} btc={btc} isMobile={isMobile} />;
       case "mini": return <MiniMePage settings={settings} updateSetting={updateSetting} session={session} onWorkerRun={refreshData} isMobile={isMobile} />;
