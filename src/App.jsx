@@ -953,9 +953,11 @@ function MorningBriefPage({ btc, isMobile, settings }) {
                         const dayEvents = miniEventsByDay[miniDateKey(day)] || [];
                         const isToday = day === todayDate;
                         return (
-                          <div key={day} style={{ aspectRatio: "1", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 1, borderRadius: 6, border: isToday ? `1.5px solid ${T.brass}` : "1px solid transparent", background: isToday ? "rgba(143,107,30,0.08)" : "transparent" }}>
-                            <span style={{ fontSize: 9.5, fontWeight: isToday ? 800 : 500, color: isToday ? T.brass : T.ink, fontFamily: mono }}>{day}</span>
-                            {dayEvents.length > 0 && <span style={{ width: 3, height: 3, borderRadius: "50%", background: miniCatColor(dayEvents[0].category) }} />}
+                          <div key={day} style={{ display: "flex", flexDirection: "column", alignItems: "stretch", gap: 1, textAlign: "left", minHeight: 34, padding: "2px 2px", borderRadius: 5, border: isToday ? `1.5px solid ${T.brass}` : "1px solid transparent", background: isToday ? "rgba(143,107,30,0.08)" : "transparent" }}>
+                            <span style={{ fontSize: 9, fontWeight: isToday ? 800 : 500, color: isToday ? T.brass : T.ink, fontFamily: mono, paddingLeft: 1 }}>{day}</span>
+                            {dayEvents.length > 0 && (
+                              <span style={{ fontSize: 6.5, fontWeight: 700, color: "#FFFFFF", background: miniCatColor(dayEvents[0].category), borderRadius: 3, padding: "1px 2px", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", lineHeight: 1.4 }}>{dayEvents[0].title}</span>
+                            )}
                           </div>
                         );
                       })}
@@ -1985,17 +1987,16 @@ Only extract entries you can read with real confidence — skip anything blurry,
               return (
                 <button key={key} onClick={() => setSelectedDay(key)}
                   style={{
-                    aspectRatio: "1", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 2,
-                    borderRadius: 9, cursor: "pointer", padding: "2px 0",
+                    display: "flex", flexDirection: "column", alignItems: "stretch", gap: 2, textAlign: "left",
+                    borderRadius: 8, cursor: "pointer", padding: "4px 3px", minHeight: 56,
                     border: todayFlag ? `1.5px solid ${T.brass}` : "1px solid transparent",
                     background: todayFlag ? "rgba(143,107,30,0.08)" : "transparent",
                   }}>
-                  <span style={{ fontSize: 11.5, fontWeight: todayFlag ? 800 : 500, color: todayFlag ? T.brass : T.ink, fontFamily: mono }}>{day}</span>
-                  {dayEvents.length > 0 && (
-                    <span style={{ display: "flex", gap: 2 }}>
-                      {dayEvents.slice(0, 3).map((ev, j) => <span key={j} style={{ width: 4, height: 4, borderRadius: "50%", background: catColor(ev.category) }} />)}
-                    </span>
-                  )}
+                  <span style={{ fontSize: 10.5, fontWeight: todayFlag ? 800 : 500, color: todayFlag ? T.brass : T.ink, fontFamily: mono, paddingLeft: 2, marginBottom: 1 }}>{day}</span>
+                  {dayEvents.slice(0, 2).map((ev, j) => (
+                    <span key={j} style={{ fontSize: 8, fontWeight: 700, color: "#FFFFFF", background: catColor(ev.category), borderRadius: 4, padding: "1.5px 4px", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", lineHeight: 1.5, marginBottom: 1 }}>{ev.title}</span>
+                  ))}
+                  {dayEvents.length > 2 && <span style={{ fontSize: 7.5, color: T.faint, paddingLeft: 2, fontFamily: mono }}>+{dayEvents.length - 2} more</span>}
                 </button>
               );
             })}
