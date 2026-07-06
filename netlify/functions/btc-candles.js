@@ -8,6 +8,7 @@ const json = (code, body) => ({ statusCode: code, headers: { "Content-Type": "ap
 
 // UI interval -> Kraken interval in minutes
 const INTERVAL_MAP = {
+  "1m": 1,
   "5m": 5,
   "15m": 15,
   "30m": 30,

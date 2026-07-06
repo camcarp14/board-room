@@ -11,6 +11,7 @@ const T = {
 };
 
 const INTERVALS = [
+  { key: "1m", label: "1m" },
   { key: "5m", label: "5m" },
   { key: "15m", label: "15m" },
   { key: "30m", label: "30m" },
@@ -19,7 +20,7 @@ const INTERVALS = [
 ];
 
 export default function BtcChartModal({ isMobile, onClose, callFnFull }) {
-  const [interval, setInterval_] = useState("1d");
+  const [interval, setInterval_] = useState("1m");
   const [candles, setCandles] = useState(null);
   const [candleErr, setCandleErr] = useState(null);
 
@@ -66,9 +67,9 @@ export default function BtcChartModal({ isMobile, onClose, callFnFull }) {
   }, [candles, interval, isMobile]);
 
   return (
-    <div onClick={onClose} style={{ position: "fixed", inset: 0, background: "rgba(4,7,14,0.72)", zIndex: 500, display: "flex", alignItems: isMobile ? "flex-end" : "center", justifyContent: "center", animation: "fadein 0.15s ease both" }}>
+    <div onClick={onClose} style={{ position: "fixed", inset: 0, background: "rgba(4,7,14,0.72)", zIndex: 500, display: "flex", alignItems: "center", justifyContent: "center", padding: isMobile ? 16 : 0, animation: "fadein 0.15s ease both" }}>
       <div onClick={e => e.stopPropagation()} style={{
-        background: "linear-gradient(180deg,#FFFFFF,#F6F3ED)", borderRadius: isMobile ? "20px 20px 0 0" : 18,
+        background: "linear-gradient(180deg,#FFFFFF,#F6F3ED)", borderRadius: 18,
         padding: "20px 20px calc(20px + env(safe-area-inset-bottom))", width: isMobile ? "100%" : 720, maxWidth: 720,
         maxHeight: isMobile ? "88vh" : "86vh", overflowY: "auto",
         border: "1px solid rgba(34,29,20,0.1)", boxShadow: "0 32px 80px rgba(30,25,17,0.42)", color: T.ink,

@@ -132,6 +132,17 @@ const db = {
   async deleteEvent(id) {
     try { await supabase.from("personal_events").delete().eq("id", id); } catch {}
   },
+  async saveEventsBulk(rows) {
+    const user_id = await db.uid();
+    if (!user_id) throw new Error("Not signed in");
+    const payload = rows.map(e => ({
+      id: e.id, user_id, title: e.title, notes: e.notes || "",
+      start_time: e.start_time, end_time: e.end_time || null, all_day: !!e.all_day,
+    }));
+    const { data, error } = await supabase.from("personal_events").insert(payload).select();
+    if (error) throw error;
+    return data;
+  },
   async loadBirthdays() {
     const { data, error } = await supabase.from("personal_birthdays")
       .select("id,name,month,day,year,notes");
@@ -767,6 +778,11 @@ Be directional where the data supports it — don't hedge into uselessness — b
                       <span style={{ fontSize: 26, fontWeight: 500, fontFamily: mono, color: T.ink }}>{price}</span>
                       {hasChange && <span style={{ fontSize: 12, fontWeight: 700, color: up ? T.green : T.red, fontFamily: mono }}>{up ? "▲" : "▼"} {Math.abs(btc.changePct || 0).toFixed(2)}%</span>}
                     </div>
+                    {isMobile && !btc.loading && !btc.error && (
+                      <div style={{ marginBottom: 13 }}>
+                        <Sparkline points={btc.points} color={up ? T.green : T.red} height={34} />
+                      </div>
+                    )}
                     <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 7, marginBottom: 13 }}>
                       <StatBox value={dayTarget} label="Day target" valueColor={T.brass} />
                       <StatBox value={support} label="Support (24h low)" valueColor={T.green} />
@@ -1459,12 +1475,126 @@ function CalendarPanel({ isMobile }) {
   const [saveErr, setSaveErr] = useState(null);
   const [showPast, setShowPast] = useState(false);
 
+  const [bulkOpen, setBulkOpen] = useState(false);
+  const [bulkImages, setBulkImages] = useState([]); // {id, name, dataUrl, base64, mediaType}
+  const [bulkParsing, setBulkParsing] = useState(false);
+  const [bulkErr, setBulkErr] = useState(null);
+  const [bulkPreview, setBulkPreview] = useState(null); // parsed rows awaiting review
+  const [bulkSaving, setBulkSaving] = useState(false);
+
   const refresh = () => {
     db.loadEvents()
       .then(rows => setEvents(rows))
       .catch(e => setLoadErr(e.message || "Couldn't load your calendar."));
   };
   useEffect(() => { refresh(); }, []);
+
+  // ─── Bulk import from calendar screenshots ───
+  const normName = (s) => (s || "").toLowerCase().replace(/'s birthday|birthday|bday|born/gi, "").replace(/[^a-z0-9]/g, "").trim();
+
+  const addImages = (fileList) => {
+    Array.from(fileList).forEach(file => {
+      const reader = new FileReader();
+      reader.onload = () => {
+        const dataUrl = reader.result;
+        const base64 = dataUrl.split(",")[1];
+        setBulkImages(prev => [...prev, { id: crypto.randomUUID(), name: file.name, dataUrl, base64, mediaType: file.type || "image/png" }]);
+      };
+      reader.readAsDataURL(file);
+    });
+  };
+  const removeImage = (id) => setBulkImages(prev => prev.filter(i => i.id !== id));
+
+  const parseBulkImages = async () => {
+    if (!bulkImages.length) return;
+    setBulkParsing(true); setBulkErr(null); setBulkPreview(null);
+
+    const [birthdaysList, eventsList] = await Promise.all([
+      db.loadBirthdays().catch(() => []),
+      db.loadEvents().catch(() => []),
+    ]);
+
+    const system = `You are extracting events from a screenshot of a calendar app's month view. Look at the month/year shown in the screenshot's header to anchor the dates. Respond with ONLY a JSON array, no markdown fences, no commentary.
+Each item: {"title": string, "date": "YYYY-MM-DD", "time": "HH:MM" or null, "all_day": boolean, "kind": "event" or "possible_birthday"}.
+Use kind "possible_birthday" if the title clearly reads as someone's birthday (contains "birthday", "bday", a cake emoji, or is just a name in a way that strongly implies it). Otherwise use "event".
+Only extract entries you can read with real confidence — skip anything blurry, cut off, or ambiguous rather than guessing. If you find nothing legible, respond with []`;
+
+    const merged = [];
+    const errors = [];
+    for (const img of bulkImages) {
+      try {
+        const text = await callClaude({
+          system,
+          messages: [{ role: "user", content: [
+            { type: "image", source: { type: "base64", media_type: img.mediaType, data: img.base64 } },
+            { type: "text", text: "Extract every event from this calendar screenshot as instructed." },
+          ] }],
+          modelKey: "sonnet", maxTokens: 2500, fn: "parse_calendar_image",
+        });
+        if (!text) { errors.push(`${img.name}: no response`); continue; }
+        const cleaned = text.trim().replace(/^```(json)?/i, "").replace(/```$/, "").trim();
+        const parsed = JSON.parse(cleaned);
+        if (!Array.isArray(parsed)) { errors.push(`${img.name}: unexpected response shape`); continue; }
+        parsed.forEach(item => {
+          if (item && typeof item.title === "string" && item.date) merged.push(item);
+        });
+      } catch (e) {
+        errors.push(`${img.name}: ${e.message || "couldn't parse"}`);
+      }
+    }
+
+    setBulkParsing(false);
+    if (!merged.length) {
+      setBulkErr(errors.length ? `Couldn't extract anything. ${errors.join("; ")}` : "No events found in those screenshots.");
+      return;
+    }
+
+    // Cross-reference against what's already tracked, so re-importing your
+    // old calendar doesn't create duplicate birthdays or duplicate events.
+    const reviewed = merged.map(item => {
+      const [y, m, d] = item.date.split("-").map(Number);
+      if (item.kind === "possible_birthday") {
+        const match = birthdaysList.find(b => normName(b.name) === normName(item.title) && b.month === m && b.day === d);
+        return {
+          tempId: crypto.randomUUID(), title: item.title, date: item.date, time: item.time, allDay: !!item.all_day,
+          kind: match ? "duplicate_birthday" : "new_birthday",
+          matchedName: match?.name,
+          action: match ? "skip" : "birthday",
+          month: m, day: d, year: y,
+        };
+      }
+      const dupEvent = eventsList.find(e => normName(e.title) === normName(item.title) && e.start_time.slice(0, 10) === item.date);
+      return {
+        tempId: crypto.randomUUID(), title: item.title, date: item.date, time: item.time, allDay: !!item.all_day,
+        kind: dupEvent ? "duplicate_event" : "event",
+        action: dupEvent ? "skip" : "calendar",
+      };
+    });
+
+    if (errors.length) setBulkErr(`Imported what I could. Skipped: ${errors.join("; ")}`);
+    setBulkPreview(reviewed);
+  };
+
+  const updateRowAction = (tempId, action) => setBulkPreview(rows => rows.map(r => r.tempId === tempId ? { ...r, action } : r));
+
+  const confirmBulkImport = () => {
+    if (!bulkPreview?.length) return;
+    setBulkSaving(true);
+    const toCalendar = bulkPreview.filter(r => r.action === "calendar").map(r => ({
+      id: crypto.randomUUID(), title: r.title, notes: "Imported from calendar screenshot",
+      start_time: r.allDay || !r.time ? new Date(`${r.date}T00:00:00`).toISOString() : new Date(`${r.date}T${r.time}:00`).toISOString(),
+      all_day: r.allDay || !r.time,
+    }));
+    const toBirthdays = bulkPreview.filter(r => r.action === "birthday").map(r => ({
+      id: crypto.randomUUID(), name: r.title.replace(/'s birthday|birthday|bday/gi, "").trim() || r.title, month: r.month, day: r.day, year: r.year || null,
+    }));
+    Promise.all([
+      toCalendar.length ? db.saveEventsBulk(toCalendar) : Promise.resolve(),
+      toBirthdays.length ? db.saveBirthdaysBulk(toBirthdays) : Promise.resolve(),
+    ]).then(() => {
+      setBulkSaving(false); setBulkPreview(null); setBulkImages([]); setBulkOpen(false); refresh();
+    }).catch(e => { setBulkSaving(false); setBulkErr(e.message || "Couldn't save the batch."); });
+  };
 
   const todayStr = new Date().toISOString().slice(0, 10);
   const nowMs = Date.now();
@@ -1587,14 +1717,86 @@ function CalendarPanel({ isMobile }) {
 
   return (
     <div style={card}>
-      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 12 }}>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 12, flexWrap: "wrap", gap: 8 }}>
         <span style={S.title}>Calendar</span>
-        <button onClick={openNew} style={{ ...S.brassBtn, padding: "7px 14px", fontSize: 11.5 }}>+ Add event</button>
+        <div style={{ display: "flex", gap: 8 }}>
+          <button onClick={() => setBulkOpen(o => !o)} style={{ ...S.ghostBtn, padding: "7px 14px", fontSize: 11.5 }}>{bulkOpen ? "Close import" : "Import screenshots"}</button>
+          <button onClick={openNew} style={{ ...S.brassBtn, padding: "7px 14px", fontSize: 11.5 }}>+ Add event</button>
+        </div>
       </div>
+
+      {bulkOpen && (
+        <div style={{ ...S.inner, padding: 12, marginBottom: 12 }}>
+          {!bulkPreview ? (
+            <>
+              <div style={{ fontSize: 10.5, color: T.sub, lineHeight: 1.6, marginBottom: 10 }}>
+                Upload screenshots of your old calendar — one per month works well. Claude reads each one, and anything
+                that looks like a birthday gets checked against your Birthdays list automatically so you don't end up
+                with duplicates. You'll review everything before it's saved.
+              </div>
+
+              <label style={{ display: "inline-block", ...S.ghostBtn, padding: "8px 16px", fontSize: 11.5, marginBottom: 10, cursor: "pointer" }}>
+                Choose images
+                <input type="file" accept="image/*" multiple onChange={e => { addImages(e.target.files); e.target.value = ""; }} style={{ display: "none" }} />
+              </label>
+
+              {bulkImages.length > 0 && (
+                <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginBottom: 10 }}>
+                  {bulkImages.map(img => (
+                    <div key={img.id} style={{ position: "relative", width: 64, height: 64, borderRadius: 8, overflow: "hidden", border: `1px solid ${T.line}` }}>
+                      <img src={img.dataUrl} alt={img.name} style={{ width: "100%", height: "100%", objectFit: "cover" }} />
+                      <button onClick={() => removeImage(img.id)} aria-label="Remove"
+                        style={{ position: "absolute", top: 2, right: 2, width: 18, height: 18, borderRadius: "50%", border: "none", background: "rgba(34,29,20,0.75)", color: "#fff", fontSize: 11, cursor: "pointer", lineHeight: 1 }}>×</button>
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              {bulkErr && <div style={{ fontSize: 11, color: "#B23A2E", marginBottom: 8 }}>{bulkErr}</div>}
+
+              <button onClick={parseBulkImages} disabled={bulkParsing || !bulkImages.length} style={{ ...S.brassBtn, padding: "8px 16px", fontSize: 11.5, opacity: (bulkParsing || !bulkImages.length) ? 0.55 : 1 }}>
+                {bulkParsing ? `Reading ${bulkImages.length} image${bulkImages.length === 1 ? "" : "s"}…` : `Parse ${bulkImages.length || ""} image${bulkImages.length === 1 ? "" : "s"}`}
+              </button>
+            </>
+          ) : (
+            <>
+              <div style={{ fontSize: 10.5, color: T.sub, marginBottom: 8 }}>Found {bulkPreview.length} — review the action for each, then confirm.</div>
+              <div style={{ display: "flex", flexDirection: "column", gap: 5, marginBottom: 10, maxHeight: 320, overflowY: "auto" }}>
+                {bulkPreview.map(r => (
+                  <div key={r.tempId} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, background: "#FCFBF9", border: `1px solid ${T.line}`, borderRadius: 8, padding: "8px 10px" }}>
+                    <div style={{ minWidth: 0, flex: 1 }}>
+                      <div style={{ fontSize: 12, fontFamily: syne, fontWeight: 700, color: T.ink, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{r.title}</div>
+                      <div style={{ fontSize: 10, color: T.sub, fontFamily: mono }}>
+                        {r.date}{r.time ? ` · ${r.time}` : ""}
+                        {r.kind === "duplicate_birthday" && ` · already in Birthdays as "${r.matchedName}"`}
+                        {r.kind === "new_birthday" && " · looks like a new birthday"}
+                        {r.kind === "duplicate_event" && " · looks like it's already on your calendar"}
+                      </div>
+                    </div>
+                    <select value={r.action} onChange={e => updateRowAction(r.tempId, e.target.value)}
+                      style={{ ...S.input, fontSize: 11, padding: "5px 8px", flex: "none" }}>
+                      <option value="calendar">Add to Calendar</option>
+                      <option value="birthday">Add to Birthdays</option>
+                      <option value="skip">Skip</option>
+                    </select>
+                  </div>
+                ))}
+              </div>
+              {bulkErr && <div style={{ fontSize: 11, color: "#B23A2E", marginBottom: 8 }}>{bulkErr}</div>}
+              <div style={{ display: "flex", gap: 8 }}>
+                <button onClick={confirmBulkImport} disabled={bulkSaving} style={{ ...S.brassBtn, padding: "8px 16px", fontSize: 11.5, opacity: bulkSaving ? 0.6 : 1 }}>
+                  {bulkSaving ? "Saving…" : `Confirm (${bulkPreview.filter(r => r.action !== "skip").length})`}
+                </button>
+                <button onClick={() => { setBulkPreview(null); setBulkErr(null); }} style={{ ...S.ghostBtn, padding: "8px 14px", fontSize: 11.5 }}>Start over</button>
+              </div>
+            </>
+          )}
+        </div>
+      )}
 
       {loadErr && <div style={{ fontSize: 11.5, color: T.faint, padding: "20px 0", textAlign: "center" }}>{loadErr}</div>}
       {!loadErr && events === null && <div style={{ fontSize: 11.5, color: T.faint, padding: "20px 0", textAlign: "center", animation: "pulse 1.4s infinite" }}>Loading calendar…</div>}
-      {!loadErr && events && events.length === 0 && (
+      {!loadErr && events && events.length === 0 && !bulkOpen && (
         <div style={{ fontSize: 11.5, color: T.faint, padding: "24px 0", textAlign: "center" }}>Nothing on the calendar yet — tap "+ Add event" to start.</div>
       )}
 
@@ -1621,7 +1823,7 @@ function CalendarPanel({ isMobile }) {
 }
 
 // ─── Page: Properties ────────────────────────────────────────────────────────
-function PropertiesPage({ isMobile, btc, settings, updateSetting, session }) {
+function PropertiesPage({ isMobile, settings, updateSetting, session }) {
   const [status, setStatus] = useState({});
   useEffect(() => {
     let alive = true;
@@ -1660,18 +1862,6 @@ function PropertiesPage({ isMobile, btc, settings, updateSetting, session }) {
           </div>
           );
         })}
-        {isMobile && btc && !btc.loading && !btc.error && (
-          <div style={S.cardM}>
-            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 7 }}>
-              <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                <span style={{ width: 16, height: 16, borderRadius: "50%", background: "linear-gradient(135deg,#F7931A,#C77416)", display: "inline-flex", alignItems: "center", justifyContent: "center", fontSize: 9, fontWeight: 800, color: "#1A0F00" }}>₿</span>
-                <span style={{ fontSize: 14, fontWeight: 500, fontFamily: mono, color: T.ink }}>${btc.price?.toLocaleString(undefined, { maximumFractionDigits: 0 })}</span>
-              </div>
-              <span style={{ fontSize: 11, fontWeight: 700, color: (btc.changePct || 0) >= 0 ? T.green : T.red, fontFamily: mono }}>{(btc.changePct || 0) >= 0 ? "▲" : "▼"} {Math.abs(btc.changePct || 0).toFixed(2)}%</span>
-            </div>
-            <Sparkline points={btc.points} color={(btc.changePct || 0) >= 0 ? T.green : T.red} height={34} />
-          </div>
-        )}
         <div style={{ gridColumn: isMobile ? "auto" : "1 / -1" }}>
           <AuditorCard settings={settings} updateSetting={updateSetting} session={session} isMobile={isMobile} />
         </div>
@@ -3014,7 +3204,7 @@ export default function App() {
       case "brief": return <MorningBriefPage btc={btc} isMobile={isMobile} settings={settings} />;
       case "boardroom": return <BoardRoomPage messages={messages} thinking={thinking} loadingData={loadingData} input={input} setInput={setInput} onSend={send} endRef={endRef} seatNotes={seatNotes} onEditSeat={setEditSeat} isMobile={isMobile} />;
       case "personal": return <PersonalPage isMobile={isMobile} />;
-      case "assets": return <PropertiesPage isMobile={isMobile} btc={btc} settings={settings} updateSetting={updateSetting} session={session} />;
+      case "assets": return <PropertiesPage isMobile={isMobile} settings={settings} updateSetting={updateSetting} session={session} />;
       case "systems": return <SystemsPage settings={settings} updateSetting={updateSetting} session={session} btc={btc} isMobile={isMobile} />;
       case "mini": return <MiniMePage settings={settings} updateSetting={updateSetting} session={session} onWorkerRun={refreshData} isMobile={isMobile} />;
       default: return null;
