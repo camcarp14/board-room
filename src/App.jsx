@@ -669,6 +669,10 @@ function MorningBriefPage({ btc, isMobile, settings }) {
   const [clarifyStatus, setClarifyStatus] = useState({ state: "loading" });
   const [ztsPipe, setZtsPipe] = useState(null);
   const [ztsPipeStatus, setZtsPipeStatus] = useState({ state: "loading" });
+  const [wire, setWire] = useState([]);
+  const [wireStatus, setWireStatus] = useState({ state: "loading" });
+  const [shopify, setShopify] = useState(null);
+  const [shopifyStatus, setShopifyStatus] = useState({ state: "loading" });
   const [meetings, setMeetings] = useState([]);
   const [meetingsStatus, setMeetingsStatus] = useState({ state: "loading" });
   const [birthdays, setBirthdays] = useState(null); // null = loading
@@ -721,6 +725,9 @@ Be directional where the data supports it — don't hedge into uselessness — b
     loadCredentialed("zts-pipeline", {}, (d) => setZtsPipe(d), setZtsPipeStatus,
       (m) => `Add ${m || "ZTS_SUPABASE_URL + ZTS_SUPABASE_ANON_KEY"} in Netlify env vars, then redeploy.`);
     loadOpen("markets", (d) => setStocks(d), setStocksStatus);
+    loadOpen("wire", (d) => setWire(d.wire || []), setWireStatus);
+    loadCredentialed("shopify", { days: 14 }, (d) => setShopify(d), setShopifyStatus,
+      (m) => `Add ${m || "SHOPIFY_SHOP + SHOPIFY_CLIENT_ID + SHOPIFY_CLIENT_SECRET"} in Netlify env vars, then redeploy.`);
     db.loadBirthdays().then(rows => { if (alive) setBirthdays(rows); }).catch(e => { if (alive) setBirthdaysErr(e.message || "Couldn't load birthdays."); });
     loadOpen("calendar", (d) => setEvents(d.events || []), setEventsStatus);
     // Meetings depend on a per-user setting (calendar_url), not an env var —
@@ -965,6 +972,51 @@ Be directional where the data supports it — don't hedge into uselessness — b
                     ) : <FeedFallbackRow status={ztsPipeStatus} />}
                   </div>
       );
+      const card_wire = (
+                  <div style={card}>
+                    <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 12 }}>
+                      <span style={S.title}>The Wire</span>
+                      <StatusTag status={wireStatus} />
+                    </div>
+                    {wireStatus.state === "live" ? (
+                      wire.length ? (
+                        <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                          {wire.map((w, i) => {
+                            const Row = w.link ? "a" : "div";
+                            return (
+                              <Row key={i} {...(w.link ? { href: w.link, target: "_blank", rel: "noreferrer" } : {})}
+                                style={{ display: "flex", alignItems: "baseline", gap: 8, textDecoration: "none", color: "inherit" }}>
+                                <span style={{ fontSize: 9, fontFamily: mono, color: T.faint, flexShrink: 0 }}>{w.time}</span>
+                                <span style={{ fontSize: 8, fontWeight: 700, color: w.tagColor, border: `1px solid ${w.tagColor}40`, background: w.tagColor + "1A", borderRadius: 5, padding: "1.5px 5px", flexShrink: 0, fontFamily: mono }}>{w.tag}</span>
+                                <span style={{ fontSize: 11.5, color: T.ink, lineHeight: 1.4, minWidth: 0, flex: 1 }}>{w.text}</span>
+                              </Row>
+                            );
+                          })}
+                        </div>
+                      ) : <div style={{ fontSize: 10.5, color: T.faint, padding: "6px 0" }}>No headlines returned this cycle.</div>
+                    ) : <FeedFallbackRow status={wireStatus} />}
+                  </div>
+      );
+      const card_shopify = (
+                  <div style={card}>
+                    <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 12 }}>
+                      <span style={S.title}>Zero To Secure · Store</span>
+                      <StatusTag status={shopifyStatus} />
+                    </div>
+                    {shopifyStatus.state === "live" ? (
+                      <>
+                        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr 1fr", gap: 7, marginBottom: 11 }}>
+                          <StatBox value={String(shopify.orders)} label="Orders" delta={shopify.ordersD} />
+                          <StatBox value={shopify.visits} label="Visits" valueColor={T.blue} delta={shopify.visitsD} />
+                          <StatBox value={shopify.conv} label="Conv." valueColor={T.green} />
+                          <StatBox value={shopify.convD || "—"} label="Conv. Δ" valueColor={T.sub} />
+                        </div>
+                        {shopify.series && <Sparkline points={shopify.series} color={T.brass} />}
+                        <div style={{ fontSize: 11.5, color: T.sub, lineHeight: 1.6, marginTop: 8 }}>{shopify.note}</div>
+                      </>
+                    ) : <FeedFallbackRow status={shopifyStatus} />}
+                  </div>
+      );
       const sectionHeader = (label) => (
         <div style={{ display: "flex", alignItems: "center", gap: 10, padding: isMobile ? "2px 2px 0" : "0 2px" }}>
           <span style={{ fontSize: 10, fontWeight: 700, letterSpacing: "0.22em", textTransform: "uppercase", color: T.faint, fontFamily: mono }}>{label}</span>
@@ -975,9 +1027,9 @@ Be directional where the data supports it — don't hedge into uselessness — b
       <div style={grid}>
         <div style={col}>
           {sectionHeader("Market")}
-          {card_bitcoin}{card_stocks}{card_watch}
+          {card_bitcoin}{card_stocks}{card_watch}{card_wire}
           {sectionHeader("Ops")}
-          {card_gsc}{card_clarify}{card_zts}{card_birthdays}{card_meetings}
+          {card_gsc}{card_clarify}{card_zts}{card_shopify}{card_birthdays}{card_meetings}
         </div>
         {btcChartOpen && <BtcChartModal isMobile onClose={() => setBtcChartOpen(false)} callFnFull={callFnFull} />}
       </div>
@@ -985,11 +1037,11 @@ Be directional where the data supports it — don't hedge into uselessness — b
       <div style={grid}>
         <div style={col}>
           {sectionHeader("Market")}
-          {card_bitcoin}{card_stocks}{card_watch}
+          {card_bitcoin}{card_stocks}{card_watch}{card_wire}
         </div>
         <div style={col}>
           {sectionHeader("Ops")}
-          {card_gsc}{card_clarify}{card_zts}{card_birthdays}{card_meetings}
+          {card_gsc}{card_clarify}{card_zts}{card_shopify}{card_birthdays}{card_meetings}
         </div>
         {btcChartOpen && <BtcChartModal isMobile={false} onClose={() => setBtcChartOpen(false)} callFnFull={callFnFull} />}
       </div>
@@ -2124,7 +2176,7 @@ const CONN_GROUPS = [
   { title: "Core", keys: ["supabase_env", "supabase_auth", "supabase_db"] },
   { title: "AI", keys: ["anthropic"] },
   { title: "Market Data", keys: ["coingecko"] },
-  { title: "Netlify Functions", keys: ["fn_health", "fn_mini", "fn_btc", "fn_btc_candles", "fn_markets", "fn_calendar", "fn_calendar_events", "fn_site_status", "fn_gsc", "fn_shopify", "fn_clarify_pipeline", "fn_zts_pipeline", "fn_deploy", "fn_dbadmin", "fn_audit", "fn_autofix"] },
+  { title: "Netlify Functions", keys: ["fn_health", "fn_mini", "fn_btc", "fn_btc_candles", "fn_markets", "fn_wire", "fn_calendar", "fn_calendar_events", "fn_site_status", "fn_gsc", "fn_shopify", "fn_clarify_pipeline", "fn_zts_pipeline", "fn_deploy", "fn_dbadmin", "fn_audit", "fn_autofix"] },
 ];
 const CONN_META = {
   supabase_env: { name: "Supabase · config", desc: "VITE_SUPABASE_URL + anon key present at build time" },
@@ -2144,6 +2196,7 @@ const CONN_META = {
   fn_site_status: { name: "site-status", desc: "uptime check behind the Properties page's live/down pill" },
   fn_gsc: { name: "gsc", desc: "Search Console · zerotosecure.com last 14d" },
   fn_shopify: { name: "shopify", desc: "Shopify Admin API · orders last 14d" },
+  fn_wire: { name: "wire", desc: "CoinDesk + Cointelegraph RSS · tagged headlines" },
   fn_deploy: { name: "deploy", desc: "Netlify API · trigger builds per property" },
   fn_dbadmin: { name: "db-admin", desc: "service-role maintenance, allowlisted commands" },
   fn_audit: { name: "audit", desc: "AI site auditor across all five properties" },
@@ -2224,7 +2277,7 @@ function useConnections({ session, btc }) {
     }
 
     // Netlify functions
-    const fns = [["fn_health", "health"], ["fn_mini", "mini-worker"], ["fn_btc", "btc"], ["fn_markets", "markets"], ["fn_calendar", "calendar"], ["fn_calendar_events", "calendar-events"], ["fn_site_status", "site-status"], ["fn_gsc", "gsc"], ["fn_shopify", "shopify"], ["fn_clarify_pipeline", "clarify-pipeline"], ["fn_zts_pipeline", "zts-pipeline"], ["fn_deploy", "deploy"], ["fn_dbadmin", "db-admin"], ["fn_audit", "audit"], ["fn_autofix", "auto-fix"]];
+    const fns = [["fn_health", "health"], ["fn_mini", "mini-worker"], ["fn_btc", "btc"], ["fn_markets", "markets"], ["fn_wire", "wire"], ["fn_calendar", "calendar"], ["fn_calendar_events", "calendar-events"], ["fn_site_status", "site-status"], ["fn_gsc", "gsc"], ["fn_shopify", "shopify"], ["fn_clarify_pipeline", "clarify-pipeline"], ["fn_zts_pipeline", "zts-pipeline"], ["fn_deploy", "deploy"], ["fn_dbadmin", "db-admin"], ["fn_audit", "audit"], ["fn_autofix", "auto-fix"]];
     if (!IS_DEPLOYED) {
       // netlify dev serves functions locally; try health first to decide
       const probe = await pingFn("health");
