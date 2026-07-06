@@ -111,6 +111,52 @@ const db = {
   async deleteNote(id) {
     try { await supabase.from("personal_notes").delete().eq("id", id); } catch {}
   },
+  async loadEvents() {
+    const { data, error } = await supabase.from("personal_events")
+      .select("id,title,notes,start_time,end_time,all_day")
+      .order("start_time", { ascending: true });
+    if (error) throw error;
+    return data || [];
+  },
+  async saveEvent(ev) {
+    const user_id = await db.uid();
+    if (!user_id) throw new Error("Not signed in");
+    const row = {
+      id: ev.id, user_id, title: ev.title, notes: ev.notes || "",
+      start_time: ev.start_time, end_time: ev.end_time || null, all_day: !!ev.all_day,
+    };
+    const { data, error } = await supabase.from("personal_events").upsert(row, { onConflict: "id" }).select().single();
+    if (error) throw error;
+    return data;
+  },
+  async deleteEvent(id) {
+    try { await supabase.from("personal_events").delete().eq("id", id); } catch {}
+  },
+  async loadBirthdays() {
+    const { data, error } = await supabase.from("personal_birthdays")
+      .select("id,name,month,day,year,notes");
+    if (error) throw error;
+    return data || [];
+  },
+  async saveBirthday(b) {
+    const user_id = await db.uid();
+    if (!user_id) throw new Error("Not signed in");
+    const row = { id: b.id, user_id, name: b.name, month: b.month, day: b.day, year: b.year ?? null, notes: b.notes || "" };
+    const { data, error } = await supabase.from("personal_birthdays").upsert(row, { onConflict: "id" }).select().single();
+    if (error) throw error;
+    return data;
+  },
+  async saveBirthdaysBulk(rows) {
+    const user_id = await db.uid();
+    if (!user_id) throw new Error("Not signed in");
+    const payload = rows.map(b => ({ id: b.id, user_id, name: b.name, month: b.month, day: b.day, year: b.year ?? null, notes: "" }));
+    const { data, error } = await supabase.from("personal_birthdays").insert(payload).select();
+    if (error) throw error;
+    return data;
+  },
+  async deleteBirthday(id) {
+    try { await supabase.from("personal_birthdays").delete().eq("id", id); } catch {}
+  },
 };
 
 // Durable, cross-device usage log (Supabase) — separate from the
@@ -301,6 +347,7 @@ function useGlobalStyles() {
       @keyframes sheetup { from { opacity: 0; transform: translateY(40px); } to { opacity: 1; transform: none; } }
       @keyframes breathe { 0%,100% { box-shadow: 0 0 10px rgba(143,107,30,0.25), inset 0 1px 0 rgba(255,255,255,0.3); } 50% { box-shadow: 0 0 22px rgba(143,107,30,0.4), inset 0 1px 0 rgba(255,255,255,0.3); } }
       @keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
+      @keyframes shake { 10%,90% { transform: translateX(-2px); } 20%,80% { transform: translateX(4px); } 30%,50%,70% { transform: translateX(-8px); } 40%,60% { transform: translateX(8px); } }
     `;
     document.head.appendChild(style);
   }, []);
@@ -613,6 +660,8 @@ function MorningBriefPage({ btc, isMobile, settings }) {
   const [ztsPipeStatus, setZtsPipeStatus] = useState({ state: "loading" });
   const [meetings, setMeetings] = useState([]);
   const [meetingsStatus, setMeetingsStatus] = useState({ state: "loading" });
+  const [birthdays, setBirthdays] = useState(null); // null = loading
+  const [birthdaysErr, setBirthdaysErr] = useState(null);
   const [openEventIdx, setOpenEventIdx] = useState(null);
   const [eventAnalysis, setEventAnalysis] = useState({}); // idx -> {btc, stocks} | "loading" | "error"
   const [btcChartOpen, setBtcChartOpen] = useState(false);
@@ -661,6 +710,7 @@ Be directional where the data supports it — don't hedge into uselessness — b
     loadCredentialed("zts-pipeline", {}, (d) => setZtsPipe(d), setZtsPipeStatus,
       (m) => `Add ${m || "ZTS_SUPABASE_URL + ZTS_SUPABASE_ANON_KEY"} in Netlify env vars, then redeploy.`);
     loadOpen("markets", (d) => setStocks(d), setStocksStatus);
+    db.loadBirthdays().then(rows => { if (alive) setBirthdays(rows); }).catch(e => { if (alive) setBirthdaysErr(e.message || "Couldn't load birthdays."); });
     loadOpen("calendar", (d) => setEvents(d.events || []), setEventsStatus);
     // Meetings depend on a per-user setting (calendar_url), not an env var —
     // no ping/configured gate, just try and report the real outcome.
@@ -829,6 +879,35 @@ Be directional where the data supports it — don't hedge into uselessness — b
                   </div>
           
   );
+  const upcomingBirthdays = (birthdays || [])
+    .map(b => ({ ...b, ...nextBirthdayOccurrence(b.month, b.day) }))
+    .filter(b => b.daysUntil <= 30)
+    .sort((a, b) => a.daysUntil - b.daysUntil);
+
+  const card_birthdays = (
+                  <div style={card}>
+                    <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+                      <span style={S.title}>Upcoming Birthdays</span>
+                      <span style={{ ...S.microLabel }}>NEXT 30D</span>
+                    </div>
+                    <div style={{ display: "flex", flexDirection: "column", gap: 7, marginTop: 10 }}>
+                      {birthdaysErr ? (
+                        <div style={{ fontSize: 10.5, color: T.faint, padding: "6px 0" }}>{birthdaysErr}</div>
+                      ) : birthdays === null ? (
+                        <div style={{ fontSize: 10.5, color: T.faint, padding: "6px 0", animation: "pulse 1.4s infinite" }}>Loading…</div>
+                      ) : upcomingBirthdays.length ? upcomingBirthdays.map((b) => (
+                        <div key={b.id} style={{ ...S.inner, display: "flex", alignItems: "center", gap: 11, padding: "11px 13px" }}>
+                          <span style={{ width: 7, height: 7, borderRadius: "50%", background: "#8B5CF6", flex: "none" }} />
+                          <span style={{ display: "flex", flexDirection: "column", gap: 1, flex: 1, minWidth: 0 }}>
+                            <span style={{ fontSize: 11, color: "#3A3323", lineHeight: 1.4 }}>{b.name}{b.year ? ` — turns ${b.next.getFullYear() - b.year}` : ""}</span>
+                            <span style={{ fontSize: 9, color: T.faint, fontFamily: mono }}>{MONTH_NAMES[b.month - 1]} {b.day} · {b.daysUntil === 0 ? "Today!" : b.daysUntil === 1 ? "Tomorrow" : `in ${b.daysUntil}d`}</span>
+                          </span>
+                        </div>
+                      )) : <div style={{ fontSize: 10.5, color: T.faint, padding: "6px 0" }}>Nothing in the next 30 days.</div>}
+                    </div>
+                  </div>
+          
+  );
   const card_meetings = (
                   <div style={card}>
                     <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
@@ -882,7 +961,7 @@ Be directional where the data supports it — don't hedge into uselessness — b
           {sectionHeader("Market")}
           {card_bitcoin}{card_stocks}{card_watch}
           {sectionHeader("Ops")}
-          {card_gsc}{card_clarify}{card_zts}{card_meetings}
+          {card_gsc}{card_clarify}{card_zts}{card_birthdays}{card_meetings}
         </div>
         {btcChartOpen && <BtcChartModal isMobile onClose={() => setBtcChartOpen(false)} callFnFull={callFnFull} />}
       </div>
@@ -894,7 +973,7 @@ Be directional where the data supports it — don't hedge into uselessness — b
         </div>
         <div style={col}>
           {sectionHeader("Ops")}
-          {card_gsc}{card_clarify}{card_zts}{card_meetings}
+          {card_gsc}{card_clarify}{card_zts}{card_birthdays}{card_meetings}
         </div>
         {btcChartOpen && <BtcChartModal isMobile={false} onClose={() => setBtcChartOpen(false)} callFnFull={callFnFull} />}
       </div>
@@ -1002,15 +1081,35 @@ function BoardRoomPage({ messages, thinking, loadingData, input, setInput, onSen
   );
 }
 
-// ─── Page: Personal (Notes + Calendar) ────────────────────────────────────────
-const PERSONAL_SUBTABS = [{ key: "notes", label: "Notes" }, { key: "calendar", label: "Calendar" }];
+// ─── Shared birthday date math ────────────────────────────────────────────────
+// Handles the Feb 29 edge case by falling back to Feb 28 in non-leap years —
+// a reasonable convention, not a perfect one, but birthdays don't need to be.
+function isLeapYear(y) { return (y % 4 === 0 && y % 100 !== 0) || y % 400 === 0; }
+function nextBirthdayOccurrence(month, day, fromDate = new Date()) {
+  const today = new Date(fromDate); today.setHours(0, 0, 0, 0);
+  const tryDate = (y) => {
+    const d = (month === 2 && day === 29 && !isLeapYear(y)) ? 28 : day;
+    return new Date(y, month - 1, d);
+  };
+  let next = tryDate(today.getFullYear());
+  if (next < today) next = tryDate(today.getFullYear() + 1);
+  const daysUntil = Math.round((next - today) / 86400000);
+  return { next, daysUntil };
+}
+
+// ─── Page: Personal (Notes + Calendar + Birthdays) ────────────────────────────
+const PERSONAL_SUBTABS = [{ key: "notes", label: "Notes" }, { key: "calendar", label: "Calendar" }, { key: "birthdays", label: "Birthdays" }];
 
 function PersonalPage({ isMobile }) {
   const [sub, setSub] = useState("notes");
   return (
-    <div style={{ maxWidth: 900, margin: "0 auto", padding: isMobile ? "10px 14px 24px" : "20px 24px 40px", display: "flex", flexDirection: "column", gap: 14 }}>
-      <SubTabs options={PERSONAL_SUBTABS} value={sub} onChange={setSub} />
-      {sub === "notes" ? <NotesPanel isMobile={isMobile} /> : <CalendarPanel isMobile={isMobile} />}
+    <div style={{ flex: 1, overflowY: "auto", padding: isMobile ? "18px 16px 24px" : "30px 34px 40px" }}>
+      <div style={{ maxWidth: 900, margin: "0 auto", display: "flex", flexDirection: "column", gap: 14 }}>
+        <SubTabs options={PERSONAL_SUBTABS} value={sub} onChange={setSub} />
+        {sub === "notes" && <NotesPanel isMobile={isMobile} />}
+        {sub === "calendar" && <CalendarPanel isMobile={isMobile} />}
+        {sub === "birthdays" && <BirthdaysPanel isMobile={isMobile} />}
+      </div>
     </div>
   );
 }
@@ -1151,16 +1250,372 @@ function NotesPanel({ isMobile }) {
   );
 }
 
+const MONTH_NAMES = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+
+function BirthdaysPanel({ isMobile }) {
+  const card = isMobile ? S.cardM : S.card;
+  const [rows, setRows] = useState(null); // null = loading
+  const [loadErr, setLoadErr] = useState(null);
+  const [form, setForm] = useState(null); // single add/edit
+  const [saving, setSaving] = useState(false);
+  const [saveErr, setSaveErr] = useState(null);
+
+  const [bulkOpen, setBulkOpen] = useState(false);
+  const [bulkText, setBulkText] = useState("");
+  const [bulkParsing, setBulkParsing] = useState(false);
+  const [bulkErr, setBulkErr] = useState(null);
+  const [bulkPreview, setBulkPreview] = useState(null); // array of parsed rows awaiting confirmation
+  const [bulkSaving, setBulkSaving] = useState(false);
+
+  const refresh = () => {
+    db.loadBirthdays().then(setRows).catch(e => setLoadErr(e.message || "Couldn't load birthdays."));
+  };
+  useEffect(() => { refresh(); }, []);
+
+  // ─── Single add/edit ───
+  const openNew = () => {
+    setSaveErr(null);
+    const today = new Date();
+    setForm({ id: crypto.randomUUID(), name: "", date: today.toISOString().slice(0, 10), unknownYear: true, notes: "" });
+  };
+  const openEdit = (b) => {
+    setSaveErr(null);
+    const y = b.year || new Date().getFullYear();
+    const mm = String(b.month).padStart(2, "0"), dd = String(b.day).padStart(2, "0");
+    setForm({ id: b.id, name: b.name, date: `${y}-${mm}-${dd}`, unknownYear: !b.year, notes: b.notes || "" });
+  };
+  const closeForm = () => setForm(null);
+
+  const save = () => {
+    if (!form.name.trim()) { setSaveErr("Give them a name."); return; }
+    if (!form.date) { setSaveErr("Pick a date."); return; }
+    const [y, m, d] = form.date.split("-").map(Number);
+    setSaving(true); setSaveErr(null);
+    db.saveBirthday({ id: form.id, name: form.name.trim(), month: m, day: d, year: form.unknownYear ? null : y, notes: form.notes })
+      .then(() => { setSaving(false); closeForm(); refresh(); })
+      .catch(e => { setSaving(false); setSaveErr(e.message || "Couldn't save."); });
+  };
+  const removeBirthday = (id, e) => {
+    e.stopPropagation();
+    if (!window.confirm("Delete this birthday?")) return;
+    db.deleteBirthday(id).then(() => { if (form?.id === id) closeForm(); refresh(); });
+  };
+
+  // ─── Bulk parse via Claude ───
+  const parseBulk = async () => {
+    if (!bulkText.trim()) return;
+    setBulkParsing(true); setBulkErr(null); setBulkPreview(null);
+    const system = `Extract birthdays from the text the user pastes. Respond with ONLY a JSON array, no markdown fences, no commentary — just the raw array. Each item: {"name": string, "month": 1-12, "day": 1-31, "year": number or null}. If a birth year isn't given or isn't confidently inferable, use null for year — never guess one. If a line doesn't look like a name+date, skip it rather than inventing data. If you truly cannot find any valid entries, respond with []`;
+    const text = await callClaude({ system, messages: [{ role: "user", content: bulkText }], modelKey: "haiku", maxTokens: 2000, fn: "parse_birthdays" });
+    setBulkParsing(false);
+    if (!text) { setBulkErr("Couldn't reach Claude — try again in a moment."); return; }
+    try {
+      const cleaned = text.trim().replace(/^```(json)?/i, "").replace(/```$/, "").trim();
+      const parsed = JSON.parse(cleaned);
+      if (!Array.isArray(parsed)) throw new Error("not an array");
+      const valid = parsed.filter(r => r && typeof r.name === "string" && r.name.trim() && Number(r.month) >= 1 && Number(r.month) <= 12 && Number(r.day) >= 1 && Number(r.day) <= 31);
+      if (!valid.length) { setBulkErr("Didn't find any birthdays in that text — try a clearer format, e.g. one per line: \"Name — Month Day\"."); return; }
+      setBulkPreview(valid.map(r => ({ tempId: crypto.randomUUID(), name: r.name.trim(), month: Number(r.month), day: Number(r.day), year: r.year ? Number(r.year) : null })));
+    } catch {
+      setBulkErr("Got an unexpected response back — try again, or simplify the text.");
+    }
+  };
+  const removeFromPreview = (tempId) => setBulkPreview(rows => rows.filter(r => r.tempId !== tempId));
+  const confirmBulk = () => {
+    if (!bulkPreview?.length) return;
+    setBulkSaving(true);
+    db.saveBirthdaysBulk(bulkPreview.map(r => ({ id: crypto.randomUUID(), name: r.name, month: r.month, day: r.day, year: r.year })))
+      .then(() => { setBulkSaving(false); setBulkPreview(null); setBulkText(""); setBulkOpen(false); refresh(); })
+      .catch(e => { setBulkSaving(false); setBulkErr(e.message || "Couldn't save the batch."); });
+  };
+
+  // ─── Form view ───
+  if (form) {
+    return (
+      <div style={card}>
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 12 }}>
+          <button onClick={closeForm} style={{ background: "none", border: "none", color: T.brass, fontFamily: syne, fontWeight: 700, fontSize: 12, cursor: "pointer", padding: 0 }}>‹ Cancel</button>
+          <span style={S.title}>{rows?.some(b => b.id === form.id) ? "Edit birthday" : "New birthday"}</span>
+          <span style={{ width: 50 }} />
+        </div>
+
+        <input value={form.name} onChange={e => setForm(f => ({ ...f, name: e.target.value }))} placeholder="Name"
+          style={{ ...S.input, width: "100%", padding: "10px 12px", fontSize: 14, fontWeight: 700, fontFamily: syne, marginBottom: 10 }} />
+
+        <input type="date" value={form.date} onChange={e => setForm(f => ({ ...f, date: e.target.value }))}
+          style={{ ...S.input, width: "100%", padding: "9px 10px", fontSize: 13, fontFamily: mono, marginBottom: 10 }} />
+
+        <label style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 10, fontSize: 11.5, color: T.sub, cursor: "pointer" }}>
+          <input type="checkbox" checked={form.unknownYear} onChange={e => setForm(f => ({ ...f, unknownYear: e.target.checked }))} />
+          Don't track birth year (just month + day)
+        </label>
+
+        <textarea value={form.notes} onChange={e => setForm(f => ({ ...f, notes: e.target.value }))} placeholder="Notes (optional)" rows={3}
+          style={{ ...S.input, width: "100%", padding: "10px 12px", fontSize: 13, lineHeight: 1.6, resize: "vertical", marginBottom: 10 }} />
+
+        {saveErr && <div style={{ fontSize: 11, color: "#B23A2E", marginBottom: 8 }}>{saveErr}</div>}
+
+        <div style={{ display: "flex", gap: 8 }}>
+          <button onClick={save} disabled={saving} style={{ ...S.brassBtn, padding: "9px 18px", fontSize: 12, opacity: saving ? 0.6 : 1 }}>{saving ? "Saving…" : "Save"}</button>
+          {rows?.some(b => b.id === form.id) && (
+            <button onClick={(e) => removeBirthday(form.id, e)} style={{ ...S.ghostBtn, padding: "9px 14px", fontSize: 12 }}>Delete</button>
+          )}
+        </div>
+      </div>
+    );
+  }
+
+  // ─── List view ───
+  const sorted = (rows || []).map(b => ({ ...b, ...nextBirthdayOccurrence(b.month, b.day) })).sort((a, b) => a.daysUntil - b.daysUntil);
+
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+      <div style={card}>
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 12, flexWrap: "wrap", gap: 8 }}>
+          <span style={S.title}>Birthdays</span>
+          <div style={{ display: "flex", gap: 8 }}>
+            <button onClick={() => setBulkOpen(o => !o)} style={{ ...S.ghostBtn, padding: "7px 14px", fontSize: 11.5 }}>{bulkOpen ? "Close bulk add" : "Bulk add"}</button>
+            <button onClick={openNew} style={{ ...S.brassBtn, padding: "7px 14px", fontSize: 11.5 }}>+ Add birthday</button>
+          </div>
+        </div>
+
+        {bulkOpen && (
+          <div style={{ ...S.inner, padding: 12, marginBottom: 12 }}>
+            {!bulkPreview ? (
+              <>
+                <div style={{ fontSize: 10.5, color: T.sub, lineHeight: 1.6, marginBottom: 8 }}>
+                  Paste anything — a list, a few sentences, whatever you've got. Claude will pull out names and dates; you'll get a chance to review before anything's saved.
+                </div>
+                <textarea value={bulkText} onChange={e => setBulkText(e.target.value)} rows={6} placeholder={"e.g.\nMom - March 3\nJohn Smith 12/25/1990\nSarah's birthday is June 1st"}
+                  style={{ ...S.input, width: "100%", padding: "10px 12px", fontSize: 13, lineHeight: 1.6, resize: "vertical", marginBottom: 8 }} />
+                {bulkErr && <div style={{ fontSize: 11, color: "#B23A2E", marginBottom: 8 }}>{bulkErr}</div>}
+                <button onClick={parseBulk} disabled={bulkParsing || !bulkText.trim()} style={{ ...S.brassBtn, padding: "8px 16px", fontSize: 11.5, opacity: (bulkParsing || !bulkText.trim()) ? 0.55 : 1 }}>
+                  {bulkParsing ? "Parsing…" : "Parse with Claude"}
+                </button>
+              </>
+            ) : (
+              <>
+                <div style={{ fontSize: 10.5, color: T.sub, marginBottom: 8 }}>Found {bulkPreview.length} — review, then add.</div>
+                <div style={{ display: "flex", flexDirection: "column", gap: 5, marginBottom: 10, maxHeight: 240, overflowY: "auto" }}>
+                  {bulkPreview.map(r => (
+                    <div key={r.tempId} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", background: "#FCFBF9", border: `1px solid ${T.line}`, borderRadius: 8, padding: "7px 10px" }}>
+                      <span style={{ fontSize: 12, fontFamily: syne, fontWeight: 700, color: T.ink }}>{r.name}</span>
+                      <span style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                        <span style={{ fontSize: 11, color: T.sub, fontFamily: mono }}>{MONTH_NAMES[r.month - 1]} {r.day}{r.year ? `, ${r.year}` : ""}</span>
+                        <button onClick={() => removeFromPreview(r.tempId)} style={{ background: "none", border: "none", color: T.faint, cursor: "pointer", fontSize: 14, padding: 0 }}>×</button>
+                      </span>
+                    </div>
+                  ))}
+                </div>
+                {bulkErr && <div style={{ fontSize: 11, color: "#B23A2E", marginBottom: 8 }}>{bulkErr}</div>}
+                <div style={{ display: "flex", gap: 8 }}>
+                  <button onClick={confirmBulk} disabled={bulkSaving || !bulkPreview.length} style={{ ...S.brassBtn, padding: "8px 16px", fontSize: 11.5, opacity: bulkSaving ? 0.6 : 1 }}>
+                    {bulkSaving ? "Adding…" : `Add all (${bulkPreview.length})`}
+                  </button>
+                  <button onClick={() => { setBulkPreview(null); setBulkErr(null); }} style={{ ...S.ghostBtn, padding: "8px 14px", fontSize: 11.5 }}>Start over</button>
+                </div>
+              </>
+            )}
+          </div>
+        )}
+
+        {loadErr && <div style={{ fontSize: 11.5, color: T.faint, padding: "20px 0", textAlign: "center" }}>{loadErr}</div>}
+        {!loadErr && rows === null && <div style={{ fontSize: 11.5, color: T.faint, padding: "20px 0", textAlign: "center", animation: "pulse 1.4s infinite" }}>Loading birthdays…</div>}
+        {!loadErr && rows && rows.length === 0 && !bulkOpen && (
+          <div style={{ fontSize: 11.5, color: T.faint, padding: "24px 0", textAlign: "center" }}>No birthdays yet — add one, or bulk-add a whole list at once.</div>
+        )}
+        {!loadErr && sorted.length > 0 && (
+          <div style={{ display: "flex", flexDirection: "column", gap: 7 }}>
+            {sorted.map(b => (
+              <div key={b.id} onClick={() => openEdit(b)}
+                style={{ ...S.inner, padding: "10px 12px", cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10 }}>
+                <div style={{ minWidth: 0, flex: 1 }}>
+                  <div style={{ fontSize: 12.5, fontWeight: 700, fontFamily: syne, color: T.ink }}>{b.name}</div>
+                  <div style={{ fontSize: 11, color: T.sub }}>
+                    {MONTH_NAMES[b.month - 1]} {b.day}{b.year ? ` · turns ${b.next.getFullYear() - b.year}` : ""}
+                  </div>
+                </div>
+                <div style={{ display: "flex", alignItems: "center", gap: 10, flex: "none" }}>
+                  <span style={{ ...S.microLabel, color: b.daysUntil <= 7 ? T.brass : T.faint }}>
+                    {b.daysUntil === 0 ? "Today!" : b.daysUntil === 1 ? "Tomorrow" : `in ${b.daysUntil}d`}
+                  </span>
+                  <button onClick={(e) => removeBirthday(b.id, e)} aria-label="Delete" style={{ background: "none", border: "none", color: T.faint, cursor: "pointer", fontSize: 14, padding: 2, lineHeight: 1 }}>×</button>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
 function CalendarPanel({ isMobile }) {
   const card = isMobile ? S.cardM : S.card;
+  const [events, setEvents] = useState(null); // null = loading
+  const [loadErr, setLoadErr] = useState(null);
+  const [form, setForm] = useState(null); // null = closed; object = open (new or editing)
+  const [saving, setSaving] = useState(false);
+  const [saveErr, setSaveErr] = useState(null);
+  const [showPast, setShowPast] = useState(false);
+
+  const refresh = () => {
+    db.loadEvents()
+      .then(rows => setEvents(rows))
+      .catch(e => setLoadErr(e.message || "Couldn't load your calendar."));
+  };
+  useEffect(() => { refresh(); }, []);
+
+  const todayStr = new Date().toISOString().slice(0, 10);
+  const nowMs = Date.now();
+
+  const blankDraft = () => ({
+    id: crypto.randomUUID(), title: "", notes: "",
+    date: todayStr, time: "09:00", allDay: false,
+  });
+
+  const openNew = () => { setSaveErr(null); setForm(blankDraft()); };
+  const openEdit = (ev) => {
+    setSaveErr(null);
+    const d = new Date(ev.start_time);
+    setForm({
+      id: ev.id, title: ev.title, notes: ev.notes || "", allDay: ev.all_day,
+      date: d.toISOString().slice(0, 10),
+      time: ev.all_day ? "09:00" : d.toTimeString().slice(0, 5),
+    });
+  };
+  const closeForm = () => setForm(null);
+
+  const save = () => {
+    if (!form.title.trim()) { setSaveErr("Give it a title."); return; }
+    const start_time = form.allDay
+      ? new Date(`${form.date}T00:00:00`).toISOString()
+      : new Date(`${form.date}T${form.time}:00`).toISOString();
+    setSaving(true);
+    setSaveErr(null);
+    db.saveEvent({ id: form.id, title: form.title.trim(), notes: form.notes, start_time, all_day: form.allDay })
+      .then(() => { setSaving(false); closeForm(); refresh(); })
+      .catch(e => { setSaving(false); setSaveErr(e.message || "Couldn't save."); });
+  };
+
+  const removeEvent = (id, e) => {
+    e.stopPropagation();
+    if (!window.confirm("Delete this event?")) return;
+    db.deleteEvent(id).then(() => { if (form?.id === id) closeForm(); refresh(); });
+  };
+
+  const dayLabel = (iso) => {
+    const d = new Date(iso);
+    const dayStart = new Date(d); dayStart.setHours(0, 0, 0, 0);
+    const today = new Date(); today.setHours(0, 0, 0, 0);
+    const diffDays = Math.round((dayStart - today) / 86400000);
+    if (diffDays === 0) return "Today";
+    if (diffDays === 1) return "Tomorrow";
+    if (diffDays === -1) return "Yesterday";
+    return d.toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric" });
+  };
+  const timeLabel = (iso, allDay) => allDay ? "All day" : new Date(iso).toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" });
+
+  // ─── Form (add/edit) ───
+  if (form) {
+    return (
+      <div style={card}>
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 12 }}>
+          <button onClick={closeForm} style={{ background: "none", border: "none", color: T.brass, fontFamily: syne, fontWeight: 700, fontSize: 12, cursor: "pointer", padding: 0 }}>‹ Cancel</button>
+          <span style={S.title}>{events?.some(e => e.id === form.id) ? "Edit event" : "New event"}</span>
+          <span style={{ width: 50 }} />
+        </div>
+
+        <input
+          value={form.title}
+          onChange={e => setForm(f => ({ ...f, title: e.target.value }))}
+          placeholder="Event title"
+          style={{ ...S.input, width: "100%", padding: "10px 12px", fontSize: 14, fontWeight: 700, fontFamily: syne, marginBottom: 10 }}
+        />
+
+        <label style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 10, fontSize: 11.5, color: T.sub, cursor: "pointer" }}>
+          <input type="checkbox" checked={form.allDay} onChange={e => setForm(f => ({ ...f, allDay: e.target.checked }))} />
+          All-day
+        </label>
+
+        <div style={{ display: "flex", gap: 8, marginBottom: 10 }}>
+          <input type="date" value={form.date} onChange={e => setForm(f => ({ ...f, date: e.target.value }))}
+            style={{ ...S.input, flex: 1, padding: "9px 10px", fontSize: 13, fontFamily: mono }} />
+          {!form.allDay && (
+            <input type="time" value={form.time} onChange={e => setForm(f => ({ ...f, time: e.target.value }))}
+              style={{ ...S.input, flex: 1, padding: "9px 10px", fontSize: 13, fontFamily: mono }} />
+          )}
+        </div>
+
+        <textarea
+          value={form.notes}
+          onChange={e => setForm(f => ({ ...f, notes: e.target.value }))}
+          placeholder="Notes (optional)"
+          rows={4}
+          style={{ ...S.input, width: "100%", padding: "10px 12px", fontSize: 13, lineHeight: 1.6, resize: "vertical", marginBottom: 10 }}
+        />
+
+        {saveErr && <div style={{ fontSize: 11, color: "#B23A2E", marginBottom: 8 }}>{saveErr}</div>}
+
+        <div style={{ display: "flex", gap: 8 }}>
+          <button onClick={save} disabled={saving} style={{ ...S.brassBtn, padding: "9px 18px", fontSize: 12, opacity: saving ? 0.6 : 1 }}>
+            {saving ? "Saving…" : "Save"}
+          </button>
+          {events?.some(e => e.id === form.id) && (
+            <button onClick={(e) => removeEvent(form.id, e)} style={{ ...S.ghostBtn, padding: "9px 14px", fontSize: 12 }}>Delete</button>
+          )}
+        </div>
+      </div>
+    );
+  }
+
+  // ─── Agenda list ───
+  const upcoming = (events || []).filter(e => new Date(e.start_time).getTime() >= nowMs - 86400000 || e.start_time.slice(0, 10) === todayStr);
+  const past = (events || []).filter(e => !upcoming.includes(e));
+
+  const renderEvent = (ev) => (
+    <div key={ev.id} onClick={() => openEdit(ev)}
+      style={{ ...S.inner, padding: "10px 12px", cursor: "pointer", display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 10 }}>
+      <div style={{ minWidth: 0, flex: 1 }}>
+        <div style={{ fontSize: 12.5, fontWeight: 700, fontFamily: syne, color: T.ink, marginBottom: 2 }}>{ev.title}</div>
+        <div style={{ fontSize: 11, color: T.sub }}>{dayLabel(ev.start_time)} · {timeLabel(ev.start_time, ev.all_day)}</div>
+        {ev.notes && <div style={{ fontSize: 10.5, color: T.faint, marginTop: 3, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{ev.notes}</div>}
+      </div>
+      <button onClick={(e) => removeEvent(ev.id, e)} aria-label="Delete event" style={{ background: "none", border: "none", color: T.faint, cursor: "pointer", fontSize: 14, padding: 2, lineHeight: 1, flex: "none" }}>×</button>
+    </div>
+  );
+
   return (
     <div style={card}>
-      <span style={S.title}>Calendar</span>
-      <div style={{ fontSize: 11.5, color: T.sub, lineHeight: 1.7, marginTop: 10 }}>
-        Not built yet — this is next in line after Notes. It'll let you add your own events here,
-        backed by Supabase the same way Notes is, and will likely feed into the Watch This Week /
-        Upcoming Meetings cards on the Brief.
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 12 }}>
+        <span style={S.title}>Calendar</span>
+        <button onClick={openNew} style={{ ...S.brassBtn, padding: "7px 14px", fontSize: 11.5 }}>+ Add event</button>
       </div>
+
+      {loadErr && <div style={{ fontSize: 11.5, color: T.faint, padding: "20px 0", textAlign: "center" }}>{loadErr}</div>}
+      {!loadErr && events === null && <div style={{ fontSize: 11.5, color: T.faint, padding: "20px 0", textAlign: "center", animation: "pulse 1.4s infinite" }}>Loading calendar…</div>}
+      {!loadErr && events && events.length === 0 && (
+        <div style={{ fontSize: 11.5, color: T.faint, padding: "24px 0", textAlign: "center" }}>Nothing on the calendar yet — tap "+ Add event" to start.</div>
+      )}
+
+      {!loadErr && upcoming.length > 0 && (
+        <div style={{ display: "flex", flexDirection: "column", gap: 7 }}>
+          {upcoming.map(renderEvent)}
+        </div>
+      )}
+
+      {!loadErr && past.length > 0 && (
+        <div style={{ marginTop: 14 }}>
+          <button onClick={() => setShowPast(s => !s)} style={{ background: "none", border: "none", color: T.brass, fontFamily: syne, fontWeight: 700, fontSize: 11, cursor: "pointer", padding: 0 }}>
+            {showPast ? "Hide" : "Show"} past events ({past.length})
+          </button>
+          {showPast && (
+            <div style={{ display: "flex", flexDirection: "column", gap: 7, marginTop: 8 }}>
+              {past.map(renderEvent)}
+            </div>
+          )}
+        </div>
+      )}
     </div>
   );
 }
@@ -1490,7 +1945,7 @@ const CONN_META = {
   fn_health: { name: "health", desc: "reports which server-side keys are configured" },
   fn_mini: { name: "mini-worker", desc: "Mini Me engine — nightly at ~3 AM CT + on-demand runs" },
   fn_btc: { name: "btc", desc: "proxies BTC price + sparkline — avoids mobile-carrier IP rate limiting" },
-  fn_btc_candles: { name: "btc-candles", desc: "BTC/USDT candles via Binance public API (5m/15m/30m/1d/1w) — no key needed" },
+  fn_btc_candles: { name: "btc-candles", desc: "BTC/USD candles via Kraken public API (5m/15m/30m/1d/1w) — no key needed" },
   fn_markets: { name: "markets", desc: "S&P/Nasdaq futures, 10Y yield, DXY via Yahoo's public endpoint (unofficial)" },
   fn_calendar: { name: "calendar", desc: "US econ calendar, today through +7 days (unofficial free feed)" },
   fn_calendar_events: { name: "calendar-events", desc: "upcoming meetings — parses the linked iCal URL" },
