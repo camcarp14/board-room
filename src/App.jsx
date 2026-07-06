@@ -58,6 +58,13 @@ const db = {
   async saveMessage({ role, content, consulted = [] }) {
     try { await supabase.from("chat_messages").insert({ role, content, consulted_seats: consulted }); } catch {}
   },
+  async clearChat() {
+    // RLS (auth.uid() = user_id) already scopes this to the signed-in
+    // user's own rows — the gte filter just satisfies Supabase's
+    // requirement that delete() have some condition.
+    const { error } = await supabase.from("chat_messages").delete().gte("created_at", "1970-01-01");
+    if (error) throw error;
+  },
   async loadSeatNotes() {
     const { data, error } = await supabase.from("seat_notes").select("seat_key,notes");
     if (error) return {};
@@ -113,7 +120,7 @@ const db = {
   },
   async loadEvents() {
     const { data, error } = await supabase.from("personal_events")
-      .select("id,title,notes,start_time,end_time,all_day")
+      .select("id,title,notes,start_time,end_time,all_day,location,category")
       .order("start_time", { ascending: true });
     if (error) throw error;
     return data || [];
@@ -124,6 +131,7 @@ const db = {
     const row = {
       id: ev.id, user_id, title: ev.title, notes: ev.notes || "",
       start_time: ev.start_time, end_time: ev.end_time || null, all_day: !!ev.all_day,
+      location: ev.location || "", category: ev.category || "personal",
     };
     const { data, error } = await supabase.from("personal_events").upsert(row, { onConflict: "id" }).select().single();
     if (error) throw error;
@@ -138,6 +146,7 @@ const db = {
     const payload = rows.map(e => ({
       id: e.id, user_id, title: e.title, notes: e.notes || "",
       start_time: e.start_time, end_time: e.end_time || null, all_day: !!e.all_day,
+      category: e.category || "personal",
     }));
     const { data, error } = await supabase.from("personal_events").insert(payload).select();
     if (error) throw error;
@@ -376,9 +385,9 @@ function useIsMobile() {
 }
 
 const PROPERTIES = [
+  { name: "Zero To Secure", desc: "Premium seed phrase backup", url: "https://zerotosecure.com", appUrl: "https://zts-command-center.netlify.app", color: "#0E9F6E", repo: "camcarp14/zts-command-center", site: "zero-to-secure" },
   { name: "Clarify Paid Search", desc: "Boutique Google Ads agency", url: "https://clarifypaidsearch.com", appUrl: "https://clarify-outreach.netlify.app/", color: "#B68A2E", repo: "camcarp14/clarify-outreach", site: "clarify-paid-search" },
   { name: "Clarify SaaS", desc: "Google Ads auditing tool", url: null, appUrl: "https://clarify-saas.netlify.app/", color: "#B68A2E", repo: "camcarp14/clarify-saas", site: "clarify-saas" },
-  { name: "Zero To Secure", desc: "Premium seed phrase backup", url: "https://zerotosecure.com", appUrl: "https://zts-command-center.netlify.app", color: "#0E9F6E", repo: "camcarp14/zts-command-center", site: "zero-to-secure" },
   { name: "Macro Command Center", desc: "Markets, portfolio, thesis", url: null, appUrl: "https://macro-command-center.netlify.app/", color: "#31589C", repo: "camcarp14/macro-command-center", site: "macro-command-center" },
 ];
 
@@ -616,11 +625,16 @@ function TopStatus({ now, dataStamp, refreshing, onRefresh, compact }) {
 // ─── Page: The Room ─────────────────────────────────────────────────────────
 // A real page now, same on both platforms — replaces the old mobile-only
 // floating-pill-that-expands-to-a-sheet mechanic. One layout to learn.
-function RoomPage({ messages, thinking, loadingData, input, setInput, onSend, endRef, isMobile }) {
+function RoomPage({ messages, thinking, loadingData, input, setInput, onSend, onClearChat, endRef, isMobile }) {
   return (
     <>
       <div style={{ flex: 1, overflowY: "auto", padding: isMobile ? "16px 14px 8px" : "32px 34px 10px", display: "flex", flexDirection: "column", alignItems: "center" }}>
         <div style={{ width: "100%", maxWidth: 780, display: "flex", flexDirection: "column", gap: 18, flex: 1 }}>
+          {messages.length > 0 && (
+            <div style={{ display: "flex", justifyContent: "flex-end" }}>
+              <button onClick={onClearChat} style={{ background: "none", border: `1px solid ${T.line}`, borderRadius: 7, color: T.faint, fontSize: 10.5, padding: "4px 10px", cursor: "pointer", fontFamily: syne, fontWeight: 600 }}>Clear chat</button>
+            </div>
+          )}
           <ChatThread messages={messages} thinking={thinking} loadingData={loadingData} setInput={setInput} endRef={endRef} compact={isMobile} />
         </div>
       </div>
@@ -640,7 +654,7 @@ function RoomPage({ messages, thinking, loadingData, input, setInput, onSend, en
 // LIVE (real data), NOT CONNECTED (with exact setup instructions), or ERROR
 // (with the actual failure). Empty dashes beat plausible-looking fake data.
 const GSC_EMPTY = { impressions: "—", impressionsD: "", clicks: "—", clicksD: "", pos: "—", posD: "", series: Array(14).fill(0), daily: [], note: "" };
-const STOCKS_EMPTY = { spx: { value: "—", up: true }, ndq: { value: "—", up: true }, tnx: { value: "—", up: true }, dxy: { value: "—", up: true } };
+const STOCKS_EMPTY = { spx: { value: "—", price: "—", up: true }, ndq: { value: "—", price: "—", up: true }, tnx: { value: "—", price: "—", up: true }, dxy: { value: "—", price: "—", up: true } };
 
 function StancePill({ text, color }) {
   return <span style={{ fontSize: 8.5, fontWeight: 700, color, background: color + "1A", border: `1px solid ${color}4D`, padding: "4px 10px", borderRadius: 12, fontFamily: mono, letterSpacing: "0.08em" }}>{text}</span>;
@@ -677,25 +691,27 @@ function MorningBriefPage({ btc, isMobile, settings }) {
   const [meetingsStatus, setMeetingsStatus] = useState({ state: "loading" });
   const [birthdays, setBirthdays] = useState(null); // null = loading
   const [birthdaysErr, setBirthdaysErr] = useState(null);
-  const [openEventIdx, setOpenEventIdx] = useState(null);
-  const [eventAnalysis, setEventAnalysis] = useState({}); // idx -> {btc, stocks} | "loading" | "error"
+  const [miniEvents, setMiniEvents] = useState([]); // for the mini calendar card — same personal_events table CalendarPanel uses
+  const [eventAnalysis, setEventAnalysis] = useState({}); // idx -> one-sentence take | "loading" | "error"
   const [btcChartOpen, setBtcChartOpen] = useState(false);
 
-  const toggleEvent = async (i, e) => {
-    if (openEventIdx === i) { setOpenEventIdx(null); return; }
-    setOpenEventIdx(i);
+  // Auto-generates a single, tidy one-sentence take (Bitcoin + stocks
+  // together, not separate lines) for every Watch This Week event as soon
+  // as the events load — no click needed, and each is cached by index so
+  // it only ever generates once per event per session.
+  const fetchEventTake = async (i, e) => {
     if (eventAnalysis[i]) return; // already have a read on this one
     setEventAnalysis(prev => ({ ...prev, [i]: "loading" }));
-    const system = `You give quick, concrete market-impact reads for a solo trader/investor watching Bitcoin and equities. Given a US economic calendar event (with forecast/prior if given), respond with ONLY:
-BTC: <one concise sentence on the likely Bitcoin impact and why>
-STOCKS: <one concise sentence on the likely equities impact and why>
-Be directional where the data supports it — don't hedge into uselessness — but don't overstate certainty on an event that hasn't happened yet.`;
-    const raw = await callClaude({ system, messages: [{ role: "user", content: e.text }], modelKey: "haiku", maxTokens: 200, fn: "event_impact" });
-    const btcMatch = (raw || "").match(/BTC:\s*(.+)/i);
-    const stocksMatch = (raw || "").match(/STOCKS:\s*(.+)/i);
-    if (btcMatch || stocksMatch) setEventAnalysis(prev => ({ ...prev, [i]: { btc: btcMatch?.[1]?.trim() || "—", stocks: stocksMatch?.[1]?.trim() || "—" } }));
+    const system = `You give a single, tidy, opinionated read on how a US economic event will likely move Bitcoin and equities together — ONE sentence covering both, not two. Given a US economic calendar event (with forecast/prior if given), respond with ONLY that one sentence — no labels, no "BTC:"/"Stocks:" prefixes, no preamble, no markdown. Be directional where the data supports it — don't hedge into uselessness — but don't overstate certainty on an event that hasn't happened yet.`;
+    const raw = await callClaude({ system, messages: [{ role: "user", content: e.text }], modelKey: "haiku", maxTokens: 100, fn: "event_impact" });
+    if (raw && raw.trim()) setEventAnalysis(prev => ({ ...prev, [i]: raw.trim() }));
     else setEventAnalysis(prev => ({ ...prev, [i]: "error" }));
   };
+  useEffect(() => {
+    if (eventsStatus.state !== "live" || !events.length) return;
+    events.forEach((e, i) => { if (!eventAnalysis[i]) fetchEventTake(i, e); });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [eventsStatus.state, events]);
 
   useEffect(() => {
     let alive = true;
@@ -729,6 +745,7 @@ Be directional where the data supports it — don't hedge into uselessness — b
     loadCredentialed("shopify", { days: 14 }, (d) => setShopify(d), setShopifyStatus,
       (m) => `Add ${m || "SHOPIFY_SHOP + SHOPIFY_CLIENT_ID + SHOPIFY_CLIENT_SECRET"} in Netlify env vars, then redeploy.`);
     db.loadBirthdays().then(rows => { if (alive) setBirthdays(rows); }).catch(e => { if (alive) setBirthdaysErr(e.message || "Couldn't load birthdays."); });
+    db.loadEvents().then(rows => { if (alive) setMiniEvents(rows); }).catch(() => { if (alive) setMiniEvents([]); });
     loadOpen("calendar", (d) => setEvents(d.events || []), setEventsStatus);
     // Meetings depend on a per-user setting (calendar_url), not an env var —
     // no ping/configured gate, just try and report the real outcome.
@@ -785,7 +802,7 @@ Be directional where the data supports it — don't hedge into uselessness — b
                       <span style={{ fontSize: 26, fontWeight: 500, fontFamily: mono, color: T.ink }}>{price}</span>
                       {hasChange && <span style={{ fontSize: 12, fontWeight: 700, color: up ? T.green : T.red, fontFamily: mono }}>{up ? "▲" : "▼"} {Math.abs(btc.changePct || 0).toFixed(2)}%</span>}
                     </div>
-                    {isMobile && !btc.loading && !btc.error && (
+                    {!btc.loading && !btc.error && (
                       <div style={{ marginBottom: 13 }}>
                         <Sparkline points={btc.points} color={up ? T.green : T.red} height={34} />
                       </div>
@@ -815,28 +832,19 @@ Be directional where the data supports it — don't hedge into uselessness — b
                     <div style={{ display: "flex", flexDirection: "column", gap: 7, marginTop: 10 }}>
                       {eventsStatus.state === "live" ? (
                         events.length ? events.map((e, i) => {
-                          const open = openEventIdx === i;
                           const analysis = eventAnalysis[i];
                           return (
-                            <div key={i} style={{ ...S.inner, padding: "11px 13px", display: "flex", flexDirection: "column", gap: 8 }}>
-                              <div onClick={() => toggleEvent(i, e)} style={{ display: "flex", alignItems: "center", gap: 11, cursor: "pointer" }}>
+                            <div key={i} style={{ ...S.inner, padding: "11px 13px", display: "flex", flexDirection: "column", gap: 4 }}>
+                              <div style={{ display: "flex", alignItems: "center", gap: 11 }}>
                                 <span style={{ width: 7, height: 7, borderRadius: "50%", background: e.color, flex: "none", boxShadow: `0 0 8px ${e.color}80` }} />
                                 <span style={{ fontSize: 9, color: T.faint, fontFamily: mono, flex: "none", whiteSpace: "nowrap" }}>{e.time}</span>
                                 <span style={{ fontSize: 11, color: "#3A3323", lineHeight: 1.5, flex: 1 }}>{e.text}</span>
-                                <span style={{ fontSize: 9, color: T.brass, flex: "none" }}>{open ? "▲" : "▼"}</span>
                               </div>
-                              {open && (
-                                <div style={{ background: "rgba(34,29,20,0.04)", border: "1px solid rgba(34,29,20,0.05)", borderRadius: 9, padding: "10px 12px", display: "flex", flexDirection: "column", gap: 6 }}>
-                                  {analysis === "loading" && <span style={{ fontSize: 10.5, color: T.faint, animation: "pulse 1.4s infinite" }}>Thinking through the likely impact…</span>}
-                                  {analysis === "error" && <span style={{ fontSize: 10.5, color: T.faint }}>Couldn't get a read on this one — tap to try again.</span>}
-                                  {analysis && typeof analysis === "object" && (
-                                    <>
-                                      <div style={{ fontSize: 10.5, color: T.sub, lineHeight: 1.5 }}><span style={{ color: "#C77416", fontWeight: 700 }}>₿ Bitcoin — </span>{analysis.btc}</div>
-                                      <div style={{ fontSize: 10.5, color: T.sub, lineHeight: 1.5 }}><span style={{ color: T.blue, fontWeight: 700 }}>Stocks — </span>{analysis.stocks}</div>
-                                    </>
-                                  )}
-                                </div>
-                              )}
+                              <div style={{ fontSize: 10, color: T.faint, lineHeight: 1.45, paddingLeft: 18 }}>
+                                {analysis === "loading" || !analysis ? <span style={{ animation: "pulse 1.4s infinite" }}>Reading the likely impact…</span>
+                                  : analysis === "error" ? "Couldn't get a read on this one."
+                                  : analysis}
+                              </div>
                             </div>
                           );
                         }) : <div style={{ fontSize: 10.5, color: T.faint, padding: "6px 0" }}>No high/medium-impact US events in the next 7 days.</div>
@@ -883,6 +891,14 @@ Be directional where the data supports it — don't hedge into uselessness — b
                     ) : <FeedFallbackRow status={clarifyStatus} />}
                   </div>
   );
+  const spxUp = stocks.spx.up, ndqUp = stocks.ndq.up, tnxUp = stocks.tnx.up, dxyUp = stocks.dxy.up;
+  const eqTone = spxUp && ndqUp ? "risk-on, with S&P and Nasdaq futures both pushing higher"
+    : !spxUp && !ndqUp ? "risk-off, with S&P and Nasdaq futures both pulling back"
+    : "mixed, with S&P and Nasdaq futures pointed in different directions";
+  const stocksOutlook = stocksStatus.state === "live"
+    ? `Futures are ${eqTone}, alongside ${tnxUp ? "rising" : "falling"} yields and a ${dxyUp ? "firmer" : "softer"} dollar.`
+    : stocksStatus.state === "loading" ? "Loading live data…" : stocksStatus.detail;
+
   const card_stocks = (
                   <div style={card}>
                     <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 12 }}>
@@ -891,13 +907,16 @@ Be directional where the data supports it — don't hedge into uselessness — b
                     </div>
                     <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 7, marginBottom: 13 }}>
                       {[["S&P FUT", stocks.spx], ["NASDAQ FUT", stocks.ndq], ["10Y YIELD", stocks.tnx], ["DXY", stocks.dxy]].map(([l, s], i) => (
-                        <div key={i} style={{ ...S.inner, padding: "10px 12px", borderRadius: 10, display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+                        <div key={i} style={{ ...S.inner, padding: "10px 12px", borderRadius: 10, display: "flex", alignItems: "center", justifyContent: "space-between", gap: 6 }}>
                           <span style={{ fontSize: 9, color: T.faint, letterSpacing: "0.06em" }}>{l}</span>
-                          <span style={{ fontSize: 11.5, fontWeight: 700, color: s.value === "—" ? T.faint : s.up ? T.green : T.red, fontFamily: mono }}>{s.value}</span>
+                          <span style={{ display: "flex", alignItems: "baseline", gap: 6 }}>
+                            {s.price && s.price !== s.value && <span style={{ fontSize: 11, color: T.ink, fontFamily: mono }}>{s.price}</span>}
+                            <span style={{ fontSize: 11.5, fontWeight: 700, color: s.value === "—" ? T.faint : s.up ? T.green : T.red, fontFamily: mono }}>{s.value}</span>
+                          </span>
                         </div>
                       ))}
                     </div>
-                    <div style={{ fontSize: 11.5, color: T.sub, lineHeight: 1.65 }}>{stocksStatus.state === "live" ? "Futures and yield pulled live via Yahoo Finance's public endpoint — unofficial, no key, refreshes on page load." : stocksStatus.state === "loading" ? "Loading live data…" : stocksStatus.detail}</div>
+                    <div style={{ fontSize: 11.5, color: T.sub, lineHeight: 1.65 }}>{stocksOutlook}</div>
                     <div style={{ marginTop: 9, ...S.microLabel, letterSpacing: "0.04em" }}>{todayLabel}</div>
                   </div>
           
@@ -907,6 +926,42 @@ Be directional where the data supports it — don't hedge into uselessness — b
     .filter(b => b.daysUntil <= 30)
     .sort((a, b) => a.daysUntil - b.daysUntil);
 
+  const miniCatColor = (key) => (EVENT_CATEGORIES.find(c => c.key === key) || EVENT_CATEGORIES[0]).color;
+  const miniNow = new Date();
+  const miniYear = miniNow.getFullYear(), miniMonth = miniNow.getMonth();
+  const miniDaysInMonth = new Date(miniYear, miniMonth + 1, 0).getDate();
+  const miniLeading = new Date(miniYear, miniMonth, 1).getDay();
+  const miniCells = [...Array(miniLeading).fill(null), ...Array.from({ length: miniDaysInMonth }, (_, i) => i + 1)];
+  const miniEventsByDay = {};
+  (miniEvents || []).forEach(ev => { const k = ev.start_time.slice(0, 10); (miniEventsByDay[k] = miniEventsByDay[k] || []).push(ev); });
+  const miniDateKey = (day) => `${miniYear}-${String(miniMonth + 1).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
+  const todayDate = miniNow.getDate();
+  const card_minicalendar = (
+                  <div style={card}>
+                    <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 10 }}>
+                      <span style={S.title}>{miniNow.toLocaleDateString("en-US", { month: "long", year: "numeric" })}</span>
+                      <span style={{ ...S.microLabel }}>THIS MONTH</span>
+                    </div>
+                    <div style={{ display: "grid", gridTemplateColumns: "repeat(7, 1fr)", gap: 2, marginBottom: 3 }}>
+                      {["S", "M", "T", "W", "T", "F", "S"].map((d, i) => (
+                        <div key={i} style={{ textAlign: "center", fontSize: 8.5, fontWeight: 700, color: T.faint, fontFamily: mono }}>{d}</div>
+                      ))}
+                    </div>
+                    <div style={{ display: "grid", gridTemplateColumns: "repeat(7, 1fr)", gap: 2 }}>
+                      {miniCells.map((day, i) => {
+                        if (day === null) return <div key={`b${i}`} />;
+                        const dayEvents = miniEventsByDay[miniDateKey(day)] || [];
+                        const isToday = day === todayDate;
+                        return (
+                          <div key={day} style={{ aspectRatio: "1", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 1, borderRadius: 6, border: isToday ? `1.5px solid ${T.brass}` : "1px solid transparent", background: isToday ? "rgba(143,107,30,0.08)" : "transparent" }}>
+                            <span style={{ fontSize: 9.5, fontWeight: isToday ? 800 : 500, color: isToday ? T.brass : T.ink, fontFamily: mono }}>{day}</span>
+                            {dayEvents.length > 0 && <span style={{ width: 3, height: 3, borderRadius: "50%", background: miniCatColor(dayEvents[0].category) }} />}
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+  );
   const card_birthdays = (
                   <div style={card}>
                     <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
@@ -934,7 +989,7 @@ Be directional where the data supports it — don't hedge into uselessness — b
   const card_meetings = (
                   <div style={card}>
                     <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-                      <span style={S.title}>Upcoming Meetings</span>
+                      <span style={S.title}>Business Meetings</span>
                       <StatusTag status={meetingsStatus} />
                     </div>
                     <div style={{ display: "flex", flexDirection: "column", gap: 7, marginTop: 10 }}>
@@ -1029,7 +1084,7 @@ Be directional where the data supports it — don't hedge into uselessness — b
           {sectionHeader("Market")}
           {card_bitcoin}{card_stocks}{card_watch}{card_wire}
           {sectionHeader("Ops")}
-          {card_gsc}{card_clarify}{card_zts}{card_shopify}{card_birthdays}{card_meetings}
+          {card_minicalendar}{card_gsc}{card_clarify}{card_zts}{card_shopify}{card_birthdays}{card_meetings}
         </div>
         {btcChartOpen && <BtcChartModal isMobile onClose={() => setBtcChartOpen(false)} callFnFull={callFnFull} />}
       </div>
@@ -1041,7 +1096,7 @@ Be directional where the data supports it — don't hedge into uselessness — b
         </div>
         <div style={col}>
           {sectionHeader("Ops")}
-          {card_gsc}{card_clarify}{card_zts}{card_shopify}{card_birthdays}{card_meetings}
+          {card_minicalendar}{card_gsc}{card_clarify}{card_zts}{card_shopify}{card_birthdays}{card_meetings}
         </div>
         {btcChartOpen && <BtcChartModal isMobile={false} onClose={() => setBtcChartOpen(false)} callFnFull={callFnFull} />}
       </div>
@@ -1121,14 +1176,14 @@ function BoardSeatsSidebar({ seatNotes, onEditSeat }) {
 // Desktop: split view — chat and the board are both visible, always, no
 // switching needed. Mobile: a sub-tab toggle, since there's no room for both.
 const BOARDROOM_SUBTABS = [{ key: "chat", label: "Chat" }, { key: "seats", label: "Seats" }];
-function BoardRoomPage({ messages, thinking, loadingData, input, setInput, onSend, endRef, seatNotes, onEditSeat, isMobile }) {
+function BoardRoomPage({ messages, thinking, loadingData, input, setInput, onSend, onClearChat, endRef, seatNotes, onEditSeat, isMobile }) {
   const [sub, setSub] = useState("chat");
 
   if (!isMobile) {
     return (
       <div style={{ flex: 1, display: "flex", minHeight: 0 }}>
         <div style={{ flex: "1 1 auto", minWidth: 0, minHeight: 0, display: "flex", flexDirection: "column", borderRight: `1px solid ${T.line}` }}>
-          <RoomPage messages={messages} thinking={thinking} loadingData={loadingData} input={input} setInput={setInput} onSend={onSend} endRef={endRef} isMobile={false} />
+          <RoomPage messages={messages} thinking={thinking} loadingData={loadingData} input={input} setInput={setInput} onSend={onSend} onClearChat={onClearChat} endRef={endRef} isMobile={false} />
         </div>
         <div style={{ flex: "0 0 300px", minHeight: 0 }}>
           <BoardSeatsSidebar seatNotes={seatNotes} onEditSeat={onEditSeat} />
@@ -1143,7 +1198,7 @@ function BoardRoomPage({ messages, thinking, loadingData, input, setInput, onSen
         <SubTabs options={BOARDROOM_SUBTABS} value={sub} onChange={setSub} />
       </div>
       {sub === "chat"
-        ? <RoomPage messages={messages} thinking={thinking} loadingData={loadingData} input={input} setInput={setInput} onSend={onSend} endRef={endRef} isMobile={true} />
+        ? <RoomPage messages={messages} thinking={thinking} loadingData={loadingData} input={input} setInput={setInput} onSend={onSend} onClearChat={onClearChat} endRef={endRef} isMobile={true} />
         : <BoardPage seatNotes={seatNotes} onEditSeat={onEditSeat} onEnterRoom={() => setSub("chat")} isMobile={true} />}
     </>
   );
@@ -1518,6 +1573,14 @@ function BirthdaysPanel({ isMobile }) {
   );
 }
 
+// Shared between the full Calendar tab and the Ops mini-calendar card.
+const EVENT_CATEGORIES = [
+  { key: "personal", label: "Personal", color: T.blue },
+  { key: "work", label: "Work", color: T.amber },
+  { key: "health", label: "Health", color: T.green },
+  { key: "bills", label: "Bills / Finance", color: T.red },
+];
+
 function CalendarPanel({ isMobile }) {
   const card = isMobile ? S.cardM : S.card;
   const [events, setEvents] = useState(null); // null = loading
@@ -1525,7 +1588,9 @@ function CalendarPanel({ isMobile }) {
   const [form, setForm] = useState(null); // null = closed; object = open (new or editing)
   const [saving, setSaving] = useState(false);
   const [saveErr, setSaveErr] = useState(null);
-  const [showPast, setShowPast] = useState(false);
+  const today0 = new Date(); today0.setHours(0, 0, 0, 0);
+  const [viewMonth, setViewMonth] = useState(() => new Date(today0.getFullYear(), today0.getMonth(), 1));
+  const [selectedDay, setSelectedDay] = useState(null); // "YYYY-MM-DD" or null — grid shows when null
 
   const [bulkOpen, setBulkOpen] = useState(false);
   const [bulkImages, setBulkImages] = useState([]); // {id, name, dataUrl, base64, mediaType}
@@ -1649,21 +1714,24 @@ Only extract entries you can read with real confidence — skip anything blurry,
   };
 
   const todayStr = new Date().toISOString().slice(0, 10);
-  const nowMs = Date.now();
 
-  const blankDraft = () => ({
-    id: crypto.randomUUID(), title: "", notes: "",
-    date: todayStr, time: "09:00", allDay: false,
+  const catColor = (key) => (EVENT_CATEGORIES.find(c => c.key === key) || EVENT_CATEGORIES[0]).color;
+
+  const blankDraft = (presetDate) => ({
+    id: crypto.randomUUID(), title: "", notes: "", location: "", category: "personal",
+    date: presetDate || todayStr, time: "09:00", endTime: "", allDay: false,
   });
 
-  const openNew = () => { setSaveErr(null); setForm(blankDraft()); };
+  const openNew = (presetDate) => { setSaveErr(null); setForm(blankDraft(presetDate)); };
   const openEdit = (ev) => {
     setSaveErr(null);
     const d = new Date(ev.start_time);
     setForm({
       id: ev.id, title: ev.title, notes: ev.notes || "", allDay: ev.all_day,
+      location: ev.location || "", category: ev.category || "personal",
       date: d.toISOString().slice(0, 10),
       time: ev.all_day ? "09:00" : d.toTimeString().slice(0, 5),
+      endTime: ev.end_time ? new Date(ev.end_time).toTimeString().slice(0, 5) : "",
     });
   };
   const closeForm = () => setForm(null);
@@ -1673,9 +1741,10 @@ Only extract entries you can read with real confidence — skip anything blurry,
     const start_time = form.allDay
       ? new Date(`${form.date}T00:00:00`).toISOString()
       : new Date(`${form.date}T${form.time}:00`).toISOString();
+    const end_time = (!form.allDay && form.endTime) ? new Date(`${form.date}T${form.endTime}:00`).toISOString() : null;
     setSaving(true);
     setSaveErr(null);
-    db.saveEvent({ id: form.id, title: form.title.trim(), notes: form.notes, start_time, all_day: form.allDay })
+    db.saveEvent({ id: form.id, title: form.title.trim(), notes: form.notes, start_time, end_time, all_day: form.allDay, location: form.location, category: form.category })
       .then(() => { setSaving(false); closeForm(); refresh(); })
       .catch(e => { setSaving(false); setSaveErr(e.message || "Couldn't save."); });
   };
@@ -1715,19 +1784,42 @@ Only extract entries you can read with real confidence — skip anything blurry,
           style={{ ...S.input, width: "100%", padding: "10px 12px", fontSize: 14, fontWeight: 700, fontFamily: syne, marginBottom: 10 }}
         />
 
+        <div style={{ display: "flex", gap: 6, marginBottom: 10, flexWrap: "wrap" }}>
+          {EVENT_CATEGORIES.map(c => (
+            <button key={c.key} onClick={() => setForm(f => ({ ...f, category: c.key }))}
+              style={{ display: "flex", alignItems: "center", gap: 5, padding: "5px 10px", borderRadius: 999, fontSize: 10.5, fontWeight: 700, fontFamily: syne, cursor: "pointer",
+                border: `1px solid ${form.category === c.key ? c.color : T.line}`, background: form.category === c.key ? c.color + "1A" : "transparent", color: form.category === c.key ? c.color : T.sub }}>
+              <span style={{ width: 6, height: 6, borderRadius: "50%", background: c.color }} />
+              {c.label}
+            </button>
+          ))}
+        </div>
+
         <label style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 10, fontSize: 11.5, color: T.sub, cursor: "pointer" }}>
           <input type="checkbox" checked={form.allDay} onChange={e => setForm(f => ({ ...f, allDay: e.target.checked }))} />
           All-day
         </label>
 
-        <div style={{ display: "flex", gap: 8, marginBottom: 10 }}>
+        <div style={{ display: "flex", gap: 8, marginBottom: 10, flexWrap: "wrap" }}>
           <input type="date" value={form.date} onChange={e => setForm(f => ({ ...f, date: e.target.value }))}
-            style={{ ...S.input, flex: 1, padding: "9px 10px", fontSize: 13, fontFamily: mono }} />
+            style={{ ...S.input, flex: "1 1 130px", padding: "9px 10px", fontSize: 13, fontFamily: mono }} />
           {!form.allDay && (
-            <input type="time" value={form.time} onChange={e => setForm(f => ({ ...f, time: e.target.value }))}
-              style={{ ...S.input, flex: 1, padding: "9px 10px", fontSize: 13, fontFamily: mono }} />
+            <>
+              <input type="time" value={form.time} onChange={e => setForm(f => ({ ...f, time: e.target.value }))}
+                style={{ ...S.input, flex: "1 1 90px", padding: "9px 10px", fontSize: 13, fontFamily: mono }} />
+              <input type="time" value={form.endTime} onChange={e => setForm(f => ({ ...f, endTime: e.target.value }))}
+                placeholder="End (optional)" title="End time (optional)"
+                style={{ ...S.input, flex: "1 1 90px", padding: "9px 10px", fontSize: 13, fontFamily: mono }} />
+            </>
           )}
         </div>
+
+        <input
+          value={form.location}
+          onChange={e => setForm(f => ({ ...f, location: e.target.value }))}
+          placeholder="Location (optional)"
+          style={{ ...S.input, width: "100%", padding: "9px 12px", fontSize: 13, marginBottom: 10 }}
+        />
 
         <textarea
           value={form.notes}
@@ -1752,20 +1844,43 @@ Only extract entries you can read with real confidence — skip anything blurry,
   }
 
   // ─── Agenda list ───
-  const upcoming = (events || []).filter(e => new Date(e.start_time).getTime() >= nowMs - 86400000 || e.start_time.slice(0, 10) === todayStr);
-  const past = (events || []).filter(e => !upcoming.includes(e));
 
   const renderEvent = (ev) => (
     <div key={ev.id} onClick={() => openEdit(ev)}
       style={{ ...S.inner, padding: "10px 12px", cursor: "pointer", display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 10 }}>
       <div style={{ minWidth: 0, flex: 1 }}>
-        <div style={{ fontSize: 12.5, fontWeight: 700, fontFamily: syne, color: T.ink, marginBottom: 2 }}>{ev.title}</div>
-        <div style={{ fontSize: 11, color: T.sub }}>{dayLabel(ev.start_time)} · {timeLabel(ev.start_time, ev.all_day)}</div>
+        <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 2 }}>
+          <span style={{ width: 6, height: 6, borderRadius: "50%", background: catColor(ev.category), flex: "none" }} />
+          <span style={{ fontSize: 12.5, fontWeight: 700, fontFamily: syne, color: T.ink }}>{ev.title}</span>
+        </div>
+        <div style={{ fontSize: 11, color: T.sub }}>
+          {dayLabel(ev.start_time)} · {timeLabel(ev.start_time, ev.all_day)}{ev.end_time && !ev.all_day ? `–${new Date(ev.end_time).toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" })}` : ""}
+          {ev.location ? ` · ${ev.location}` : ""}
+        </div>
         {ev.notes && <div style={{ fontSize: 10.5, color: T.faint, marginTop: 3, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{ev.notes}</div>}
       </div>
       <button onClick={(e) => removeEvent(ev.id, e)} aria-label="Delete event" style={{ background: "none", border: "none", color: T.faint, cursor: "pointer", fontSize: 14, padding: 2, lineHeight: 1, flex: "none" }}>×</button>
     </div>
   );
+
+  // ─── Month grid ───
+  const gridYear = viewMonth.getFullYear(), gridMonth = viewMonth.getMonth();
+  const firstOfMonth = new Date(gridYear, gridMonth, 1);
+  const daysInMonth = new Date(gridYear, gridMonth + 1, 0).getDate();
+  const leadingBlanks = firstOfMonth.getDay(); // 0 = Sunday
+  const cells = [...Array(leadingBlanks).fill(null), ...Array.from({ length: daysInMonth }, (_, i) => i + 1)];
+  const eventsByDay = {}; // "YYYY-MM-DD" -> [events]
+  (events || []).forEach(ev => {
+    const key = ev.start_time.slice(0, 10);
+    (eventsByDay[key] = eventsByDay[key] || []).push(ev);
+  });
+  const dateKey = (day) => `${gridYear}-${String(gridMonth + 1).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
+  const isToday = (day) => dateKey(day) === todayStr;
+  const monthLabel = viewMonth.toLocaleDateString("en-US", { month: "long", year: "numeric" });
+  const changeMonth = (delta) => setViewMonth(new Date(gridYear, gridMonth + delta, 1));
+
+  const selectedDayEvents = selectedDay ? (eventsByDay[selectedDay] || []).sort((a, b) => new Date(a.start_time) - new Date(b.start_time)) : [];
+  const selectedDayLabel = selectedDay ? new Date(`${selectedDay}T00:00:00`).toLocaleDateString("en-US", { weekday: "long", month: "long", day: "numeric" }) : "";
 
   return (
     <div style={card}>
@@ -1773,7 +1888,7 @@ Only extract entries you can read with real confidence — skip anything blurry,
         <span style={S.title}>Calendar</span>
         <div style={{ display: "flex", gap: 8 }}>
           <button onClick={() => setBulkOpen(o => !o)} style={{ ...S.ghostBtn, padding: "7px 14px", fontSize: 11.5 }}>{bulkOpen ? "Close import" : "Import screenshots"}</button>
-          <button onClick={openNew} style={{ ...S.brassBtn, padding: "7px 14px", fontSize: 11.5 }}>+ Add event</button>
+          <button onClick={() => openNew(selectedDay)} style={{ ...S.brassBtn, padding: "7px 14px", fontSize: 11.5 }}>+ Add event</button>
         </div>
       </div>
 
@@ -1848,24 +1963,57 @@ Only extract entries you can read with real confidence — skip anything blurry,
 
       {loadErr && <div style={{ fontSize: 11.5, color: T.faint, padding: "20px 0", textAlign: "center" }}>{loadErr}</div>}
       {!loadErr && events === null && <div style={{ fontSize: 11.5, color: T.faint, padding: "20px 0", textAlign: "center", animation: "pulse 1.4s infinite" }}>Loading calendar…</div>}
-      {!loadErr && events && events.length === 0 && !bulkOpen && (
-        <div style={{ fontSize: 11.5, color: T.faint, padding: "24px 0", textAlign: "center" }}>Nothing on the calendar yet — tap "+ Add event" to start.</div>
-      )}
 
-      {!loadErr && upcoming.length > 0 && (
-        <div style={{ display: "flex", flexDirection: "column", gap: 7 }}>
-          {upcoming.map(renderEvent)}
+      {!loadErr && events !== null && !bulkOpen && selectedDay === null && (
+        <div>
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 12 }}>
+            <button onClick={() => changeMonth(-1)} aria-label="Previous month" style={{ background: "none", border: `1px solid ${T.line}`, borderRadius: 8, width: 30, height: 30, color: T.sub, cursor: "pointer", fontSize: 14 }}>‹</button>
+            <span style={{ fontSize: 13, fontWeight: 700, fontFamily: syne, color: T.ink }}>{monthLabel}</span>
+            <button onClick={() => changeMonth(1)} aria-label="Next month" style={{ background: "none", border: `1px solid ${T.line}`, borderRadius: 8, width: 30, height: 30, color: T.sub, cursor: "pointer", fontSize: 14 }}>›</button>
+          </div>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(7, 1fr)", gap: 3, marginBottom: 4 }}>
+            {["S", "M", "T", "W", "T", "F", "S"].map((d, i) => (
+              <div key={i} style={{ textAlign: "center", fontSize: 9.5, fontWeight: 700, color: T.faint, fontFamily: mono, padding: "2px 0" }}>{d}</div>
+            ))}
+          </div>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(7, 1fr)", gap: 3 }}>
+            {cells.map((day, i) => {
+              if (day === null) return <div key={`b${i}`} />;
+              const key = dateKey(day);
+              const dayEvents = eventsByDay[key] || [];
+              const todayFlag = isToday(day);
+              return (
+                <button key={key} onClick={() => setSelectedDay(key)}
+                  style={{
+                    aspectRatio: "1", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 2,
+                    borderRadius: 9, cursor: "pointer", padding: "2px 0",
+                    border: todayFlag ? `1.5px solid ${T.brass}` : "1px solid transparent",
+                    background: todayFlag ? "rgba(143,107,30,0.08)" : "transparent",
+                  }}>
+                  <span style={{ fontSize: 11.5, fontWeight: todayFlag ? 800 : 500, color: todayFlag ? T.brass : T.ink, fontFamily: mono }}>{day}</span>
+                  {dayEvents.length > 0 && (
+                    <span style={{ display: "flex", gap: 2 }}>
+                      {dayEvents.slice(0, 3).map((ev, j) => <span key={j} style={{ width: 4, height: 4, borderRadius: "50%", background: catColor(ev.category) }} />)}
+                    </span>
+                  )}
+                </button>
+              );
+            })}
+          </div>
         </div>
       )}
 
-      {!loadErr && past.length > 0 && (
-        <div style={{ marginTop: 14 }}>
-          <button onClick={() => setShowPast(s => !s)} style={{ background: "none", border: "none", color: T.brass, fontFamily: syne, fontWeight: 700, fontSize: 11, cursor: "pointer", padding: 0 }}>
-            {showPast ? "Hide" : "Show"} past events ({past.length})
-          </button>
-          {showPast && (
-            <div style={{ display: "flex", flexDirection: "column", gap: 7, marginTop: 8 }}>
-              {past.map(renderEvent)}
+      {!loadErr && events !== null && !bulkOpen && selectedDay !== null && (
+        <div>
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 12 }}>
+            <button onClick={() => setSelectedDay(null)} style={{ background: "none", border: "none", color: T.brass, fontFamily: syne, fontWeight: 700, fontSize: 12, cursor: "pointer", padding: 0 }}>‹ {monthLabel}</button>
+          </div>
+          <div style={{ fontSize: 12.5, fontWeight: 700, fontFamily: syne, color: T.ink, marginBottom: 10 }}>{selectedDayLabel}</div>
+          {selectedDayEvents.length === 0 ? (
+            <div style={{ fontSize: 11.5, color: T.faint, padding: "16px 0", textAlign: "center" }}>Nothing yet — tap "+ Add event" to add something.</div>
+          ) : (
+            <div style={{ display: "flex", flexDirection: "column", gap: 7 }}>
+              {selectedDayEvents.map(renderEvent)}
             </div>
           )}
         </div>
@@ -3209,6 +3357,17 @@ export default function App() {
   };
   const skipImport = () => { sm.set("migrated", true); setMigration(null); };
 
+  // Scroll the active page back to top on nav tap — smooth if there's
+  // actually somewhere to scroll from, skipped entirely if already at top
+  // so it's not a pointless animation on every tap.
+  const goToPage = (key) => {
+    setPage(key);
+    requestAnimationFrame(() => {
+      const el = document.getElementById("page-scroll");
+      if (el && el.scrollTop > 0) el.scrollTo({ top: 0, behavior: "smooth" });
+    });
+  };
+
   const send = async () => {
     const q = input.trim();
     if (!q || thinking) return;
@@ -3225,6 +3384,11 @@ export default function App() {
     setMessages([...next, asstMsg]);
     db.saveMessage({ role: "assistant", content: result.answer, consulted: result.consulted });
     runOversight(q, result); // fire-and-forget — never blocks the chat
+  };
+
+  const clearChat = async () => {
+    if (!window.confirm("Clear the whole chat history? This can't be undone.")) return;
+    try { await db.clearChat(); setMessages([]); } catch (e) { alert(e.message || "Couldn't clear chat."); }
   };
 
   // Real oversight: if the user has it on and 2+ seats were consulted, ask a
@@ -3255,7 +3419,7 @@ export default function App() {
   const renderPage = (key) => {
     switch (key) {
       case "brief": return <MorningBriefPage btc={btc} isMobile={isMobile} settings={settings} />;
-      case "boardroom": return <BoardRoomPage messages={messages} thinking={thinking} loadingData={loadingData} input={input} setInput={setInput} onSend={send} endRef={endRef} seatNotes={seatNotes} onEditSeat={setEditSeat} isMobile={isMobile} />;
+      case "boardroom": return <BoardRoomPage messages={messages} thinking={thinking} loadingData={loadingData} input={input} setInput={setInput} onSend={send} onClearChat={clearChat} endRef={endRef} seatNotes={seatNotes} onEditSeat={setEditSeat} isMobile={isMobile} />;
       case "personal": return <PersonalPage isMobile={isMobile} />;
       case "assets": return <PropertiesPage isMobile={isMobile} settings={settings} updateSetting={updateSetting} session={session} />;
       case "systems": return <SystemsPage settings={settings} updateSetting={updateSetting} session={session} btc={btc} isMobile={isMobile} />;
@@ -3279,7 +3443,9 @@ export default function App() {
           <TopStatus now={now} dataStamp={dataStamp} refreshing={refreshing} onRefresh={refreshData} compact />
         </div>
 
-        {renderPage(page)}
+        <div id="page-scroll" style={{ flex: 1, minHeight: 0, overflowY: "auto", display: "flex", flexDirection: "column" }}>
+          {renderPage(page)}
+        </div>
 
         {/* Bottom nav — icon-only, same 6 destinations as the desktop rail */}
         <div style={{ flex: "none", display: "flex", borderTop: `1px solid ${T.line}`, background: "rgba(243,241,236,0.94)", backdropFilter: "blur(12px)" }}>
@@ -3287,7 +3453,7 @@ export default function App() {
             const active = page === n.key;
             const Icon = NAV_ICONS[n.key];
             return (
-              <button key={n.key} onClick={() => setPage(n.key)} title={n.label} aria-label={n.label} aria-current={active ? "page" : undefined}
+              <button key={n.key} onClick={() => goToPage(n.key)} title={n.label} aria-label={n.label} aria-current={active ? "page" : undefined}
                 style={{ flex: 1, minHeight: 66, position: "relative", background: active ? "linear-gradient(180deg, rgba(143,107,30,0.10), transparent)" : "none", border: "none", cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", padding: "9px 0 calc(9px + env(safe-area-inset-bottom))" }}>
                 <span style={{ position: "absolute", top: 7, left: "50%", transform: "translateX(-50%)", width: 6, height: 6, borderRadius: "50%", background: T.brass, opacity: active ? 1 : 0, transition: "opacity 0.15s", boxShadow: "0 0 8px rgba(143,107,30,0.85)" }} />
                 <Icon width={23} height={23} color={active ? T.ink : T.faint} style={{ transition: "color 0.15s" }} />
@@ -3319,7 +3485,7 @@ export default function App() {
           {NAV.map(n => {
             const active = page === n.key;
             return (
-              <div key={n.key} onClick={() => setPage(n.key)} style={{ display: "flex", alignItems: "center", gap: 12, padding: "12px 13px", borderRadius: 12, cursor: "pointer", background: active ? "linear-gradient(180deg, rgba(143,107,30,0.13), rgba(143,107,30,0.05))" : "transparent", border: `1px solid ${active ? "rgba(143,107,30,0.3)" : "transparent"}` }}>
+              <div key={n.key} onClick={() => goToPage(n.key)} style={{ display: "flex", alignItems: "center", gap: 12, padding: "12px 13px", borderRadius: 12, cursor: "pointer", background: active ? "linear-gradient(180deg, rgba(143,107,30,0.13), rgba(143,107,30,0.05))" : "transparent", border: `1px solid ${active ? "rgba(143,107,30,0.3)" : "transparent"}` }}>
                 <span style={{ width: 8, height: 8, transform: "rotate(45deg)", background: active ? n.mark : "rgba(34,29,20,0.18)", boxShadow: active ? `0 0 10px ${n.mark}99` : "none", flex: "none", borderRadius: 2 }} />
                 <span style={{ display: "flex", flexDirection: "column", gap: 2, minWidth: 0 }}>
                   <span style={{ fontSize: 12.5, fontWeight: 700, fontFamily: syne, color: active ? T.ink : T.sub, letterSpacing: "0.02em" }}>{n.label}</span>
@@ -3380,7 +3546,9 @@ export default function App() {
           </div>
         </div>
 
-        {renderPage(page)}
+        <div id="page-scroll" style={{ flex: 1, minHeight: 0, overflowY: "auto", display: "flex", flexDirection: "column" }}>
+          {renderPage(page)}
+        </div>
       </div>
 
       {editSeat && <SeatNotesModal seatKey={editSeat} initial={seatNotes[editSeat]} onSave={saveSeatNote} onClose={() => setEditSeat(null)} />}
