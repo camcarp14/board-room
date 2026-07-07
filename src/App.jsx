@@ -1265,7 +1265,11 @@ function MorningBriefPage({ btc, isMobile, settings, updateSetting, onOpenCalend
                             return (
                               <div key={g.id} style={{ ...S.inner, padding: "9px 11px", flexShrink: 0 }}>
                                 <div onClick={() => toggleGame(g)} style={{ display: "flex", alignItems: "center", gap: 8, cursor: "pointer" }}>
-                                  <span style={{ width: 6, height: 6, borderRadius: "50%", flex: "none", background: g.state === "in" ? T.red : g.isPast ? T.green : T.faint, animation: g.state === "in" ? "pulse 1.4s infinite" : "none" }} />
+                                  {(() => {
+                                    const Icon = SPORT_ICONS[g.sport] || SPORT_ICONS.baseball;
+                                    const iconColor = g.state === "in" ? T.red : g.isPast ? T.green : T.faint;
+                                    return <Icon width={13} height={13} style={{ flex: "none", color: iconColor, animation: g.state === "in" ? "pulse 1.4s infinite" : "none" }} />;
+                                  })()}
                                   <span style={{ fontSize: 10.5, color: T.ink, flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
                                     {g.away?.abbr} {g.away?.score ?? ""} @ {g.home?.abbr} {g.home?.score ?? ""}
                                   </span>
@@ -3906,6 +3910,50 @@ const HEADERS = {
   personal: ["Personal", "notes and calendar, just for you"],
   assets: ["Assets", "everything you run, one click away"],
   systems: ["Systems", "usage, status, deploys, and supabase"],
+};
+// Small sport-type icons for the Sports tile — same line-icon style as
+// NAV_ICONS below, just simplified further since these render tiny (~12px)
+// inside a compact list row. Colored by the caller to double as the
+// live/final/upcoming state indicator, replacing a plain dot.
+const SPORT_ICONS = {
+  baseball: (p) => (
+    <svg {...p} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round">
+      <circle cx="12" cy="12" r="8.5" />
+      <path d="M6.3 6c1.8 2 2.7 3.9 2.7 6s-.9 4-2.7 6" />
+      <path d="M17.7 6c-1.8 2-2.7 3.9-2.7 6s.9 4 2.7 6" />
+    </svg>
+  ),
+  football: (p) => (
+    <svg {...p} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round">
+      <ellipse cx="12" cy="12" rx="8.5" ry="5.5" />
+      <line x1="6" y1="12" x2="18" y2="12" />
+      <line x1="10.5" y1="9.8" x2="10.5" y2="8.4" /><line x1="13.5" y1="9.8" x2="13.5" y2="8.4" />
+      <line x1="10.5" y1="14.2" x2="10.5" y2="15.6" /><line x1="13.5" y1="14.2" x2="13.5" y2="15.6" />
+    </svg>
+  ),
+  basketball: (p) => (
+    <svg {...p} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round">
+      <circle cx="12" cy="12" r="8.5" />
+      <line x1="3.5" y1="12" x2="20.5" y2="12" />
+      <line x1="12" y1="3.5" x2="12" y2="20.5" />
+      <path d="M6 5.8c2.2 2.2 3.3 4.2 3.3 6.2s-1.1 4-3.3 6.2" />
+      <path d="M18 5.8c-2.2 2.2-3.3 4.2-3.3 6.2s1.1 4 3.3 6.2" />
+    </svg>
+  ),
+  hockey: (p) => (
+    <svg {...p} viewBox="0 0 24 24" fill="currentColor" stroke="none">
+      <ellipse cx="12" cy="12" rx="8.5" ry="4" />
+    </svg>
+  ),
+  soccer: (p) => (
+    <svg {...p} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+      <circle cx="12" cy="12" r="8.5" />
+      <polygon points="12,8 14.6,9.9 13.6,13 10.4,13 9.4,9.9" fill="currentColor" stroke="none" />
+      <line x1="12" y1="3.5" x2="12" y2="8" /><line x1="14.6" y1="9.9" x2="18.7" y2="8.6" />
+      <line x1="13.6" y1="13" x2="15.5" y2="17.2" /><line x1="10.4" y1="13" x2="8.5" y2="17.2" />
+      <line x1="9.4" y1="9.9" x2="5.3" y2="8.6" />
+    </svg>
+  ),
 };
 const NAV_ICONS = {
   brief: (p) => ( // sunrise — the morning brief
