@@ -699,7 +699,30 @@ function StatusTag({ status }) {
   return <span style={{ fontSize: 8, fontWeight: 700, color: s.color, background: s.color + "1A", border: `1px solid ${s.color}40`, padding: "3.5px 9px", borderRadius: 10, fontFamily: mono, letterSpacing: "0.06em" }}>{s.label}</span>;
 }
 
-function MorningBriefPage({ btc, isMobile, settings }) {
+function MorningBriefPage({ btc, isMobile, settings, updateSetting }) {
+  const sportsCfg = settings?.sports || { followedTeams: [], watchLeagues: [], watchGames: [], excludedGames: [] };
+  const [sportsGames, setSportsGames] = useState([]);
+  const [sportsStatus, setSportsStatus] = useState({ state: "loading" });
+  const [sportsNews, setSportsNews] = useState([]);
+  const [sportsNewsStatus, setSportsNewsStatus] = useState({ state: "loading" });
+  const [sportsDetail, setSportsDetail] = useState({}); // eventId -> detail | "loading" | "error"
+  const [openGameId, setOpenGameId] = useState(null);
+  const [sportsSettingsOpen, setSportsSettingsOpen] = useState(false);
+
+  const toggleGame = async (g) => {
+    if (openGameId === g.id) { setOpenGameId(null); return; }
+    setOpenGameId(g.id);
+    if (sportsDetail[g.id]) return; // already fetched — no need to hit the network again
+    setSportsDetail(prev => ({ ...prev, [g.id]: "loading" }));
+    const res = await callFnFull("sports-detail", { sport: g.sport, league: g.league, eventId: g.id });
+    if (res.ok && res.data?.success) setSportsDetail(prev => ({ ...prev, [g.id]: res.data }));
+    else setSportsDetail(prev => ({ ...prev, [g.id]: "error" }));
+  };
+  const excludeGame = (id) => {
+    const next = { ...sportsCfg, excludedGames: [...(sportsCfg.excludedGames || []), id] };
+    updateSetting("sports", next);
+    setSportsGames(prev => prev.filter(g => g.id !== id)); // instant — don't wait on the next poll
+  };
   const [gsc, setGsc] = useState(GSC_EMPTY);
   const [gscStatus, setGscStatus] = useState({ state: "loading" });
   const [gscMetric, setGscMetric] = useState("impressions");
@@ -789,6 +812,19 @@ function MorningBriefPage({ btc, isMobile, settings }) {
       updateSnapshot({ todayEvents: soon });
     }).catch(() => { if (alive) setMiniEvents([]); });
     loadOpen("calendar", (d) => setEvents(d.events || []), setEventsStatus);
+    (async () => {
+      const res = await callFnFull("sports", { followedTeams: sportsCfg.followedTeams, watchLeagues: sportsCfg.watchLeagues, watchGames: sportsCfg.watchGames, excludedGames: sportsCfg.excludedGames });
+      if (!alive) return;
+      if (res.ok && res.data?.success) { setSportsGames(res.data.games || []); setSportsStatus({ state: "live" }); }
+      else setSportsStatus({ state: "error", detail: res.data?.error || "unreachable" });
+    })();
+    (async () => {
+      const leagueList = [...sportsCfg.followedTeams, ...sportsCfg.watchLeagues].map(x => ({ sport: x.sport, league: x.league, displayName: x.displayName || x.league?.toUpperCase() }));
+      const res = await callFnFull("sports-news", { leagues: leagueList });
+      if (!alive) return;
+      if (res.ok && res.data?.success) { setSportsNews(res.data.news || []); setSportsNewsStatus({ state: "live" }); }
+      else setSportsNewsStatus({ state: "error", detail: res.data?.error || "unreachable" });
+    })();
     // Meetings depend on a per-user setting (calendar_url), not an env var —
     // no ping/configured gate, just try and report the real outcome.
     (async () => {
@@ -799,7 +835,36 @@ function MorningBriefPage({ btc, isMobile, settings }) {
       else setMeetingsStatus({ state: "error", detail: res.data?.error || "unreachable" });
     })();
     return () => { alive = false; };
-  }, [settings?.calendar_url]);
+  }, [settings?.calendar_url, JSON.stringify(settings?.sports)]);
+
+  // Stocks previously only fetched once on page load and then sat frozen —
+  // the "risk-on/off" read looked live but the numbers behind it weren't
+  // actually updating. Polls on the same 5-min cadence as Bitcoin now.
+  useEffect(() => {
+    let alive = true;
+    const poll = async () => {
+      const res = await callFnFull("markets", {});
+      if (!alive) return;
+      if (res.ok && res.data?.success) { setStocks(res.data); updateSnapshot({ stocks: res.data }); setStocksStatus({ state: "live" }); }
+    };
+    const iv = setInterval(poll, 5 * 60 * 1000);
+    return () => { alive = false; clearInterval(iv); };
+  }, []);
+
+  // Live scores need to actually move — same reasoning as stocks above.
+  // A shorter 2-min cadence here since live game state changes faster than
+  // markets do and this is the whole point of a "live stats" tile.
+  useEffect(() => {
+    if (!sportsCfg.followedTeams.length && !sportsCfg.watchLeagues.length && !sportsCfg.watchGames.length) return;
+    let alive = true;
+    const poll = async () => {
+      const res = await callFnFull("sports", { followedTeams: sportsCfg.followedTeams, watchLeagues: sportsCfg.watchLeagues, watchGames: sportsCfg.watchGames, excludedGames: sportsCfg.excludedGames });
+      if (!alive) return;
+      if (res.ok && res.data?.success) setSportsGames(res.data.games || []);
+    };
+    const iv2 = setInterval(poll, 2 * 60 * 1000);
+    return () => { alive = false; clearInterval(iv2); };
+  }, [JSON.stringify(settings?.sports)]);
 
   const price = btc.loading ? "…" : btc.error || btc.price == null ? "—" : "$" + btc.price.toLocaleString(undefined, { maximumFractionDigits: 0 });
   const hasChange = !btc.loading && !btc.error && btc.changePct !== null && btc.changePct !== undefined;
@@ -830,9 +895,9 @@ function MorningBriefPage({ btc, isMobile, settings }) {
     if (aiBtcNarrativeKey.current && now - aiBtcNarrativeKey.current < 10 * 60 * 1000) return;
     aiBtcNarrativeKey.current = now;
     (async () => {
-      const system = `You write one tight, genuinely informative take (3-4 sentences max) on Bitcoin's current setup, for a solo trader/investor who holds a leveraged WBTC position on Aave he manages carefully. Don't just restate the numbers you're given — say what they actually mean, and weave in today's broader market tape if it's relevant (correlated risk-on/risk-off moves, a notable macro headline). Only bring up the Aave health-factor angle if price action genuinely warrants it — a real approach toward the invalidation level — not as a reflexive line every time. No preamble, no markdown, no hedging filler.`;
+      const system = `You write one tight, genuinely informative take (2-3 sentences, no more) on Bitcoin's current setup, for a solo trader/investor who holds a leveraged WBTC position on Aave he manages carefully. Don't just restate the numbers you're given — say what they actually mean, and weave in today's broader market tape only if it's genuinely relevant (correlated risk-on/risk-off moves, a notable macro headline) — cut it if it doesn't add something real. Only bring up the Aave health-factor angle if price action genuinely warrants it — a real approach toward the invalidation level — not as a reflexive line every time. No preamble, no markdown, no hedging filler.`;
       const context = `Price: $${Math.round(btc.price).toLocaleString()}, ${up ? "+" : ""}${(btc.changePct || 0).toFixed(1)}% 24h. 24h range: ${fmtK(btc.low24)}\u2013${fmtK(btc.high24)}. Day target: ${dayTarget}. Support: ${support}. Invalidation: ${invalidation}.${formatSnapshotForChat()}`;
-      const raw = await callClaude({ system, messages: [{ role: "user", content: context }], modelKey: "haiku", maxTokens: 180, fn: "btc_narrative" });
+      const raw = await callClaude({ system, messages: [{ role: "user", content: context }], modelKey: "haiku", maxTokens: 130, fn: "btc_narrative" });
       if (raw && raw.trim()) setAiBtcNarrative(raw.trim());
     })();
   }, [hasRange, btc.fetchedAt]);
@@ -1031,13 +1096,13 @@ function MorningBriefPage({ btc, isMobile, settings }) {
                       <span style={S.title}>Upcoming Birthdays</span>
                       <span style={{ ...S.microLabel }}>NEXT 30D</span>
                     </div>
-                    <div style={{ display: "flex", flexDirection: "column", gap: 7, marginTop: 10 }}>
+                    <div style={{ display: "flex", flexDirection: "column", gap: 7, marginTop: 10, maxHeight: 258, overflowY: upcomingBirthdays.length > 4 ? "auto" : "visible", paddingRight: 2 }}>
                       {birthdaysErr ? (
                         <div style={{ fontSize: 10.5, color: T.faint, padding: "6px 0" }}>{birthdaysErr}</div>
                       ) : birthdays === null ? (
                         <div style={{ fontSize: 10.5, color: T.faint, padding: "6px 0", animation: "pulse 1.4s infinite" }}>Loading…</div>
                       ) : upcomingBirthdays.length ? upcomingBirthdays.map((b) => (
-                        <div key={b.id} style={{ ...S.inner, display: "flex", alignItems: "center", gap: 11, padding: "11px 13px" }}>
+                        <div key={b.id} style={{ ...S.inner, display: "flex", alignItems: "center", gap: 11, padding: "11px 13px", flexShrink: 0 }}>
                           <span style={{ width: 7, height: 7, borderRadius: "50%", background: "#8B5CF6", flex: "none" }} />
                           <span style={{ display: "flex", flexDirection: "column", gap: 1, flex: 1, minWidth: 0 }}>
                             <span style={{ fontSize: 11, color: "#3A3323", lineHeight: 1.4 }}>{b.name}{b.year ? ` — turns ${b.next.getFullYear() - b.year}` : ""}</span>
@@ -1055,10 +1120,10 @@ function MorningBriefPage({ btc, isMobile, settings }) {
                       <span style={S.title}>Business Meetings</span>
                       <StatusTag status={meetingsStatus} />
                     </div>
-                    <div style={{ display: "flex", flexDirection: "column", gap: 7, marginTop: 10 }}>
+                    <div style={{ display: "flex", flexDirection: "column", gap: 7, marginTop: 10, maxHeight: 258, overflowY: meetings.length > 4 ? "auto" : "visible", paddingRight: 2 }}>
                       {meetingsStatus.state === "live" ? (
                         meetings.length ? meetings.map((m, i) => (
-                          <div key={i} style={{ ...S.inner, display: "flex", alignItems: "center", gap: 11, padding: "11px 13px" }}>
+                          <div key={i} style={{ ...S.inner, display: "flex", alignItems: "center", gap: 11, padding: "11px 13px", flexShrink: 0 }}>
                             <span style={{ width: 7, height: 7, borderRadius: "50%", background: T.blue, flex: "none" }} />
                             <span style={{ display: "flex", flexDirection: "column", gap: 1, flex: 1, minWidth: 0 }}>
                               <span style={{ fontSize: 11, color: "#3A3323", lineHeight: 1.4 }}>{m.title}</span>
@@ -1098,12 +1163,12 @@ function MorningBriefPage({ btc, isMobile, settings }) {
                     </div>
                     {wireStatus.state === "live" ? (
                       wire.length ? (
-                        <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                        <div style={{ display: "flex", flexDirection: "column", gap: 8, maxHeight: 258, overflowY: "auto", paddingRight: 2 }}>
                           {wire.map((w, i) => {
                             const Row = w.link ? "a" : "div";
                             return (
                               <Row key={i} {...(w.link ? { href: w.link, target: "_blank", rel: "noreferrer" } : {})}
-                                style={{ display: "flex", alignItems: "baseline", gap: 8, textDecoration: "none", color: "inherit" }}>
+                                style={{ display: "flex", alignItems: "baseline", gap: 8, textDecoration: "none", color: "inherit", flexShrink: 0 }}>
                                 <span style={{ fontSize: 9, fontFamily: mono, color: T.faint, flexShrink: 0 }}>{w.time}</span>
                                 <span style={{ fontSize: 8, fontWeight: 700, color: w.tagColor, border: `1px solid ${w.tagColor}40`, background: w.tagColor + "1A", borderRadius: 5, padding: "1.5px 5px", flexShrink: 0, fontFamily: mono }}>{w.tag}</span>
                                 <span style={{ fontSize: 11.5, color: T.ink, lineHeight: 1.4, minWidth: 0, flex: 1 }}>{w.text}</span>
@@ -1113,6 +1178,87 @@ function MorningBriefPage({ btc, isMobile, settings }) {
                         </div>
                       ) : <div style={{ fontSize: 10.5, color: T.faint, padding: "6px 0" }}>No headlines returned this cycle.</div>
                     ) : <FeedFallbackRow status={wireStatus} />}
+                  </div>
+      );
+      const card_sports = (
+                  <div style={card}>
+                    <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 12 }}>
+                      <span style={S.title}>Sports</span>
+                      <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                        <button onClick={() => setSportsSettingsOpen(true)} title="Manage teams & leagues" style={{ background: "none", border: `1px solid ${T.line}`, borderRadius: 6, width: 22, height: 22, color: T.faint, cursor: "pointer", fontSize: 11, display: "flex", alignItems: "center", justifyContent: "center", padding: 0 }}>⚙</button>
+                        <StatusTag status={sportsStatus} />
+                      </div>
+                    </div>
+                    {sportsStatus.state === "live" ? (
+                      !sportsCfg.followedTeams.length && !sportsCfg.watchLeagues.length && !sportsCfg.watchGames.length ? (
+                        <div style={{ fontSize: 10.5, color: T.faint, padding: "6px 0", lineHeight: 1.5 }}>No teams or leagues set up yet — tap ⚙ to add some.</div>
+                      ) : sportsGames.length ? (
+                        <div style={{ display: "flex", flexDirection: "column", gap: 6, maxHeight: 258, overflowY: "auto", paddingRight: 2 }}>
+                          {sportsGames.map((g) => {
+                            const open = openGameId === g.id;
+                            const detail = sportsDetail[g.id];
+                            return (
+                              <div key={g.id} style={{ ...S.inner, padding: "9px 11px", flexShrink: 0 }}>
+                                <div onClick={() => toggleGame(g)} style={{ display: "flex", alignItems: "center", gap: 8, cursor: "pointer" }}>
+                                  <span style={{ width: 6, height: 6, borderRadius: "50%", flex: "none", background: g.state === "in" ? T.red : g.isPast ? T.green : T.faint, animation: g.state === "in" ? "pulse 1.4s infinite" : "none" }} />
+                                  <span style={{ fontSize: 10.5, color: T.ink, flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                                    {g.away?.abbr} {g.away?.score ?? ""} @ {g.home?.abbr} {g.home?.score ?? ""}
+                                  </span>
+                                  {g.significance && <span style={{ fontSize: 7, fontWeight: 700, color: T.brass, border: `1px solid ${T.brass}40`, background: "rgba(143,107,30,0.1)", borderRadius: 4, padding: "1px 4px", flex: "none", fontFamily: mono }}>{g.significance.toUpperCase()}</span>}
+                                  <span style={{ fontSize: 8.5, color: T.faint, fontFamily: mono, flex: "none" }}>{g.statusDetail}</span>
+                                  <span onClick={(e) => { e.stopPropagation(); excludeGame(g.id); }} title="Hide this game" style={{ color: T.faint, fontSize: 12, lineHeight: 1, padding: "0 2px", flex: "none" }}>×</span>
+                                </div>
+                                {open && (
+                                  <div style={{ marginTop: 8, paddingTop: 8, borderTop: `1px solid ${T.line}`, fontSize: 9.5, color: T.sub, lineHeight: 1.6 }}>
+                                    {detail === "loading" || !detail ? <span style={{ animation: "pulse 1.4s infinite" }}>Loading…</span>
+                                      : detail === "error" ? "Couldn't load details for this one."
+                                      : (
+                                        <div style={{ display: "flex", flexDirection: "column", gap: 3 }}>
+                                          {detail.venue && <div>{detail.venue}{detail.broadcast ? ` · ${detail.broadcast}` : ""}</div>}
+                                          {detail.home?.record && <div>{detail.away?.name} ({detail.away?.record}) at {detail.home?.name} ({detail.home?.record})</div>}
+                                          {detail.linescores?.some(l => l.periods?.length) && (
+                                            <div style={{ fontFamily: mono, fontSize: 9 }}>
+                                              {detail.linescores.map((l, i) => <div key={i}>{l.abbr}: {l.periods.join(" · ")}</div>)}
+                                            </div>
+                                          )}
+                                          {detail.leaders?.map((l, i) => <div key={i}>{l.team} — {l.category}: {l.athlete} ({l.value})</div>)}
+                                          {detail.preview && <div>{detail.preview}</div>}
+                                        </div>
+                                      )}
+                                  </div>
+                                )}
+                              </div>
+                            );
+                          })}
+                        </div>
+                      ) : <div style={{ fontSize: 10.5, color: T.faint, padding: "6px 0" }}>Nothing on right now — followed teams, significant games, or your watch list will show up here.</div>
+                    ) : <FeedFallbackRow status={sportsStatus} />}
+                    {sportsSettingsOpen && <SportsSettingsModal cfg={sportsCfg} onSave={(next) => { updateSetting("sports", next); setSportsSettingsOpen(false); }} onClose={() => setSportsSettingsOpen(false)} isMobile={isMobile} />}
+                  </div>
+      );
+      const card_sportsnews = (
+                  <div style={card}>
+                    <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 12 }}>
+                      <span style={S.title}>Sports News</span>
+                      <StatusTag status={sportsNewsStatus} />
+                    </div>
+                    {sportsNewsStatus.state === "live" ? (
+                      sportsNews.length ? (
+                        <div style={{ display: "flex", flexDirection: "column", gap: 8, maxHeight: 258, overflowY: "auto", paddingRight: 2 }}>
+                          {sportsNews.map((n, i) => {
+                            const Row = n.link ? "a" : "div";
+                            return (
+                              <Row key={i} {...(n.link ? { href: n.link, target: "_blank", rel: "noreferrer" } : {})}
+                                style={{ display: "flex", alignItems: "baseline", gap: 8, textDecoration: "none", color: "inherit", flexShrink: 0 }}>
+                                <span style={{ fontSize: 8.5, fontFamily: mono, color: T.faint, flexShrink: 0 }}>{n.time}</span>
+                                <span style={{ fontSize: 7.5, fontWeight: 700, color: T.sub, border: `1px solid ${T.line}`, borderRadius: 5, padding: "1.5px 5px", flexShrink: 0, fontFamily: mono }}>{n.league}</span>
+                                <span style={{ fontSize: 10.5, color: T.ink, lineHeight: 1.4, minWidth: 0, flex: 1 }}>{n.text}</span>
+                              </Row>
+                            );
+                          })}
+                        </div>
+                      ) : <div style={{ fontSize: 10.5, color: T.faint, padding: "6px 0" }}>No news for your followed leagues right now.</div>
+                    ) : <FeedFallbackRow status={sportsNewsStatus} />}
                   </div>
       );
       const card_shopify = (
@@ -1147,7 +1293,7 @@ function MorningBriefPage({ btc, isMobile, settings }) {
           {sectionHeader("Market")}
           {card_bitcoin}{card_stocks}{card_watch}{card_wire}
           {sectionHeader("Ops")}
-          {card_minicalendar}{card_gsc}{card_clarify}{card_zts}{card_shopify}{card_birthdays}{card_meetings}
+          {card_minicalendar}{card_gsc}{card_clarify}{card_zts}{card_shopify}{card_birthdays}{card_meetings}{card_sports}{card_sportsnews}
         </div>
         {btcChartOpen && <BtcChartModal isMobile onClose={() => setBtcChartOpen(false)} callFnFull={callFnFull} />}
       </div>
@@ -1159,7 +1305,7 @@ function MorningBriefPage({ btc, isMobile, settings }) {
         </div>
         <div style={col}>
           {sectionHeader("Ops")}
-          {card_minicalendar}{card_gsc}{card_clarify}{card_zts}{card_shopify}{card_birthdays}{card_meetings}
+          {card_minicalendar}{card_gsc}{card_clarify}{card_zts}{card_shopify}{card_birthdays}{card_meetings}{card_sports}{card_sportsnews}
         </div>
         {btcChartOpen && <BtcChartModal isMobile={false} onClose={() => setBtcChartOpen(false)} callFnFull={callFnFull} />}
       </div>
@@ -2066,7 +2212,7 @@ Only extract entries you can read with real confidence — skip anything blurry,
               const dayEvents = eventsByDay[key] || [];
               const todayFlag = isToday(day);
               return (
-                <button key={key} onClick={() => setSelectedDay(key)}
+                <div key={key} onClick={() => openNew(key)}
                   style={{
                     display: "flex", flexDirection: "column", alignItems: "stretch", gap: 2, textAlign: "left",
                     borderRadius: 8, cursor: "pointer", padding: "4px 3px", minHeight: 56,
@@ -2075,10 +2221,14 @@ Only extract entries you can read with real confidence — skip anything blurry,
                   }}>
                   <span style={{ fontSize: 10.5, fontWeight: todayFlag ? 800 : 500, color: todayFlag ? T.brass : T.ink, fontFamily: mono, paddingLeft: 2, marginBottom: 1 }}>{day}</span>
                   {dayEvents.slice(0, 2).map((ev, j) => (
-                    <span key={j} style={{ fontSize: 8, fontWeight: 700, color: "#FFFFFF", background: catColor(ev.category), borderRadius: 4, padding: "1.5px 4px", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", lineHeight: 1.5, marginBottom: 1 }}>{ev.title}</span>
+                    <span key={j} onClick={(e) => { e.stopPropagation(); openEdit(ev); }}
+                      style={{ fontSize: 8, fontWeight: 700, color: "#FFFFFF", background: catColor(ev.category), borderRadius: 4, padding: "1.5px 4px", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", lineHeight: 1.5, marginBottom: 1, cursor: "pointer" }}>{ev.title}</span>
                   ))}
-                  {dayEvents.length > 2 && <span style={{ fontSize: 7.5, color: T.faint, paddingLeft: 2, fontFamily: mono }}>+{dayEvents.length - 2} more</span>}
-                </button>
+                  {dayEvents.length > 2 && (
+                    <span onClick={(e) => { e.stopPropagation(); setSelectedDay(key); }}
+                      style={{ fontSize: 7.5, color: T.faint, paddingLeft: 2, fontFamily: mono, cursor: "pointer" }}>+{dayEvents.length - 2} more</span>
+                  )}
+                </div>
               );
             })}
           </div>
@@ -3164,6 +3314,82 @@ function ModalShell({ onClose, children, isMobile, z = 300 }) {
   );
 }
 
+// One line per entry, parsed on save — simpler to build reliably and just
+// as easy to edit as a row-based form, and easy to bulk-edit/copy-paste.
+function SportsSettingsModal({ cfg, onSave, onClose, isMobile }) {
+  const teamsText = (cfg.followedTeams || []).map(t => `${t.sport}/${t.league} ${t.team} ${t.displayName || ""}`.trim()).join("\n");
+  const leaguesText = (cfg.watchLeagues || []).map(l => `${l.sport}/${l.league} ${l.displayName || ""}`.trim()).join("\n");
+  const gamesText = (cfg.watchGames || []).map(g => `${g.sport}/${g.league} ${g.team1} ${g.team2}`.trim()).join("\n");
+  const [teams, setTeams] = useState(teamsText);
+  const [leagues, setLeagues] = useState(leaguesText);
+  const [games, setGames] = useState(gamesText);
+
+  const parseTeams = (text) => text.split("\n").map(l => l.trim()).filter(Boolean).map(line => {
+    const [sl, team, ...rest] = line.split(/\s+/);
+    const [sport, league] = (sl || "").split("/");
+    return { sport, league, team, displayName: rest.join(" ") };
+  }).filter(t => t.sport && t.league && t.team);
+  const parseLeagues = (text) => text.split("\n").map(l => l.trim()).filter(Boolean).map(line => {
+    const [sl, ...rest] = line.split(/\s+/);
+    const [sport, league] = (sl || "").split("/");
+    return { sport, league, displayName: rest.join(" ") };
+  }).filter(l => l.sport && l.league);
+  const parseGames = (text) => text.split("\n").map(l => l.trim()).filter(Boolean).map(line => {
+    const [sl, team1, team2] = line.split(/\s+/);
+    const [sport, league] = (sl || "").split("/");
+    return { sport, league, team1, team2 };
+  }).filter(g => g.sport && g.league && g.team1 && g.team2);
+
+  const save = () => {
+    onSave({
+      followedTeams: parseTeams(teams),
+      watchLeagues: parseLeagues(leagues),
+      watchGames: parseGames(games),
+      excludedGames: cfg.excludedGames || [],
+    });
+  };
+  const removeExcluded = (id) => onSave({ ...cfg, excludedGames: (cfg.excludedGames || []).filter(x => x !== id) });
+
+  const box = { width: "100%", padding: "9px 11px", fontSize: 11.5, fontFamily: mono, border: `1px solid ${T.line}`, borderRadius: 8, background: T.bg, color: T.ink, minHeight: 70, resize: "vertical", boxSizing: "border-box" };
+  const label = { fontSize: 10, fontWeight: 700, color: T.sub, letterSpacing: "0.04em", marginBottom: 5, display: "block" };
+  const hint = { fontSize: 9.5, color: T.faint, marginBottom: 6, lineHeight: 1.5 };
+
+  return (
+    <ModalShell onClose={onClose} isMobile={isMobile}>
+      <div style={{ fontSize: 14, fontWeight: 700, fontFamily: syne, marginBottom: 4 }}>Sports settings</div>
+      <div style={{ fontSize: 11, color: T.sub, marginBottom: 16 }}>One entry per line. Sport/league examples: basketball/nba, football/nfl, baseball/mlb, hockey/nhl, football/college-football, soccer/eng.1.</div>
+
+      <label style={label}>FOLLOWED TEAMS</label>
+      <div style={hint}>sport/league TEAM_ABBR Display Name — e.g. "basketball/nba LAL Lakers"</div>
+      <textarea style={{ ...box, marginBottom: 14 }} value={teams} onChange={e => setTeams(e.target.value)} placeholder="basketball/nba LAL Lakers" />
+
+      <label style={label}>WATCH LEAGUES (for significant games even without a followed team)</label>
+      <div style={hint}>sport/league Display Name — e.g. "football/nfl NFL"</div>
+      <textarea style={{ ...box, marginBottom: 14 }} value={leagues} onChange={e => setLeagues(e.target.value)} placeholder="football/nfl NFL" />
+
+      <label style={label}>SPECIFIC GAMES TO WATCH</label>
+      <div style={hint}>sport/league TEAM1 TEAM2 — e.g. "football/nfl DAL PHI"</div>
+      <textarea style={{ ...box, marginBottom: 14 }} value={games} onChange={e => setGames(e.target.value)} placeholder="football/nfl DAL PHI" />
+
+      {(cfg.excludedGames || []).length > 0 && (
+        <div style={{ marginBottom: 14 }}>
+          <label style={label}>HIDDEN GAMES ({(cfg.excludedGames || []).length})</label>
+          <div style={{ display: "flex", flexWrap: "wrap", gap: 5 }}>
+            {(cfg.excludedGames || []).map(id => (
+              <span key={id} onClick={() => removeExcluded(id)} title="Tap to unhide" style={{ fontSize: 9.5, color: T.faint, border: `1px solid ${T.line}`, borderRadius: 6, padding: "3px 8px", cursor: "pointer", fontFamily: mono }}>{id} ×</span>
+            ))}
+          </div>
+        </div>
+      )}
+
+      <div style={{ display: "flex", gap: 8, marginTop: 4 }}>
+        <button onClick={save} style={{ ...S.brassBtn, padding: "9px 18px", fontSize: 12 }}>Save</button>
+        <button onClick={onClose} style={{ ...S.ghostBtn, padding: "9px 18px", fontSize: 12 }}>Cancel</button>
+      </div>
+    </ModalShell>
+  );
+}
+
 function SeatNotesModal({ seatKey, initial, onSave, onClose, isMobile }) {
   const seat = BOARD.find(b => b.key === seatKey);
   const [notes, setNotes] = useState(initial || "");
@@ -3281,8 +3507,8 @@ function LoginScreen() {
 // keys: nothing to learn twice.
 const NAV = [
   { key: "brief", label: "Brief", sub: "BTC · stocks · wires · ZTS", mark: T.amber },
-  { key: "boardroom", label: "Board Room", sub: "mini me · chat + 5 seats · charters", mark: T.brass },
   { key: "personal", label: "Personal", sub: "notes · calendar", mark: "#8B5CF6" },
+  { key: "boardroom", label: "Board Room", sub: "mini me · smart routing · 5 seats", mark: T.brass },
   { key: "assets", label: "Assets", sub: "4 live properties · site auditor", mark: T.blue },
   { key: "systems", label: "Systems", sub: "usage · status · deploy · supabase", mark: "#0E9F6E" },
 ];
@@ -3296,19 +3522,37 @@ const HEADERS = {
 const NAV_ICONS = {
   brief: (p) => ( // sunrise — the morning brief
     <svg {...p} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round">
-      <path d="M17 18a5 5 0 0 0-10 0" /><line x1="12" y1="2" x2="12" y2="9" />
-      <line x1="4.2" y1="10.2" x2="5.6" y2="11.6" /><line x1="19.8" y1="10.2" x2="18.4" y2="11.6" />
-      <line x1="1" y1="18" x2="3" y2="18" /><line x1="21" y1="18" x2="23" y2="18" /><line x1="1" y1="22" x2="23" y2="22" />
+      <path d="M6.5 17.5a5.5 5.5 0 0 1 11 0" />
+      <line x1="12" y1="3" x2="12" y2="8.5" />
+      <line x1="5.8" y1="9.3" x2="7.4" y2="10.9" /><line x1="18.2" y1="9.3" x2="16.6" y2="10.9" />
+      <line x1="2.5" y1="17.5" x2="4.7" y2="17.5" /><line x1="19.3" y1="17.5" x2="21.5" y2="17.5" />
+      <line x1="2" y1="21.5" x2="22" y2="21.5" />
     </svg>
   ),
-  boardroom: (p) => ( // chat bubble — board room (chat + seats)
+  personal: (p) => ( // calendar page, leading with what's first on mobile now — notes live below it
     <svg {...p} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round">
-      <path d="M21 11.5a8.4 8.4 0 0 1-8.4 8.4H12a8.3 8.3 0 0 1-4-1L3 20l1.1-5a8.3 8.3 0 0 1-1-4 8.4 8.4 0 0 1 8.4-8.4h.1a8.4 8.4 0 0 1 8.4 8.4z" />
+      <rect x="3" y="4.5" width="18" height="16" rx="2.5" />
+      <line x1="3" y1="9.5" x2="21" y2="9.5" />
+      <line x1="8" y1="2.5" x2="8" y2="6.5" /><line x1="16" y1="2.5" x2="16" y2="6.5" />
+      <circle cx="8" cy="14.2" r="1.05" fill="currentColor" stroke="none" /><circle cx="12" cy="14.2" r="1.05" fill="currentColor" stroke="none" />
     </svg>
   ),
-  assets: (p) => ( // building — your properties
+  boardroom: (p) => ( // a table with seats around it — the board convening, not a generic chat bubble
     <svg {...p} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round">
-      <path d="M3 21V9l9-6 9 6v12" /><path d="M9 21v-8h6v8" />
+      <circle cx="12" cy="12" r="6.4" />
+      <circle cx="12" cy="3.8" r="1.3" fill="currentColor" stroke="none" />
+      <circle cx="19.4" cy="8.3" r="1.3" fill="currentColor" stroke="none" />
+      <circle cx="19.4" cy="15.7" r="1.3" fill="currentColor" stroke="none" />
+      <circle cx="12" cy="20.2" r="1.3" fill="currentColor" stroke="none" />
+      <circle cx="4.6" cy="15.7" r="1.3" fill="currentColor" stroke="none" />
+      <circle cx="4.6" cy="8.3" r="1.3" fill="currentColor" stroke="none" />
+    </svg>
+  ),
+  assets: (p) => ( // classical column — on brand with the Roman aesthetic, still reads as "properties"
+    <svg {...p} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round">
+      <line x1="4" y1="21" x2="20" y2="21" /><line x1="4.5" y1="18" x2="19.5" y2="18" />
+      <line x1="5" y1="3" x2="19" y2="3" />
+      <line x1="7" y1="6" x2="7" y2="18" /><line x1="12" y1="6" x2="12" y2="18" /><line x1="17" y1="6" x2="17" y2="18" />
     </svg>
   ),
   systems: (p) => ( // terminal — systems
@@ -3319,13 +3563,6 @@ const NAV_ICONS = {
   mini: (p) => ( // sparkle — mini me
     <svg {...p} viewBox="0 0 24 24" fill="currentColor" stroke="none">
       <path d="M12 2.5c.5 3.4 1.2 5.4 2.4 6.6 1.2 1.2 3.2 1.9 6.6 2.4-3.4.5-5.4 1.2-6.6 2.4-1.2 1.2-1.9 3.2-2.4 6.6-.5-3.4-1.2-5.4-2.4-6.6C8.4 12.7 6.4 12 3 11.5c3.4-.5 5.4-1.2 6.6-2.4 1.2-1.2 1.9-3.2 2.4-6.6z" />
-    </svg>
-  ),
-  personal: (p) => ( // notebook — personal notes + calendar
-    <svg {...p} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round">
-      <path d="M4 4.5A2.5 2.5 0 0 1 6.5 2H18a1 1 0 0 1 1 1v17a1 1 0 0 1-1 1H6.5A2.5 2.5 0 0 1 4 18.5v-14z" />
-      <path d="M4 18.5A2.5 2.5 0 0 1 6.5 16H19" />
-      <line x1="8" y1="7" x2="14" y2="7" /><line x1="8" y1="10.5" x2="14" y2="10.5" />
     </svg>
   ),
 };
@@ -3498,7 +3735,7 @@ export default function App() {
 
   const renderPage = (key) => {
     switch (key) {
-      case "brief": return <MorningBriefPage btc={btc} isMobile={isMobile} settings={settings} />;
+      case "brief": return <MorningBriefPage btc={btc} isMobile={isMobile} settings={settings} updateSetting={updateSetting} />;
       case "boardroom": return <BoardRoomPage messages={messages} thinking={thinking} loadingData={loadingData} input={input} setInput={setInput} onSend={send} onClearChat={clearChat} endRef={endRef} seatNotes={seatNotes} onEditSeat={setEditSeat} settings={settings} updateSetting={updateSetting} session={session} onWorkerRun={refreshData} isMobile={isMobile} />;
       case "personal": return <PersonalPage isMobile={isMobile} />;
       case "assets": return <PropertiesPage isMobile={isMobile} settings={settings} updateSetting={updateSetting} session={session} />;

@@ -20,7 +20,7 @@ function parseRss(xml, source) {
   const items = [];
   const re = /<item>([\s\S]*?)<\/item>/g;
   let m;
-  while ((m = re.exec(xml)) && items.length < 8) {
+  while ((m = re.exec(xml)) && items.length < 15) {
     const block = m[1];
     const title = stripCdata((block.match(/<title>([\s\S]*?)<\/title>/) || [])[1]);
     const pubDate = (block.match(/<pubDate>([\s\S]*?)<\/pubDate>/) || [])[1] || "";
@@ -60,7 +60,7 @@ exports.handler = async (event) => {
     const wire = items
       .map(it => ({ ...it, ts: new Date(it.pubDate).getTime() || 0 }))
       .sort((a, b) => b.ts - a.ts)
-      .slice(0, 6)
+      .slice(0, 20)
       .map(it => {
         const { tag: t, color } = tag(it.title);
         const time = it.ts ? new Date(it.ts).toLocaleTimeString("en-US", { timeZone: "America/Chicago", hour: "2-digit", minute: "2-digit", hour12: false }) : "—";
