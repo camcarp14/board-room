@@ -1878,37 +1878,42 @@ function MoviesPanel({ isMobile }) {
   const card = isMobile ? S.cardM : S.card;
   const [movies, setMovies] = useState(null);
   const [loadErr, setLoadErr] = useState(null);
-  const [titleInput, setTitleInput] = useState("");
-  const [searching, setSearching] = useState(false);
-  const [searchResults, setSearchResults] = useState(null);
-  const [selected, setSelected] = useState(null);
+  const [title, setTitle] = useState("");
+  const [year, setYear] = useState("");
+  const [posterUrl, setPosterUrl] = useState(null);
+  const [trueScore, setTrueScore] = useState("");
   const [cameronScore, setCameronScore] = useState("");
   const [note, setNote] = useState("");
+  const [searching, setSearching] = useState(false);
+  const [searchResults, setSearchResults] = useState(null);
   const [saving, setSaving] = useState(false);
   const [saveErr, setSaveErr] = useState(null);
 
   const refresh = () => { db.loadMovies().then(setMovies).catch(e => setLoadErr(e.message || "Couldn't load movies.")); };
   useEffect(() => { refresh(); }, []);
 
-  const search = async () => {
-    if (!titleInput.trim()) return;
-    setSearching(true); setSearchResults(null); setSelected(null);
-    const res = await callFnFull("tmdb", { title: titleInput.trim() });
+  // Purely optional — just fills in a poster + confirms the year/title
+  // spelling. Your two scores are always typed by you; this never sets them.
+  const findPoster = async () => {
+    if (!title.trim()) return;
+    setSearching(true); setSearchResults(null);
+    const res = await callFnFull("tmdb", { title: title.trim() });
     setSearching(false);
     setSearchResults(res.ok && res.data?.success ? res.data.results : []);
   };
-  const selectResult = (r) => { setSelected(r); setSearchResults(null); };
-  const selectManual = () => { setSelected({ title: titleInput.trim(), year: null, poster_url: null, true_quality_score: null }); setSearchResults(null); };
-  const resetForm = () => { setSelected(null); setTitleInput(""); setCameronScore(""); setNote(""); setSaveErr(null); };
+  const pickPoster = (r) => { setTitle(r.title); setYear(r.year ? String(r.year) : ""); setPosterUrl(r.poster_url); setSearchResults(null); };
+
+  const resetForm = () => { setTitle(""); setYear(""); setPosterUrl(null); setTrueScore(""); setCameronScore(""); setNote(""); setSaveErr(null); setSearchResults(null); };
   const logMovie = () => {
-    if (!selected || cameronScore === "") return;
+    if (!title.trim() || trueScore === "" || cameronScore === "") return;
     setSaving(true); setSaveErr(null);
-    db.saveMovie({ ...selected, cameron_score: Number(cameronScore), note })
+    db.saveMovie({ title: title.trim(), year: year ? Number(year) : null, poster_url: posterUrl, true_quality_score: Number(trueScore), cameron_score: Number(cameronScore), note })
       .then(() => { setSaving(false); resetForm(); refresh(); })
       .catch(e => { setSaving(false); setSaveErr(e.message || "Couldn't save."); });
   };
   const removeMovie = (id) => { if (!window.confirm("Delete this movie?")) return; db.deleteMovie(id).then(refresh); };
   const scoreColor = (s) => s == null ? T.faint : s >= 70 ? T.green : s >= 40 ? T.amber : T.red;
+  const canLog = title.trim() && trueScore !== "" && cameronScore !== "";
 
   return (
     <div style={card}>
@@ -1916,51 +1921,47 @@ function MoviesPanel({ isMobile }) {
         <span style={S.title}>Movies</span>
       </div>
 
-      {!selected ? (
-        <div style={{ display: "flex", gap: 8, marginBottom: 14 }}>
-          <input value={titleInput} onChange={e => setTitleInput(e.target.value)} onKeyDown={e => { if (e.key === "Enter") search(); }} placeholder="Movie title…" style={{ ...S.input, flex: 1, padding: "9px 12px", fontSize: 13 }} />
-          <button onClick={search} disabled={searching || !titleInput.trim()} style={{ ...S.brassBtn, padding: "9px 16px", fontSize: 12 }}>{searching ? "…" : "Search"}</button>
+      <div style={{ ...S.inner, padding: "12px 14px", marginBottom: 14, display: "flex", flexDirection: "column", gap: 10 }}>
+        <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+          {posterUrl && <img src={posterUrl} style={{ width: 30, height: 45, borderRadius: 4, objectFit: "cover", flex: "none" }} />}
+          <input value={title} onChange={e => setTitle(e.target.value)} onKeyDown={e => { if (e.key === "Enter") findPoster(); }} placeholder="Movie title…" style={{ ...S.input, flex: 1, padding: "9px 12px", fontSize: 13 }} />
+          <button onClick={findPoster} disabled={searching || !title.trim()} title="Optional — just fills in a poster/year" style={{ ...S.ghostBtn, padding: "9px 12px", fontSize: 11 }}>{searching ? "…" : "🔍"}</button>
         </div>
-      ) : (
-        <div style={{ ...S.inner, padding: "12px 14px", marginBottom: 14, display: "flex", flexDirection: "column", gap: 10 }}>
-          <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-            {selected.poster_url && <img src={selected.poster_url} style={{ width: 36, height: 54, borderRadius: 5, objectFit: "cover" }} />}
-            <div>
-              <div style={{ fontSize: 13, fontWeight: 700, fontFamily: syne }}>{selected.title}{selected.year ? ` (${selected.year})` : ""}</div>
-              {selected.true_quality_score != null && <div style={{ fontSize: 10.5, color: scoreColor(selected.true_quality_score) }}>True quality: {selected.true_quality_score}%</div>}
-            </div>
-          </div>
-          <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-            <span style={{ fontSize: 11, color: T.sub }}>Your score:</span>
-            <input type="number" min="0" max="100" value={cameronScore} onChange={e => setCameronScore(e.target.value)} placeholder="0-100" style={{ ...S.input, width: 70, padding: "7px 9px", fontSize: 12 }} />
-            <span style={{ fontSize: 11, color: T.faint }}>%</span>
-          </div>
-          <input value={note} onChange={e => setNote(e.target.value)} placeholder="Quick note (optional)" style={{ ...S.input, padding: "8px 10px", fontSize: 12 }} />
-          {saveErr && <div style={{ fontSize: 10.5, color: T.red }}>{saveErr}</div>}
-          <div style={{ display: "flex", gap: 8 }}>
-            <button onClick={logMovie} disabled={saving || cameronScore === ""} style={{ ...S.brassBtn, padding: "8px 16px", fontSize: 11.5 }}>{saving ? "Saving…" : "Log it"}</button>
-            <button onClick={resetForm} style={{ ...S.ghostBtn, padding: "8px 16px", fontSize: 11.5 }}>Cancel</button>
-          </div>
-        </div>
-      )}
 
-      {searchResults && (
-        <div style={{ display: "flex", flexDirection: "column", gap: 6, marginBottom: 14 }}>
-          {searchResults.length ? searchResults.map(r => (
-            <div key={r.id} onClick={() => selectResult(r)} style={{ ...S.inner, padding: "9px 12px", display: "flex", alignItems: "center", gap: 10, cursor: "pointer" }}>
-              {r.poster_url && <img src={r.poster_url} style={{ width: 30, height: 45, borderRadius: 4, objectFit: "cover" }} />}
-              <div style={{ flex: 1 }}>
-                <div style={{ fontSize: 12, fontWeight: 600 }}>{r.title}{r.year ? ` (${r.year})` : ""}</div>
-                {r.true_quality_score != null && <div style={{ fontSize: 10, color: T.faint }}>TMDb: {r.true_quality_score}%</div>}
+        {searchResults && (
+          <div style={{ display: "flex", flexDirection: "column", gap: 5 }}>
+            {searchResults.length ? searchResults.map(r => (
+              <div key={r.id} onClick={() => pickPoster(r)} style={{ display: "flex", alignItems: "center", gap: 9, cursor: "pointer", padding: "5px 6px", borderRadius: 6 }}>
+                {r.poster_url && <img src={r.poster_url} style={{ width: 24, height: 36, borderRadius: 3, objectFit: "cover" }} />}
+                <span style={{ fontSize: 11.5 }}>{r.title}{r.year ? ` (${r.year})` : ""}</span>
               </div>
+            )) : <div style={{ fontSize: 10.5, color: T.faint }}>No matches — no problem, just fill in the fields below by hand.</div>}
+          </div>
+        )}
+
+        <div style={{ display: "flex", gap: 14 }}>
+          <div style={{ flex: 1 }}>
+            <div style={{ fontSize: 9.5, color: T.faint, marginBottom: 4 }}>True quality (your honest critic take)</div>
+            <div style={{ display: "flex", alignItems: "center", gap: 5 }}>
+              <input type="number" min="0" max="100" value={trueScore} onChange={e => setTrueScore(e.target.value)} placeholder="0-100" style={{ ...S.input, width: 60, padding: "7px 9px", fontSize: 12 }} />
+              <span style={{ fontSize: 11, color: T.faint }}>%</span>
             </div>
-          )) : (
-            <div style={{ fontSize: 11, color: T.faint, padding: "6px 0" }}>
-              No matches found. <span onClick={selectManual} style={{ color: T.brass, cursor: "pointer", fontWeight: 600 }}>Log "{titleInput}" manually →</span>
+          </div>
+          <div style={{ flex: 1 }}>
+            <div style={{ fontSize: 9.5, color: T.faint, marginBottom: 4 }}>Cameron score (bias welcome)</div>
+            <div style={{ display: "flex", alignItems: "center", gap: 5 }}>
+              <input type="number" min="0" max="100" value={cameronScore} onChange={e => setCameronScore(e.target.value)} placeholder="0-100" style={{ ...S.input, width: 60, padding: "7px 9px", fontSize: 12 }} />
+              <span style={{ fontSize: 11, color: T.faint }}>%</span>
             </div>
-          )}
+          </div>
         </div>
-      )}
+        <input value={note} onChange={e => setNote(e.target.value)} placeholder="Quick note (optional)" style={{ ...S.input, padding: "8px 10px", fontSize: 12 }} />
+        {saveErr && <div style={{ fontSize: 10.5, color: T.red }}>{saveErr}</div>}
+        <div style={{ display: "flex", gap: 8 }}>
+          <button onClick={logMovie} disabled={saving || !canLog} style={{ ...S.brassBtn, padding: "8px 16px", fontSize: 11.5, opacity: canLog ? 1 : 0.5 }}>{saving ? "Saving…" : "Log it"}</button>
+          {(title || trueScore || cameronScore) && <button onClick={resetForm} style={{ ...S.ghostBtn, padding: "8px 16px", fontSize: 11.5 }}>Clear</button>}
+        </div>
+      </div>
 
       <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
         {loadErr ? <div style={{ fontSize: 11, color: T.faint }}>{loadErr}</div>

@@ -1,7 +1,11 @@
-// Movie search — powers the Movies tab's "true quality score." Uses TMDb
-// (themoviedb.org), a legitimate, actively-maintained free API — unlike
-// several other integrations in this app, this one needs you to actually
-// sign up (free, instant, no card) and set TMDB_API_KEY in Netlify:
+// Movie search — OPTIONAL. Only used to auto-fill a poster + confirm the
+// year/title spelling when logging a movie. Both scores in the Movies tab
+// are Cameron's own, typed by hand — this never supplies either one.
+// Uses TMDb (themoviedb.org), a legitimate, actively-maintained free API —
+// unlike several other integrations in this app, this one needs you to
+// actually sign up (free, instant, no card) and set TMDB_API_KEY in Netlify.
+// If you don't bother setting this up, the Movies tab still works fully —
+// you just won't get a poster image, and you'll type the year by hand.
 //   1. https://www.themoviedb.org/signup
 //   2. Once logged in: Settings → API → request a free "API Read Access Token" (v4 auth) or classic API key (v3)
 //   3. Netlify → Site configuration → Environment variables → add TMDB_API_KEY
@@ -30,8 +34,10 @@ exports.handler = async (event) => {
       title: m.title,
       year: m.release_date ? Number(m.release_date.slice(0, 4)) : null,
       poster_url: m.poster_path ? `https://image.tmdb.org/t/p/w200${m.poster_path}` : null,
-      true_quality_score: m.vote_average ? Math.round(m.vote_average * 10) : null, // TMDb is 0-10, this app is 0-100
       overview: m.overview,
+      // Not used as this app's "true quality score" — that's Cameron's own
+      // rating, typed by hand. This is just extra context if useful.
+      tmdb_rating: m.vote_average ? Math.round(m.vote_average * 10) : null,
     }));
     return json(200, { success: true, results });
   } catch (e) {
