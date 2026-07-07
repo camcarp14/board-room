@@ -2792,35 +2792,45 @@ function AuditorCard({ settings, updateSetting, session, isMobile }) {
 // cost-bearing calls those make outside a browser session).
 const USAGE_WINDOWS = [["24h", 1], ["7d", 7], ["30d", 30], ["All", 3650]];
 function UsageCard({ isMobile }) {
-  const [rows, setRows] = useState(null); // null = loading
+  const [summary, setSummary] = useState(null); // null = loading; accurate totals via server-side aggregation, not capped by row count
+  const [recentRows, setRecentRows] = useState(null); // separate, smaller fetch — only for the raw log detail view below
   const [err, setErr] = useState(null);
   const [windowIdx, setWindowIdx] = useState(1);
   const [showLog, setShowLog] = useState(false);
 
   const load = async () => {
-    setRows(null); setErr(null);
+    setSummary(null); setRecentRows(null); setErr(null);
+    const since = new Date(Date.now() - USAGE_WINDOWS[windowIdx][1] * 86400000).toISOString();
     try {
-      const since = new Date(Date.now() - USAGE_WINDOWS[windowIdx][1] * 86400000).toISOString();
-      const { data, error } = await supabase.from("usage_log").select("fn,kind,model,in_tokens,out_tokens,cost_usd,ms,ok,detail,created_at").gte("created_at", since).order("created_at", { ascending: false }).limit(1000);
-      if (error) { setErr(error.message.includes("usage_log") ? "Run supabase-usage.sql in the Supabase SQL editor to enable this." : error.message); setRows([]); return; }
-      setRows(data || []);
-    } catch { setErr("usage log unavailable"); setRows([]); }
+      // Real fix: this used to be one row-capped select that both summed
+      // totals AND fed the log view. At this app's actual call volume, the
+      // cap meant 7d/30d/All silently showed the same few hours of data as
+      // 24h. Aggregating in Postgres removes the row-count ceiling from the
+      // numbers that matter (spend, calls, tokens); the raw log below is
+      // still capped, but that's fine — nobody needs to scroll thousands of
+      // individual lines, only the totals needed to be exact.
+      const { data, error } = await supabase.rpc("usage_summary", { since_ts: since });
+      if (error) { setErr(error.message.includes("usage_summary") ? "Run supabase-usage-fix.sql in the Supabase SQL editor to enable accurate totals." : error.message); setSummary([]); return; }
+      setSummary(data || []);
+    } catch { setErr("usage log unavailable"); setSummary([]); }
+    supabase.from("usage_log").select("fn,kind,model,in_tokens,out_tokens,cost_usd,ms,ok,detail,created_at").gte("created_at", since).order("created_at", { ascending: false }).limit(300)
+      .then(({ data }) => setRecentRows(data || []));
   };
   useEffect(() => { load(); }, [windowIdx]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const card = isMobile ? S.cardM : S.card;
-  const totalCalls = rows?.length || 0;
-  const failed = rows?.filter(r => !r.ok).length || 0;
-  const anthropicRows = rows?.filter(r => r.kind === "anthropic") || [];
-  const totalCost = anthropicRows.reduce((s, r) => s + (r.cost_usd || 0), 0);
-  const totalIn = anthropicRows.reduce((s, r) => s + (r.in_tokens || 0), 0);
-  const totalOut = anthropicRows.reduce((s, r) => s + (r.out_tokens || 0), 0);
+  const totalCalls = summary?.reduce((s, r) => s + Number(r.calls), 0) || 0;
+  const failed = summary?.reduce((s, r) => s + Number(r.failed), 0) || 0;
+  const anthropicRows = summary?.filter(r => r.kind === "anthropic") || [];
+  const totalCost = anthropicRows.reduce((s, r) => s + Number(r.cost_usd || 0), 0);
+  const totalIn = anthropicRows.reduce((s, r) => s + Number(r.in_tokens || 0), 0);
+  const totalOut = anthropicRows.reduce((s, r) => s + Number(r.out_tokens || 0), 0);
   const byFn = {};
-  (rows || []).forEach(r => {
+  (summary || []).forEach(r => {
     byFn[r.fn] = byFn[r.fn] || { calls: 0, cost: 0, failed: 0 };
-    byFn[r.fn].calls++;
-    byFn[r.fn].cost += r.cost_usd || 0;
-    if (!r.ok) byFn[r.fn].failed++;
+    byFn[r.fn].calls += Number(r.calls);
+    byFn[r.fn].cost += Number(r.cost_usd || 0);
+    byFn[r.fn].failed += Number(r.failed);
   });
   const topFns = Object.entries(byFn).sort((a, b) => (b[1].cost - a[1].cost) || (b[1].calls - a[1].calls)).slice(0, 8);
   const fmtK = (n) => n > 999 ? (n / 1000).toFixed(1) + "K" : String(n);
@@ -2842,16 +2852,16 @@ function UsageCard({ isMobile }) {
       {!err && (
         <>
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr 1fr", gap: 7, marginBottom: 13 }}>
-            <StatBox value={rows === null ? "…" : "$" + totalCost.toFixed(3)} label="Anthropic spend" valueColor={T.brass} />
-            <StatBox value={rows === null ? "…" : String(totalCalls)} label="total calls" />
-            <StatBox value={rows === null ? "…" : `${fmtK(totalIn)}/${fmtK(totalOut)}`} label="tokens in/out" />
-            <StatBox value={rows === null ? "…" : String(failed)} label="failed calls" valueColor={failed ? T.red : T.green} />
+            <StatBox value={summary === null ? "…" : "$" + totalCost.toFixed(3)} label="Anthropic spend" valueColor={T.brass} />
+            <StatBox value={summary === null ? "…" : String(totalCalls)} label="total calls" />
+            <StatBox value={summary === null ? "…" : `${fmtK(totalIn)}/${fmtK(totalOut)}`} label="tokens in/out" />
+            <StatBox value={summary === null ? "…" : String(failed)} label="failed calls" valueColor={failed ? T.red : T.green} />
           </div>
 
           <div style={{ fontSize: 9.5, fontWeight: 700, color: "rgba(143,107,30,0.8)", textTransform: "uppercase", letterSpacing: "0.12em", fontFamily: syne, marginBottom: 8 }}>By feature</div>
           <div style={{ display: "flex", flexDirection: "column", gap: 6, marginBottom: 13 }}>
-            {rows === null && <div style={{ fontSize: 10.5, color: T.faint, textAlign: "center", padding: "8px 0" }}>Loading…</div>}
-            {rows !== null && topFns.length === 0 && <div style={{ fontSize: 10.5, color: T.faint, textAlign: "center", padding: "8px 0" }}>No calls logged in this window yet.</div>}
+            {summary === null && <div style={{ fontSize: 10.5, color: T.faint, textAlign: "center", padding: "8px 0" }}>Loading…</div>}
+            {summary !== null && topFns.length === 0 && <div style={{ fontSize: 10.5, color: T.faint, textAlign: "center", padding: "8px 0" }}>No calls logged in this window yet.</div>}
             {topFns.map(([fn, s]) => (
               <div key={fn} style={{ ...S.inner, display: "flex", alignItems: "center", gap: 10, padding: "8px 12px" }}>
                 <span style={{ fontSize: 10.5, color: "#3A3323", fontFamily: mono, flex: 1, minWidth: 0, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{fn}</span>
@@ -2863,12 +2873,13 @@ function UsageCard({ isMobile }) {
           </div>
 
           <button onClick={() => setShowLog(!showLog)} style={{ width: "100%", padding: 9, background: "rgba(34,29,20,0.03)", border: `1px solid rgba(34,29,20,0.08)`, borderRadius: 9, color: T.sub, fontSize: 10.5, fontWeight: 600, cursor: "pointer", marginBottom: showLog ? 9 : 0 }}>
-            {showLog ? "Hide raw log ▲" : `Show raw log (${totalCalls}) ▼`}
+            {showLog ? "Hide recent log ▲" : `Show recent log (up to 300) ▼`}
           </button>
           {showLog && (
             <div style={{ background: "rgba(34,29,20,0.045)", border: "1px solid rgba(34,29,20,0.05)", borderRadius: 10, maxHeight: 280, overflowY: "auto", display: "flex", flexDirection: "column" }}>
-              {(rows || []).slice(0, 150).map((r, i) => (
-                <div key={i} style={{ display: "flex", alignItems: "center", gap: 9, padding: "7px 11px", borderBottom: i < rows.length - 1 ? "1px solid rgba(34,29,20,0.04)" : "none" }}>
+              {recentRows === null && <div style={{ fontSize: 10.5, color: T.faint, textAlign: "center", padding: "14px 0" }}>Loading…</div>}
+              {(recentRows || []).map((r, i) => (
+                <div key={i} style={{ display: "flex", alignItems: "center", gap: 9, padding: "7px 11px", borderBottom: i < recentRows.length - 1 ? "1px solid rgba(34,29,20,0.04)" : "none" }}>
                   <span style={{ width: 6, height: 6, borderRadius: "50%", background: r.ok ? T.green : T.red, flex: "none" }} />
                   <span style={{ fontSize: 9, color: T.faint, fontFamily: mono, flex: "none", width: 32 }}>{ago(r.created_at)}</span>
                   <span style={{ fontSize: 10, color: "#3A3323", fontFamily: mono, flex: 1, minWidth: 0, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{r.fn}{r.model ? ` · ${r.model}` : ""}{!r.ok && r.detail ? ` · ${r.detail}` : ""}</span>
@@ -2876,7 +2887,7 @@ function UsageCard({ isMobile }) {
                   <span style={{ fontSize: 9.5, color: T.brass, fontFamily: mono, flex: "none", width: 48, textAlign: "right" }}>{r.cost_usd ? "$" + r.cost_usd.toFixed(4) : ""}</span>
                 </div>
               ))}
-              {rows?.length === 0 && <div style={{ fontSize: 10.5, color: T.faint, textAlign: "center", padding: "14px 0" }}>Nothing logged yet.</div>}
+              {recentRows?.length === 0 && <div style={{ fontSize: 10.5, color: T.faint, textAlign: "center", padding: "14px 0" }}>Nothing logged yet.</div>}
             </div>
           )}
         </>
