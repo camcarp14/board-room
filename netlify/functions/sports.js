@@ -113,18 +113,26 @@ exports.handler = async (event) => {
   }
 
   const now = new Date();
-  const yesterday = new Date(now.getTime() - 86400000);
+  const dateWindow = [-1, 0, 1, 2, 3].map(offset => ymd(new Date(now.getTime() + offset * 86400000)));
   const games = [];
 
   try {
     await Promise.all([...leagueSet.values()].map(async ({ sport, league }) => {
       let events = [];
       try {
-        const [todayEvents, yEvents] = await Promise.all([
-          fetchScoreboard(sport, league, null),
-          fetchScoreboard(sport, league, ymd(yesterday)),
-        ]);
-        events = [...yEvents, ...todayEvents];
+        // Explicit dates for the whole window — the no-date "today" call
+        // isn't reliable for "what's coming up," and mixing it with explicit
+        // dates was producing duplicate entries for the same game. One
+        // fetch per date, deduped by event id below.
+        const results = await Promise.all(dateWindow.map(d => fetchScoreboard(sport, league, d)));
+        const seen = new Set();
+        for (const dayEvents of results) {
+          for (const ev of dayEvents) {
+            if (seen.has(ev.id)) continue;
+            seen.add(ev.id);
+            events.push(ev);
+          }
+        }
       } catch { return; } // one league failing doesn't take down the others
 
       events.forEach(ev => {

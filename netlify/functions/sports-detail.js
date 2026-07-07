@@ -39,8 +39,12 @@ exports.handler = async (event) => {
       broadcast: comp?.broadcasts?.[0]?.names?.[0] || null,
       home: teamAt(true),
       away: teamAt(false),
-      // Live/completed: period-by-period score if ESPN gave us one.
-      linescores: (comp?.competitors || []).map(c => ({ abbr: c.team?.abbreviation, periods: (c.linescores || []).map(l => l.value) })),
+      // Field name for a linescore's value has been inconsistent across
+      // what this endpoint's lightweight "header" section returns vs the
+      // full boxscore — try the known variants rather than assume one.
+      linescores: (comp?.competitors || [])
+        .map(c => ({ abbr: c.team?.abbreviation, periods: (c.linescores || []).map(l => l.value ?? l.displayValue ?? l.score).filter(v => v !== undefined && v !== null) }))
+        .filter(l => l.periods.length > 0),
       // A couple of leaders (top performer) when present — works across most sports without needing sport-specific stat parsing.
       leaders: (data?.leaders || []).slice(0, 2).flatMap(cat =>
         (cat.leaders || []).slice(0, 1).map(l => ({ team: cat.team?.abbreviation, category: cat.name, athlete: l.athlete?.shortName, value: l.displayValue }))
