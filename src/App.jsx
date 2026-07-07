@@ -426,6 +426,11 @@ function useGlobalStyles() {
       @keyframes breathe { 0%,100% { box-shadow: 0 0 10px rgba(143,107,30,0.25), inset 0 1px 0 rgba(255,255,255,0.3); } 50% { box-shadow: 0 0 22px rgba(143,107,30,0.4), inset 0 1px 0 rgba(255,255,255,0.3); } }
       @keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
       @keyframes shake { 10%,90% { transform: translateX(-2px); } 20%,80% { transform: translateX(4px); } 30%,50%,70% { transform: translateX(-8px); } 40%,60% { transform: translateX(8px); } }
+      input[type=range].scoreSlider { -webkit-appearance: none; appearance: none; width: 100%; height: 6px; border-radius: 999px; background: linear-gradient(to right, var(--slider-color, #9A9280) 0%, var(--slider-color, #9A9280) var(--slider-fill, 50%), rgba(34,29,20,0.12) var(--slider-fill, 50%), rgba(34,29,20,0.12) 100%); outline: none; cursor: pointer; margin: 0; }
+      input[type=range].scoreSlider::-webkit-slider-thumb { -webkit-appearance: none; appearance: none; width: 18px; height: 18px; border-radius: 50%; background: var(--slider-color, #9A9280); border: 2px solid #F3F1EC; box-shadow: 0 1px 4px rgba(0,0,0,0.3); cursor: pointer; }
+      input[type=range].scoreSlider::-moz-range-thumb { width: 18px; height: 18px; border-radius: 50%; background: var(--slider-color, #9A9280); border: 2px solid #F3F1EC; box-shadow: 0 1px 4px rgba(0,0,0,0.3); cursor: pointer; }
+      input[type=range].scoreSlider::-moz-range-track { height: 6px; border-radius: 999px; background: rgba(34,29,20,0.12); }
+      input[type=range].scoreSlider::-moz-range-progress { height: 6px; border-radius: 999px; background: var(--slider-color, #9A9280); }
     `;
     document.head.appendChild(style);
   }, []);
@@ -1940,20 +1945,22 @@ function MoviesPanel({ isMobile }) {
           </div>
         )}
 
-        <div style={{ display: "flex", gap: 14 }}>
-          <div style={{ flex: 1 }}>
-            <div style={{ fontSize: 9.5, color: T.faint, marginBottom: 4 }}>True quality — optional until watched</div>
-            <div style={{ display: "flex", alignItems: "center", gap: 5 }}>
-              <input type="number" min="0" max="100" value={trueScore} onChange={e => setTrueScore(e.target.value)} placeholder="0-100" style={{ ...S.input, width: 60, padding: "7px 9px", fontSize: 12 }} />
-              <span style={{ fontSize: 11, color: T.faint }}>%</span>
+        <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+          <div>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", marginBottom: 7 }}>
+              <span style={{ fontSize: 9.5, color: T.faint }}>True quality — optional until watched</span>
+              <span style={{ fontSize: 12, fontWeight: 700, fontFamily: mono, color: trueScore === "" ? T.faint : scoreColor(Number(trueScore)) }}>{trueScore === "" ? "—" : `${trueScore}%`}</span>
             </div>
+            <input type="range" min="0" max="100" className="scoreSlider" value={trueScore === "" ? 50 : trueScore} onChange={e => setTrueScore(e.target.value)}
+              style={{ "--slider-color": trueScore === "" ? T.faint : scoreColor(Number(trueScore)), "--slider-fill": `${trueScore === "" ? 50 : trueScore}%` }} />
           </div>
-          <div style={{ flex: 1 }}>
-            <div style={{ fontSize: 9.5, color: T.faint, marginBottom: 4 }}>Cameron score — optional until watched</div>
-            <div style={{ display: "flex", alignItems: "center", gap: 5 }}>
-              <input type="number" min="0" max="100" value={cameronScore} onChange={e => setCameronScore(e.target.value)} placeholder="0-100" style={{ ...S.input, width: 60, padding: "7px 9px", fontSize: 12 }} />
-              <span style={{ fontSize: 11, color: T.faint }}>%</span>
+          <div>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", marginBottom: 7 }}>
+              <span style={{ fontSize: 9.5, color: T.faint }}>Cameron score — optional until watched</span>
+              <span style={{ fontSize: 12, fontWeight: 700, fontFamily: mono, color: cameronScore === "" ? T.faint : scoreColor(Number(cameronScore)) }}>{cameronScore === "" ? "—" : `${cameronScore}%`}</span>
             </div>
+            <input type="range" min="0" max="100" className="scoreSlider" value={cameronScore === "" ? 50 : cameronScore} onChange={e => setCameronScore(e.target.value)}
+              style={{ "--slider-color": cameronScore === "" ? T.faint : scoreColor(Number(cameronScore)), "--slider-fill": `${cameronScore === "" ? 50 : cameronScore}%` }} />
           </div>
         </div>
         <input value={note} onChange={e => setNote(e.target.value)} placeholder="Quick note (optional)" style={{ ...S.input, padding: "8px 10px", fontSize: 12 }} />
