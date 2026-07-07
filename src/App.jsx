@@ -152,6 +152,59 @@ const db = {
     if (error) throw error;
     return data;
   },
+  async loadMovies() {
+    const { data, error } = await supabase.from("movies").select("*").order("watched_date", { ascending: false });
+    if (error) throw error;
+    return data || [];
+  },
+  async saveMovie(m) {
+    const user_id = await db.uid();
+    if (!user_id) throw new Error("Not signed in");
+    const row = { user_id, title: m.title, year: m.year || null, poster_url: m.poster_url || null, true_quality_score: m.true_quality_score ?? null, cameron_score: m.cameron_score ?? null, note: m.note || "", watched_date: m.watched_date || new Date().toISOString().slice(0, 10) };
+    const { data, error } = await supabase.from("movies").insert(row).select().single();
+    if (error) throw error;
+    return data;
+  },
+  async deleteMovie(id) {
+    const { error } = await supabase.from("movies").delete().eq("id", id);
+    if (error) throw error;
+  },
+  async loadGroceryItems() {
+    const { data, error } = await supabase.from("grocery_items").select("*").order("created_at", { ascending: true });
+    if (error) throw error;
+    return data || [];
+  },
+  async addGroceryItem(item) {
+    const user_id = await db.uid();
+    if (!user_id) throw new Error("Not signed in");
+    const { data, error } = await supabase.from("grocery_items").insert({ user_id, item }).select().single();
+    if (error) throw error;
+    return data;
+  },
+  async toggleGroceryItem(id, checked) {
+    const { error } = await supabase.from("grocery_items").update({ checked }).eq("id", id);
+    if (error) throw error;
+  },
+  async deleteGroceryItem(id) {
+    const { error } = await supabase.from("grocery_items").delete().eq("id", id);
+    if (error) throw error;
+  },
+  async loadSavedRecipes() {
+    const { data, error } = await supabase.from("saved_recipes").select("*").order("created_at", { ascending: false });
+    if (error) throw error;
+    return data || [];
+  },
+  async saveRecipe(title, content) {
+    const user_id = await db.uid();
+    if (!user_id) throw new Error("Not signed in");
+    const { data, error } = await supabase.from("saved_recipes").insert({ user_id, title, content }).select().single();
+    if (error) throw error;
+    return data;
+  },
+  async deleteRecipe(id) {
+    const { error } = await supabase.from("saved_recipes").delete().eq("id", id);
+    if (error) throw error;
+  },
   async loadBirthdays() {
     const { data, error } = await supabase.from("personal_birthdays")
       .select("id,name,month,day,year,notes");
@@ -699,7 +752,7 @@ function StatusTag({ status }) {
   return <span style={{ fontSize: 8, fontWeight: 700, color: s.color, background: s.color + "1A", border: `1px solid ${s.color}40`, padding: "3.5px 9px", borderRadius: 10, fontFamily: mono, letterSpacing: "0.06em" }}>{s.label}</span>;
 }
 
-function MorningBriefPage({ btc, isMobile, settings, updateSetting }) {
+function MorningBriefPage({ btc, isMobile, settings, updateSetting, onOpenCalendar }) {
   const sportsCfg = settings?.sports || { followedTeams: [], watchLeagues: [], watchGames: [], excludedGames: [] };
   const [sportsGames, setSportsGames] = useState([]);
   const [sportsStatus, setSportsStatus] = useState({ state: "loading" });
@@ -727,6 +780,7 @@ function MorningBriefPage({ btc, isMobile, settings, updateSetting }) {
   const [gscStatus, setGscStatus] = useState({ state: "loading" });
   const [gscMetric, setGscMetric] = useState("impressions");
   const [stocks, setStocks] = useState(STOCKS_EMPTY);
+  const [stocksFetchedAt, setStocksFetchedAt] = useState(null);
   const [stocksStatus, setStocksStatus] = useState({ state: "loading" });
   const [events, setEvents] = useState([]);
   const [eventsStatus, setEventsStatus] = useState({ state: "loading" });
@@ -746,6 +800,7 @@ function MorningBriefPage({ btc, isMobile, settings, updateSetting }) {
   const [eventAnalysis, setEventAnalysis] = useState({}); // idx -> one-sentence take | "loading" | "error"
   const [btcChartOpen, setBtcChartOpen] = useState(false);
   const [aiBtcNarrative, setAiBtcNarrative] = useState(null);
+  const [btcNarrativeExpanded, setBtcNarrativeExpanded] = useState(false);
   const aiBtcNarrativeKey = useRef(null); // dedupe so a re-render doesn't refire the same call
 
   // Auto-generates a single, tidy one-sentence take (Bitcoin + stocks
@@ -795,7 +850,7 @@ function MorningBriefPage({ btc, isMobile, settings, updateSetting }) {
       (m) => `Add ${m || "CLARIFY_SUPABASE_URL + CLARIFY_SUPABASE_ANON_KEY"} in Netlify env vars, then redeploy.`);
     loadCredentialed("zts-pipeline", {}, (d) => setZtsPipe(d), setZtsPipeStatus,
       (m) => `Add ${m || "ZTS_SUPABASE_URL + ZTS_SUPABASE_ANON_KEY"} in Netlify env vars, then redeploy.`);
-    loadOpen("markets", (d) => { setStocks(d); updateSnapshot({ stocks: d }); }, setStocksStatus);
+    loadOpen("markets", (d) => { setStocks(d); setStocksFetchedAt(Date.now()); updateSnapshot({ stocks: d }); }, setStocksStatus);
     loadOpen("wire", (d) => { setWire(d.wire || []); updateSnapshot({ wire: d.wire || [] }); }, setWireStatus);
     loadCredentialed("shopify", { days: 14 }, (d) => setShopify(d), setShopifyStatus,
       (m) => `Add ${m || "SHOPIFY_SHOP + SHOPIFY_CLIENT_ID + SHOPIFY_CLIENT_SECRET"} in Netlify env vars, then redeploy.`);
@@ -845,7 +900,7 @@ function MorningBriefPage({ btc, isMobile, settings, updateSetting }) {
     const poll = async () => {
       const res = await callFnFull("markets", {});
       if (!alive) return;
-      if (res.ok && res.data?.success) { setStocks(res.data); updateSnapshot({ stocks: res.data }); setStocksStatus({ state: "live" }); }
+      if (res.ok && res.data?.success) { setStocks(res.data); setStocksFetchedAt(Date.now()); updateSnapshot({ stocks: res.data }); setStocksStatus({ state: "live" }); }
     };
     const iv = setInterval(poll, 5 * 60 * 1000);
     return () => { alive = false; clearInterval(iv); };
@@ -914,8 +969,12 @@ function MorningBriefPage({ btc, isMobile, settings, updateSetting }) {
   return (
     <div style={{ flex: 1, overflowY: "auto", padding: isMobile ? "18px 16px 24px" : "30px 34px 40px" }}>
       {(() => {
+      const fullNarrative = aiBtcNarrative || narrative;
+      const firstSentenceEnd = fullNarrative.indexOf(". ");
+      const shortNarrative = firstSentenceEnd > 0 ? fullNarrative.slice(0, firstSentenceEnd + 1) : fullNarrative;
+      const hasMore = shortNarrative.length < fullNarrative.length;
       const card_bitcoin = (
-                  <div style={{ ...card, cursor: "pointer" }} onClick={() => setBtcChartOpen(true)} title="Tap for the full chart">
+                  <div style={card}>
                     <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 12 }}>
                       <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
                         <span style={{ width: 18, height: 18, borderRadius: "50%", background: "linear-gradient(135deg,#F7931A,#C77416)", display: "inline-flex", alignItems: "center", justifyContent: "center", fontSize: 9, fontWeight: 800, color: "#1A0F00" }}>₿</span>
@@ -923,24 +982,29 @@ function MorningBriefPage({ btc, isMobile, settings, updateSetting }) {
                       </div>
                       <StancePill text={stance} color={stanceColor} />
                     </div>
-                    <div style={{ display: "flex", alignItems: "baseline", gap: 10, marginBottom: 13 }}>
-                      <span style={{ fontSize: 26, fontWeight: 500, fontFamily: mono, color: T.ink }}>{price}</span>
-                      {hasChange && <span style={{ fontSize: 12, fontWeight: 700, color: up ? T.green : T.red, fontFamily: mono }}>{up ? "▲" : "▼"} {Math.abs(btc.changePct || 0).toFixed(2)}%</span>}
-                    </div>
-                    {!btc.loading && !btc.error && (
-                      <div style={{ marginBottom: 13 }}>
-                        <Sparkline points={btc.points} color={up ? T.green : T.red} height={34} />
+                    <div onClick={() => setBtcChartOpen(true)} style={{ cursor: "pointer" }} title="Tap for the full chart">
+                      <div style={{ display: "flex", alignItems: "baseline", gap: 10, marginBottom: 13 }}>
+                        <span style={{ fontSize: 26, fontWeight: 500, fontFamily: mono, color: T.ink }}>{price}</span>
+                        {hasChange && <span style={{ fontSize: 12, fontWeight: 700, color: up ? T.green : T.red, fontFamily: mono }}>{up ? "▲" : "▼"} {Math.abs(btc.changePct || 0).toFixed(2)}%</span>}
                       </div>
-                    )}
-                    <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 7, marginBottom: 13 }}>
-                      <StatBox value={dayTarget} label="Day target" valueColor={T.brass} />
-                      <StatBox value={support} label="Support (24h low)" valueColor={T.green} />
-                      <StatBox value={invalidation} label="Invalidation" valueColor={T.red} />
+                      {!btc.loading && !btc.error && (
+                        <div style={{ marginBottom: 13 }}>
+                          <Sparkline points={btc.points} color={up ? T.green : T.red} height={34} />
+                        </div>
+                      )}
+                      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 7, marginBottom: 13 }}>
+                        <StatBox value={dayTarget} label="Day target" valueColor={T.brass} />
+                        <StatBox value={support} label="Support (24h low)" valueColor={T.green} />
+                        <StatBox value={invalidation} label="Invalidation" valueColor={T.red} />
+                      </div>
                     </div>
-                    <div style={{ fontSize: 11.5, color: T.sub, lineHeight: 1.65 }}>{aiBtcNarrative || narrative}</div>
+                    <div onClick={() => setBtcNarrativeExpanded(e => !e)} style={{ cursor: hasMore ? "pointer" : "default" }}>
+                      <div style={{ fontSize: 11.5, color: T.sub, lineHeight: 1.65 }}>{btcNarrativeExpanded ? fullNarrative : shortNarrative}</div>
+                      {hasMore && <div style={{ fontSize: 9, color: T.brass, marginTop: 4, fontWeight: 600 }}>{btcNarrativeExpanded ? "Show less" : "Tap for more"}</div>}
+                    </div>
                     <div style={{ marginTop: 9, display: "flex", alignItems: "center", justifyContent: "space-between" }}>
                       <span style={{ ...S.microLabel, letterSpacing: "0.04em" }}>{btc.fetchedAt ? `UPDATED ${new Date(btc.fetchedAt).toLocaleTimeString("en-US", { timeZone: "America/Chicago", hour: "numeric", minute: "2-digit" })} CT` : "UPDATING…"}</span>
-                      <span style={{ ...S.microLabel, color: T.brass, flex: "none", marginLeft: 8 }}>CHART ›</span>
+                      <span onClick={() => setBtcChartOpen(true)} style={{ ...S.microLabel, color: T.brass, flex: "none", marginLeft: 8, cursor: "pointer" }}>CHART ›</span>
                     </div>
                   </div>
           
@@ -1043,7 +1107,7 @@ function MorningBriefPage({ btc, isMobile, settings, updateSetting }) {
                       ))}
                     </div>
                     <div style={{ fontSize: 11.5, color: T.sub, lineHeight: 1.65 }}>{stocksOutlook}</div>
-                    <div style={{ marginTop: 9, ...S.microLabel, letterSpacing: "0.04em" }}>{todayLabel}</div>
+                    <div style={{ marginTop: 9, ...S.microLabel, letterSpacing: "0.04em" }}>{stocksFetchedAt ? `UPDATED ${new Date(stocksFetchedAt).toLocaleTimeString("en-US", { timeZone: "America/Chicago", hour: "numeric", minute: "2-digit" })} CT` : "UPDATING…"}</div>
                   </div>
           
   );
@@ -1063,7 +1127,7 @@ function MorningBriefPage({ btc, isMobile, settings, updateSetting }) {
   const miniDateKey = (day) => `${miniYear}-${String(miniMonth + 1).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
   const todayDate = miniNow.getDate();
   const card_minicalendar = (
-                  <div style={card}>
+                  <div style={{ ...card, cursor: "pointer" }} onClick={onOpenCalendar} title="Open the full calendar">
                     <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 10 }}>
                       <span style={S.title}>{miniNow.toLocaleDateString("en-US", { month: "long", year: "numeric" })}</span>
                       <span style={{ ...S.microLabel }}>THIS MONTH</span>
@@ -1435,11 +1499,15 @@ function nextBirthdayOccurrence(month, day, fromDate = new Date()) {
 }
 
 // ─── Page: Personal (Notes + Calendar + Birthdays) ────────────────────────────
-const PERSONAL_SUBTABS = [{ key: "notes", label: "Notes" }, { key: "calendar", label: "Calendar" }, { key: "birthdays", label: "Birthdays" }];
-const PERSONAL_SUBTABS_MOBILE = [{ key: "notescal", label: "Notes & Calendar" }, { key: "birthdays", label: "Birthdays" }];
+const PERSONAL_SUBTABS = [{ key: "notes", label: "Notes" }, { key: "calendar", label: "Calendar" }, { key: "birthdays", label: "Birthdays" }, { key: "movies", label: "Movies" }, { key: "food", label: "Food" }];
+const PERSONAL_SUBTABS_MOBILE = [{ key: "notescal", label: "Notes & Calendar" }, { key: "birthdays", label: "Birthdays" }, { key: "movies", label: "Movies" }, { key: "food", label: "Food" }];
 
-function PersonalPage({ isMobile }) {
+function PersonalPage({ isMobile, jumpSignal, settings, updateSetting }) {
   const [sub, setSub] = useState(isMobile ? "notescal" : "notes");
+  useEffect(() => {
+    if (jumpSignal) setSub(isMobile ? "notescal" : "calendar");
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [jumpSignal]);
   return (
     <div style={{ flex: 1, overflowY: "auto", padding: isMobile ? "18px 16px 24px" : "30px 34px 40px" }}>
       <div style={{ maxWidth: 900, margin: "0 auto", display: "flex", flexDirection: "column", gap: 14 }}>
@@ -1453,12 +1521,16 @@ function PersonalPage({ isMobile }) {
               </div>
             )}
             {sub === "birthdays" && <BirthdaysPanel isMobile={isMobile} />}
+            {sub === "movies" && <MoviesPanel isMobile={isMobile} />}
+            {sub === "food" && <FoodPanel isMobile={isMobile} settings={settings} updateSetting={updateSetting} />}
           </>
         ) : (
           <>
             {sub === "notes" && <NotesPanel isMobile={isMobile} />}
             {sub === "calendar" && <CalendarPanel isMobile={isMobile} />}
             {sub === "birthdays" && <BirthdaysPanel isMobile={isMobile} />}
+            {sub === "movies" && <MoviesPanel isMobile={isMobile} />}
+            {sub === "food" && <FoodPanel isMobile={isMobile} settings={settings} updateSetting={updateSetting} />}
           </>
         )}
       </div>
@@ -1796,6 +1868,244 @@ function BirthdaysPanel({ isMobile }) {
               </div>
             ))}
           </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function MoviesPanel({ isMobile }) {
+  const card = isMobile ? S.cardM : S.card;
+  const [movies, setMovies] = useState(null);
+  const [loadErr, setLoadErr] = useState(null);
+  const [titleInput, setTitleInput] = useState("");
+  const [searching, setSearching] = useState(false);
+  const [searchResults, setSearchResults] = useState(null);
+  const [selected, setSelected] = useState(null);
+  const [cameronScore, setCameronScore] = useState("");
+  const [note, setNote] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [saveErr, setSaveErr] = useState(null);
+
+  const refresh = () => { db.loadMovies().then(setMovies).catch(e => setLoadErr(e.message || "Couldn't load movies.")); };
+  useEffect(() => { refresh(); }, []);
+
+  const search = async () => {
+    if (!titleInput.trim()) return;
+    setSearching(true); setSearchResults(null); setSelected(null);
+    const res = await callFnFull("tmdb", { title: titleInput.trim() });
+    setSearching(false);
+    setSearchResults(res.ok && res.data?.success ? res.data.results : []);
+  };
+  const selectResult = (r) => { setSelected(r); setSearchResults(null); };
+  const selectManual = () => { setSelected({ title: titleInput.trim(), year: null, poster_url: null, true_quality_score: null }); setSearchResults(null); };
+  const resetForm = () => { setSelected(null); setTitleInput(""); setCameronScore(""); setNote(""); setSaveErr(null); };
+  const logMovie = () => {
+    if (!selected || cameronScore === "") return;
+    setSaving(true); setSaveErr(null);
+    db.saveMovie({ ...selected, cameron_score: Number(cameronScore), note })
+      .then(() => { setSaving(false); resetForm(); refresh(); })
+      .catch(e => { setSaving(false); setSaveErr(e.message || "Couldn't save."); });
+  };
+  const removeMovie = (id) => { if (!window.confirm("Delete this movie?")) return; db.deleteMovie(id).then(refresh); };
+  const scoreColor = (s) => s == null ? T.faint : s >= 70 ? T.green : s >= 40 ? T.amber : T.red;
+
+  return (
+    <div style={card}>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 12 }}>
+        <span style={S.title}>Movies</span>
+      </div>
+
+      {!selected ? (
+        <div style={{ display: "flex", gap: 8, marginBottom: 14 }}>
+          <input value={titleInput} onChange={e => setTitleInput(e.target.value)} onKeyDown={e => { if (e.key === "Enter") search(); }} placeholder="Movie title…" style={{ ...S.input, flex: 1, padding: "9px 12px", fontSize: 13 }} />
+          <button onClick={search} disabled={searching || !titleInput.trim()} style={{ ...S.brassBtn, padding: "9px 16px", fontSize: 12 }}>{searching ? "…" : "Search"}</button>
+        </div>
+      ) : (
+        <div style={{ ...S.inner, padding: "12px 14px", marginBottom: 14, display: "flex", flexDirection: "column", gap: 10 }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+            {selected.poster_url && <img src={selected.poster_url} style={{ width: 36, height: 54, borderRadius: 5, objectFit: "cover" }} />}
+            <div>
+              <div style={{ fontSize: 13, fontWeight: 700, fontFamily: syne }}>{selected.title}{selected.year ? ` (${selected.year})` : ""}</div>
+              {selected.true_quality_score != null && <div style={{ fontSize: 10.5, color: scoreColor(selected.true_quality_score) }}>True quality: {selected.true_quality_score}%</div>}
+            </div>
+          </div>
+          <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+            <span style={{ fontSize: 11, color: T.sub }}>Your score:</span>
+            <input type="number" min="0" max="100" value={cameronScore} onChange={e => setCameronScore(e.target.value)} placeholder="0-100" style={{ ...S.input, width: 70, padding: "7px 9px", fontSize: 12 }} />
+            <span style={{ fontSize: 11, color: T.faint }}>%</span>
+          </div>
+          <input value={note} onChange={e => setNote(e.target.value)} placeholder="Quick note (optional)" style={{ ...S.input, padding: "8px 10px", fontSize: 12 }} />
+          {saveErr && <div style={{ fontSize: 10.5, color: T.red }}>{saveErr}</div>}
+          <div style={{ display: "flex", gap: 8 }}>
+            <button onClick={logMovie} disabled={saving || cameronScore === ""} style={{ ...S.brassBtn, padding: "8px 16px", fontSize: 11.5 }}>{saving ? "Saving…" : "Log it"}</button>
+            <button onClick={resetForm} style={{ ...S.ghostBtn, padding: "8px 16px", fontSize: 11.5 }}>Cancel</button>
+          </div>
+        </div>
+      )}
+
+      {searchResults && (
+        <div style={{ display: "flex", flexDirection: "column", gap: 6, marginBottom: 14 }}>
+          {searchResults.length ? searchResults.map(r => (
+            <div key={r.id} onClick={() => selectResult(r)} style={{ ...S.inner, padding: "9px 12px", display: "flex", alignItems: "center", gap: 10, cursor: "pointer" }}>
+              {r.poster_url && <img src={r.poster_url} style={{ width: 30, height: 45, borderRadius: 4, objectFit: "cover" }} />}
+              <div style={{ flex: 1 }}>
+                <div style={{ fontSize: 12, fontWeight: 600 }}>{r.title}{r.year ? ` (${r.year})` : ""}</div>
+                {r.true_quality_score != null && <div style={{ fontSize: 10, color: T.faint }}>TMDb: {r.true_quality_score}%</div>}
+              </div>
+            </div>
+          )) : (
+            <div style={{ fontSize: 11, color: T.faint, padding: "6px 0" }}>
+              No matches found. <span onClick={selectManual} style={{ color: T.brass, cursor: "pointer", fontWeight: 600 }}>Log "{titleInput}" manually →</span>
+            </div>
+          )}
+        </div>
+      )}
+
+      <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+        {loadErr ? <div style={{ fontSize: 11, color: T.faint }}>{loadErr}</div>
+          : movies === null ? <div style={{ fontSize: 11, color: T.faint, animation: "pulse 1.4s infinite" }}>Loading…</div>
+          : movies.length ? movies.map(m => (
+            <div key={m.id} style={{ ...S.inner, padding: "10px 13px", display: "flex", alignItems: "center", gap: 10 }}>
+              {m.poster_url && <img src={m.poster_url} style={{ width: 32, height: 48, borderRadius: 4, objectFit: "cover", flex: "none" }} />}
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div style={{ fontSize: 12.5, fontWeight: 700, fontFamily: syne }}>{m.title}{m.year ? ` (${m.year})` : ""}</div>
+                <div style={{ display: "flex", gap: 12, marginTop: 2 }}>
+                  <span style={{ fontSize: 10, color: scoreColor(m.true_quality_score) }}>True: {m.true_quality_score != null ? `${m.true_quality_score}%` : "—"}</span>
+                  <span style={{ fontSize: 10, color: scoreColor(m.cameron_score), fontWeight: 700 }}>Cameron: {m.cameron_score}%</span>
+                </div>
+                {m.note && <div style={{ fontSize: 10, color: T.faint, marginTop: 2 }}>{m.note}</div>}
+              </div>
+              <button onClick={() => removeMovie(m.id)} style={{ background: "none", border: "none", color: T.faint, cursor: "pointer", fontSize: 14, flex: "none" }}>×</button>
+            </div>
+          )) : <div style={{ fontSize: 11, color: T.faint, padding: "10px 0" }}>Nothing logged yet.</div>}
+      </div>
+    </div>
+  );
+}
+
+function FoodPanel({ isMobile, settings, updateSetting }) {
+  const card = isMobile ? S.cardM : S.card;
+  const prefs = settings?.food_preferences || { likes: [], dislikes: [] };
+  const [newLike, setNewLike] = useState("");
+  const [newDislike, setNewDislike] = useState("");
+  const [groceries, setGroceries] = useState(null);
+  const [newItem, setNewItem] = useState("");
+  const [savedRecipes, setSavedRecipes] = useState(null);
+  const [generating, setGenerating] = useState(false);
+  const [idea, setIdea] = useState(null);
+  const [ideaErr, setIdeaErr] = useState(null);
+
+  const refreshGroceries = () => db.loadGroceryItems().then(setGroceries).catch(() => setGroceries([]));
+  const refreshRecipes = () => db.loadSavedRecipes().then(setSavedRecipes).catch(() => setSavedRecipes([]));
+  useEffect(() => { refreshGroceries(); refreshRecipes(); }, []);
+
+  const addLike = () => { if (!newLike.trim()) return; updateSetting("food_preferences", { ...prefs, likes: [...prefs.likes, newLike.trim()] }); setNewLike(""); };
+  const addDislike = () => { if (!newDislike.trim()) return; updateSetting("food_preferences", { ...prefs, dislikes: [...prefs.dislikes, newDislike.trim()] }); setNewDislike(""); };
+  const removeLike = (i) => updateSetting("food_preferences", { ...prefs, likes: prefs.likes.filter((_, idx) => idx !== i) });
+  const removeDislike = (i) => updateSetting("food_preferences", { ...prefs, dislikes: prefs.dislikes.filter((_, idx) => idx !== i) });
+
+  const addGroceryItem = () => { if (!newItem.trim()) return; db.addGroceryItem(newItem.trim()).then(() => { setNewItem(""); refreshGroceries(); }); };
+  const toggleItem = (it) => { db.toggleGroceryItem(it.id, !it.checked).then(refreshGroceries); };
+  const removeItem = (id) => db.deleteGroceryItem(id).then(refreshGroceries);
+  const clearChecked = () => { (groceries || []).filter(g => g.checked).forEach(g => db.deleteGroceryItem(g.id)); setTimeout(refreshGroceries, 300); };
+
+  const generateIdea = async () => {
+    setGenerating(true); setIdeaErr(null); setIdea(null);
+    const system = `You generate one meal idea with a full, cookable recipe for someone with specific tastes. Likes: ${prefs.likes.join(", ") || "no strong likes recorded yet"}. Dislikes — never suggest anything built around these: ${prefs.dislikes.join(", ") || "none recorded yet"}. Give a real recipe: a short title, ingredient list with rough quantities, and clear numbered steps. Keep it practical for a home cook on a weeknight unless asked otherwise. No preamble, start straight with the title.`;
+    const raw = await callClaude({ system, messages: [{ role: "user", content: "Give me a meal idea for tonight." }], modelKey: "haiku", maxTokens: 600, fn: "meal_idea" });
+    setGenerating(false);
+    if (raw && raw.trim()) setIdea(raw.trim());
+    else setIdeaErr("Couldn't get an idea — try again.");
+  };
+  const saveIdea = () => {
+    if (!idea) return;
+    const title = idea.split("\n")[0].replace(/^#+\s*/, "").slice(0, 80);
+    db.saveRecipe(title, idea).then(() => { setIdea(null); refreshRecipes(); });
+  };
+  const notForMe = () => {
+    const key = window.prompt("What didn't work about it? (adds to your dislikes so future ideas avoid it — leave blank to skip)");
+    if (key && key.trim()) updateSetting("food_preferences", { ...prefs, dislikes: [...prefs.dislikes, key.trim()] });
+    setIdea(null);
+  };
+  const removeRecipe = (id) => { if (!window.confirm("Delete this saved recipe?")) return; db.deleteRecipe(id).then(refreshRecipes); };
+
+  const tag = (text, onRemove, color) => (
+    <span onClick={onRemove} style={{ fontSize: 10.5, color, border: `1px solid ${color}40`, background: color + "14", borderRadius: 999, padding: "4px 10px", cursor: "pointer" }}>{text} ×</span>
+  );
+
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+      <div style={card}>
+        <div style={{ ...S.title, marginBottom: 10 }}>Tastes</div>
+        <div style={{ fontSize: 10, fontWeight: 700, color: T.sub, letterSpacing: "0.04em", marginBottom: 6 }}>LIKES</div>
+        <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginBottom: 10 }}>
+          {prefs.likes.map((l, i) => tag(l, () => removeLike(i), T.green))}
+          {!prefs.likes.length && <span style={{ fontSize: 10.5, color: T.faint }}>None yet.</span>}
+        </div>
+        <div style={{ display: "flex", gap: 7, marginBottom: 16 }}>
+          <input value={newLike} onChange={e => setNewLike(e.target.value)} onKeyDown={e => { if (e.key === "Enter") addLike(); }} placeholder="Add something you like…" style={{ ...S.input, flex: 1, padding: "8px 10px", fontSize: 12 }} />
+          <button onClick={addLike} style={{ ...S.ghostBtn, padding: "8px 14px", fontSize: 11.5 }}>Add</button>
+        </div>
+        <div style={{ fontSize: 10, fontWeight: 700, color: T.sub, letterSpacing: "0.04em", marginBottom: 6 }}>DISLIKES</div>
+        <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginBottom: 10 }}>
+          {prefs.dislikes.map((d, i) => tag(d, () => removeDislike(i), T.red))}
+          {!prefs.dislikes.length && <span style={{ fontSize: 10.5, color: T.faint }}>None yet.</span>}
+        </div>
+        <div style={{ display: "flex", gap: 7 }}>
+          <input value={newDislike} onChange={e => setNewDislike(e.target.value)} onKeyDown={e => { if (e.key === "Enter") addDislike(); }} placeholder="Add something you don't like…" style={{ ...S.input, flex: 1, padding: "8px 10px", fontSize: 12 }} />
+          <button onClick={addDislike} style={{ ...S.ghostBtn, padding: "8px 14px", fontSize: 11.5 }}>Add</button>
+        </div>
+      </div>
+
+      <div style={card}>
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 10 }}>
+          <span style={S.title}>Grocery List</span>
+          {(groceries || []).some(g => g.checked) && <span onClick={clearChecked} style={{ fontSize: 10, color: T.brass, cursor: "pointer", fontWeight: 600 }}>Clear checked</span>}
+        </div>
+        <div style={{ display: "flex", gap: 7, marginBottom: 12 }}>
+          <input value={newItem} onChange={e => setNewItem(e.target.value)} onKeyDown={e => { if (e.key === "Enter") addGroceryItem(); }} placeholder="Add an item…" style={{ ...S.input, flex: 1, padding: "8px 10px", fontSize: 12 }} />
+          <button onClick={addGroceryItem} style={{ ...S.brassBtn, padding: "8px 14px", fontSize: 11.5 }}>Add</button>
+        </div>
+        <div style={{ display: "flex", flexDirection: "column", gap: 5 }}>
+          {groceries === null ? <div style={{ fontSize: 11, color: T.faint, animation: "pulse 1.4s infinite" }}>Loading…</div>
+            : groceries.length ? groceries.map(it => (
+              <div key={it.id} style={{ display: "flex", alignItems: "center", gap: 9, padding: "6px 2px" }}>
+                <input type="checkbox" checked={it.checked} onChange={() => toggleItem(it)} />
+                <span style={{ fontSize: 12, color: it.checked ? T.faint : T.ink, textDecoration: it.checked ? "line-through" : "none", flex: 1 }}>{it.item}</span>
+                <button onClick={() => removeItem(it.id)} style={{ background: "none", border: "none", color: T.faint, cursor: "pointer", fontSize: 13 }}>×</button>
+              </div>
+            )) : <div style={{ fontSize: 11, color: T.faint }}>List's empty.</div>}
+        </div>
+      </div>
+
+      <div style={card}>
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 10 }}>
+          <span style={S.title}>Meal Ideas</span>
+          <button onClick={generateIdea} disabled={generating} style={{ ...S.brassBtn, padding: "7px 14px", fontSize: 11.5 }}>{generating ? "Thinking…" : "✦ Generate idea"}</button>
+        </div>
+        {ideaErr && <div style={{ fontSize: 11, color: T.red, marginBottom: 8 }}>{ideaErr}</div>}
+        {idea && (
+          <div style={{ ...S.inner, padding: "13px 15px", marginBottom: 14 }}>
+            <div style={{ fontSize: 12, color: T.ink, lineHeight: 1.7, whiteSpace: "pre-wrap" }}>{idea}</div>
+            <div style={{ display: "flex", gap: 8, marginTop: 12 }}>
+              <button onClick={saveIdea} style={{ ...S.brassBtn, padding: "7px 14px", fontSize: 11 }}>👍 Save recipe</button>
+              <button onClick={notForMe} style={{ ...S.ghostBtn, padding: "7px 14px", fontSize: 11 }}>👎 Not my taste</button>
+            </div>
+          </div>
+        )}
+        {(savedRecipes || []).length > 0 && (
+          <>
+            <div style={{ fontSize: 10, fontWeight: 700, color: T.sub, letterSpacing: "0.04em", marginBottom: 8 }}>SAVED</div>
+            <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+              {savedRecipes.map(r => (
+                <div key={r.id} style={{ ...S.inner, padding: "9px 12px", display: "flex", alignItems: "center", gap: 10 }}>
+                  <span style={{ fontSize: 12, fontWeight: 600, flex: 1 }}>{r.title}</span>
+                  <button onClick={() => removeRecipe(r.id)} style={{ background: "none", border: "none", color: T.faint, cursor: "pointer", fontSize: 13 }}>×</button>
+                </div>
+              ))}
+            </div>
+          </>
         )}
       </div>
     </div>
@@ -3316,76 +3626,138 @@ function ModalShell({ onClose, children, isMobile, z = 300 }) {
 
 // One line per entry, parsed on save — simpler to build reliably and just
 // as easy to edit as a row-based form, and easy to bulk-edit/copy-paste.
+const COMMON_LEAGUES = [
+  { sport: "football", league: "nfl", name: "NFL" },
+  { sport: "basketball", league: "nba", name: "NBA" },
+  { sport: "baseball", league: "mlb", name: "MLB" },
+  { sport: "hockey", league: "nhl", name: "NHL" },
+  { sport: "basketball", league: "wnba", name: "WNBA" },
+  { sport: "football", league: "college-football", name: "College Football" },
+  { sport: "basketball", league: "mens-college-basketball", name: "Men's College BB" },
+  { sport: "basketball", league: "womens-college-basketball", name: "Women's College BB" },
+  { sport: "soccer", league: "eng.1", name: "Premier League" },
+  { sport: "soccer", league: "usa.1", name: "MLS" },
+  { sport: "soccer", league: "uefa.champions", name: "Champions League" },
+];
+
 function SportsSettingsModal({ cfg, onSave, onClose, isMobile }) {
-  const teamsText = (cfg.followedTeams || []).map(t => `${t.sport}/${t.league} ${t.team} ${t.displayName || ""}`.trim()).join("\n");
-  const leaguesText = (cfg.watchLeagues || []).map(l => `${l.sport}/${l.league} ${l.displayName || ""}`.trim()).join("\n");
-  const gamesText = (cfg.watchGames || []).map(g => `${g.sport}/${g.league} ${g.team1} ${g.team2}`.trim()).join("\n");
-  const [teams, setTeams] = useState(teamsText);
-  const [leagues, setLeagues] = useState(leaguesText);
-  const [games, setGames] = useState(gamesText);
+  const [teamOptions, setTeamOptions] = useState({}); // "sport/league" -> [{abbr,name}] | "loading" | "error"
+  const [addLeague, setAddLeague] = useState(COMMON_LEAGUES[0].league);
+  const [addTeam, setAddTeam] = useState("");
+  const [gameLeague, setGameLeague] = useState(COMMON_LEAGUES[0].league);
+  const [gameTeam1, setGameTeam1] = useState("");
+  const [gameTeam2, setGameTeam2] = useState("");
 
-  const parseTeams = (text) => text.split("\n").map(l => l.trim()).filter(Boolean).map(line => {
-    const [sl, team, ...rest] = line.split(/\s+/);
-    const [sport, league] = (sl || "").split("/");
-    return { sport, league, team, displayName: rest.join(" ") };
-  }).filter(t => t.sport && t.league && t.team);
-  const parseLeagues = (text) => text.split("\n").map(l => l.trim()).filter(Boolean).map(line => {
-    const [sl, ...rest] = line.split(/\s+/);
-    const [sport, league] = (sl || "").split("/");
-    return { sport, league, displayName: rest.join(" ") };
-  }).filter(l => l.sport && l.league);
-  const parseGames = (text) => text.split("\n").map(l => l.trim()).filter(Boolean).map(line => {
-    const [sl, team1, team2] = line.split(/\s+/);
-    const [sport, league] = (sl || "").split("/");
-    return { sport, league, team1, team2 };
-  }).filter(g => g.sport && g.league && g.team1 && g.team2);
+  const leagueByKey = (league) => COMMON_LEAGUES.find(l => l.league === league) || COMMON_LEAGUES[0];
 
-  const save = () => {
-    onSave({
-      followedTeams: parseTeams(teams),
-      watchLeagues: parseLeagues(leagues),
-      watchGames: parseGames(games),
-      excludedGames: cfg.excludedGames || [],
-    });
+  const ensureTeams = async (league) => {
+    const { sport } = leagueByKey(league);
+    const key = `${sport}/${league}`;
+    if (teamOptions[key]) return;
+    setTeamOptions(prev => ({ ...prev, [key]: "loading" }));
+    const res = await callFnFull("sports", { mode: "teams", sport, league });
+    if (res.ok && res.data?.success) setTeamOptions(prev => ({ ...prev, [key]: res.data.teams }));
+    else setTeamOptions(prev => ({ ...prev, [key]: "error" }));
   };
+  useEffect(() => { ensureTeams(addLeague); // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [addLeague]);
+  useEffect(() => { ensureTeams(gameLeague); // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [gameLeague]);
+
+  const toggleWatchLeague = (l) => {
+    const exists = (cfg.watchLeagues || []).some(w => w.league === l.league);
+    const next = exists ? (cfg.watchLeagues || []).filter(w => w.league !== l.league) : [...(cfg.watchLeagues || []), { sport: l.sport, league: l.league, displayName: l.name }];
+    onSave({ ...cfg, watchLeagues: next });
+  };
+  const addFollowedTeam = () => {
+    if (!addTeam) return;
+    const { sport, name: leagueName } = leagueByKey(addLeague);
+    const key = `${sport}/${addLeague}`;
+    const teamInfo = (Array.isArray(teamOptions[key]) ? teamOptions[key] : []).find(t => t.abbr === addTeam);
+    if (!teamInfo) return;
+    const next = [...(cfg.followedTeams || []), { sport, league: addLeague, team: teamInfo.abbr, displayName: `${teamInfo.name} (${leagueName})` }];
+    onSave({ ...cfg, followedTeams: next });
+    setAddTeam("");
+  };
+  const removeFollowedTeam = (i) => onSave({ ...cfg, followedTeams: (cfg.followedTeams || []).filter((_, idx) => idx !== i) });
+  const addWatchGame = () => {
+    if (!gameTeam1 || !gameTeam2 || gameTeam1 === gameTeam2) return;
+    const { sport } = leagueByKey(gameLeague);
+    const next = [...(cfg.watchGames || []), { sport, league: gameLeague, team1: gameTeam1, team2: gameTeam2 }];
+    onSave({ ...cfg, watchGames: next });
+    setGameTeam1(""); setGameTeam2("");
+  };
+  const removeWatchGame = (i) => onSave({ ...cfg, watchGames: (cfg.watchGames || []).filter((_, idx) => idx !== i) });
   const removeExcluded = (id) => onSave({ ...cfg, excludedGames: (cfg.excludedGames || []).filter(x => x !== id) });
 
-  const box = { width: "100%", padding: "9px 11px", fontSize: 11.5, fontFamily: mono, border: `1px solid ${T.line}`, borderRadius: 8, background: T.bg, color: T.ink, minHeight: 70, resize: "vertical", boxSizing: "border-box" };
-  const label = { fontSize: 10, fontWeight: 700, color: T.sub, letterSpacing: "0.04em", marginBottom: 5, display: "block" };
-  const hint = { fontSize: 9.5, color: T.faint, marginBottom: 6, lineHeight: 1.5 };
+  const label = { fontSize: 10, fontWeight: 700, color: T.sub, letterSpacing: "0.04em", marginBottom: 7, display: "block" };
+  const sel = { padding: "8px 10px", fontSize: 11.5, border: `1px solid ${T.line}`, borderRadius: 8, background: T.bg, color: T.ink, flex: 1, minWidth: 0 };
+  const chip = (active) => ({ fontSize: 10.5, fontWeight: 600, padding: "6px 11px", borderRadius: 999, cursor: "pointer", border: `1px solid ${active ? T.brass : T.line}`, background: active ? "rgba(143,107,30,0.12)" : "transparent", color: active ? T.brass : T.sub });
+  const teamsFor = (league) => { const { sport } = leagueByKey(league); const t = teamOptions[`${sport}/${league}`]; return Array.isArray(t) ? t : []; };
 
   return (
     <ModalShell onClose={onClose} isMobile={isMobile}>
-      <div style={{ fontSize: 14, fontWeight: 700, fontFamily: syne, marginBottom: 4 }}>Sports settings</div>
-      <div style={{ fontSize: 11, color: T.sub, marginBottom: 16 }}>One entry per line. Sport/league examples: basketball/nba, football/nfl, baseball/mlb, hockey/nhl, football/college-football, soccer/eng.1.</div>
+      <div style={{ fontSize: 14, fontWeight: 700, fontFamily: syne, marginBottom: 16 }}>Sports settings</div>
+
+      <label style={label}>WATCH LEAGUES — tap to toggle (significant games even without a followed team)</label>
+      <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginBottom: 18 }}>
+        {COMMON_LEAGUES.map(l => (
+          <span key={l.league} onClick={() => toggleWatchLeague(l)} style={chip((cfg.watchLeagues || []).some(w => w.league === l.league))}>{l.name}</span>
+        ))}
+      </div>
 
       <label style={label}>FOLLOWED TEAMS</label>
-      <div style={hint}>sport/league TEAM_ABBR Display Name — e.g. "basketball/nba LAL Lakers"</div>
-      <textarea style={{ ...box, marginBottom: 14 }} value={teams} onChange={e => setTeams(e.target.value)} placeholder="basketball/nba LAL Lakers" />
-
-      <label style={label}>WATCH LEAGUES (for significant games even without a followed team)</label>
-      <div style={hint}>sport/league Display Name — e.g. "football/nfl NFL"</div>
-      <textarea style={{ ...box, marginBottom: 14 }} value={leagues} onChange={e => setLeagues(e.target.value)} placeholder="football/nfl NFL" />
+      <div style={{ display: "flex", gap: 7, marginBottom: 9 }}>
+        <select value={addLeague} onChange={e => { setAddLeague(e.target.value); setAddTeam(""); }} style={sel}>
+          {COMMON_LEAGUES.map(l => <option key={l.league} value={l.league}>{l.name}</option>)}
+        </select>
+        <select value={addTeam} onChange={e => setAddTeam(e.target.value)} style={{ ...sel, flex: 1.6 }}>
+          <option value="">{teamOptions[`${leagueByKey(addLeague).sport}/${addLeague}`] === "loading" ? "Loading teams…" : "Choose a team…"}</option>
+          {teamsFor(addLeague).map(t => <option key={t.abbr} value={t.abbr}>{t.name}</option>)}
+        </select>
+        <button onClick={addFollowedTeam} disabled={!addTeam} style={{ ...S.brassBtn, padding: "0 14px", fontSize: 11, opacity: addTeam ? 1 : 0.5 }}>Add</button>
+      </div>
+      <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginBottom: 18 }}>
+        {(cfg.followedTeams || []).map((t, i) => (
+          <span key={i} onClick={() => removeFollowedTeam(i)} title="Tap to remove" style={{ fontSize: 10.5, color: T.ink, border: `1px solid ${T.line}`, borderRadius: 999, padding: "5px 11px", cursor: "pointer" }}>{t.displayName || t.team} ×</span>
+        ))}
+        {!(cfg.followedTeams || []).length && <span style={{ fontSize: 10.5, color: T.faint }}>None yet.</span>}
+      </div>
 
       <label style={label}>SPECIFIC GAMES TO WATCH</label>
-      <div style={hint}>sport/league TEAM1 TEAM2 — e.g. "football/nfl DAL PHI"</div>
-      <textarea style={{ ...box, marginBottom: 14 }} value={games} onChange={e => setGames(e.target.value)} placeholder="football/nfl DAL PHI" />
+      <div style={{ display: "flex", gap: 7, marginBottom: 9, flexWrap: "wrap" }}>
+        <select value={gameLeague} onChange={e => { setGameLeague(e.target.value); setGameTeam1(""); setGameTeam2(""); }} style={{ ...sel, flexBasis: "100%" }}>
+          {COMMON_LEAGUES.map(l => <option key={l.league} value={l.league}>{l.name}</option>)}
+        </select>
+        <select value={gameTeam1} onChange={e => setGameTeam1(e.target.value)} style={sel}>
+          <option value="">Team 1…</option>
+          {teamsFor(gameLeague).map(t => <option key={t.abbr} value={t.abbr}>{t.name}</option>)}
+        </select>
+        <select value={gameTeam2} onChange={e => setGameTeam2(e.target.value)} style={sel}>
+          <option value="">Team 2…</option>
+          {teamsFor(gameLeague).map(t => <option key={t.abbr} value={t.abbr}>{t.name}</option>)}
+        </select>
+        <button onClick={addWatchGame} disabled={!gameTeam1 || !gameTeam2} style={{ ...S.brassBtn, padding: "0 14px", fontSize: 11, opacity: gameTeam1 && gameTeam2 ? 1 : 0.5 }}>Add</button>
+      </div>
+      <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginBottom: 18 }}>
+        {(cfg.watchGames || []).map((g, i) => (
+          <span key={i} onClick={() => removeWatchGame(i)} title="Tap to remove" style={{ fontSize: 10.5, color: T.ink, border: `1px solid ${T.line}`, borderRadius: 999, padding: "5px 11px", cursor: "pointer" }}>{g.team1} vs {g.team2} ×</span>
+        ))}
+        {!(cfg.watchGames || []).length && <span style={{ fontSize: 10.5, color: T.faint }}>None yet.</span>}
+      </div>
 
       {(cfg.excludedGames || []).length > 0 && (
-        <div style={{ marginBottom: 14 }}>
-          <label style={label}>HIDDEN GAMES ({(cfg.excludedGames || []).length})</label>
+        <div style={{ marginBottom: 16 }}>
+          <label style={label}>HIDDEN GAMES ({(cfg.excludedGames || []).length}) — tap to unhide</label>
           <div style={{ display: "flex", flexWrap: "wrap", gap: 5 }}>
             {(cfg.excludedGames || []).map(id => (
-              <span key={id} onClick={() => removeExcluded(id)} title="Tap to unhide" style={{ fontSize: 9.5, color: T.faint, border: `1px solid ${T.line}`, borderRadius: 6, padding: "3px 8px", cursor: "pointer", fontFamily: mono }}>{id} ×</span>
+              <span key={id} onClick={() => removeExcluded(id)} style={{ fontSize: 9.5, color: T.faint, border: `1px solid ${T.line}`, borderRadius: 6, padding: "3px 8px", cursor: "pointer", fontFamily: mono }}>{id} ×</span>
             ))}
           </div>
         </div>
       )}
 
-      <div style={{ display: "flex", gap: 8, marginTop: 4 }}>
-        <button onClick={save} style={{ ...S.brassBtn, padding: "9px 18px", fontSize: 12 }}>Save</button>
-        <button onClick={onClose} style={{ ...S.ghostBtn, padding: "9px 18px", fontSize: 12 }}>Cancel</button>
-      </div>
+      <button onClick={onClose} style={{ ...S.brassBtn, padding: "9px 22px", fontSize: 12 }}>Done</button>
     </ModalShell>
   );
 }
@@ -3684,6 +4056,8 @@ export default function App() {
       if (el && el.scrollTop > 0) el.scrollTo({ top: 0, behavior: "smooth" });
     });
   };
+  const [personalJumpTo, setPersonalJumpTo] = useState(null); // tells PersonalPage which sub-tab to open on arrival
+  const goToCalendar = () => { setPersonalJumpTo(Date.now()); goToPage("personal"); }; // timestamp so re-tapping still re-triggers even if already on Personal
 
   const send = async () => {
     const q = input.trim();
@@ -3735,9 +4109,9 @@ export default function App() {
 
   const renderPage = (key) => {
     switch (key) {
-      case "brief": return <MorningBriefPage btc={btc} isMobile={isMobile} settings={settings} updateSetting={updateSetting} />;
+      case "brief": return <MorningBriefPage btc={btc} isMobile={isMobile} settings={settings} updateSetting={updateSetting} onOpenCalendar={goToCalendar} />;
       case "boardroom": return <BoardRoomPage messages={messages} thinking={thinking} loadingData={loadingData} input={input} setInput={setInput} onSend={send} onClearChat={clearChat} endRef={endRef} seatNotes={seatNotes} onEditSeat={setEditSeat} settings={settings} updateSetting={updateSetting} session={session} onWorkerRun={refreshData} isMobile={isMobile} />;
-      case "personal": return <PersonalPage isMobile={isMobile} />;
+      case "personal": return <PersonalPage isMobile={isMobile} jumpSignal={personalJumpTo} settings={settings} updateSetting={updateSetting} />;
       case "assets": return <PropertiesPage isMobile={isMobile} settings={settings} updateSetting={updateSetting} session={session} />;
       case "systems": return <SystemsPage settings={settings} updateSetting={updateSetting} session={session} btc={btc} isMobile={isMobile} />;
       default: return null;
