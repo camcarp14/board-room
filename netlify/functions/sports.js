@@ -149,13 +149,21 @@ exports.handler = async (event) => {
         const significance = detectSignificance(ev, comp);
         if (!followed && !watchlisted && !significance) return; // the actual filter — this is what keeps it from becoming every game everywhere
 
+        const state = ev.status?.type?.state || "pre";
+        // ESPN's own shortDetail/detail strings are pre-formatted in ET —
+        // fine for "Final" or "Top 3rd", wrong for a scheduled game's clock
+        // time. Build that ourselves in CT for the "pre" case specifically.
+        const statusDetail = state === "pre"
+          ? `${startTime.toLocaleDateString("en-US", { timeZone: "America/Chicago", month: "numeric", day: "numeric" })} \u00B7 ${startTime.toLocaleTimeString("en-US", { timeZone: "America/Chicago", hour: "numeric", minute: "2-digit" })} CT`
+          : (ev.status?.type?.shortDetail || ev.status?.type?.detail || "");
+
         games.push({
           id: ev.id, sport, league,
           name: ev.shortName || ev.name,
           date: ev.date,
-          state: ev.status?.type?.state || "pre", // "pre" | "in" | "post"
-          statusDetail: ev.status?.type?.shortDetail || ev.status?.type?.detail || "",
-          isPast: ev.status?.type?.state === "post",
+          state, // "pre" | "in" | "post"
+          statusDetail,
+          isPast: state === "post",
           home: teamSide(comp.competitors, true),
           away: teamSide(comp.competitors, false),
           significance,
