@@ -169,6 +169,11 @@ const db = {
     const { error } = await supabase.from("movies").delete().eq("id", id);
     if (error) throw error;
   },
+  async updateMovie(id, patch) {
+    const { data, error } = await supabase.from("movies").update(patch).eq("id", id).select().single();
+    if (error) throw error;
+    return data;
+  },
   async loadGroceryItems() {
     const { data, error } = await supabase.from("grocery_items").select("*").order("created_at", { ascending: true });
     if (error) throw error;
@@ -756,8 +761,6 @@ function MorningBriefPage({ btc, isMobile, settings, updateSetting, onOpenCalend
   const sportsCfg = settings?.sports || { followedTeams: [], watchLeagues: [], watchGames: [], excludedGames: [] };
   const [sportsGames, setSportsGames] = useState([]);
   const [sportsStatus, setSportsStatus] = useState({ state: "loading" });
-  const [sportsNews, setSportsNews] = useState([]);
-  const [sportsNewsStatus, setSportsNewsStatus] = useState({ state: "loading" });
   const [sportsDetail, setSportsDetail] = useState({}); // eventId -> detail | "loading" | "error"
   const [openGameId, setOpenGameId] = useState(null);
   const [sportsSettingsOpen, setSportsSettingsOpen] = useState(false);
@@ -872,13 +875,6 @@ function MorningBriefPage({ btc, isMobile, settings, updateSetting, onOpenCalend
       if (!alive) return;
       if (res.ok && res.data?.success) { setSportsGames(res.data.games || []); setSportsStatus({ state: "live" }); }
       else setSportsStatus({ state: "error", detail: res.data?.error || "unreachable" });
-    })();
-    (async () => {
-      const leagueList = [...sportsCfg.followedTeams, ...sportsCfg.watchLeagues].map(x => ({ sport: x.sport, league: x.league, displayName: x.displayName || x.league?.toUpperCase() }));
-      const res = await callFnFull("sports-news", { leagues: leagueList });
-      if (!alive) return;
-      if (res.ok && res.data?.success) { setSportsNews(res.data.news || []); setSportsNewsStatus({ state: "live" }); }
-      else setSportsNewsStatus({ state: "error", detail: res.data?.error || "unreachable" });
     })();
     // Meetings depend on a per-user setting (calendar_url), not an env var —
     // no ping/configured gate, just try and report the real outcome.
@@ -1300,31 +1296,6 @@ function MorningBriefPage({ btc, isMobile, settings, updateSetting, onOpenCalend
                     {sportsSettingsOpen && <SportsSettingsModal cfg={sportsCfg} onSave={(next) => { updateSetting("sports", next); setSportsSettingsOpen(false); }} onClose={() => setSportsSettingsOpen(false)} isMobile={isMobile} />}
                   </div>
       );
-      const card_sportsnews = (
-                  <div style={card}>
-                    <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 12 }}>
-                      <span style={S.title}>Sports News</span>
-                      <StatusTag status={sportsNewsStatus} />
-                    </div>
-                    {sportsNewsStatus.state === "live" ? (
-                      sportsNews.length ? (
-                        <div style={{ display: "flex", flexDirection: "column", gap: 8, maxHeight: 258, overflowY: "auto", paddingRight: 2 }}>
-                          {sportsNews.map((n, i) => {
-                            const Row = n.link ? "a" : "div";
-                            return (
-                              <Row key={i} {...(n.link ? { href: n.link, target: "_blank", rel: "noreferrer" } : {})}
-                                style={{ display: "flex", alignItems: "baseline", gap: 8, textDecoration: "none", color: "inherit", flexShrink: 0 }}>
-                                <span style={{ fontSize: 8.5, fontFamily: mono, color: T.faint, flexShrink: 0 }}>{n.time}</span>
-                                <span style={{ fontSize: 7.5, fontWeight: 700, color: T.sub, border: `1px solid ${T.line}`, borderRadius: 5, padding: "1.5px 5px", flexShrink: 0, fontFamily: mono }}>{n.league}</span>
-                                <span style={{ fontSize: 10.5, color: T.ink, lineHeight: 1.4, minWidth: 0, flex: 1 }}>{n.text}</span>
-                              </Row>
-                            );
-                          })}
-                        </div>
-                      ) : <div style={{ fontSize: 10.5, color: T.faint, padding: "6px 0" }}>No news for your followed leagues right now.</div>
-                    ) : <FeedFallbackRow status={sportsNewsStatus} />}
-                  </div>
-      );
       const card_shopify = (
                   <div style={card}>
                     <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 12 }}>
@@ -1357,7 +1328,7 @@ function MorningBriefPage({ btc, isMobile, settings, updateSetting, onOpenCalend
           {sectionHeader("Market")}
           {card_bitcoin}{card_stocks}{card_watch}{card_wire}
           {sectionHeader("Ops")}
-          {card_minicalendar}{card_gsc}{card_clarify}{card_zts}{card_shopify}{card_birthdays}{card_meetings}{card_sports}{card_sportsnews}
+          {card_minicalendar}{card_gsc}{card_clarify}{card_zts}{card_shopify}{card_birthdays}{card_meetings}{card_sports}
         </div>
         {btcChartOpen && <BtcChartModal isMobile onClose={() => setBtcChartOpen(false)} callFnFull={callFnFull} />}
       </div>
@@ -1369,7 +1340,7 @@ function MorningBriefPage({ btc, isMobile, settings, updateSetting, onOpenCalend
         </div>
         <div style={col}>
           {sectionHeader("Ops")}
-          {card_minicalendar}{card_gsc}{card_clarify}{card_zts}{card_shopify}{card_birthdays}{card_meetings}{card_sports}{card_sportsnews}
+          {card_minicalendar}{card_gsc}{card_clarify}{card_zts}{card_shopify}{card_birthdays}{card_meetings}{card_sports}
         </div>
         {btcChartOpen && <BtcChartModal isMobile={false} onClose={() => setBtcChartOpen(false)} callFnFull={callFnFull} />}
       </div>
@@ -1878,6 +1849,7 @@ function MoviesPanel({ isMobile }) {
   const card = isMobile ? S.cardM : S.card;
   const [movies, setMovies] = useState(null);
   const [loadErr, setLoadErr] = useState(null);
+  const [editingId, setEditingId] = useState(null); // null = adding new, otherwise editing this movie
   const [title, setTitle] = useState("");
   const [year, setYear] = useState("");
   const [posterUrl, setPosterUrl] = useState(null);
@@ -1903,17 +1875,45 @@ function MoviesPanel({ isMobile }) {
   };
   const pickPoster = (r) => { setTitle(r.title); setYear(r.year ? String(r.year) : ""); setPosterUrl(r.poster_url); setSearchResults(null); };
 
-  const resetForm = () => { setTitle(""); setYear(""); setPosterUrl(null); setTrueScore(""); setCameronScore(""); setNote(""); setSaveErr(null); setSearchResults(null); };
-  const logMovie = () => {
-    if (!title.trim() || trueScore === "" || cameronScore === "") return;
+  const resetForm = () => { setEditingId(null); setTitle(""); setYear(""); setPosterUrl(null); setTrueScore(""); setCameronScore(""); setNote(""); setSaveErr(null); setSearchResults(null); };
+  const startEdit = (m) => {
+    setEditingId(m.id); setTitle(m.title); setYear(m.year ? String(m.year) : ""); setPosterUrl(m.poster_url);
+    setTrueScore(m.true_quality_score != null ? String(m.true_quality_score) : "");
+    setCameronScore(m.cameron_score != null ? String(m.cameron_score) : "");
+    setNote(m.note || ""); setSearchResults(null); setSaveErr(null);
+  };
+  const saveMovie = () => {
+    if (!title.trim()) return;
     setSaving(true); setSaveErr(null);
-    db.saveMovie({ title: title.trim(), year: year ? Number(year) : null, poster_url: posterUrl, true_quality_score: Number(trueScore), cameron_score: Number(cameronScore), note })
-      .then(() => { setSaving(false); resetForm(); refresh(); })
+    const payload = { title: title.trim(), year: year ? Number(year) : null, poster_url: posterUrl, true_quality_score: trueScore === "" ? null : Number(trueScore), cameron_score: cameronScore === "" ? null : Number(cameronScore), note };
+    const op = editingId ? db.updateMovie(editingId, payload) : db.saveMovie(payload);
+    op.then(() => { setSaving(false); resetForm(); refresh(); })
       .catch(e => { setSaving(false); setSaveErr(e.message || "Couldn't save."); });
   };
-  const removeMovie = (id) => { if (!window.confirm("Delete this movie?")) return; db.deleteMovie(id).then(refresh); };
+  const removeMovie = (id, e) => { e.stopPropagation(); if (!window.confirm("Delete this movie?")) return; db.deleteMovie(id).then(refresh); };
   const scoreColor = (s) => s == null ? T.faint : s >= 70 ? T.green : s >= 40 ? T.amber : T.red;
-  const canLog = title.trim() && trueScore !== "" && cameronScore !== "";
+  const hasBothScores = trueScore !== "" && cameronScore !== "";
+  const saveLabel = editingId ? "Save changes" : hasBothScores ? "Log it" : "Add to watchlist";
+
+  const watchlist = (movies || []).filter(m => m.true_quality_score == null && m.cameron_score == null);
+  const reviewed = (movies || []).filter(m => m.true_quality_score != null || m.cameron_score != null);
+
+  const MovieRow = ({ m }) => (
+    <div onClick={() => startEdit(m)} style={{ ...S.inner, padding: "10px 13px", display: "flex", alignItems: "center", gap: 10, cursor: "pointer" }}>
+      {m.poster_url && <img src={m.poster_url} style={{ width: 32, height: 48, borderRadius: 4, objectFit: "cover", flex: "none" }} />}
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <div style={{ fontSize: 12.5, fontWeight: 700, fontFamily: syne }}>{m.title}{m.year ? ` (${m.year})` : ""}</div>
+        {m.true_quality_score != null || m.cameron_score != null ? (
+          <div style={{ display: "flex", gap: 12, marginTop: 2 }}>
+            <span style={{ fontSize: 10, color: scoreColor(m.true_quality_score) }}>True: {m.true_quality_score != null ? `${m.true_quality_score}%` : "—"}</span>
+            <span style={{ fontSize: 10, color: scoreColor(m.cameron_score), fontWeight: 700 }}>Cameron: {m.cameron_score != null ? `${m.cameron_score}%` : "—"}</span>
+          </div>
+        ) : <div style={{ fontSize: 10, color: T.faint, marginTop: 2 }}>Tap to add your scores once watched</div>}
+        {m.note && <div style={{ fontSize: 10, color: T.faint, marginTop: 2 }}>{m.note}</div>}
+      </div>
+      <button onClick={(e) => removeMovie(m.id, e)} style={{ background: "none", border: "none", color: T.faint, cursor: "pointer", fontSize: 14, flex: "none" }}>×</button>
+    </div>
+  );
 
   return (
     <div style={card}>
@@ -1922,6 +1922,7 @@ function MoviesPanel({ isMobile }) {
       </div>
 
       <div style={{ ...S.inner, padding: "12px 14px", marginBottom: 14, display: "flex", flexDirection: "column", gap: 10 }}>
+        {editingId && <div style={{ fontSize: 10, color: T.brass, fontWeight: 700, letterSpacing: "0.04em" }}>EDITING</div>}
         <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
           {posterUrl && <img src={posterUrl} style={{ width: 30, height: 45, borderRadius: 4, objectFit: "cover", flex: "none" }} />}
           <input value={title} onChange={e => setTitle(e.target.value)} onKeyDown={e => { if (e.key === "Enter") findPoster(); }} placeholder="Movie title…" style={{ ...S.input, flex: 1, padding: "9px 12px", fontSize: 13 }} />
@@ -1941,14 +1942,14 @@ function MoviesPanel({ isMobile }) {
 
         <div style={{ display: "flex", gap: 14 }}>
           <div style={{ flex: 1 }}>
-            <div style={{ fontSize: 9.5, color: T.faint, marginBottom: 4 }}>True quality (your honest critic take)</div>
+            <div style={{ fontSize: 9.5, color: T.faint, marginBottom: 4 }}>True quality — optional until watched</div>
             <div style={{ display: "flex", alignItems: "center", gap: 5 }}>
               <input type="number" min="0" max="100" value={trueScore} onChange={e => setTrueScore(e.target.value)} placeholder="0-100" style={{ ...S.input, width: 60, padding: "7px 9px", fontSize: 12 }} />
               <span style={{ fontSize: 11, color: T.faint }}>%</span>
             </div>
           </div>
           <div style={{ flex: 1 }}>
-            <div style={{ fontSize: 9.5, color: T.faint, marginBottom: 4 }}>Cameron score (bias welcome)</div>
+            <div style={{ fontSize: 9.5, color: T.faint, marginBottom: 4 }}>Cameron score — optional until watched</div>
             <div style={{ display: "flex", alignItems: "center", gap: 5 }}>
               <input type="number" min="0" max="100" value={cameronScore} onChange={e => setCameronScore(e.target.value)} placeholder="0-100" style={{ ...S.input, width: 60, padding: "7px 9px", fontSize: 12 }} />
               <span style={{ fontSize: 11, color: T.faint }}>%</span>
@@ -1958,29 +1959,29 @@ function MoviesPanel({ isMobile }) {
         <input value={note} onChange={e => setNote(e.target.value)} placeholder="Quick note (optional)" style={{ ...S.input, padding: "8px 10px", fontSize: 12 }} />
         {saveErr && <div style={{ fontSize: 10.5, color: T.red }}>{saveErr}</div>}
         <div style={{ display: "flex", gap: 8 }}>
-          <button onClick={logMovie} disabled={saving || !canLog} style={{ ...S.brassBtn, padding: "8px 16px", fontSize: 11.5, opacity: canLog ? 1 : 0.5 }}>{saving ? "Saving…" : "Log it"}</button>
-          {(title || trueScore || cameronScore) && <button onClick={resetForm} style={{ ...S.ghostBtn, padding: "8px 16px", fontSize: 11.5 }}>Clear</button>}
+          <button onClick={saveMovie} disabled={saving || !title.trim()} style={{ ...S.brassBtn, padding: "8px 16px", fontSize: 11.5, opacity: title.trim() ? 1 : 0.5 }}>{saving ? "Saving…" : saveLabel}</button>
+          {(title || editingId) && <button onClick={resetForm} style={{ ...S.ghostBtn, padding: "8px 16px", fontSize: 11.5 }}>{editingId ? "Cancel" : "Clear"}</button>}
         </div>
       </div>
 
-      <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-        {loadErr ? <div style={{ fontSize: 11, color: T.faint }}>{loadErr}</div>
-          : movies === null ? <div style={{ fontSize: 11, color: T.faint, animation: "pulse 1.4s infinite" }}>Loading…</div>
-          : movies.length ? movies.map(m => (
-            <div key={m.id} style={{ ...S.inner, padding: "10px 13px", display: "flex", alignItems: "center", gap: 10 }}>
-              {m.poster_url && <img src={m.poster_url} style={{ width: 32, height: 48, borderRadius: 4, objectFit: "cover", flex: "none" }} />}
-              <div style={{ flex: 1, minWidth: 0 }}>
-                <div style={{ fontSize: 12.5, fontWeight: 700, fontFamily: syne }}>{m.title}{m.year ? ` (${m.year})` : ""}</div>
-                <div style={{ display: "flex", gap: 12, marginTop: 2 }}>
-                  <span style={{ fontSize: 10, color: scoreColor(m.true_quality_score) }}>True: {m.true_quality_score != null ? `${m.true_quality_score}%` : "—"}</span>
-                  <span style={{ fontSize: 10, color: scoreColor(m.cameron_score), fontWeight: 700 }}>Cameron: {m.cameron_score}%</span>
+      {loadErr ? <div style={{ fontSize: 11, color: T.faint }}>{loadErr}</div>
+        : movies === null ? <div style={{ fontSize: 11, color: T.faint, animation: "pulse 1.4s infinite" }}>Loading…</div>
+        : (
+          <>
+            {watchlist.length > 0 && (
+              <div style={{ marginBottom: 16 }}>
+                <div style={{ fontSize: 10, fontWeight: 700, color: T.sub, letterSpacing: "0.04em", marginBottom: 8 }}>WATCHLIST ({watchlist.length})</div>
+                <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                  {watchlist.map(m => <MovieRow key={m.id} m={m} />)}
                 </div>
-                {m.note && <div style={{ fontSize: 10, color: T.faint, marginTop: 2 }}>{m.note}</div>}
               </div>
-              <button onClick={() => removeMovie(m.id)} style={{ background: "none", border: "none", color: T.faint, cursor: "pointer", fontSize: 14, flex: "none" }}>×</button>
+            )}
+            <div style={{ fontSize: 10, fontWeight: 700, color: T.sub, letterSpacing: "0.04em", marginBottom: 8 }}>REVIEWED ({reviewed.length})</div>
+            <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+              {reviewed.length ? reviewed.map(m => <MovieRow key={m.id} m={m} />) : <div style={{ fontSize: 11, color: T.faint, padding: "6px 0" }}>Nothing reviewed yet.</div>}
             </div>
-          )) : <div style={{ fontSize: 11, color: T.faint, padding: "10px 0" }}>Nothing logged yet.</div>}
-      </div>
+          </>
+        )}
     </div>
   );
 }
