@@ -3651,18 +3651,19 @@ function SportsSettingsModal({ cfg, onSave, onClose, isMobile }) {
 
   const leagueByKey = (league) => COMMON_LEAGUES.find(l => l.league === league) || COMMON_LEAGUES[0];
 
-  const ensureTeams = async (league) => {
+  const ensureTeams = async (league, force) => {
     const { sport } = leagueByKey(league);
     const key = `${sport}/${league}`;
-    if (teamOptions[key]) return;
+    if (!force && Array.isArray(teamOptions[key])) return; // only skip if we already have a real list — "error" should always be retryable
     setTeamOptions(prev => ({ ...prev, [key]: "loading" }));
     const res = await callFnFull("sports", { mode: "teams", sport, league });
-    if (res.ok && res.data?.success) setTeamOptions(prev => ({ ...prev, [key]: res.data.teams }));
+    if (res.ok && res.data?.success && Array.isArray(res.data.teams)) setTeamOptions(prev => ({ ...prev, [key]: res.data.teams }));
     else setTeamOptions(prev => ({ ...prev, [key]: "error" }));
   };
   useEffect(() => { ensureTeams(addLeague); // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [addLeague]);
-  useEffect(() => { ensureTeams(gameLeague); // eslint-disable-next-line react-hooks/exhaustive-deps
+  useEffect(() => { if (gameLeague !== addLeague) ensureTeams(gameLeague); // avoid firing the exact same fetch twice on mount when both pickers still point at the default league
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [gameLeague]);
 
   const toggleWatchLeague = (l) => {
@@ -3708,7 +3709,7 @@ function SportsSettingsModal({ cfg, onSave, onClose, isMobile }) {
       </div>
 
       <label style={label}>FOLLOWED TEAMS</label>
-      <div style={{ display: "flex", gap: 7, marginBottom: 9 }}>
+      <div style={{ display: "flex", gap: 7, marginBottom: 4, flexWrap: "wrap" }}>
         <select value={addLeague} onChange={e => { setAddLeague(e.target.value); setAddTeam(""); }} style={sel}>
           {COMMON_LEAGUES.map(l => <option key={l.league} value={l.league}>{l.name}</option>)}
         </select>
@@ -3718,7 +3719,10 @@ function SportsSettingsModal({ cfg, onSave, onClose, isMobile }) {
         </select>
         <button onClick={addFollowedTeam} disabled={!addTeam} style={{ ...S.brassBtn, padding: "0 14px", fontSize: 11, opacity: addTeam ? 1 : 0.5 }}>Add</button>
       </div>
-      <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginBottom: 18 }}>
+      {teamOptions[`${leagueByKey(addLeague).sport}/${addLeague}`] === "error" && (
+        <div style={{ fontSize: 10, color: T.red, marginBottom: 9 }}>Couldn't load {leagueByKey(addLeague).name} teams. <span onClick={() => ensureTeams(addLeague, true)} style={{ textDecoration: "underline", cursor: "pointer" }}>Retry</span></div>
+      )}
+      <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginBottom: 18, marginTop: 5 }}>
         {(cfg.followedTeams || []).map((t, i) => (
           <span key={i} onClick={() => removeFollowedTeam(i)} title="Tap to remove" style={{ fontSize: 10.5, color: T.ink, border: `1px solid ${T.line}`, borderRadius: 999, padding: "5px 11px", cursor: "pointer" }}>{t.displayName || t.team} ×</span>
         ))}
@@ -3726,20 +3730,23 @@ function SportsSettingsModal({ cfg, onSave, onClose, isMobile }) {
       </div>
 
       <label style={label}>SPECIFIC GAMES TO WATCH</label>
-      <div style={{ display: "flex", gap: 7, marginBottom: 9, flexWrap: "wrap" }}>
+      <div style={{ display: "flex", gap: 7, marginBottom: 4, flexWrap: "wrap" }}>
         <select value={gameLeague} onChange={e => { setGameLeague(e.target.value); setGameTeam1(""); setGameTeam2(""); }} style={{ ...sel, flexBasis: "100%" }}>
           {COMMON_LEAGUES.map(l => <option key={l.league} value={l.league}>{l.name}</option>)}
         </select>
         <select value={gameTeam1} onChange={e => setGameTeam1(e.target.value)} style={sel}>
-          <option value="">Team 1…</option>
+          <option value="">{teamOptions[`${leagueByKey(gameLeague).sport}/${gameLeague}`] === "loading" ? "Loading…" : "Team 1…"}</option>
           {teamsFor(gameLeague).map(t => <option key={t.abbr} value={t.abbr}>{t.name}</option>)}
         </select>
         <select value={gameTeam2} onChange={e => setGameTeam2(e.target.value)} style={sel}>
-          <option value="">Team 2…</option>
+          <option value="">{teamOptions[`${leagueByKey(gameLeague).sport}/${gameLeague}`] === "loading" ? "Loading…" : "Team 2…"}</option>
           {teamsFor(gameLeague).map(t => <option key={t.abbr} value={t.abbr}>{t.name}</option>)}
         </select>
         <button onClick={addWatchGame} disabled={!gameTeam1 || !gameTeam2} style={{ ...S.brassBtn, padding: "0 14px", fontSize: 11, opacity: gameTeam1 && gameTeam2 ? 1 : 0.5 }}>Add</button>
       </div>
+      {teamOptions[`${leagueByKey(gameLeague).sport}/${gameLeague}`] === "error" && (
+        <div style={{ fontSize: 10, color: T.red, marginBottom: 9 }}>Couldn't load {leagueByKey(gameLeague).name} teams. <span onClick={() => ensureTeams(gameLeague, true)} style={{ textDecoration: "underline", cursor: "pointer" }}>Retry</span></div>
+      )}
       <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginBottom: 18 }}>
         {(cfg.watchGames || []).map((g, i) => (
           <span key={i} onClick={() => removeWatchGame(i)} title="Tap to remove" style={{ fontSize: 10.5, color: T.ink, border: `1px solid ${T.line}`, borderRadius: 999, padding: "5px 11px", cursor: "pointer" }}>{g.team1} vs {g.team2} ×</span>

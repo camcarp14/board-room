@@ -20,6 +20,7 @@ const json = (code, body) => ({ statusCode: code, headers: { "Content-Type": "ap
 
 let cache = { data: null, ts: 0, key: "" };
 const TTL_MS = 10 * 60 * 1000;
+const teamsCache = new Map(); // separate from `cache` above on purpose — different shape, different lifetime
 
 const UA = { "User-Agent": "Mozilla/5.0 (compatible; BoardRoom/1.0)" };
 
@@ -72,6 +73,27 @@ exports.handler = async (event) => {
   let body = {};
   try { body = JSON.parse(event.body || "{}"); } catch {}
   if (body.ping) return json(200, { success: true, service: "sports", configured: true });
+
+  // Team lookup — powers the settings picker so you choose from a real
+  // list instead of typing ESPN abbreviations from memory. Small and
+  // separately cached (own cache object — this must not share the games
+  // cache above, which is keyed/shaped completely differently) since team
+  // rosters barely ever change.
+  if (body.mode === "teams" && body.sport && body.league) {
+    const teamCacheKey = `${body.sport}/${body.league}`;
+    const hit = teamsCache.get(teamCacheKey);
+    if (hit && Date.now() - hit.ts < 24 * 3600000) return json(200, { success: true, teams: hit.list });
+    try {
+      const res = await fetch(`https://site.api.espn.com/apis/site/v2/sports/${body.sport}/${body.league}/teams?limit=200`, { headers: UA });
+      if (!res.ok) throw new Error(`teams ${res.status}`);
+      const data = await res.json();
+      const list = (data?.sports?.[0]?.leagues?.[0]?.teams || []).map(t => ({ abbr: t.team.abbreviation, name: t.team.displayName })).sort((a, b) => a.name.localeCompare(b.name));
+      teamsCache.set(teamCacheKey, { list, ts: Date.now() });
+      return json(200, { success: true, teams: list });
+    } catch (e) {
+      return json(502, { success: false, error: e.message });
+    }
+  }
 
   const followedTeams = body.followedTeams || [];
   const watchLeagues = body.watchLeagues || [];
