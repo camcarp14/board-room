@@ -35,6 +35,7 @@ exports.handler = async (event) => {
   try {
     let rows = await fetchWeek("thisweek"); // required — if this fails, the whole call fails
     const now = new Date();
+    const windowStart = new Date(now.getTime() - 12 * 3600000); // include events from the last 12h too
     const windowEnd = new Date(now.getTime() + 7 * 86400000);
     // If the confirmed feed doesn't reach the end of our 7-day window (i.e.
     // today is late in the current week), try to extend it. Never required.
@@ -45,17 +46,21 @@ exports.handler = async (event) => {
 
     const events = rows
       .filter(r => r.country === "USD" && (r.impact === "High" || r.impact === "Medium"))
-      .filter(r => { const d = new Date(r.date); return !isNaN(d) && d >= now && d <= windowEnd; })
+      .filter(r => { const d = new Date(r.date); return !isNaN(d) && d >= windowStart && d <= windowEnd; })
       .sort((a, b) => new Date(a.date) - new Date(b.date))
-      .slice(0, 12)
+      .slice(0, 16)
       .map(r => {
         const d = new Date(r.date);
+        const isPast = d < now;
         const day = d.toLocaleDateString("en-US", { timeZone: "America/Chicago", weekday: "short", month: "short", day: "numeric" });
         const time = d.toLocaleTimeString("en-US", { timeZone: "America/Chicago", hour: "numeric", minute: "2-digit" });
         const bits = [r.title];
+        // Once an event has actually released, lead with the real number —
+        // that's the whole point of showing it after the fact.
+        if (isPast && r.actual) bits.push(`actual ${r.actual}`);
         if (r.forecast) bits.push(`forecast ${r.forecast}`);
         if (r.previous) bits.push(`prior ${r.previous}`);
-        return { color: SEV_COLOR[r.impact] || "#9AA6BC", time: `${day} · ${time}`, text: bits.join(" — ") };
+        return { color: SEV_COLOR[r.impact] || "#9AA6BC", time: `${day} · ${time}`, text: bits.join(" — "), isPast, actual: r.actual || null };
       });
 
     const payload = { success: true, events }; // events can legitimately be [] on a quiet week — that's still a live, correct result

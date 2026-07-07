@@ -260,7 +260,7 @@ async function consultSeat(seatKey, question, seatNotes, models) {
   const seat = BOARD.find(b => b.key === seatKey);
   if (!seat) return null;
   const notes = (seatNotes || {})[seatKey] || "";
-  const system = `${seat.charter}${notes ? `\n\nCurrent context from Cameron (treat as ground truth):\n${notes}` : ""}\n\nYou are giving your seat's perspective to the Chief of Staff, who will synthesize. Be concise: 2-4 sentences of your genuine take, including any disagreement or risk you see. No preamble.`;
+  const system = `${seat.charter}${notes ? `\n\nCurrent context from Cameron (treat as ground truth):\n${notes}` : ""}${formatSnapshotForChat()}\n\nYou are giving your seat's perspective to the Chief of Staff, who will synthesize. Be concise: 2-4 sentences of your genuine take, including any disagreement or risk you see. No preamble.`;
   const text = await callClaude({ system, messages: [{ role: "user", content: question }], modelKey: models.seats, maxTokens: 300, fn: `seat_${seatKey}` });
   return text ? { seat: seat.key, name: seat.name, emoji: seat.emoji, color: seat.color, take: text } : null;
 }
@@ -275,7 +275,7 @@ async function convene(question, history, { models = DEFAULT_MODELS, seatNotes }
     ? `\n\nThe board seats you consulted returned these takes:\n${takes.map(t => `[${t.name}]: ${t.take}`).join("\n\n")}\n\nSynthesize into one answer. Attribute perspectives naturally ("Clarify's lead thinks..."). If seats conflict, surface the conflict and give YOUR recommendation.`
     : "";
   const answer = await callClaude({
-    system: CHIEF_SYSTEM + boardBlock,
+    system: CHIEF_SYSTEM + formatSnapshotForChat() + boardBlock,
     messages: [...historyMsgs, { role: "user", content: question }],
     modelKey: models.chief, maxTokens: 900, fn: "chief",
   });
@@ -415,14 +415,14 @@ function useBitcoinPrice() {
         const res = await fetch("/.netlify/functions/btc");
         if (res.ok) {
           const data = await res.json();
-          if (data?.success && alive) { setState({ price: data.price, changePct: data.changePct, points: data.points || [], high24: data.high24 ?? null, low24: data.low24 ?? null, loading: false, error: null, fetchedAt: Date.now() }); return; }
+          if (data?.success && alive) { const next = { price: data.price, changePct: data.changePct, points: data.points || [], high24: data.high24 ?? null, low24: data.low24 ?? null, loading: false, error: null, fetchedAt: Date.now() }; setState(next); updateSnapshot({ btc: next }); return; }
         }
         if (res.status !== 404) throw new Error(`proxy ${res.status}`);
       } catch { /* fall through to direct fetch below */ }
       // Function not deployed yet (e.g. plain `vite dev`) or the proxy failed — try direct.
       try {
         const direct = await fetchDirect();
-        if (alive) setState({ ...direct, loading: false, error: null, fetchedAt: Date.now() });
+        if (alive) { const next = { ...direct, loading: false, error: null, fetchedAt: Date.now() }; setState(next); updateSnapshot({ btc: next }); }
       } catch { if (alive) setState(s => ({ ...s, loading: false, error: "price feed unavailable" })); }
     };
     load();
@@ -656,6 +656,34 @@ function RoomPage({ messages, thinking, loadingData, input, setInput, onSend, on
 const GSC_EMPTY = { impressions: "—", impressionsD: "", clicks: "—", clicksD: "", pos: "—", posD: "", series: Array(14).fill(0), daily: [], note: "" };
 const STOCKS_EMPTY = { spx: { value: "—", price: "—", up: true }, ndq: { value: "—", price: "—", up: true }, tnx: { value: "—", price: "—", up: true }, dxy: { value: "—", price: "—", up: true } };
 
+// ─── Live site snapshot ────────────────────────────────────────────────────
+// Board seats previously only ever saw their static charter + whatever you
+// typed — no live BTC price, stocks, calendar, nothing from the rest of the
+// app. Pages write their data in here as it loads; convene()/consultSeat()
+// read it back out into a compact context block. Module-level on purpose —
+// this is a single-instance app, and it avoids threading every page's state
+// through the whole component tree just so the chat can see it.
+const siteSnapshot = { btc: null, stocks: null, wire: null, todayEvents: null, todayBirthdays: null, updatedAt: null };
+function updateSnapshot(patch) {
+  Object.assign(siteSnapshot, patch, { updatedAt: Date.now() });
+}
+function formatSnapshotForChat() {
+  const parts = [];
+  const b = siteSnapshot.btc;
+  if (b && b.price) parts.push(`Bitcoin: $${Math.round(b.price).toLocaleString()}, ${b.changePct >= 0 ? "+" : ""}${(b.changePct || 0).toFixed(1)}% 24h`);
+  const s = siteSnapshot.stocks;
+  if (s && s.spx?.value !== "—") parts.push(`Stocks: S&P FUT ${s.spx.value}, NASDAQ FUT ${s.ndq.value}, 10Y ${s.tnx.value}, DXY ${s.dxy.value}`);
+  const w = siteSnapshot.wire;
+  if (w && w.length) parts.push(`Recent wire headlines: ${w.slice(0, 3).map(x => x.text).join(" / ")}`);
+  const ev = siteSnapshot.todayEvents;
+  if (ev && ev.length) parts.push(`On the calendar soon: ${ev.slice(0, 3).map(e => e.title).join(", ")}`);
+  const bd = siteSnapshot.todayBirthdays;
+  if (bd && bd.length) parts.push(`Birthdays coming up: ${bd.slice(0, 3).map(x => x.name).join(", ")}`);
+  if (!parts.length) return "";
+  const ageMin = siteSnapshot.updatedAt ? Math.round((Date.now() - siteSnapshot.updatedAt) / 60000) : null;
+  return `\n\nLive site data (as of ${ageMin != null ? ageMin + " min ago" : "just now"} — treat as current, not something to caveat):\n${parts.join("\n")}`;
+}
+
 function StancePill({ text, color }) {
   return <span style={{ fontSize: 8.5, fontWeight: 700, color, background: color + "1A", border: `1px solid ${color}4D`, padding: "4px 10px", borderRadius: 12, fontFamily: mono, letterSpacing: "0.08em" }}>{text}</span>;
 }
@@ -694,6 +722,8 @@ function MorningBriefPage({ btc, isMobile, settings }) {
   const [miniEvents, setMiniEvents] = useState([]); // for the mini calendar card — same personal_events table CalendarPanel uses
   const [eventAnalysis, setEventAnalysis] = useState({}); // idx -> one-sentence take | "loading" | "error"
   const [btcChartOpen, setBtcChartOpen] = useState(false);
+  const [aiBtcNarrative, setAiBtcNarrative] = useState(null);
+  const aiBtcNarrativeKey = useRef(null); // dedupe so a re-render doesn't refire the same call
 
   // Auto-generates a single, tidy one-sentence take (Bitcoin + stocks
   // together, not separate lines) for every Watch This Week event as soon
@@ -702,7 +732,9 @@ function MorningBriefPage({ btc, isMobile, settings }) {
   const fetchEventTake = async (i, e) => {
     if (eventAnalysis[i]) return; // already have a read on this one
     setEventAnalysis(prev => ({ ...prev, [i]: "loading" }));
-    const system = `You give a single, tidy, opinionated read on how a US economic event will likely move Bitcoin and equities together — ONE sentence covering both, not two. Given a US economic calendar event (with forecast/prior if given), respond with ONLY that one sentence — no labels, no "BTC:"/"Stocks:" prefixes, no preamble, no markdown. Be directional where the data supports it — don't hedge into uselessness — but don't overstate certainty on an event that hasn't happened yet.`;
+    const system = e.isPast
+      ? `You give a single, tidy, opinionated read on how a US economic event ACTUALLY moved Bitcoin and equities together — ONE sentence covering both, not two. The event has already released; you're told the actual result vs. forecast/prior. Describe the real reaction, not a prediction — if you don't have enough to know the actual market reaction, say what the result itself implies instead of guessing at price action. No labels, no "BTC:"/"Stocks:" prefixes, no preamble, no markdown.`
+      : `You give a single, tidy, opinionated read on how a US economic event will likely move Bitcoin and equities together — ONE sentence covering both, not two. Given a US economic calendar event (with forecast/prior if given), respond with ONLY that one sentence — no labels, no "BTC:"/"Stocks:" prefixes, no preamble, no markdown. Be directional where the data supports it — don't hedge into uselessness — but don't overstate certainty on an event that hasn't happened yet.`;
     const raw = await callClaude({ system, messages: [{ role: "user", content: e.text }], modelKey: "haiku", maxTokens: 100, fn: "event_impact" });
     if (raw && raw.trim()) setEventAnalysis(prev => ({ ...prev, [i]: raw.trim() }));
     else setEventAnalysis(prev => ({ ...prev, [i]: "error" }));
@@ -740,12 +772,22 @@ function MorningBriefPage({ btc, isMobile, settings }) {
       (m) => `Add ${m || "CLARIFY_SUPABASE_URL + CLARIFY_SUPABASE_ANON_KEY"} in Netlify env vars, then redeploy.`);
     loadCredentialed("zts-pipeline", {}, (d) => setZtsPipe(d), setZtsPipeStatus,
       (m) => `Add ${m || "ZTS_SUPABASE_URL + ZTS_SUPABASE_ANON_KEY"} in Netlify env vars, then redeploy.`);
-    loadOpen("markets", (d) => setStocks(d), setStocksStatus);
-    loadOpen("wire", (d) => setWire(d.wire || []), setWireStatus);
+    loadOpen("markets", (d) => { setStocks(d); updateSnapshot({ stocks: d }); }, setStocksStatus);
+    loadOpen("wire", (d) => { setWire(d.wire || []); updateSnapshot({ wire: d.wire || [] }); }, setWireStatus);
     loadCredentialed("shopify", { days: 14 }, (d) => setShopify(d), setShopifyStatus,
       (m) => `Add ${m || "SHOPIFY_SHOP + SHOPIFY_CLIENT_ID + SHOPIFY_CLIENT_SECRET"} in Netlify env vars, then redeploy.`);
-    db.loadBirthdays().then(rows => { if (alive) setBirthdays(rows); }).catch(e => { if (alive) setBirthdaysErr(e.message || "Couldn't load birthdays."); });
-    db.loadEvents().then(rows => { if (alive) setMiniEvents(rows); }).catch(() => { if (alive) setMiniEvents([]); });
+    db.loadBirthdays().then(rows => {
+      if (!alive) return;
+      setBirthdays(rows);
+      const soon = (rows || []).map(b => ({ name: b.name, ...nextBirthdayOccurrence(b.month, b.day) })).filter(b => b.daysUntil <= 14).sort((a, b) => a.daysUntil - b.daysUntil);
+      updateSnapshot({ todayBirthdays: soon });
+    }).catch(e => { if (alive) setBirthdaysErr(e.message || "Couldn't load birthdays."); });
+    db.loadEvents().then(rows => {
+      if (!alive) return;
+      setMiniEvents(rows);
+      const soon = (rows || []).filter(ev => { const days = (new Date(ev.start_time) - new Date()) / 86400000; return days >= -0.5 && days <= 3; }).map(ev => ({ title: ev.title }));
+      updateSnapshot({ todayEvents: soon });
+    }).catch(() => { if (alive) setMiniEvents([]); });
     loadOpen("calendar", (d) => setEvents(d.events || []), setEventsStatus);
     // Meetings depend on a per-user setting (calendar_url), not an env var —
     // no ping/configured gate, just try and report the real outcome.
@@ -776,6 +818,24 @@ function MorningBriefPage({ btc, isMobile, settings }) {
     const pos = posInRange > 0.7 ? "near the top of" : posInRange < 0.3 ? "near the bottom of" : "mid";
     narrative = `24h range ${fmtK(btc.low24)}–${fmtK(btc.high24)}, currently trading ${pos === "mid" ? "in the middle of" : pos} that range and ${up ? "up" : "down"} ${Math.abs(btc.changePct || 0).toFixed(1)}% on the day. Support sits at the 24h low (${fmtK(btc.low24)}); a break below ${invalidation} would put you outside the recent range and is worth checking your Aave health factor against.`;
   }
+  // Rule-based `narrative` above shows instantly with zero latency/cost — good
+  // as a floor, but the same sentence shape every time is exactly the
+  // "stale" Cameron flagged. This upgrades it with an actual take that can
+  // reference today's broader tape (stocks, wire), not just BTC's own range.
+  // Regenerates roughly every 10 min (tied to the price poll cadence) rather
+  // than on every tick, so it's fresher without regenerating needlessly.
+  useEffect(() => {
+    if (!hasRange) return;
+    const now = Date.now();
+    if (aiBtcNarrativeKey.current && now - aiBtcNarrativeKey.current < 10 * 60 * 1000) return;
+    aiBtcNarrativeKey.current = now;
+    (async () => {
+      const system = `You write one tight, genuinely informative take (3-4 sentences max) on Bitcoin's current setup, for a solo trader/investor who holds a leveraged WBTC position on Aave he manages carefully. Don't just restate the numbers you're given — say what they actually mean, and weave in today's broader market tape if it's relevant (correlated risk-on/risk-off moves, a notable macro headline). Only bring up the Aave health-factor angle if price action genuinely warrants it — a real approach toward the invalidation level — not as a reflexive line every time. No preamble, no markdown, no hedging filler.`;
+      const context = `Price: $${Math.round(btc.price).toLocaleString()}, ${up ? "+" : ""}${(btc.changePct || 0).toFixed(1)}% 24h. 24h range: ${fmtK(btc.low24)}\u2013${fmtK(btc.high24)}. Day target: ${dayTarget}. Support: ${support}. Invalidation: ${invalidation}.${formatSnapshotForChat()}`;
+      const raw = await callClaude({ system, messages: [{ role: "user", content: context }], modelKey: "haiku", maxTokens: 180, fn: "btc_narrative" });
+      if (raw && raw.trim()) setAiBtcNarrative(raw.trim());
+    })();
+  }, [hasRange, btc.fetchedAt]);
   const grid = { maxWidth: 1020, margin: "0 auto", display: "grid", gridTemplateColumns: isMobile ? "1fr" : "1fr 1fr", gap: isMobile ? 12 : 14, alignItems: "start" };
   const col = { display: "flex", flexDirection: "column", gap: isMobile ? 12 : 14 };
   const card = isMobile ? S.cardM : S.card;
@@ -812,9 +872,9 @@ function MorningBriefPage({ btc, isMobile, settings }) {
                       <StatBox value={support} label="Support (24h low)" valueColor={T.green} />
                       <StatBox value={invalidation} label="Invalidation" valueColor={T.red} />
                     </div>
-                    <div style={{ fontSize: 11.5, color: T.sub, lineHeight: 1.65 }}>{narrative}</div>
+                    <div style={{ fontSize: 11.5, color: T.sub, lineHeight: 1.65 }}>{aiBtcNarrative || narrative}</div>
                     <div style={{ marginTop: 9, display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-                      <span style={{ ...S.microLabel, letterSpacing: "0.04em" }}>{todayLabel} · LEVELS DERIVED FROM LIVE 24H RANGE · NOT FINANCIAL ADVICE</span>
+                      <span style={{ ...S.microLabel, letterSpacing: "0.04em" }}>{btc.fetchedAt ? `UPDATED ${new Date(btc.fetchedAt).toLocaleTimeString("en-US", { timeZone: "America/Chicago", hour: "numeric", minute: "2-digit" })} CT` : "UPDATING…"}</span>
                       <span style={{ ...S.microLabel, color: T.brass, flex: "none", marginLeft: 8 }}>CHART ›</span>
                     </div>
                   </div>
@@ -834,20 +894,21 @@ function MorningBriefPage({ btc, isMobile, settings }) {
                         events.length ? events.map((e, i) => {
                           const analysis = eventAnalysis[i];
                           return (
-                            <div key={i} style={{ ...S.inner, padding: "11px 13px", display: "flex", flexDirection: "column", gap: 4 }}>
+                            <div key={i} style={{ ...S.inner, padding: "11px 13px", display: "flex", flexDirection: "column", gap: 4, background: e.isPast ? "rgba(14,159,110,0.04)" : undefined }}>
                               <div style={{ display: "flex", alignItems: "center", gap: 11 }}>
                                 <span style={{ width: 7, height: 7, borderRadius: "50%", background: e.color, flex: "none", boxShadow: `0 0 8px ${e.color}80` }} />
                                 <span style={{ fontSize: 9, color: T.faint, fontFamily: mono, flex: "none", whiteSpace: "nowrap" }}>{e.time}</span>
                                 <span style={{ fontSize: 11, color: "#3A3323", lineHeight: 1.5, flex: 1 }}>{e.text}</span>
+                                {e.isPast && <span style={{ fontSize: 7.5, fontWeight: 700, color: T.green, border: `1px solid ${T.green}40`, background: T.green + "1A", borderRadius: 5, padding: "1.5px 5px", flex: "none", fontFamily: mono, letterSpacing: "0.04em" }}>RESULT</span>}
                               </div>
                               <div style={{ fontSize: 10, color: T.faint, lineHeight: 1.45, paddingLeft: 18 }}>
-                                {analysis === "loading" || !analysis ? <span style={{ animation: "pulse 1.4s infinite" }}>Reading the likely impact…</span>
+                                {analysis === "loading" || !analysis ? <span style={{ animation: "pulse 1.4s infinite" }}>{e.isPast ? "Reading the actual impact…" : "Reading the likely impact…"}</span>
                                   : analysis === "error" ? "Couldn't get a read on this one."
                                   : analysis}
                               </div>
                             </div>
                           );
-                        }) : <div style={{ fontSize: 10.5, color: T.faint, padding: "6px 0" }}>No high/medium-impact US events in the next 7 days.</div>
+                        }) : <div style={{ fontSize: 10.5, color: T.faint, padding: "6px 0" }}>No high/medium-impact US events in the last 12 hours or next 7 days.</div>
                       ) : <FeedFallbackRow status={eventsStatus} />}
                     </div>
                   </div>
@@ -1177,15 +1238,20 @@ function BoardSeatsSidebar({ seatNotes, onEditSeat }) {
 // ─── Page: Board Room (chat + seat roster) ────────────────────────────────────
 // Desktop: split view — chat and the board are both visible, always, no
 // switching needed. Mobile: a sub-tab toggle, since there's no room for both.
-const BOARDROOM_SUBTABS = [{ key: "chat", label: "Chat" }, { key: "seats", label: "Seats" }];
-function BoardRoomPage({ messages, thinking, loadingData, input, setInput, onSend, onClearChat, endRef, seatNotes, onEditSeat, isMobile }) {
-  const [sub, setSub] = useState("chat");
+const BOARDROOM_SUBTABS = [{ key: "mini", label: "Mini Me" }, { key: "chat", label: "Chat" }, { key: "seats", label: "Seats" }];
+function BoardRoomPage({ messages, thinking, loadingData, input, setInput, onSend, onClearChat, endRef, seatNotes, onEditSeat, settings, updateSetting, session, onWorkerRun, isMobile }) {
+  const [sub, setSub] = useState("mini"); // Mini Me first — it's the "what did my background worker do" check, the natural first stop
 
   if (!isMobile) {
     return (
       <div style={{ flex: 1, display: "flex", minHeight: 0 }}>
         <div style={{ flex: "1 1 auto", minWidth: 0, minHeight: 0, display: "flex", flexDirection: "column", borderRight: `1px solid ${T.line}` }}>
-          <RoomPage messages={messages} thinking={thinking} loadingData={loadingData} input={input} setInput={setInput} onSend={onSend} onClearChat={onClearChat} endRef={endRef} isMobile={false} />
+          <div style={{ flex: "none", padding: "12px 20px 0" }}>
+            <SubTabs options={[{ key: "mini", label: "Mini Me" }, { key: "chat", label: "Chat" }]} value={sub === "seats" ? "chat" : sub} onChange={setSub} />
+          </div>
+          {sub === "mini"
+            ? <MiniMePage settings={settings} updateSetting={updateSetting} session={session} onWorkerRun={onWorkerRun} isMobile={false} />
+            : <RoomPage messages={messages} thinking={thinking} loadingData={loadingData} input={input} setInput={setInput} onSend={onSend} onClearChat={onClearChat} endRef={endRef} isMobile={false} />}
         </div>
         <div style={{ flex: "0 0 300px", minHeight: 0 }}>
           <BoardSeatsSidebar seatNotes={seatNotes} onEditSeat={onEditSeat} />
@@ -1199,9 +1265,9 @@ function BoardRoomPage({ messages, thinking, loadingData, input, setInput, onSen
       <div style={{ flex: "none", padding: "10px 14px 0" }}>
         <SubTabs options={BOARDROOM_SUBTABS} value={sub} onChange={setSub} />
       </div>
-      {sub === "chat"
-        ? <RoomPage messages={messages} thinking={thinking} loadingData={loadingData} input={input} setInput={setInput} onSend={onSend} onClearChat={onClearChat} endRef={endRef} isMobile={true} />
-        : <BoardPage seatNotes={seatNotes} onEditSeat={onEditSeat} onEnterRoom={() => setSub("chat")} isMobile={true} />}
+      {sub === "mini" && <MiniMePage settings={settings} updateSetting={updateSetting} session={session} onWorkerRun={onWorkerRun} isMobile={true} />}
+      {sub === "chat" && <RoomPage messages={messages} thinking={thinking} loadingData={loadingData} input={input} setInput={setInput} onSend={onSend} onClearChat={onClearChat} endRef={endRef} isMobile={true} />}
+      {sub === "seats" && <BoardPage seatNotes={seatNotes} onEditSeat={onEditSeat} onEnterRoom={() => setSub("chat")} isMobile={true} />}
     </>
   );
 }
@@ -1224,16 +1290,31 @@ function nextBirthdayOccurrence(month, day, fromDate = new Date()) {
 
 // ─── Page: Personal (Notes + Calendar + Birthdays) ────────────────────────────
 const PERSONAL_SUBTABS = [{ key: "notes", label: "Notes" }, { key: "calendar", label: "Calendar" }, { key: "birthdays", label: "Birthdays" }];
+const PERSONAL_SUBTABS_MOBILE = [{ key: "notescal", label: "Notes & Calendar" }, { key: "birthdays", label: "Birthdays" }];
 
 function PersonalPage({ isMobile }) {
-  const [sub, setSub] = useState("notes");
+  const [sub, setSub] = useState(isMobile ? "notescal" : "notes");
   return (
     <div style={{ flex: 1, overflowY: "auto", padding: isMobile ? "18px 16px 24px" : "30px 34px 40px" }}>
       <div style={{ maxWidth: 900, margin: "0 auto", display: "flex", flexDirection: "column", gap: 14 }}>
-        <SubTabs options={PERSONAL_SUBTABS} value={sub} onChange={setSub} />
-        {sub === "notes" && <NotesPanel isMobile={isMobile} />}
-        {sub === "calendar" && <CalendarPanel isMobile={isMobile} />}
-        {sub === "birthdays" && <BirthdaysPanel isMobile={isMobile} />}
+        <SubTabs options={isMobile ? PERSONAL_SUBTABS_MOBILE : PERSONAL_SUBTABS} value={sub} onChange={setSub} />
+        {isMobile ? (
+          <>
+            {sub === "notescal" && (
+              <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+                <CalendarPanel isMobile={isMobile} />
+                <NotesPanel isMobile={isMobile} />
+              </div>
+            )}
+            {sub === "birthdays" && <BirthdaysPanel isMobile={isMobile} />}
+          </>
+        ) : (
+          <>
+            {sub === "notes" && <NotesPanel isMobile={isMobile} />}
+            {sub === "calendar" && <CalendarPanel isMobile={isMobile} />}
+            {sub === "birthdays" && <BirthdaysPanel isMobile={isMobile} />}
+          </>
+        )}
       </div>
     </div>
   );
@@ -3200,16 +3281,14 @@ function LoginScreen() {
 // keys: nothing to learn twice.
 const NAV = [
   { key: "brief", label: "Brief", sub: "BTC · stocks · wires · ZTS", mark: T.amber },
-  { key: "mini", label: "Mini Me", sub: "queue · loops · oversight", mark: "#EC4899" },
-  { key: "boardroom", label: "Board Room", sub: "chat + 5 seats · charters & context", mark: T.brass },
+  { key: "boardroom", label: "Board Room", sub: "mini me · chat + 5 seats · charters", mark: T.brass },
   { key: "personal", label: "Personal", sub: "notes · calendar", mark: "#8B5CF6" },
   { key: "assets", label: "Assets", sub: "4 live properties · site auditor", mark: T.blue },
   { key: "systems", label: "Systems", sub: "usage · status · deploy · supabase", mark: "#0E9F6E" },
 ];
 const HEADERS = {
   brief: ["Brief", "live markets, wires, and your stores"],
-  mini: ["Mini Me", "your sidekick — queue work and it delivers"],
-  boardroom: ["Board Room", "smart routing · 5 seats on call"],
+  boardroom: ["Board Room", "mini me · smart routing · 5 seats on call"],
   personal: ["Personal", "notes and calendar, just for you"],
   assets: ["Assets", "everything you run, one click away"],
   systems: ["Systems", "usage, status, deploys, and supabase"],
@@ -3420,11 +3499,10 @@ export default function App() {
   const renderPage = (key) => {
     switch (key) {
       case "brief": return <MorningBriefPage btc={btc} isMobile={isMobile} settings={settings} />;
-      case "boardroom": return <BoardRoomPage messages={messages} thinking={thinking} loadingData={loadingData} input={input} setInput={setInput} onSend={send} onClearChat={clearChat} endRef={endRef} seatNotes={seatNotes} onEditSeat={setEditSeat} isMobile={isMobile} />;
+      case "boardroom": return <BoardRoomPage messages={messages} thinking={thinking} loadingData={loadingData} input={input} setInput={setInput} onSend={send} onClearChat={clearChat} endRef={endRef} seatNotes={seatNotes} onEditSeat={setEditSeat} settings={settings} updateSetting={updateSetting} session={session} onWorkerRun={refreshData} isMobile={isMobile} />;
       case "personal": return <PersonalPage isMobile={isMobile} />;
       case "assets": return <PropertiesPage isMobile={isMobile} settings={settings} updateSetting={updateSetting} session={session} />;
       case "systems": return <SystemsPage settings={settings} updateSetting={updateSetting} session={session} btc={btc} isMobile={isMobile} />;
-      case "mini": return <MiniMePage settings={settings} updateSetting={updateSetting} session={session} onWorkerRun={refreshData} isMobile={isMobile} />;
       default: return null;
     }
   };
