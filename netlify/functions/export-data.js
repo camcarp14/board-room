@@ -29,6 +29,12 @@ exports.handler = async (event) => {
   let body = {};
   try { body = JSON.parse(event.body || "{}"); } catch {}
 
+  const configured = !!(process.env.BACKUP_SECRET && process.env.SUPABASE_URL && process.env.SUPABASE_SERVICE_ROLE_KEY);
+  if (body.ping) {
+    const missing = [!process.env.BACKUP_SECRET && "BACKUP_SECRET", !process.env.SUPABASE_URL && "SUPABASE_URL", !process.env.SUPABASE_SERVICE_ROLE_KEY && "SUPABASE_SERVICE_ROLE_KEY"].filter(Boolean).join(" / ");
+    return json(200, { success: true, service: "export-data", configured, missing: configured ? undefined : missing });
+  }
+
   if (!process.env.BACKUP_SECRET || body.secret !== process.env.BACKUP_SECRET) {
     return json(401, { success: false, error: "Missing or incorrect secret." });
   }

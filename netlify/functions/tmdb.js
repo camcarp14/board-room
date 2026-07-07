@@ -16,11 +16,14 @@ exports.handler = async (event) => {
   const guard = methodGuard(event, "POST");
   if (guard) return guard;
 
+  let body = {};
+  try { body = JSON.parse(event.body || "{}"); } catch {}
   const apiKey = process.env.TMDB_API_KEY;
+  if (body.ping) return json(200, { success: true, service: "tmdb", configured: !!apiKey, missing: apiKey ? undefined : "TMDB_API_KEY" });
   if (!apiKey) return error(500, "Missing TMDB_API_KEY in Netlify env vars — see comment at the top of this file for the free signup steps.");
 
   try {
-    const { title } = JSON.parse(event.body || "{}");
+    const { title } = body;
     if (!title) return error(400, "title is required");
 
     const res = await fetch(`https://api.themoviedb.org/3/search/movie?query=${encodeURIComponent(title)}&include_adult=false`, {

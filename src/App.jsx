@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, useCallback } from "react";
 import { createClient } from "@supabase/supabase-js";
 import GscLineChart from "./GscLineChart.jsx";
 import BtcChartModal from "./BtcChartModal.jsx";
@@ -762,7 +762,7 @@ function StatusTag({ status }) {
   return <span style={{ fontSize: 8, fontWeight: 700, color: s.color, background: s.color + "1A", border: `1px solid ${s.color}40`, padding: "3.5px 9px", borderRadius: 10, fontFamily: mono, letterSpacing: "0.06em" }}>{s.label}</span>;
 }
 
-function MorningBriefPage({ btc, isMobile, settings, updateSetting, onOpenCalendar }) {
+function MorningBriefPage({ btc, isMobile, settings, updateSetting, onOpenCalendar, refreshSignal }) {
   const sportsCfg = settings?.sports || { followedTeams: [], watchLeagues: [], watchGames: [], excludedGames: [] };
   const [sportsGames, setSportsGames] = useState([]);
   const [sportsStatus, setSportsStatus] = useState({ state: "loading" });
@@ -788,7 +788,6 @@ function MorningBriefPage({ btc, isMobile, settings, updateSetting, onOpenCalend
   const [gscStatus, setGscStatus] = useState({ state: "loading" });
   const [gscMetric, setGscMetric] = useState("impressions");
   const [stocks, setStocks] = useState(STOCKS_EMPTY);
-  const [stocksFetchedAt, setStocksFetchedAt] = useState(null);
   const [stocksStatus, setStocksStatus] = useState({ state: "loading" });
   const [events, setEvents] = useState([]);
   const [eventsStatus, setEventsStatus] = useState({ state: "loading" });
@@ -831,9 +830,18 @@ function MorningBriefPage({ btc, isMobile, settings, updateSetting, onOpenCalend
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [eventsStatus.state, events]);
 
-  useEffect(() => {
+  const [briefRefreshedAt, setBriefRefreshedAt] = useState(null); // shared freshness stamp for every card fetched in the batch below
+  const freshnessLabel = (ts) => ts ? `UPDATED ${new Date(ts).toLocaleTimeString("en-US", { timeZone: "America/Chicago", hour: "numeric", minute: "2-digit" })} CT` : "UPDATING…";
+
+  // This used to be a fire-once effect — gsc/clarify/zts/wire/shopify/
+  // calendar never refreshed again after the initial page load, and the
+  // header's manual refresh button didn't touch any of them either. Real
+  // bug: leave this tab open a while and 6 of 9 Brief cards were quietly
+  // stale with no way to fix it short of a full page reload. Now a named,
+  // reusable function — called on mount, on a shared interval below, and
+  // when you switch back to this tab after it's been hidden a while.
+  const refreshBrief = useCallback(async () => {
     let alive = true;
-    // Credentialed cards: ping first so a missing key shows setup instructions, not an error.
     const loadCredentialed = async (fn, payload, setData, setStatus, hint) => {
       const ping = await callFnFull(fn, { ping: true });
       if (!alive) return;
@@ -844,7 +852,6 @@ function MorningBriefPage({ btc, isMobile, settings, updateSetting, onOpenCalend
       if (res.ok && res.data?.success) { setData(res.data); setStatus({ state: "live" }); }
       else setStatus({ state: "error", detail: res.data?.error || (res.status ? `HTTP ${res.status}` : "unreachable") });
     };
-    // Keyless cards: just try, report the real failure if any.
     const loadOpen = async (fn, apply, setStatus) => {
       const res = await callFnFull(fn, {});
       if (!alive) return;
@@ -852,75 +859,74 @@ function MorningBriefPage({ btc, isMobile, settings, updateSetting, onOpenCalend
       if (res.ok && res.data?.success) { apply(res.data); setStatus({ state: "live" }); }
       else setStatus({ state: "error", detail: res.data?.error || (res.status ? `HTTP ${res.status}` : "unreachable") });
     };
-    loadCredentialed("gsc", { site: "zerotosecure.com", days: 14 }, setGsc, setGscStatus,
-      (m) => `Add ${m || "GSC_CLIENT_EMAIL + GSC_PRIVATE_KEY"} in Netlify env vars, share the Search Console property with the service account, then redeploy.`);
-    loadCredentialed("clarify-pipeline", {}, (d) => setClarify(d), setClarifyStatus,
-      (m) => `Add ${m || "CLARIFY_SUPABASE_URL + CLARIFY_SUPABASE_ANON_KEY"} in Netlify env vars, then redeploy.`);
-    loadCredentialed("zts-pipeline", {}, (d) => setZtsPipe(d), setZtsPipeStatus,
-      (m) => `Add ${m || "ZTS_SUPABASE_URL + ZTS_SUPABASE_ANON_KEY"} in Netlify env vars, then redeploy.`);
-    loadOpen("markets", (d) => { setStocks(d); setStocksFetchedAt(Date.now()); updateSnapshot({ stocks: d }); }, setStocksStatus);
-    loadOpen("wire", (d) => { setWire(d.wire || []); updateSnapshot({ wire: d.wire || [] }); }, setWireStatus);
-    loadCredentialed("shopify", { days: 14 }, (d) => setShopify(d), setShopifyStatus,
-      (m) => `Add ${m || "SHOPIFY_SHOP + SHOPIFY_CLIENT_ID + SHOPIFY_CLIENT_SECRET"} in Netlify env vars, then redeploy.`);
-    db.loadBirthdays().then(rows => {
-      if (!alive) return;
-      setBirthdays(rows);
-      const soon = (rows || []).map(b => ({ name: b.name, ...nextBirthdayOccurrence(b.month, b.day) })).filter(b => b.daysUntil <= 14).sort((a, b) => a.daysUntil - b.daysUntil);
-      updateSnapshot({ todayBirthdays: soon });
-    }).catch(e => { if (alive) setBirthdaysErr(e.message || "Couldn't load birthdays."); });
-    db.loadEvents().then(rows => {
-      if (!alive) return;
-      setMiniEvents(rows);
-      const soon = (rows || []).filter(ev => { const days = (new Date(ev.start_time) - new Date()) / 86400000; return days >= -0.5 && days <= 3; }).map(ev => ({ title: ev.title }));
-      updateSnapshot({ todayEvents: soon });
-    }).catch(() => { if (alive) setMiniEvents([]); });
-    loadOpen("calendar", (d) => setEvents(d.events || []), setEventsStatus);
-    (async () => {
-      const res = await callFnFull("sports", { followedTeams: sportsCfg.followedTeams, watchLeagues: sportsCfg.watchLeagues, watchGames: sportsCfg.watchGames, excludedGames: sportsCfg.excludedGames });
-      if (!alive) return;
-      if (res.ok && res.data?.success) { setSportsGames(res.data.games || []); setSportsStatus({ state: "live" }); }
-      else setSportsStatus({ state: "error", detail: res.data?.error || "unreachable" });
-    })();
-    // Meetings depend on a per-user setting (calendar_url), not an env var —
-    // no ping/configured gate, just try and report the real outcome.
-    (async () => {
-      if (!settings?.calendar_url) { if (alive) setMeetingsStatus({ state: "notconfigured", detail: "Link a calendar (iCal / .ics URL) in the sidebar to see meetings here." }); return; }
-      const res = await callFnFull("calendar-events", { url: settings.calendar_url });
-      if (!alive) return;
-      if (res.ok && res.data?.success) { setMeetings(res.data.events || []); setMeetingsStatus({ state: "live" }); }
-      else setMeetingsStatus({ state: "error", detail: res.data?.error || "unreachable" });
-    })();
+    await Promise.all([
+      loadCredentialed("gsc", { site: "zerotosecure.com", days: 14 }, setGsc, setGscStatus,
+        (m) => `Add ${m || "GSC_CLIENT_EMAIL + GSC_PRIVATE_KEY"} in Netlify env vars, share the Search Console property with the service account, then redeploy.`),
+      loadCredentialed("clarify-pipeline", {}, (d) => setClarify(d), setClarifyStatus,
+        (m) => `Add ${m || "CLARIFY_SUPABASE_URL + CLARIFY_SUPABASE_ANON_KEY"} in Netlify env vars, then redeploy.`),
+      loadCredentialed("zts-pipeline", {}, (d) => setZtsPipe(d), setZtsPipeStatus,
+        (m) => `Add ${m || "ZTS_SUPABASE_URL + ZTS_SUPABASE_ANON_KEY"} in Netlify env vars, then redeploy.`),
+      loadOpen("markets", (d) => { setStocks(d); updateSnapshot({ stocks: d }); }, setStocksStatus),
+      loadOpen("wire", (d) => { setWire(d.wire || []); updateSnapshot({ wire: d.wire || [] }); }, setWireStatus),
+      loadCredentialed("shopify", { days: 14 }, (d) => setShopify(d), setShopifyStatus,
+        (m) => `Add ${m || "SHOPIFY_SHOP + SHOPIFY_CLIENT_ID + SHOPIFY_CLIENT_SECRET"} in Netlify env vars, then redeploy.`),
+      db.loadBirthdays().then(rows => {
+        if (!alive) return;
+        setBirthdays(rows);
+        const soon = (rows || []).map(b => ({ name: b.name, ...nextBirthdayOccurrence(b.month, b.day) })).filter(b => b.daysUntil <= 14).sort((a, b) => a.daysUntil - b.daysUntil);
+        updateSnapshot({ todayBirthdays: soon });
+      }).catch(e => { if (alive) setBirthdaysErr(e.message || "Couldn't load birthdays."); }),
+      db.loadEvents().then(rows => {
+        if (!alive) return;
+        setMiniEvents(rows);
+        const soon = (rows || []).filter(ev => { const days = (new Date(ev.start_time) - new Date()) / 86400000; return days >= -0.5 && days <= 3; }).map(ev => ({ title: ev.title }));
+        updateSnapshot({ todayEvents: soon });
+      }).catch(() => { if (alive) setMiniEvents([]); }),
+      loadOpen("calendar", (d) => setEvents(d.events || []), setEventsStatus),
+      (async () => {
+        const res = await callFnFull("sports", { followedTeams: sportsCfg.followedTeams, watchLeagues: sportsCfg.watchLeagues, watchGames: sportsCfg.watchGames, excludedGames: sportsCfg.excludedGames });
+        if (!alive) return;
+        if (res.ok && res.data?.success) { setSportsGames(res.data.games || []); setSportsStatus({ state: "live" }); }
+        else setSportsStatus({ state: "error", detail: res.data?.error || "unreachable" });
+      })(),
+      (async () => {
+        if (!settings?.calendar_url) { if (alive) setMeetingsStatus({ state: "notconfigured", detail: "Link a calendar (iCal / .ics URL) in the sidebar to see meetings here." }); return; }
+        const res = await callFnFull("calendar-events", { url: settings.calendar_url });
+        if (!alive) return;
+        if (res.ok && res.data?.success) { setMeetings(res.data.events || []); setMeetingsStatus({ state: "live" }); }
+        else setMeetingsStatus({ state: "error", detail: res.data?.error || "unreachable" });
+      })(),
+    ]);
+    if (alive) setBriefRefreshedAt(Date.now());
     return () => { alive = false; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [settings?.calendar_url, JSON.stringify(settings?.sports)]);
 
-  // Stocks previously only fetched once on page load and then sat frozen —
-  // the "risk-on/off" read looked live but the numbers behind it weren't
-  // actually updating. Polls on the same 5-min cadence as Bitcoin now.
-  useEffect(() => {
-    let alive = true;
-    const poll = async () => {
-      const res = await callFnFull("markets", {});
-      if (!alive) return;
-      if (res.ok && res.data?.success) { setStocks(res.data); setStocksFetchedAt(Date.now()); updateSnapshot({ stocks: res.data }); setStocksStatus({ state: "live" }); }
-    };
-    const iv = setInterval(poll, 5 * 60 * 1000);
-    return () => { alive = false; clearInterval(iv); };
-  }, []);
+  useEffect(() => { refreshBrief(); }, [refreshBrief]);
 
-  // Live scores need to actually move — same reasoning as stocks above.
-  // A shorter 2-min cadence here since live game state changes faster than
-  // markets do and this is the whole point of a "live stats" tile.
   useEffect(() => {
-    if (!sportsCfg.followedTeams.length && !sportsCfg.watchLeagues.length && !sportsCfg.watchGames.length) return;
-    let alive = true;
-    const poll = async () => {
-      const res = await callFnFull("sports", { followedTeams: sportsCfg.followedTeams, watchLeagues: sportsCfg.watchLeagues, watchGames: sportsCfg.watchGames, excludedGames: sportsCfg.excludedGames });
-      if (!alive) return;
-      if (res.ok && res.data?.success) setSportsGames(res.data.games || []);
+    if (refreshSignal) refreshBrief();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [refreshSignal]);
+
+  // One shared interval for everything above (was 3 separate mechanisms:
+  // this one-time effect, plus bespoke stocks-only and sports-only
+  // intervals — consolidated since they were all polling the same way for
+  // no real reason). Also refetches when you switch back to this tab after
+  // it's been hidden a while, so alt-tabbing away for hours doesn't leave
+  // you staring at a stale page until the next 5-min tick happens to land.
+  useEffect(() => {
+    const iv = setInterval(refreshBrief, 5 * 60 * 1000);
+    let lastVisibleRefresh = Date.now();
+    const onVisible = () => {
+      if (document.visibilityState !== "visible") return;
+      if (Date.now() - lastVisibleRefresh < 60 * 1000) return; // just refreshed — don't refire on rapid tab-switching
+      lastVisibleRefresh = Date.now();
+      refreshBrief();
     };
-    const iv2 = setInterval(poll, 2 * 60 * 1000);
-    return () => { alive = false; clearInterval(iv2); };
-  }, [JSON.stringify(settings?.sports)]);
+    document.addEventListener("visibilitychange", onVisible);
+    return () => { clearInterval(iv); document.removeEventListener("visibilitychange", onVisible); };
+  }, [refreshBrief]);
 
   const price = btc.loading ? "…" : btc.error || btc.price == null ? "—" : "$" + btc.price.toLocaleString(undefined, { maximumFractionDigits: 0 });
   const hasChange = !btc.loading && !btc.error && btc.changePct !== null && btc.changePct !== undefined;
@@ -1041,6 +1047,7 @@ function MorningBriefPage({ btc, isMobile, settings, updateSetting, onOpenCalend
                         }) : <div style={{ fontSize: 10.5, color: T.faint, padding: "6px 0" }}>No high/medium-impact US events in the last 12 hours or next 7 days.</div>
                       ) : <FeedFallbackRow status={eventsStatus} />}
                     </div>
+                    {eventsStatus.state === "live" && <div style={{ marginTop: 8, ...S.microLabel, letterSpacing: "0.04em" }}>{freshnessLabel(briefRefreshedAt)}</div>}
                   </div>
           
   );
@@ -1060,6 +1067,7 @@ function MorningBriefPage({ btc, isMobile, settings, updateSetting, onOpenCalend
                     </div>
                     <GscLineChart rows={gsc.daily} metric={gscMetric} />
                     <div style={{ marginTop: 8, fontSize: 10.5, color: gscStatus.state === "live" ? T.sub : T.faint, lineHeight: 1.55 }}>{gscStatus.state === "live" ? gsc.note : gscStatus.state === "loading" ? "Loading…" : gscStatus.detail}</div>
+                    {gscStatus.state === "live" && <div style={{ marginTop: 8, ...S.microLabel, letterSpacing: "0.04em" }}>{freshnessLabel(briefRefreshedAt)}</div>}
                   </div>
           
   );
@@ -1078,6 +1086,7 @@ function MorningBriefPage({ btc, isMobile, settings, updateSetting, onOpenCalend
                           <StatBox value={String(clarify.replied)} label="Replied" valueColor={T.green} />
                         </div>
                         <div style={{ fontSize: 11.5, color: T.sub, lineHeight: 1.6 }}>{clarify.replyRate}% reply rate</div>
+                        <div style={{ marginTop: 8, ...S.microLabel, letterSpacing: "0.04em" }}>{freshnessLabel(briefRefreshedAt)}</div>
                       </>
                     ) : <FeedFallbackRow status={clarifyStatus} />}
                   </div>
@@ -1108,7 +1117,7 @@ function MorningBriefPage({ btc, isMobile, settings, updateSetting, onOpenCalend
                       ))}
                     </div>
                     <div style={{ fontSize: 11.5, color: T.sub, lineHeight: 1.65 }}>{stocksOutlook}</div>
-                    <div style={{ marginTop: 9, ...S.microLabel, letterSpacing: "0.04em" }}>{stocksFetchedAt ? `UPDATED ${new Date(stocksFetchedAt).toLocaleTimeString("en-US", { timeZone: "America/Chicago", hour: "numeric", minute: "2-digit" })} CT` : "UPDATING…"}</div>
+                    <div style={{ marginTop: 9, ...S.microLabel, letterSpacing: "0.04em" }}>{freshnessLabel(briefRefreshedAt)}</div>
                   </div>
           
   );
@@ -1216,6 +1225,7 @@ function MorningBriefPage({ btc, isMobile, settings, updateSetting, onOpenCalend
                           <StatBox value={String(ztsPipe.collab)} label="Collab" valueColor={T.green} />
                         </div>
                         <div style={{ fontSize: 11.5, color: T.sub, lineHeight: 1.6 }}><span style={{ color: T.green, fontWeight: 700 }}>{ztsPipe.weightedReach.toLocaleString()}</span> weighted reach in pipeline</div>
+                        <div style={{ marginTop: 8, ...S.microLabel, letterSpacing: "0.04em" }}>{freshnessLabel(briefRefreshedAt)}</div>
                       </>
                     ) : <FeedFallbackRow status={ztsPipeStatus} />}
                   </div>
@@ -1243,6 +1253,7 @@ function MorningBriefPage({ btc, isMobile, settings, updateSetting, onOpenCalend
                         </div>
                       ) : <div style={{ fontSize: 10.5, color: T.faint, padding: "6px 0" }}>No headlines returned this cycle.</div>
                     ) : <FeedFallbackRow status={wireStatus} />}
+                    {wireStatus.state === "live" && <div style={{ marginTop: 8, ...S.microLabel, letterSpacing: "0.04em" }}>{freshnessLabel(briefRefreshedAt)}</div>}
                   </div>
       );
       const card_sports = (
@@ -1321,6 +1332,7 @@ function MorningBriefPage({ btc, isMobile, settings, updateSetting, onOpenCalend
                         </div>
                         {shopify.series && <Sparkline points={shopify.series} color={T.brass} />}
                         <div style={{ fontSize: 11.5, color: T.sub, lineHeight: 1.6, marginTop: 8 }}>{shopify.note}</div>
+                        <div style={{ marginTop: 8, ...S.microLabel, letterSpacing: "0.04em" }}>{freshnessLabel(briefRefreshedAt)}</div>
                       </>
                     ) : <FeedFallbackRow status={shopifyStatus} />}
                   </div>
@@ -2879,7 +2891,7 @@ const CONN_GROUPS = [
   { title: "Core", keys: ["supabase_env", "supabase_auth", "supabase_db"] },
   { title: "AI", keys: ["anthropic"] },
   { title: "Market Data", keys: ["coingecko"] },
-  { title: "Netlify Functions", keys: ["fn_health", "fn_mini", "fn_btc", "fn_btc_candles", "fn_markets", "fn_wire", "fn_calendar", "fn_calendar_events", "fn_site_status", "fn_gsc", "fn_shopify", "fn_clarify_pipeline", "fn_zts_pipeline", "fn_deploy", "fn_dbadmin", "fn_audit", "fn_autofix"] },
+  { title: "Netlify Functions", keys: ["fn_health", "fn_mini", "fn_btc", "fn_btc_candles", "fn_markets", "fn_wire", "fn_sports", "fn_sports_detail", "fn_tmdb", "fn_export_data", "fn_calendar", "fn_calendar_events", "fn_site_status", "fn_gsc", "fn_shopify", "fn_clarify_pipeline", "fn_zts_pipeline", "fn_deploy", "fn_dbadmin", "fn_audit", "fn_autofix"] },
 ];
 const CONN_META = {
   supabase_env: { name: "Supabase · config", desc: "VITE_SUPABASE_URL + anon key present at build time" },
@@ -2900,6 +2912,10 @@ const CONN_META = {
   fn_gsc: { name: "gsc", desc: "Search Console · zerotosecure.com last 14d" },
   fn_shopify: { name: "shopify", desc: "Shopify Admin API · orders last 14d" },
   fn_wire: { name: "wire", desc: "CoinDesk + Cointelegraph RSS · tagged headlines" },
+  fn_sports: { name: "sports", desc: "ESPN scoreboard · followed teams, significant games, watch list" },
+  fn_sports_detail: { name: "sports-detail", desc: "on-demand per-game detail, only called on tap" },
+  fn_tmdb: { name: "tmdb", desc: "movie search for poster/year lookup — optional, not required for Movies tab" },
+  fn_export_data: { name: "export-data", desc: "local backup export — service-role read of all personal tables" },
   fn_deploy: { name: "deploy", desc: "Netlify API · trigger builds per property" },
   fn_dbadmin: { name: "db-admin", desc: "service-role maintenance, allowlisted commands" },
   fn_audit: { name: "audit", desc: "AI site auditor across all five properties" },
@@ -2980,7 +2996,7 @@ function useConnections({ session, btc }) {
     }
 
     // Netlify functions
-    const fns = [["fn_health", "health"], ["fn_mini", "mini-worker"], ["fn_btc", "btc"], ["fn_markets", "markets"], ["fn_wire", "wire"], ["fn_calendar", "calendar"], ["fn_calendar_events", "calendar-events"], ["fn_site_status", "site-status"], ["fn_gsc", "gsc"], ["fn_shopify", "shopify"], ["fn_clarify_pipeline", "clarify-pipeline"], ["fn_zts_pipeline", "zts-pipeline"], ["fn_deploy", "deploy"], ["fn_dbadmin", "db-admin"], ["fn_audit", "audit"], ["fn_autofix", "auto-fix"]];
+    const fns = [["fn_health", "health"], ["fn_mini", "mini-worker"], ["fn_btc", "btc"], ["fn_markets", "markets"], ["fn_wire", "wire"], ["fn_sports", "sports"], ["fn_sports_detail", "sports-detail"], ["fn_tmdb", "tmdb"], ["fn_export_data", "export-data"], ["fn_calendar", "calendar"], ["fn_calendar_events", "calendar-events"], ["fn_site_status", "site-status"], ["fn_gsc", "gsc"], ["fn_shopify", "shopify"], ["fn_clarify_pipeline", "clarify-pipeline"], ["fn_zts_pipeline", "zts-pipeline"], ["fn_deploy", "deploy"], ["fn_dbadmin", "db-admin"], ["fn_audit", "audit"], ["fn_autofix", "auto-fix"]];
     if (!IS_DEPLOYED) {
       // netlify dev serves functions locally; try health first to decide
       const probe = await pingFn("health");
@@ -4034,10 +4050,12 @@ export default function App() {
     return () => clearInterval(iv);
   }, []);
 
+  const [briefRefreshSignal, setBriefRefreshSignal] = useState(null);
   const refreshData = async () => {
     if (refreshing || !supabase || !session?.user) return;
     setRefreshing(true);
     btc.refresh();
+    setBriefRefreshSignal(Date.now()); // the header button previously only touched chat/notes/settings/btc — gsc/clarify/zts/wire/shopify/calendar never actually refreshed when tapped despite implying they would
     try {
       const [chat, notes, sets] = await Promise.all([db.loadChat(), db.loadSeatNotes(), db.loadSettings()]);
       setMessages(chat); setSeatNotes(notes); setSettings(sets);
@@ -4173,7 +4191,7 @@ export default function App() {
 
   const renderPage = (key) => {
     switch (key) {
-      case "brief": return <MorningBriefPage btc={btc} isMobile={isMobile} settings={settings} updateSetting={updateSetting} onOpenCalendar={goToCalendar} />;
+      case "brief": return <MorningBriefPage btc={btc} isMobile={isMobile} settings={settings} updateSetting={updateSetting} onOpenCalendar={goToCalendar} refreshSignal={briefRefreshSignal} />;
       case "boardroom": return <BoardRoomPage messages={messages} thinking={thinking} loadingData={loadingData} input={input} setInput={setInput} onSend={send} onClearChat={clearChat} endRef={endRef} seatNotes={seatNotes} onEditSeat={setEditSeat} settings={settings} updateSetting={updateSetting} session={session} onWorkerRun={refreshData} isMobile={isMobile} />;
       case "personal": return <PersonalPage isMobile={isMobile} jumpSignal={personalJumpTo} settings={settings} updateSetting={updateSetting} />;
       case "assets": return <PropertiesPage isMobile={isMobile} settings={settings} updateSetting={updateSetting} session={session} />;
