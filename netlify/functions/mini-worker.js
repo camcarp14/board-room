@@ -66,6 +66,28 @@ async function loadUserBundle(cfg, userId) {
   (Array.isArray(rows) ? rows : []).forEach(r => { out[r.setting_key] = r.setting_value; });
   return out;
 }
+
+// Skills taught on the Learn tab — enabled ones ride along in the worker's
+// system prompt. Mirrors buildSkillsBlock in src/LearnPanel.jsx (keep in
+// sync). Silently returns "" if the table doesn't exist yet.
+async function loadSkillsBlock(cfg, userId, budget = 9000) {
+  try {
+    const res = await rest(cfg, `mini_skills?user_id=eq.${userId}&enabled=eq.true&select=title,description,content&order=updated_at.desc`, { headers: { Prefer: "" } });
+    if (!res.ok) return "";
+    const skills = await res.json();
+    if (!Array.isArray(skills) || !skills.length) return "";
+    const index = skills.map(s => `• ${s.title} — ${s.description}`).join("\n");
+    let out = `\n\nLEARNED SKILLS — knowledge the user has explicitly taught you. Apply when relevant; cite the skill by name when you lean on one.\nIndex:\n${index}\n`;
+    let used = out.length, loaded = 0;
+    for (const s of skills) {
+      const block = `\n[SKILL: ${s.title}]\n${s.content}\n`;
+      if (used + block.length > budget) break;
+      out += block; used += block.length; loaded++;
+    }
+    if (loaded < skills.length) out += `\n(${skills.length - loaded} more skill${skills.length - loaded > 1 ? "s" : ""} known by title only.)`;
+    return out;
+  } catch { return ""; }
+}
 async function saveTasks(cfg, userId, tasks) {
   await rest(cfg, `app_settings?user_id=eq.${userId}&setting_key=eq.mini_tasks`, {
     method: "PATCH",
@@ -118,7 +140,8 @@ async function processUser(cfg, userId) {
   const toRun = queuedIdx.slice(0, limit);
   const directive = (mini.directive || "").trim();
   const role = (mini.role || "").trim();
-  const system = `You are "Mini Me", the user's autonomous assistant inside their Board Room app.${role ? ` Your role: ${role}` : ""} Produce the requested deliverable directly and completely — concrete and usable, no preamble, no clarifying questions (make reasonable assumptions and state them briefly at the end if needed).${directive ? `\n\nYour prime directive — this is the overall mission, weigh every task against it: ${directive}` : ""}`;
+  const skillsBlock = await loadSkillsBlock(cfg, userId);
+  const system = `You are "Mini Me", the user's autonomous assistant inside their Board Room app.${role ? ` Your role: ${role}` : ""} Produce the requested deliverable directly and completely — concrete and usable, no preamble, no clarifying questions (make reasonable assumptions and state them briefly at the end if needed).${directive ? `\n\nYour prime directive — this is the overall mission, weigh every task against it: ${directive}` : ""}${skillsBlock}`;
 
   const feedRows = [];
   let processed = 0;

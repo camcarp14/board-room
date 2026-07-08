@@ -1,7 +1,9 @@
-import { useState, useEffect, useRef, useCallback } from "react";
+import { useState, useEffect, useRef, useCallback, useMemo } from "react";
 import { createClient } from "@supabase/supabase-js";
 import GscLineChart from "./GscLineChart.jsx";
 import BtcChartModal from "./BtcChartModal.jsx";
+import WorkoutPanel from "./WorkoutPanel.jsx";
+import LearnPanel, { parseLearnCommand, learnFromInput, buildSkillsBlock, makeSdb as makeSkillsDb } from "./LearnPanel.jsx";
 
 // ════════════════════════════════════════════════════════════════════════════
 // THE BOARD ROOM — modern roman edition.
@@ -101,22 +103,57 @@ const db = {
     try { await supabase.from("auditor_findings").insert(rows.map(r => ({ property: r.property, severity: r.severity, area: r.area || null, finding: r.finding, suggestion: r.suggestion }))); } catch {}
   },
   async loadNotes() {
-    const { data, error } = await supabase.from("personal_notes")
+    // Try the upgraded schema first; fall back cleanly if the pinned/color
+    // columns haven't been added yet so notes keep working pre-migration.
+    const full = await supabase.from("personal_notes")
+      .select("id,title,body,pinned,color,updated_at,created_at")
+      .order("updated_at", { ascending: false });
+    if (!full.error) return { rows: full.data || [], legacy: false };
+    if (!/column|pinned|color|42703/i.test(full.error.message || "")) throw full.error;
+    const base = await supabase.from("personal_notes")
       .select("id,title,body,updated_at,created_at")
       .order("updated_at", { ascending: false });
-    if (error) throw error;
-    return data || [];
+    if (base.error) throw base.error;
+    return { rows: base.data || [], legacy: true };
   },
   async saveNote(note) {
     const user_id = await db.uid();
     if (!user_id) throw new Error("Not signed in");
     const row = { id: note.id, user_id, title: note.title, body: note.body, updated_at: new Date().toISOString() };
+    if (note.pinned !== undefined) row.pinned = note.pinned;
+    if (note.color !== undefined) row.color = note.color;
     const { data, error } = await supabase.from("personal_notes").upsert(row, { onConflict: "id" }).select().single();
     if (error) throw error;
     return data;
   },
   async deleteNote(id) {
     try { await supabase.from("personal_notes").delete().eq("id", id); } catch {}
+  },
+  async bulkDeleteNotes(ids) {
+    if (!ids?.length) return;
+    const { error } = await supabase.from("personal_notes").delete().in("id", ids);
+    if (error) throw error;
+  },
+  async bulkUpdateNotes(ids, patch) {
+    if (!ids?.length) return;
+    const { error } = await supabase.from("personal_notes")
+      .update({ ...patch, updated_at: new Date().toISOString() }).in("id", ids);
+    if (error) throw error;
+  },
+  async restoreNotes(rows) {
+    // Undo path — re-upserts previously deleted/overwritten rows exactly as
+    // they were, original timestamps included, so order comes back too.
+    if (!rows?.length) return;
+    const user_id = await db.uid();
+    if (!user_id) throw new Error("Not signed in");
+    const clean = rows.map(({ id, title, body, pinned, color, created_at, updated_at }) => {
+      const r = { id, user_id, title, body, created_at, updated_at };
+      if (pinned !== undefined) r.pinned = pinned;
+      if (color !== undefined) r.color = color;
+      return r;
+    });
+    const { error } = await supabase.from("personal_notes").upsert(clean, { onConflict: "id" });
+    if (error) throw error;
   },
   async loadEvents() {
     const { data, error } = await supabase.from("personal_events")
@@ -323,7 +360,7 @@ async function consultSeat(seatKey, question, seatNotes, models) {
   return text ? { seat: seat.key, name: seat.name, emoji: seat.emoji, color: seat.color, take: text } : null;
 }
 
-async function convene(question, history, { models = DEFAULT_MODELS, seatNotes } = {}) {
+async function convene(question, history, { models = DEFAULT_MODELS, seatNotes, skills } = {}) {
   const routing = await routeQuestion(question, models);
   const takes = routing.seats.length
     ? (await Promise.all(routing.seats.map(k => consultSeat(k, question, seatNotes, models)))).filter(Boolean)
@@ -333,7 +370,7 @@ async function convene(question, history, { models = DEFAULT_MODELS, seatNotes }
     ? `\n\nThe board seats you consulted returned these takes:\n${takes.map(t => `[${t.name}]: ${t.take}`).join("\n\n")}\n\nSynthesize into one answer. Attribute perspectives naturally ("Clarify's lead thinks..."). If seats conflict, surface the conflict and give YOUR recommendation.`
     : "";
   const answer = await callClaude({
-    system: CHIEF_SYSTEM + formatSnapshotForChat() + boardBlock,
+    system: CHIEF_SYSTEM + formatSnapshotForChat() + buildSkillsBlock(skills) + boardBlock,
     messages: [...historyMsgs, { role: "user", content: question }],
     modelKey: models.chief, maxTokens: 900, fn: "chief",
   });
@@ -383,19 +420,23 @@ async function callFnFull(name, payload) {
 // `syne` keeps its name (100+ call sites) but now carries Cinzel.
 const syne = "'Cinzel', 'Times New Roman', serif", mono = "'DM Mono', monospace";
 const T = {
-  bg: "#F3F1EC", ink: "#221D14", sub: "#6C6455", faint: "#9A9280",
-  brass: "#8F6B1E", brassDeep: "#6A4D12", line: "rgba(34,29,20,0.10)",
+  bg: "#F4F2ED", surface: "#FBFAF8", ink: "#201B12", sub: "#635C4C", faint: "#99917E",
+  brass: "#8A671C", brassDeep: "#6A4D12", line: "rgba(32,27,18,0.09)", lineStrong: "rgba(32,27,18,0.18)",
   green: "#1F7A55", red: "#B23A2E", amber: "#A2700E", blue: "#31589C",
 };
+// The plate system: every card is a quiet paper plate with a hairline edge —
+// no stripes, no glow. Titles are engraved (Cinzel small caps, wide tracking).
+// Brass is spent in exactly three places: the active mark, the primary
+// action, and live data. Shadows exist only on things that float.
 const S = {
-  card: { padding: "19px 21px", background: "#FCFBF9", border: `1px solid ${T.line}`, borderTop: `2px solid rgba(143,107,30,0.55)`, borderRadius: 14, boxShadow: "0 1px 2px rgba(34,29,20,0.04), 0 10px 28px rgba(34,29,20,0.06)" },
-  cardM: { padding: 17, background: "#FCFBF9", border: `1px solid ${T.line}`, borderTop: `2px solid rgba(143,107,30,0.55)`, borderRadius: 13, boxShadow: "0 1px 2px rgba(34,29,20,0.04)" },
-  inner: { background: "rgba(34,29,20,0.035)", border: "1px solid rgba(34,29,20,0.07)", borderRadius: 11 },
-  title: { fontSize: 12.5, fontWeight: 700, fontFamily: syne, color: T.ink, letterSpacing: "0.04em" },
-  microLabel: { fontSize: 8.5, color: T.faint, fontFamily: mono, letterSpacing: "0.08em" },
-  brassBtn: { background: `linear-gradient(135deg, ${T.brass}, ${T.brassDeep})`, border: "none", borderRadius: 10, color: "#FCFBF9", fontWeight: 700, fontFamily: syne, cursor: "pointer", boxShadow: "inset 0 1px 0 rgba(255,255,255,0.25), 0 2px 8px rgba(106,77,18,0.25)" },
-  ghostBtn: { background: "rgba(143,107,30,0.08)", border: "1px solid rgba(143,107,30,0.35)", borderRadius: 8, color: T.brass, fontWeight: 700, fontFamily: syne, cursor: "pointer" },
-  input: { background: "#FFFFFF", border: `1px solid rgba(34,29,20,0.14)`, borderRadius: 10, color: T.ink },
+  card: { padding: "20px 22px", background: T.surface, border: `1px solid ${T.line}`, borderRadius: 14, boxShadow: "none" },
+  cardM: { padding: "17px 16px", background: T.surface, border: `1px solid ${T.line}`, borderRadius: 13, boxShadow: "none" },
+  inner: { background: "transparent", border: `1px solid ${T.line}`, borderRadius: 10 },
+  title: { fontSize: 11, fontWeight: 600, fontFamily: syne, color: T.ink, letterSpacing: "0.18em", textTransform: "uppercase" },
+  microLabel: { fontSize: 9, color: T.faint, fontFamily: mono, letterSpacing: "0.14em", textTransform: "uppercase" },
+  brassBtn: { background: T.brass, border: "none", borderRadius: 9, color: "#FCFBF8", fontWeight: 700, fontFamily: syne, letterSpacing: "0.04em", cursor: "pointer", boxShadow: "none" },
+  ghostBtn: { background: "transparent", border: `1px solid ${T.lineStrong}`, borderRadius: 9, color: T.sub, fontWeight: 600, fontFamily: "inherit", cursor: "pointer" },
+  input: { background: "#FFFFFF", border: `1px solid ${T.lineStrong}`, borderRadius: 9, color: T.ink },
 };
 
 function useGlobalStyles() {
@@ -409,13 +450,13 @@ function useGlobalStyles() {
       *, *::before, *::after { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
       * { -webkit-font-smoothing: antialiased; text-rendering: optimizeLegibility; }
       html, body { margin: 0; font-family: 'Inter', system-ui, sans-serif; overscroll-behavior-y: none; }
-      body { color: #221D14; background-color: #F3F1EC; background-image: radial-gradient(1100px 560px at 10% -6%, rgba(143,107,30,0.06), transparent 60%), radial-gradient(900px 620px at 102% 4%, rgba(49,88,156,0.035), transparent 55%), linear-gradient(180deg,#F5F3EE 0%,#F1EEE7 100%); background-attachment: fixed; }
+      body { color: #201B12; background-color: #F4F2ED; }
       ::-webkit-scrollbar { width: 8px; height: 8px; } ::-webkit-scrollbar-track { background: transparent; }
       ::-webkit-scrollbar-thumb { background: rgba(34,29,20,0.18); border-radius: 10px; }
       textarea, input, select, button { font-family: 'Inter', system-ui, sans-serif; }
       ::selection { background: rgba(143,107,30,0.22); color: #221D14; }
-      button, a, input, textarea { transition: all 0.16s ease; }
-      button:focus-visible, input:focus-visible, textarea:focus-visible { outline: none; box-shadow: 0 0 0 3px rgba(143,107,30,0.35); }
+      button, a, input, textarea { transition: color 0.15s ease, background-color 0.15s ease, border-color 0.15s ease, opacity 0.15s ease, transform 0.15s ease, box-shadow 0.15s ease; }
+      button:focus-visible, input:focus-visible, textarea:focus-visible { outline: none; box-shadow: 0 0 0 2px #F4F2ED, 0 0 0 4px rgba(138,103,28,0.55); }
       input::placeholder, textarea::placeholder { color: #9A9280; }
       textarea:focus, input:focus { outline: none; }
       @media (max-width: 760px) { input, textarea, select { font-size: 16px !important; } }
@@ -526,7 +567,7 @@ function Bars({ data, from, to, height = 54 }) {
 function Toggle({ on, onToggle, size = 20 }) {
   const w = size * 1.7, knob = size - 4;
   return (
-    <span onClick={onToggle} style={{ width: w, height: size, borderRadius: size / 2 + 1, background: on ? "linear-gradient(135deg, #1F7A55, #166042)" : "rgba(34,29,20,0.15)", position: "relative", cursor: "pointer", display: "inline-block", flex: "none", transition: "background 0.15s", boxShadow: "inset 0 1px 2px rgba(34,29,20,0.12)" }}>
+    <span onClick={onToggle} style={{ width: w, height: size, borderRadius: size / 2 + 1, background: on ? T.green : "rgba(32,27,18,0.16)", position: "relative", cursor: "pointer", display: "inline-block", flex: "none", transition: "background 0.15s", boxShadow: "inset 0 1px 2px rgba(34,29,20,0.12)" }}>
       <span style={{ position: "absolute", top: 2, left: on ? w - knob - 2 : 2, width: knob, height: knob, borderRadius: "50%", background: "#FFFFFF", transition: "left 0.15s", boxShadow: "0 1px 3px rgba(34,29,20,0.18)" }} />
     </span>
   );
@@ -550,8 +591,8 @@ function Segmented({ value, onChange }) {
       {MODEL_META.map(m => {
         const active = value === m.key;
         return (
-          <button key={m.key} onClick={() => onChange(m.key)} style={{ flex: 1, padding: "7px 0 6px", background: active ? `linear-gradient(135deg, ${T.brass}, ${T.brassDeep})` : "transparent", border: "none", borderRadius: 8, cursor: "pointer", display: "flex", flexDirection: "column", alignItems: "center", gap: 1, boxShadow: active ? "inset 0 1px 0 rgba(255,255,255,0.35), 0 2px 8px rgba(143,107,30,0.3)" : "none" }}>
-            <span style={{ fontSize: 10, fontWeight: 800, fontFamily: syne, color: active ? T.bg : T.sub }}>{m.label}</span>
+          <button key={m.key} onClick={() => onChange(m.key)} style={{ flex: 1, padding: "7px 0 6px", background: active ? T.brass : "transparent", border: "none", borderRadius: 8, cursor: "pointer", display: "flex", flexDirection: "column", alignItems: "center", gap: 1, boxShadow: active ? "inset 0 1px 0 rgba(255,255,255,0.35), 0 2px 8px rgba(143,107,30,0.3)" : "none" }}>
+            <span style={{ fontSize: 10, fontWeight: 700, fontFamily: syne, color: active ? T.bg : T.sub }}>{m.label}</span>
             <span style={{ fontSize: 7.5, fontFamily: mono, color: active ? "rgba(252,251,249,0.78)" : T.faint }}>{m.price}</span>
           </button>
         );
@@ -628,7 +669,7 @@ function ChatThread({ messages, thinking, loadingData, setInput, endRef, compact
                 ))}
               </div>
             )}
-            <div style={{ padding: compact ? "11px 14px" : "13px 17px", borderRadius: user ? "16px 16px 5px 16px" : "16px 16px 16px 5px", background: user ? "linear-gradient(135deg, rgba(143,107,30,0.14), rgba(143,107,30,0.06))" : "#FFFFFF", border: `1px solid ${user ? "rgba(143,107,30,0.32)" : T.line}`, fontSize: 13.5, lineHeight: 1.68, whiteSpace: "pre-wrap", color: T.ink, boxShadow: "0 8px 24px rgba(34,29,20,0.045)" }}>{m.content}</div>
+            <div style={{ padding: compact ? "11px 14px" : "13px 17px", borderRadius: user ? "16px 16px 5px 16px" : "16px 16px 16px 5px", background: user ? "rgba(138,103,28,0.08)" : T.surface, border: `1px solid ${user ? "rgba(143,107,30,0.32)" : T.line}`, fontSize: 13.5, lineHeight: 1.68, whiteSpace: "pre-wrap", color: T.ink, boxShadow: "0 8px 24px rgba(34,29,20,0.045)" }}>{m.content}</div>
             {m.source === "discord" && <div style={{ fontSize: 8.5, color: T.faint, fontFamily: mono, letterSpacing: "0.06em" }}>VIA DISCORD</div>}
           </div>
         );
@@ -650,7 +691,7 @@ function Composer({ input, setInput, onSend, thinking, compact }) {
       <textarea value={input} onChange={e => setInput(e.target.value)} onKeyDown={e => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); onSend(); } }}
         placeholder={compact ? "Ask the Chief…" : "Ask the Chief of Staff…"} rows={1}
         style={{ flex: 1, background: "transparent", border: "none", color: T.ink, fontSize: 13.5, resize: "none", padding: compact ? "11px 0" : "12px 0", lineHeight: 1.5, outline: "none" }} />
-      <button onClick={onSend} disabled={!canSend} style={{ padding: compact ? "0 18px" : "0 26px", minHeight: compact ? 44 : undefined, background: canSend ? `linear-gradient(135deg, ${T.brass}, ${T.brassDeep})` : "rgba(34,29,20,0.05)", border: "none", borderRadius: 11, color: canSend ? T.bg : T.faint, fontSize: 12, fontWeight: 800, cursor: canSend ? "pointer" : "default", fontFamily: syne, boxShadow: canSend ? "0 4px 14px rgba(143,107,30,0.35), inset 0 1px 0 rgba(255,255,255,0.35)" : "none" }}>Ask</button>
+      <button onClick={onSend} disabled={!canSend} style={{ padding: compact ? "0 18px" : "0 26px", minHeight: compact ? 44 : undefined, background: canSend ? T.brass : "rgba(32,27,18,0.06)", border: "none", borderRadius: 11, color: canSend ? T.bg : T.faint, fontSize: 12, fontWeight: 700, cursor: canSend ? "pointer" : "default", fontFamily: syne, boxShadow: canSend ? "0 4px 14px rgba(143,107,30,0.35), inset 0 1px 0 rgba(255,255,255,0.35)" : "none" }}>Ask</button>
     </div>
   );
 }
@@ -984,7 +1025,7 @@ function MorningBriefPage({ btc, isMobile, settings, updateSetting, onOpenCalend
                   <div style={card}>
                     <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 12 }}>
                       <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                        <span style={{ width: 18, height: 18, borderRadius: "50%", background: "linear-gradient(135deg,#F7931A,#C77416)", display: "inline-flex", alignItems: "center", justifyContent: "center", fontSize: 9, fontWeight: 800, color: "#1A0F00" }}>₿</span>
+                        <span style={{ width: 18, height: 18, borderRadius: "50%", background: "#F7931A", display: "inline-flex", alignItems: "center", justifyContent: "center", fontSize: 9, fontWeight: 700, color: "#1A0F00" }}>₿</span>
                         <span style={S.title}>Bitcoin · Day Outlook</span>
                       </div>
                       <StancePill text={stance} color={stanceColor} />
@@ -1378,8 +1419,8 @@ function BoardPage({ seatNotes, onEditSeat, onEnterRoom, isMobile }) {
     <div style={{ flex: 1, overflowY: "auto", padding: isMobile ? "18px 16px 24px" : "30px 34px 40px" }}>
       <div style={{ maxWidth: 920, margin: "0 auto", display: "flex", flexDirection: "column", gap: isMobile ? 10 : 14 }}>
         {!isMobile && (
-          <div style={{ padding: "20px 24px", background: "linear-gradient(135deg,rgba(143,107,30,0.10),rgba(143,107,30,0.03))", border: "1px solid rgba(143,107,30,0.22)", borderRadius: 18, display: "flex", alignItems: "center", gap: 18, boxShadow: "inset 0 1px 0 rgba(255,255,255,0.06)" }}>
-            <span style={{ width: 44, height: 44, borderRadius: 13, background: `linear-gradient(135deg, ${T.brass}, ${T.brassDeep})`, display: "inline-flex", alignItems: "center", justifyContent: "center", fontSize: 20, flex: "none", boxShadow: "0 4px 16px rgba(143,107,30,0.4), inset 0 1px 0 rgba(255,255,255,0.4)" }}>♛</span>
+          <div style={{ padding: "20px 24px", background: "rgba(138,103,28,0.05)", border: "1px solid rgba(143,107,30,0.22)", borderRadius: 18, display: "flex", alignItems: "center", gap: 18, boxShadow: "inset 0 1px 0 rgba(255,255,255,0.06)" }}>
+            <span style={{ width: 44, height: 44, borderRadius: 13, background: T.brass, display: "inline-flex", alignItems: "center", justifyContent: "center", fontSize: 20, flex: "none", boxShadow: "0 4px 16px rgba(143,107,30,0.4), inset 0 1px 0 rgba(255,255,255,0.4)" }}>♛</span>
             <span style={{ display: "flex", flexDirection: "column", gap: 3, flex: 1 }}>
               <span style={{ fontSize: 15, fontWeight: 700, fontFamily: syne, color: T.ink }}>Chief of Staff</span>
               <span style={{ fontSize: 11.5, color: T.sub, lineHeight: 1.5 }}>Your single point of contact. Routes every question to the seats below, synthesizes, and keeps the disagreements visible.</span>
@@ -1440,20 +1481,32 @@ function BoardSeatsSidebar({ seatNotes, onEditSeat }) {
 // ─── Page: Board Room (chat + seat roster) ────────────────────────────────────
 // Desktop: split view — chat and the board are both visible, always, no
 // switching needed. Mobile: a sub-tab toggle, since there's no room for both.
-const BOARDROOM_SUBTABS = [{ key: "mini", label: "Mini Me" }, { key: "chat", label: "Chat" }, { key: "seats", label: "Seats" }];
-function BoardRoomPage({ messages, thinking, loadingData, input, setInput, onSend, onClearChat, endRef, seatNotes, onEditSeat, settings, updateSetting, session, onWorkerRun, isMobile }) {
+const BOARDROOM_SUBTABS = [{ key: "mini", label: "Mini Me" }, { key: "learn", label: "Learn" }, { key: "chat", label: "Chat" }, { key: "seats", label: "Seats" }];
+function BoardRoomPage({ messages, thinking, loadingData, input, setInput, onSend, onClearChat, endRef, seatNotes, onEditSeat, settings, updateSetting, session, onWorkerRun, onSkillsChanged, jump, isMobile }) {
   const [sub, setSub] = useState("mini"); // Mini Me first — it's the "what did my background worker do" check, the natural first stop
+  useEffect(() => {
+    if (jump?.page === "boardroom" && jump.sub) setSub(jump.sub);
+  }, [jump?.t]); // eslint-disable-line react-hooks/exhaustive-deps
+  const skillSpotlight = jump?.page === "boardroom" && jump.skillId ? { id: jump.skillId, t: jump.t } : null;
+  const learnPanel = (
+    <div style={{ flex: 1, overflowY: "auto", padding: isMobile ? "14px 14px 24px" : "22px 24px 32px" }}>
+      <div style={{ maxWidth: 760, margin: "0 auto" }}>
+        <LearnPanel isMobile={isMobile} supabase={supabase} callClaude={callClaude} session={session}
+          modelKey={(settings?.mini || {}).model || "haiku"} onSkillsChanged={onSkillsChanged} spotlight={skillSpotlight} />
+      </div>
+    </div>
+  );
 
   if (!isMobile) {
     return (
       <div style={{ flex: 1, display: "flex", minHeight: 0 }}>
         <div style={{ flex: "1 1 auto", minWidth: 0, minHeight: 0, display: "flex", flexDirection: "column", borderRight: `1px solid ${T.line}` }}>
           <div style={{ flex: "none", padding: "12px 20px 0" }}>
-            <SubTabs options={[{ key: "mini", label: "Mini Me" }, { key: "chat", label: "Chat" }]} value={sub === "seats" ? "chat" : sub} onChange={setSub} />
+            <SubTabs options={[{ key: "mini", label: "Mini Me" }, { key: "learn", label: "Learn" }, { key: "chat", label: "Chat" }]} value={sub === "seats" ? "chat" : sub} onChange={setSub} />
           </div>
-          {sub === "mini"
-            ? <MiniMePage settings={settings} updateSetting={updateSetting} session={session} onWorkerRun={onWorkerRun} isMobile={false} />
-            : <RoomPage messages={messages} thinking={thinking} loadingData={loadingData} input={input} setInput={setInput} onSend={onSend} onClearChat={onClearChat} endRef={endRef} isMobile={false} />}
+          {sub === "mini" && <MiniMePage settings={settings} updateSetting={updateSetting} session={session} onWorkerRun={onWorkerRun} onOpenLearn={() => setSub("learn")} isMobile={false} />}
+          {sub === "learn" && learnPanel}
+          {(sub === "chat" || sub === "seats") && <RoomPage messages={messages} thinking={thinking} loadingData={loadingData} input={input} setInput={setInput} onSend={onSend} onClearChat={onClearChat} endRef={endRef} isMobile={false} />}
         </div>
         <div style={{ flex: "0 0 300px", minHeight: 0 }}>
           <BoardSeatsSidebar seatNotes={seatNotes} onEditSeat={onEditSeat} />
@@ -1467,7 +1520,8 @@ function BoardRoomPage({ messages, thinking, loadingData, input, setInput, onSen
       <div style={{ flex: "none", padding: "10px 14px 0" }}>
         <SubTabs options={BOARDROOM_SUBTABS} value={sub} onChange={setSub} />
       </div>
-      {sub === "mini" && <MiniMePage settings={settings} updateSetting={updateSetting} session={session} onWorkerRun={onWorkerRun} isMobile={true} />}
+      {sub === "mini" && <MiniMePage settings={settings} updateSetting={updateSetting} session={session} onWorkerRun={onWorkerRun} onOpenLearn={() => setSub("learn")} isMobile={true} />}
+      {sub === "learn" && learnPanel}
       {sub === "chat" && <RoomPage messages={messages} thinking={thinking} loadingData={loadingData} input={input} setInput={setInput} onSend={onSend} onClearChat={onClearChat} endRef={endRef} isMobile={true} />}
       {sub === "seats" && <BoardPage seatNotes={seatNotes} onEditSeat={onEditSeat} onEnterRoom={() => setSub("chat")} isMobile={true} />}
     </>
@@ -1491,15 +1545,22 @@ function nextBirthdayOccurrence(month, day, fromDate = new Date()) {
 }
 
 // ─── Page: Personal (Notes + Calendar + Birthdays) ────────────────────────────
-const PERSONAL_SUBTABS = [{ key: "notes", label: "Notes" }, { key: "calendar", label: "Calendar" }, { key: "birthdays", label: "Birthdays" }, { key: "movies", label: "Movies" }, { key: "food", label: "Food" }];
-const PERSONAL_SUBTABS_MOBILE = [{ key: "notescal", label: "Notes & Calendar" }, { key: "birthdays", label: "Birthdays" }, { key: "movies", label: "Movies" }, { key: "food", label: "Food" }];
+const PERSONAL_SUBTABS = [{ key: "notes", label: "Notes" }, { key: "calendar", label: "Calendar" }, { key: "workout", label: "Workout" }, { key: "birthdays", label: "Birthdays" }, { key: "movies", label: "Movies" }, { key: "food", label: "Food" }];
+const PERSONAL_SUBTABS_MOBILE = [{ key: "notescal", label: "Notes & Calendar" }, { key: "workout", label: "Workout" }, { key: "birthdays", label: "Birthdays" }, { key: "movies", label: "Movies" }, { key: "food", label: "Food" }];
 
-function PersonalPage({ isMobile, jumpSignal, settings, updateSetting }) {
+function PersonalPage({ isMobile, jumpSignal, jump, settings, updateSetting }) {
   const [sub, setSub] = useState(isMobile ? "notescal" : "notes");
   useEffect(() => {
     if (jumpSignal) setSub(isMobile ? "notescal" : "calendar");
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [jumpSignal]);
+  useEffect(() => {
+    if (jump?.page !== "personal" || !jump.sub) return;
+    const mobileMap = { notes: "notescal", calendar: "notescal" };
+    setSub(isMobile ? (mobileMap[jump.sub] || jump.sub) : jump.sub);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [jump?.t]);
+  const noteSignal = jump?.page === "personal" && jump.noteId ? { id: jump.noteId, t: jump.t } : null;
   return (
     <div style={{ flex: 1, overflowY: "auto", padding: isMobile ? "18px 16px 24px" : "30px 34px 40px" }}>
       <div style={{ maxWidth: 900, margin: "0 auto", display: "flex", flexDirection: "column", gap: 14 }}>
@@ -1509,17 +1570,19 @@ function PersonalPage({ isMobile, jumpSignal, settings, updateSetting }) {
             {sub === "notescal" && (
               <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
                 <CalendarPanel isMobile={isMobile} />
-                <NotesPanel isMobile={isMobile} />
+                <NotesPanel isMobile={isMobile} openSignal={noteSignal} />
               </div>
             )}
+            {sub === "workout" && <WorkoutPanel isMobile={isMobile} supabase={supabase} settings={settings} updateSetting={updateSetting} />}
             {sub === "birthdays" && <BirthdaysPanel isMobile={isMobile} />}
             {sub === "movies" && <MoviesPanel isMobile={isMobile} />}
             {sub === "food" && <FoodPanel isMobile={isMobile} settings={settings} updateSetting={updateSetting} />}
           </>
         ) : (
           <>
-            {sub === "notes" && <NotesPanel isMobile={isMobile} />}
+            {sub === "notes" && <NotesPanel isMobile={isMobile} openSignal={noteSignal} />}
             {sub === "calendar" && <CalendarPanel isMobile={isMobile} />}
+            {sub === "workout" && <WorkoutPanel isMobile={isMobile} supabase={supabase} settings={settings} updateSetting={updateSetting} />}
             {sub === "birthdays" && <BirthdaysPanel isMobile={isMobile} />}
             {sub === "movies" && <MoviesPanel isMobile={isMobile} />}
             {sub === "food" && <FoodPanel isMobile={isMobile} settings={settings} updateSetting={updateSetting} />}
@@ -1530,136 +1593,403 @@ function PersonalPage({ isMobile, jumpSignal, settings, updateSetting }) {
   );
 }
 
-function NotesPanel({ isMobile }) {
+const NOTES_UPGRADE_SQL = `-- Notes upgrade — pins + color seals (safe to re-run)
+alter table public.personal_notes add column if not exists pinned boolean not null default false;
+alter table public.personal_notes add column if not exists color text;`;
+
+const NOTE_SEALS = [
+  { key: "brass", c: T.brass }, { key: "green", c: T.green },
+  { key: "blue", c: T.blue }, { key: "red", c: T.red },
+];
+const sealColor = (key) => NOTE_SEALS.find(s => s.key === key)?.c || null;
+
+// Notes — quick capture, search, pins, color seals, and a select mode for
+// bulk pin/seal/merge/delete. Deletes and merges are undoable for a few
+// seconds (the toast re-upserts the cached rows). Works on the pre-upgrade
+// schema too: pins/seals hide behind a one-line SQL banner until added.
+function NotesPanel({ isMobile, openSignal }) {
   const card = isMobile ? S.cardM : S.card;
   const [notes, setNotes] = useState(null); // null = loading
+  const [legacy, setLegacy] = useState(false); // true until pinned/color columns exist
   const [loadErr, setLoadErr] = useState(null);
   const [activeId, setActiveId] = useState(null);
-  const [draft, setDraft] = useState({ title: "", body: "" });
+  const [draft, setDraft] = useState({ title: "", body: "", pinned: false, color: null });
   const [saveState, setSaveState] = useState("idle"); // idle | saving | saved | error
+  const [quick, setQuick] = useState("");
+  const [query, setQuery] = useState("");
+  const [sealFilter, setSealFilter] = useState(null); // null = all, "none" = unsealed, or a seal key
+  const [selectMode, setSelectMode] = useState(false);
+  const [selected, setSelected] = useState(() => new Set());
+  const [sealMenu, setSealMenu] = useState(false);
+  const [undo, setUndo] = useState(null); // { label, rows, extraDeleteId? }
+  const [copied, setCopied] = useState(false);
   const saveTimer = useRef(null);
-  const skipNextAutosave = useRef(false); // true right after loading a note, so opening it doesn't immediately "save"
+  const undoTimer = useRef(null);
+  const skipNextAutosave = useRef(false);
+  const quickRef = useRef(null);
 
   const refresh = () => {
     db.loadNotes()
-      .then(rows => setNotes(rows))
+      .then(({ rows, legacy: leg }) => { setNotes(rows); setLegacy(leg); })
       .catch(e => setLoadErr(e.message || "Couldn't load notes."));
   };
   useEffect(() => { refresh(); }, []);
+  useEffect(() => () => { clearTimeout(saveTimer.current); clearTimeout(undoTimer.current); }, []);
 
+  // Summon jump → open the named note as soon as it's in hand (consume once)
+  const consumedSignal = useRef(null);
+  useEffect(() => {
+    if (!openSignal || !notes || consumedSignal.current === openSignal.t) return;
+    const n = notes.find(x => x.id === openSignal.id);
+    if (!n) return;
+    consumedSignal.current = openSignal.t;
+    openNote(n);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [openSignal?.t, notes]);
+
+  // ─── derived ───
+  const firstLine = (body) => (body || "").split("\n").map(l => l.trim()).find(Boolean) || "";
+  const displayTitle = (n) => n.title?.trim() || firstLine(n.body).slice(0, 64) || "Untitled note";
+  const snippet = (n) => {
+    const body = (n.body || "").replace(/\s+/g, " ").trim();
+    if (n.title?.trim()) return body.slice(0, 90);
+    return body.slice(firstLine(n.body).length).replace(/^\s+/, "").slice(0, 90); // don't repeat the derived title
+  };
+  const fmtWhen = (iso) => {
+    const d = new Date(iso);
+    return d.toDateString() === new Date().toDateString()
+      ? d.toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" })
+      : d.toLocaleDateString("en-US", { month: "short", day: "numeric" });
+  };
+  const sorted = useMemo(() => {
+    if (!notes) return null;
+    return [...notes].sort((a, b) => (b.pinned === true) - (a.pinned === true) || new Date(b.updated_at) - new Date(a.updated_at));
+  }, [notes]);
+  const visible = useMemo(() => {
+    if (!sorted) return null;
+    const q = query.trim().toLowerCase();
+    return sorted.filter(n =>
+      (!q || `${n.title || ""} ${n.body || ""}`.toLowerCase().includes(q)) &&
+      (sealFilter === null || (sealFilter === "none" ? !n.color : n.color === sealFilter)));
+  }, [sorted, query, sealFilter]);
+  const usedSeals = useMemo(() => NOTE_SEALS.filter(s => (notes || []).some(n => n.color === s.key)), [notes]);
+  const selectedNotes = (notes || []).filter(n => selected.has(n.id));
+
+  // ─── undo plumbing ───
+  const armUndo = (label, rows, extraDeleteId = null) => {
+    clearTimeout(undoTimer.current);
+    setUndo({ label, rows, extraDeleteId });
+    undoTimer.current = setTimeout(() => setUndo(null), 6000);
+  };
+  const runUndo = async () => {
+    const u = undo; setUndo(null); clearTimeout(undoTimer.current);
+    if (!u) return;
+    try {
+      if (u.extraDeleteId) await db.bulkDeleteNotes([u.extraDeleteId]);
+      await db.restoreNotes(u.rows);
+      refresh();
+    } catch (e) { alert(e.message || "Couldn't undo."); }
+  };
+
+  // ─── quick capture ───
+  const quickAdd = async (openEditor = false) => {
+    const t = quick.trim();
+    if (!t) return;
+    const id = crypto.randomUUID();
+    if (openEditor) {
+      setQuick("");
+      skipNextAutosave.current = true;
+      setActiveId(id);
+      setDraft({ title: "", body: t, pinned: false, color: null });
+      return;
+    }
+    setQuick("");
+    const optimistic = { id, title: "", body: t, pinned: false, color: null, created_at: new Date().toISOString(), updated_at: new Date().toISOString() };
+    setNotes(list => [optimistic, ...(list || [])]);
+    try { await db.saveNote({ id, title: "", body: t }); refresh(); }
+    catch (e) { setNotes(list => (list || []).filter(n => n.id !== id)); alert(e.message || "Couldn't save."); }
+    quickRef.current?.focus();
+  };
+
+  // ─── editor open/close ───
   const openNote = (n) => {
     skipNextAutosave.current = true;
     setActiveId(n.id);
-    setDraft({ title: n.title || "", body: n.body || "" });
+    setDraft({ title: n.title || "", body: n.body || "", pinned: !!n.pinned, color: n.color || null });
     setSaveState("idle");
   };
-
   const newNote = () => {
     skipNextAutosave.current = true;
     setActiveId(crypto.randomUUID());
-    setDraft({ title: "", body: "" });
+    setDraft({ title: "", body: "", pinned: false, color: null });
     setSaveState("idle");
   };
-
-  const closeEditor = () => {
-    setActiveId(null);
-    setDraft({ title: "", body: "" });
+  const flushSave = () => {
+    if (!activeId) return;
+    clearTimeout(saveTimer.current);
+    if (saveState === "saving" && (draft.title.trim() || draft.body.trim()))
+      db.saveNote(noteRow()).then(refresh).catch(() => {});
   };
+  const closeEditor = () => { flushSave(); setActiveId(null); setDraft({ title: "", body: "", pinned: false, color: null }); };
+  const noteRow = () => ({ id: activeId, title: draft.title, body: draft.body, ...(legacy ? {} : { pinned: draft.pinned, color: draft.color }) });
 
-  // Autosave — 800ms after typing stops, and only once there's something to save
+  // autosave — 800ms after typing stops, only once there's something to save
   useEffect(() => {
     if (!activeId) return;
     if (skipNextAutosave.current) { skipNextAutosave.current = false; return; }
-    if (!draft.title.trim() && !draft.body.trim()) return; // don't save a blank note
+    if (!draft.title.trim() && !draft.body.trim()) return;
     setSaveState("saving");
     clearTimeout(saveTimer.current);
     saveTimer.current = setTimeout(() => {
-      db.saveNote({ id: activeId, title: draft.title, body: draft.body })
+      db.saveNote(noteRow())
         .then(() => { setSaveState("saved"); refresh(); })
         .catch(() => setSaveState("error"));
     }, 800);
     return () => clearTimeout(saveTimer.current);
-  }, [draft, activeId]);
+  }, [draft, activeId]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const removeNote = (id, e) => {
-    e.stopPropagation();
-    if (!window.confirm("Delete this note? This can't be undone.")) return;
-    db.deleteNote(id).then(() => {
-      if (activeId === id) closeEditor();
+  useEffect(() => {
+    if (!activeId) return;
+    const onKey = (e) => {
+      if (e.key === "Escape" || ((e.metaKey || e.ctrlKey) && e.key === "Enter")) closeEditor();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [activeId, draft, saveState]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // ─── single + bulk operations ───
+  const deleteOne = async (n) => {
+    if (!window.confirm("Delete this note?")) return;
+    try {
+      await db.bulkDeleteNotes([n.id]);
+      if (activeId === n.id) { setActiveId(null); setDraft({ title: "", body: "", pinned: false, color: null }); }
+      armUndo("Note deleted", [n]);
       refresh();
-    });
+    } catch (e) { alert(e.message || "Couldn't delete."); }
+  };
+  const clearSelection = () => { setSelected(new Set()); setSelectMode(false); setSealMenu(false); };
+  const toggleSelected = (id) => setSelected(prev => { const s = new Set(prev); s.has(id) ? s.delete(id) : s.add(id); return s; });
+  const bulkDelete = async () => {
+    if (!selected.size || !window.confirm(`Delete ${selected.size} note${selected.size > 1 ? "s" : ""}?`)) return;
+    const rows = selectedNotes;
+    try { await db.bulkDeleteNotes([...selected]); armUndo(`${rows.length} deleted`, rows); clearSelection(); refresh(); }
+    catch (e) { alert(e.message || "Couldn't delete."); }
+  };
+  const bulkPin = async () => {
+    const pin = !selectedNotes.every(n => n.pinned);
+    try { await db.bulkUpdateNotes([...selected], { pinned: pin }); clearSelection(); refresh(); }
+    catch (e) { alert(e.message || "Couldn't update."); }
+  };
+  const bulkSeal = async (colorKey) => {
+    try { await db.bulkUpdateNotes([...selected], { color: colorKey }); clearSelection(); refresh(); }
+    catch (e) { alert(e.message || "Couldn't update."); }
+  };
+  const bulkMerge = async () => {
+    if (selected.size < 2) return;
+    const picks = sorted.filter(n => selected.has(n.id)); // pinned/newest first — target is the top one
+    if (!window.confirm(`Merge ${picks.length} notes into "${displayTitle(picks[0])}"? The other ${picks.length - 1} will fold in (undoable for a few seconds).`)) return;
+    const target = picks[0];
+    const rest = picks.slice(1).sort((a, b) => new Date(a.updated_at) - new Date(b.updated_at)); // read oldest→newest
+    const mergedBody = [target.body, ...rest.map(n => (n.title?.trim() ? `${n.title.trim()}\n${n.body || ""}` : n.body || ""))]
+      .map(s => (s || "").trim()).filter(Boolean).join("\n\n⸻\n\n");
+    try {
+      const originals = picks.map(n => ({ ...n }));
+      await db.saveNote({ id: target.id, title: target.title, body: mergedBody, ...(legacy ? {} : { pinned: target.pinned, color: target.color }) });
+      await db.bulkDeleteNotes(rest.map(n => n.id));
+      armUndo(`Merged ${picks.length} notes`, originals);
+      clearSelection(); refresh();
+    } catch (e) { alert(e.message || "Couldn't merge."); }
   };
 
-  const snippet = (body) => (body || "").replace(/\s+/g, " ").trim().slice(0, 90);
-  const fmtWhen = (iso) => {
-    const d = new Date(iso);
-    const sameDay = d.toDateString() === new Date().toDateString();
-    return sameDay
-      ? d.toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" })
-      : d.toLocaleDateString("en-US", { month: "short", day: "numeric" });
-  };
+  const words = draft.body.trim() ? draft.body.trim().split(/\s+/).length : 0;
+  const activeNote = (notes || []).find(n => n.id === activeId);
 
-  // ─── Editor view ───
+  const sealDots = (value, onPick, size = 16) => (
+    <span style={{ display: "inline-flex", gap: 6, alignItems: "center" }}>
+      {NOTE_SEALS.map(s => (
+        <button key={s.key} onClick={() => onPick(value === s.key ? null : s.key)} aria-label={`Seal ${s.key}`}
+          style={{ width: size, height: size, borderRadius: "50%", border: value === s.key ? `2px solid ${T.ink}` : `1px solid rgba(34,29,20,0.2)`, background: s.c, cursor: "pointer", padding: 0, opacity: value && value !== s.key ? 0.45 : 1 }} />
+      ))}
+    </span>
+  );
+
+  // ─── editor view ───
   if (activeId) {
     return (
       <div style={{ ...card }}>
-        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 10 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 10, flexWrap: "wrap" }}>
           <button onClick={closeEditor} style={{ background: "none", border: "none", color: T.brass, fontFamily: syne, fontWeight: 700, fontSize: 12, cursor: "pointer", padding: 0 }}>‹ All notes</button>
-          <span style={{ ...S.microLabel }}>
+          <span style={{ flex: 1 }} />
+          {!legacy && (
+            <>
+              <button onClick={() => setDraft(d => ({ ...d, pinned: !d.pinned }))} title={draft.pinned ? "Unpin" : "Pin to top"}
+                style={{ background: "none", border: "none", cursor: "pointer", padding: 2, fontSize: 13, color: draft.pinned ? T.brass : T.faint, lineHeight: 1 }}>◆</button>
+              {sealDots(draft.color, (c) => setDraft(d => ({ ...d, color: c })), 14)}
+              <span style={{ width: 1, height: 14, background: T.line }} />
+            </>
+          )}
+          <button onClick={() => { navigator.clipboard?.writeText(draft.title.trim() ? `${draft.title.trim()}\n\n${draft.body}` : draft.body); setCopied(true); setTimeout(() => setCopied(false), 1800); }}
+            style={{ background: "none", border: "none", cursor: "pointer", padding: 2, fontSize: 10, fontFamily: mono, color: copied ? T.green : T.faint, letterSpacing: "0.08em" }}>{copied ? "COPIED ✓" : "COPY"}</button>
+          <button onClick={() => deleteOne(activeNote || { id: activeId, title: draft.title, body: draft.body })}
+            style={{ background: "none", border: "none", cursor: "pointer", padding: 2, fontSize: 10, fontFamily: mono, color: T.faint, letterSpacing: "0.08em" }}>DELETE</button>
+          <span style={{ ...S.microLabel, minWidth: 52, textAlign: "right" }}>
             {saveState === "saving" && "Saving…"}
             {saveState === "saved" && "Saved"}
-            {saveState === "error" && <span style={{ color: "#B23A2E" }}>Couldn't save — check your connection</span>}
+            {saveState === "error" && <span style={{ color: T.red }}>Not saved</span>}
           </span>
         </div>
         <input
           value={draft.title}
           onChange={e => setDraft(d => ({ ...d, title: e.target.value }))}
           placeholder="Untitled note"
-          style={{ ...S.input, width: "100%", padding: "10px 12px", fontSize: 15, fontWeight: 700, fontFamily: syne, marginBottom: 8 }}
+          style={{ ...S.input, width: "100%", boxSizing: "border-box", padding: "10px 12px", fontSize: 15, fontWeight: 700, fontFamily: syne, marginBottom: 8, borderLeft: draft.color ? `3px solid ${sealColor(draft.color)}` : undefined }}
         />
         <textarea
           value={draft.body}
           onChange={e => setDraft(d => ({ ...d, body: e.target.value }))}
           placeholder="Start typing — this saves automatically."
           rows={isMobile ? 14 : 18}
-          style={{ ...S.input, width: "100%", padding: "10px 12px", fontSize: 13.5, lineHeight: 1.6, resize: "vertical" }}
+          autoFocus
+          style={{ ...S.input, width: "100%", boxSizing: "border-box", padding: "10px 12px", fontSize: 13.5, lineHeight: 1.6, resize: "vertical" }}
         />
+        <div style={{ display: "flex", justifyContent: "space-between", marginTop: 8, flexWrap: "wrap", gap: 6 }}>
+          <span style={S.microLabel}>{words} words · {draft.body.length} chars</span>
+          {activeNote && <span style={S.microLabel}>edited {fmtWhen(activeNote.updated_at)}</span>}
+        </div>
       </div>
     );
   }
 
-  // ─── List view ───
+  // ─── list view ───
   return (
     <div style={{ ...card }}>
-      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 12 }}>
-        <span style={S.title}>Notes</span>
-        <button onClick={newNote} style={{ ...S.brassBtn, padding: "7px 14px", fontSize: 11.5 }}>+ New note</button>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, marginBottom: 12, flexWrap: "wrap" }}>
+        <span style={S.title}>Notes{notes?.length ? <span style={{ ...S.microLabel, marginLeft: 8 }}>{notes.length}</span> : null}</span>
+        <span style={{ display: "flex", gap: 8 }}>
+          {notes?.length > 1 && (
+            <button onClick={() => (selectMode ? clearSelection() : setSelectMode(true))}
+              style={{ ...S.ghostBtn, padding: "7px 13px", fontSize: 11, ...(selectMode ? { borderColor: T.brass, color: T.brass } : {}) }}>
+              {selectMode ? "Done" : "Select"}
+            </button>
+          )}
+          <button onClick={newNote} style={{ ...S.brassBtn, padding: "7px 14px", fontSize: 11.5 }}>+ New note</button>
+        </span>
       </div>
+
+      {legacy && notes !== null && (
+        <div style={{ ...S.inner, border: "1px solid rgba(162,112,14,0.3)", background: "rgba(162,112,14,0.06)", padding: "10px 12px", marginBottom: 10, display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+          <span style={{ fontSize: 10.5, color: T.amber, lineHeight: 1.5, flex: 1, minWidth: 180 }}>Pins &amp; color seals need two columns — one paste in Supabase → SQL Editor unlocks them.</span>
+          <button onClick={(e) => { navigator.clipboard?.writeText(NOTES_UPGRADE_SQL); e.target.textContent = "Copied ✓"; }}
+            style={{ ...S.ghostBtn, padding: "6px 12px", fontSize: 10, fontFamily: mono, color: T.amber, borderColor: "rgba(162,112,14,0.4)" }}>COPY SQL</button>
+        </div>
+      )}
+
+      {/* quick capture — Enter saves and keeps focus for the next one; ⇧Enter opens the full editor */}
+      <div style={{ display: "flex", gap: 8, marginBottom: 10 }}>
+        <input
+          ref={quickRef}
+          value={quick}
+          onChange={e => setQuick(e.target.value)}
+          onKeyDown={e => { if (e.key === "Enter") { e.preventDefault(); quickAdd(e.shiftKey); } }}
+          placeholder="Jot something — Enter saves it, ⇧Enter opens the editor"
+          style={{ ...S.input, flex: 1, minWidth: 0, padding: "10px 12px", fontSize: 12.5 }}
+        />
+        <button onClick={() => quickAdd(false)} disabled={!quick.trim()}
+          style={{ ...S.brassBtn, padding: "0 16px", fontSize: 13, opacity: quick.trim() ? 1 : 0.45 }}>↵</button>
+      </div>
+
+      {notes?.length > 4 && (
+        <input value={query} onChange={e => setQuery(e.target.value)} placeholder="Search notes…"
+          style={{ ...S.input, width: "100%", boxSizing: "border-box", padding: "9px 12px", fontSize: 12, marginBottom: 10 }} />
+      )}
+
+      {usedSeals.length > 0 && !legacy && (
+        <div style={{ display: "flex", gap: 6, marginBottom: 10, alignItems: "center", flexWrap: "wrap" }}>
+          <button onClick={() => setSealFilter(null)} style={{ ...S.ghostBtn, padding: "4px 10px", fontSize: 10, ...(sealFilter === null ? { borderColor: T.brass, color: T.brass } : {}) }}>All</button>
+          {usedSeals.map(s => (
+            <button key={s.key} onClick={() => setSealFilter(f => f === s.key ? null : s.key)} aria-label={`Filter ${s.key}`}
+              style={{ width: 18, height: 18, borderRadius: "50%", background: s.c, border: sealFilter === s.key ? `2px solid ${T.ink}` : "1px solid rgba(34,29,20,0.2)", cursor: "pointer", padding: 0 }} />
+          ))}
+          <button onClick={() => setSealFilter(f => f === "none" ? null : "none")} style={{ ...S.ghostBtn, padding: "4px 10px", fontSize: 10, ...(sealFilter === "none" ? { borderColor: T.brass, color: T.brass } : {}) }}>Unsealed</button>
+        </div>
+      )}
 
       {loadErr && <div style={{ fontSize: 11.5, color: T.faint, padding: "20px 0", textAlign: "center" }}>{loadErr}</div>}
       {!loadErr && notes === null && <div style={{ fontSize: 11.5, color: T.faint, padding: "20px 0", textAlign: "center", animation: "pulse 1.4s infinite" }}>Loading notes…</div>}
       {!loadErr && notes && notes.length === 0 && (
-        <div style={{ fontSize: 11.5, color: T.faint, padding: "24px 0", textAlign: "center" }}>No notes yet — tap "+ New note" to start one.</div>
+        <div style={{ fontSize: 11.5, color: T.faint, padding: "24px 0", textAlign: "center" }}>No notes yet — jot the first one above.</div>
       )}
-      {!loadErr && notes && notes.length > 0 && (
+      {!loadErr && visible && notes?.length > 0 && visible.length === 0 && (
+        <div style={{ fontSize: 11.5, color: T.faint, padding: "18px 0", textAlign: "center" }}>Nothing matches{query ? ` "${query}"` : ""}.</div>
+      )}
+      {!loadErr && visible && visible.length > 0 && (
         <div style={{ display: "flex", flexDirection: "column", gap: 7 }}>
-          {notes.map(n => (
-            <div key={n.id} onClick={() => openNote(n)}
-              style={{ ...S.inner, padding: "10px 12px", cursor: "pointer", display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 10 }}>
-              <div style={{ minWidth: 0, flex: 1 }}>
-                <div style={{ fontSize: 12.5, fontWeight: 700, fontFamily: syne, color: T.ink, marginBottom: 2, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
-                  {n.title?.trim() || "Untitled note"}
+          {visible.map(n => {
+            const isSel = selected.has(n.id);
+            return (
+              <div key={n.id} onClick={() => (selectMode ? toggleSelected(n.id) : openNote(n))}
+                style={{ ...S.inner, padding: "10px 12px", cursor: "pointer", display: "flex", alignItems: "flex-start", gap: 10, borderLeft: n.color ? `3px solid ${sealColor(n.color)}` : undefined, ...(isSel ? { border: `1px solid ${T.brass}`, background: "rgba(143,107,30,0.06)" } : {}) }}>
+                {selectMode && (
+                  <span style={{ marginTop: 2, width: 16, height: 16, borderRadius: 5, flex: "none", border: `1.5px solid ${isSel ? T.brass : "rgba(34,29,20,0.25)"}`, background: isSel ? T.brass : "transparent", display: "inline-flex", alignItems: "center", justifyContent: "center", color: "#FDFCF9", fontSize: 10, fontWeight: 700 }}>{isSel ? "✓" : ""}</span>
+                )}
+                <div style={{ minWidth: 0, flex: 1 }}>
+                  <div style={{ fontSize: 12.5, fontWeight: 700, fontFamily: syne, color: T.ink, marginBottom: 2, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+                    {n.pinned && <span style={{ color: T.brass, marginRight: 5, fontSize: 10 }}>◆</span>}{displayTitle(n)}
+                  </div>
+                  <div style={{ fontSize: 11, color: T.sub, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+                    {snippet(n) || "No additional text"}
+                  </div>
                 </div>
-                <div style={{ fontSize: 11, color: T.sub, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
-                  {snippet(n.body) || "No additional text"}
+                <div style={{ display: "flex", alignItems: "center", gap: 10, flex: "none" }}>
+                  <span style={{ ...S.microLabel }}>{fmtWhen(n.updated_at)}</span>
+                  {!selectMode && (
+                    <button onClick={(e) => { e.stopPropagation(); deleteOne(n); }} aria-label="Delete note"
+                      style={{ background: "none", border: "none", color: T.faint, cursor: "pointer", fontSize: 14, padding: 2, lineHeight: 1 }}>×</button>
+                  )}
                 </div>
               </div>
-              <div style={{ display: "flex", alignItems: "center", gap: 10, flex: "none" }}>
-                <span style={{ ...S.microLabel }}>{fmtWhen(n.updated_at)}</span>
-                <button onClick={(e) => removeNote(n.id, e)} aria-label="Delete note" style={{ background: "none", border: "none", color: T.faint, cursor: "pointer", fontSize: 14, padding: 2, lineHeight: 1 }}>×</button>
-              </div>
-            </div>
-          ))}
+            );
+          })}
+        </div>
+      )}
+
+      {/* select-mode action bar */}
+      {selectMode && (
+        <div style={{ position: "sticky", bottom: isMobile ? 8 : 12, marginTop: 12, background: T.surface, border: `1px solid ${T.brass}`, borderRadius: 14, padding: "10px 12px", display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", boxShadow: "0 4px 18px rgba(34,29,20,0.12)", zIndex: 5 }}>
+          <span style={{ fontSize: 11, fontFamily: mono, color: T.brass, fontWeight: 700, marginRight: 2 }}>{selected.size} selected</span>
+          <button onClick={() => setSelected(new Set((visible || []).map(n => n.id)))} style={{ ...S.ghostBtn, padding: "6px 10px", fontSize: 10 }}>All</button>
+          <button onClick={() => setSelected(new Set())} style={{ ...S.ghostBtn, padding: "6px 10px", fontSize: 10 }}>None</button>
+          <span style={{ flex: 1 }} />
+          {selected.size > 0 && (
+            <>
+              {!legacy && (
+                <button onClick={bulkPin} style={{ ...S.ghostBtn, padding: "7px 12px", fontSize: 10.5 }}>
+                  {selectedNotes.every(n => n.pinned) ? "Unpin" : "◆ Pin"}
+                </button>
+              )}
+              {!legacy && (
+                <span style={{ position: "relative" }}>
+                  <button onClick={() => setSealMenu(m => !m)} style={{ ...S.ghostBtn, padding: "7px 12px", fontSize: 10.5 }}>Seal ▾</button>
+                  {sealMenu && (
+                    <span style={{ position: "absolute", bottom: "calc(100% + 6px)", right: 0, background: T.surface, border: `1px solid ${T.line}`, borderRadius: 10, padding: "8px 10px", display: "flex", gap: 7, alignItems: "center", boxShadow: "0 4px 14px rgba(34,29,20,0.14)" }}>
+                      {sealDots(null, bulkSeal, 16)}
+                      <button onClick={() => bulkSeal(null)} style={{ ...S.ghostBtn, padding: "3px 8px", fontSize: 9.5 }}>Clear</button>
+                    </span>
+                  )}
+                </span>
+              )}
+              {selected.size > 1 && <button onClick={bulkMerge} style={{ ...S.ghostBtn, padding: "7px 12px", fontSize: 10.5 }}>Merge</button>}
+              <button onClick={bulkDelete} style={{ ...S.ghostBtn, padding: "7px 12px", fontSize: 10.5, color: T.red, borderColor: "rgba(178,58,46,0.35)" }}>Delete</button>
+            </>
+          )}
+        </div>
+      )}
+
+      {/* undo toast */}
+      {undo && (
+        <div style={{ position: "fixed", left: "50%", transform: "translateX(-50%)", bottom: isMobile ? 88 : 26, background: T.ink, color: "#F3F1EC", borderRadius: 12, padding: "10px 16px", display: "flex", alignItems: "center", gap: 14, fontSize: 12, boxShadow: "0 6px 22px rgba(34,29,20,0.35)", zIndex: 60, animation: "fadein 0.2s ease" }}>
+          <span>{undo.label}</span>
+          <button onClick={runUndo} style={{ background: "none", border: "none", color: "#D9B45B", fontWeight: 700, fontFamily: syne, fontSize: 12, cursor: "pointer", letterSpacing: "0.04em", padding: 0 }}>Undo</button>
         </div>
       )}
     </div>
@@ -1814,7 +2144,7 @@ function BirthdaysPanel({ isMobile }) {
                 <div style={{ fontSize: 10.5, color: T.sub, marginBottom: 8 }}>Found {bulkPreview.length} — review, then add.</div>
                 <div style={{ display: "flex", flexDirection: "column", gap: 5, marginBottom: 10, maxHeight: 240, overflowY: "auto" }}>
                   {bulkPreview.map(r => (
-                    <div key={r.tempId} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", background: "#FCFBF9", border: `1px solid ${T.line}`, borderRadius: 8, padding: "7px 10px" }}>
+                    <div key={r.tempId} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", background: T.surface, border: `1px solid ${T.line}`, borderRadius: 8, padding: "7px 10px" }}>
                       <span style={{ fontSize: 12, fontFamily: syne, fontWeight: 700, color: T.ink }}>{r.name}</span>
                       <span style={{ display: "flex", alignItems: "center", gap: 10 }}>
                         <span style={{ fontSize: 11, color: T.sub, fontFamily: mono }}>{MONTH_NAMES[r.month - 1]} {r.day}{r.year ? `, ${r.year}` : ""}</span>
@@ -2494,7 +2824,7 @@ Only extract entries you can read with real confidence — skip anything blurry,
               <div style={{ fontSize: 10.5, color: T.sub, marginBottom: 8 }}>Found {bulkPreview.length} — review the action for each, then confirm.</div>
               <div style={{ display: "flex", flexDirection: "column", gap: 5, marginBottom: 10, maxHeight: 320, overflowY: "auto" }}>
                 {bulkPreview.map(r => (
-                  <div key={r.tempId} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, background: "#FCFBF9", border: `1px solid ${T.line}`, borderRadius: 8, padding: "8px 10px" }}>
+                  <div key={r.tempId} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, background: T.surface, border: `1px solid ${T.line}`, borderRadius: 8, padding: "8px 10px" }}>
                     <div style={{ minWidth: 0, flex: 1 }}>
                       <div style={{ fontSize: 12, fontFamily: syne, fontWeight: 700, color: T.ink, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{r.title}</div>
                       <div style={{ fontSize: 10, color: T.sub, fontFamily: mono }}>
@@ -3042,12 +3372,160 @@ function ConnRow({ meta, check }) {
   );
 }
 
+
+// ─── Summon (⌘K) ──────────────────────────────────────────────────────────────
+// One keystroke to anywhere: pages, notes, skills, and quick actions (jot a
+// note, queue a Mini Me task) — without leaving what you're doing. The whole
+// app behind a single search field.
+const SUMMON_PLACES = [
+  { label: "Brief", page: "brief", hint: "markets · wires · stores" },
+  { label: "Notes", page: "personal", sub: "notes", hint: "personal" },
+  { label: "Calendar", page: "personal", sub: "calendar", hint: "personal" },
+  { label: "Workout", page: "personal", sub: "workout", hint: "training" },
+  { label: "Birthdays", page: "personal", sub: "birthdays", hint: "personal" },
+  { label: "Movies", page: "personal", sub: "movies", hint: "watchlist" },
+  { label: "Food", page: "personal", sub: "food", hint: "meals" },
+  { label: "Mini Me", page: "boardroom", sub: "mini", hint: "queue · run" },
+  { label: "Learn", page: "boardroom", sub: "learn", hint: "skills" },
+  { label: "Board chat", page: "boardroom", sub: "chat", hint: "ask the seats" },
+  { label: "Seats", page: "boardroom", sub: "seats", hint: "the five" },
+  { label: "Assets", page: "assets", hint: "properties · auditor" },
+  { label: "Systems", page: "systems", hint: "usage · status · deploy" },
+];
+
+function Summon({ onClose, onGo, onJot, onQueueTask, isMobile }) {
+  const [q, setQ] = useState("");
+  const [idx, setIdx] = useState(0);
+  const [mode, setMode] = useState(null); // null | "jot" | "task"
+  const [modeText, setModeText] = useState("");
+  const [flash, setFlash] = useState(null); // confirmation line before close
+  const [notes, setNotes] = useState([]);
+  const [skills, setSkills] = useState([]);
+  const inputRef = useRef(null);
+  const listRef = useRef(null);
+  const closeTimer = useRef(null);
+  useEffect(() => () => clearTimeout(closeTimer.current), []);
+
+  useEffect(() => {
+    db.loadNotes().then(({ rows }) => setNotes(rows || [])).catch(() => {});
+    makeSkillsDb(supabase).load().then(setSkills).catch(() => {});
+  }, []);
+  useEffect(() => { inputRef.current?.focus(); }, [mode]);
+
+  const needle = q.trim().toLowerCase();
+  const hit = (s) => (s || "").toLowerCase().includes(needle);
+  const noteTitle = (n) => n.title?.trim() || (n.body || "").split("\n").map(l => l.trim()).find(Boolean)?.slice(0, 60) || "Untitled note";
+
+  const rows = useMemo(() => {
+    const actions = [
+      { kind: "act", label: "Jot a note", hint: "saved straight to Notes", run: () => { setMode("jot"); setQ(""); } },
+      { kind: "act", label: "Queue a task for Mini Me", hint: "lands in the queue", run: () => { setMode("task"); setQ(""); } },
+      { kind: "act", label: "Teach a skill", hint: "/learn", go: { page: "boardroom", sub: "learn" } },
+      { kind: "act", label: "Ask the board", hint: "open the chat", go: { page: "boardroom", sub: "chat" } },
+    ].filter(a => !needle || hit(a.label) || hit(a.hint));
+    const places = SUMMON_PLACES.filter(p => !needle || hit(p.label) || hit(p.hint))
+      .map(p => ({ kind: "go", label: p.label, hint: p.hint, go: p }));
+    const noteRows = (needle ? notes.filter(n => hit(n.title) || hit(n.body)) : notes.slice(0, 3))
+      .slice(0, 5).map(n => ({ kind: "note", label: noteTitle(n), hint: "note", go: { page: "personal", sub: "notes", noteId: n.id } }));
+    const skillRows = (needle ? skills.filter(s => hit(s.title) || hit(s.description) || hit(s.content)) : [])
+      .slice(0, 5).map(s => ({ kind: "skill", label: s.title, hint: "skill", go: { page: "boardroom", sub: "learn", skillId: s.id } }));
+    return [...actions, ...places, ...noteRows, ...skillRows];
+  }, [needle, notes, skills]);
+
+  useEffect(() => { setIdx(0); }, [needle]);
+  useEffect(() => {
+    listRef.current?.children[idx]?.scrollIntoView({ block: "nearest" });
+  }, [idx]);
+
+  const choose = (r) => {
+    if (!r) return;
+    if (r.run) return r.run();
+    if (r.go) onGo(r.go);
+  };
+
+  const commitMode = async () => {
+    const t = modeText.trim();
+    if (!t) return;
+    try {
+      if (mode === "jot") { await onJot(t); setFlash("Saved to Notes ◆"); }
+      else { await onQueueTask(t); setFlash("Queued for Mini Me ◆"); }
+      setModeText("");
+      closeTimer.current = setTimeout(onClose, 650);
+    } catch (e) { setFlash(e.message || "Couldn't save — try again."); }
+  };
+
+  const onKey = (e) => {
+    if (e.key === "Escape") { e.preventDefault(); mode ? (setMode(null), setFlash(null)) : onClose(); return; }
+    if (mode) { if (e.key === "Enter") { e.preventDefault(); commitMode(); } return; }
+    if (e.key === "ArrowDown") { e.preventDefault(); setIdx(i => Math.min(i + 1, rows.length - 1)); }
+    else if (e.key === "ArrowUp") { e.preventDefault(); setIdx(i => Math.max(i - 1, 0)); }
+    else if (e.key === "Enter") { e.preventDefault(); choose(rows[idx]); }
+  };
+
+  const sectionOf = (r) => r.kind === "act" ? "Actions" : r.kind === "go" ? "Go to" : r.kind === "note" ? "Notes" : "Skills";
+
+  return (
+    <div onClick={onClose} style={{ position: "fixed", inset: 0, background: "rgba(28,24,16,0.34)", backdropFilter: "blur(3px)", zIndex: 120, display: "flex", alignItems: "flex-start", justifyContent: "center", padding: isMobile ? "12vh 14px 0" : "16vh 20px 0", animation: "fadein 0.14s ease" }}>
+      <div onClick={e => e.stopPropagation()} onKeyDown={onKey}
+        style={{ width: "100%", maxWidth: 560, background: T.surface, border: `1px solid ${T.lineStrong}`, borderRadius: 16, boxShadow: "0 30px 90px rgba(28,24,16,0.35)", overflow: "hidden", display: "flex", flexDirection: "column", maxHeight: isMobile ? "70dvh" : "62vh" }}>
+
+        {/* the diamond rule */}
+        <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "0 18px", height: 34, borderBottom: `1px solid ${T.line}`, flex: "none" }}>
+          <span style={{ width: 6, height: 6, transform: "rotate(45deg)", background: T.brass, borderRadius: 1 }} />
+          <span style={{ ...S.microLabel, color: T.sub }}>{mode === "jot" ? "Jot a note" : mode === "task" ? "Queue a task" : "Summon"}</span>
+          <span style={{ flex: 1 }} />
+          <span style={{ ...S.microLabel }}>{mode ? "↵ save · esc back" : "↑↓ · ↵ · esc"}</span>
+        </div>
+
+        {mode ? (
+          <div style={{ padding: 18 }}>
+            <textarea ref={inputRef} value={modeText} onChange={e => setModeText(e.target.value)} rows={3}
+              placeholder={mode === "jot" ? "The thought, as it comes — Enter saves it." : "What should Mini Me take on?"}
+              onKeyDown={e => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); e.stopPropagation(); commitMode(); } }}
+              style={{ ...S.input, width: "100%", boxSizing: "border-box", padding: "12px 13px", fontSize: 13.5, lineHeight: 1.6, resize: "none" }} />
+            {flash && <div style={{ marginTop: 10, fontSize: 11.5, color: flash.includes("◆") ? T.green : T.red, fontFamily: mono }}>{flash}</div>}
+          </div>
+        ) : (
+          <>
+            <input ref={inputRef} value={q} onChange={e => setQ(e.target.value)}
+              placeholder="Search everything…"
+              style={{ border: "none", outline: "none", background: "transparent", padding: "15px 18px", fontSize: 15, color: T.ink, fontFamily: "inherit", flex: "none" }} />
+            <div ref={listRef} style={{ overflowY: "auto", padding: "0 8px 10px" }}>
+              {rows.length === 0 && <div style={{ padding: "22px 12px", fontSize: 12, color: T.faint, textAlign: "center" }}>Nothing matches "{q}".</div>}
+              {rows.map((r, i) => {
+                const showSection = i === 0 || sectionOf(rows[i - 1]) !== sectionOf(r);
+                return (
+                  <div key={`${r.kind}-${r.label}-${i}`}>
+                    {showSection && <div style={{ ...S.microLabel, padding: "12px 12px 5px" }}>{sectionOf(r)}</div>}
+                    <div onClick={() => choose(r)} onMouseEnter={() => setIdx(i)}
+                      style={{ display: "flex", alignItems: "center", gap: 10, padding: "9px 12px", borderRadius: 9, cursor: "pointer", background: i === idx ? "rgba(138,103,28,0.09)" : "transparent" }}>
+                      <span style={{ width: 5, height: 5, transform: "rotate(45deg)", background: i === idx ? T.brass : "rgba(32,27,18,0.16)", borderRadius: 1, flex: "none" }} />
+                      <span style={{ fontSize: 13, color: T.ink, flex: 1, minWidth: 0, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{r.label}</span>
+                      {r.hint && <span style={{ fontSize: 9.5, color: T.faint, fontFamily: mono, flex: "none" }}>{r.hint}</span>}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
+
 function SubTabs({ options, value, onChange }) {
   return (
-    <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
-      {options.map(o => (
-        <button key={o.key} onClick={() => onChange(o.key)} style={{ padding: "7px 13px", background: value === o.key ? "linear-gradient(135deg, rgba(143,107,30,0.22), rgba(143,107,30,0.1))" : "rgba(34,29,20,0.03)", border: `1px solid ${value === o.key ? "rgba(143,107,30,0.4)" : "rgba(34,29,20,0.09)"}`, borderRadius: 10, color: value === o.key ? T.brass : T.sub, fontSize: 11, fontWeight: 700, fontFamily: syne, cursor: "pointer" }}>{o.label}</button>
-      ))}
+    <div style={{ display: "flex", gap: 22, flexWrap: "wrap", borderBottom: `1px solid ${T.line}` }}>
+      {options.map(o => {
+        const active = value === o.key;
+        return (
+          <button key={o.key} onClick={() => onChange(o.key)}
+            style={{ padding: "6px 1px 9px", background: "none", border: "none", borderBottom: `2px solid ${active ? T.brass : "transparent"}`, marginBottom: -1, color: active ? T.ink : T.faint, fontSize: 10.5, fontWeight: 600, fontFamily: syne, letterSpacing: "0.14em", textTransform: "uppercase", cursor: "pointer", borderRadius: 0 }}>
+            {o.label}
+          </button>
+        );
+      })}
     </div>
   );
 }
@@ -3270,7 +3748,7 @@ function SystemsPage({ settings, updateSetting, session, btc, isMobile }) {
             <div style={{ display: "flex", gap: 8 }}>
               <input value={sqlInput} onChange={e => setSqlInput(e.target.value)} onKeyDown={e => { if (e.key === "Enter") { e.preventDefault(); runSql(); } }} placeholder="update seat_notes set …"
                 style={{ ...S.input, flex: 1, padding: "11px 13px", fontSize: 11, fontFamily: mono }} />
-              <button onClick={runSql} style={{ ...S.ghostBtn, padding: "0 18px", minHeight: 44, borderRadius: 10, fontSize: 11, fontWeight: 800 }}>Run</button>
+              <button onClick={runSql} style={{ ...S.ghostBtn, padding: "0 18px", minHeight: 44, borderRadius: 10, fontSize: 11, fontWeight: 700 }}>Run</button>
             </div>
           </div>
         )}
@@ -3321,7 +3799,7 @@ const EFFORT_LEVELS = [
 // Mini Me is now real: on-demand only — you queue work and hit Run, nothing
 // fires on a schedule. The worker (mini-worker) runs Claude against the
 // queue, writes deliverables onto tasks, and logs to mini_feed.
-function MiniMePage({ settings, updateSetting, session, onWorkerRun, isMobile }) {
+function MiniMePage({ settings, updateSetting, session, onWorkerRun, onOpenLearn, isMobile }) {
   const mini = { ...MINI_DEFAULTS, ...(settings?.mini || {}) };
   const setMini = (patch) => updateSetting("mini", { ...mini, ...patch });
   const tasks = settings?.mini_tasks || [];
@@ -3336,6 +3814,7 @@ function MiniMePage({ settings, updateSetting, session, onWorkerRun, isMobile })
   const [showCompleted, setShowCompleted] = useState(false);
   const [directiveInput, setDirectiveInput] = useState("");
   const [directiveSending, setDirectiveSending] = useState(false);
+  const [skillCount, setSkillCount] = useState(null); // null loading · number · "teach" when table missing
   const directiveEndRef = useRef(null);
 
   const loadFeed = async () => {
@@ -3349,6 +3828,10 @@ function MiniMePage({ settings, updateSetting, session, onWorkerRun, isMobile })
   useEffect(() => {
     let alive = true;
     loadFeed();
+    // enabled-skill count for the hero chip — silent on any failure
+    supabase.from("mini_skills").select("id", { count: "exact", head: true }).eq("enabled", true)
+      .then(({ count, error }) => { if (alive) setSkillCount(error ? "teach" : (count || 0)); })
+      .catch(() => { if (alive) setSkillCount("teach"); });
     pingFn("mini-worker").then(p => {
       if (!alive) return;
       setWorker(p.status === "ok" ? { state: "ok" } : p.status === "warn" ? { state: "noenv", detail: p.detail } : { state: "off", detail: p.detail });
@@ -3485,9 +3968,9 @@ Decide which of the two his message actually addresses — often just one. Outpu
         <div style={col}>
 
           {/* Hero — identity, directive, role. No XP/level — just what it is and what it's doing. */}
-          <div style={{ ...card, background: "linear-gradient(135deg,rgba(143,107,30,0.08),rgba(49,88,156,0.04))", border: "1px solid rgba(143,107,30,0.22)" }}>
+          <div style={{ ...card, background: "rgba(138,103,28,0.05)", border: "1px solid rgba(143,107,30,0.22)" }}>
             <div style={{ display: "flex", alignItems: "center", gap: 16, marginBottom: 14 }}>
-              <span style={{ width: isMobile ? 48 : 56, height: isMobile ? 48 : 56, borderRadius: "50%", background: `linear-gradient(135deg, ${T.brass}, ${T.brassDeep})`, display: "inline-flex", alignItems: "center", justifyContent: "center", flex: "none", animation: "breathe 3.2s ease-in-out infinite" }}>
+              <span style={{ width: isMobile ? 48 : 56, height: isMobile ? 48 : 56, borderRadius: "50%", background: T.brass, display: "inline-flex", alignItems: "center", justifyContent: "center", flex: "none", animation: "breathe 3.2s ease-in-out infinite" }}>
                 <span style={{ width: 22, height: 22, borderRadius: "50%", background: T.bg, display: "inline-flex", alignItems: "center", justifyContent: "center" }}>
                   <span style={{ width: 7, height: 7, borderRadius: "50%", background: T.brass, animation: "pulse 2.4s infinite" }} />
                 </span>
@@ -3498,6 +3981,11 @@ Decide which of the two his message actually addresses — often just one. Outpu
                   <span style={{ fontSize: 9, color: mini.enabled === false ? T.faint : pillColor, fontFamily: mono, letterSpacing: "0.08em" }}>{mini.enabled === false ? "○ OFF" : pillText}</span>
                 </span>
                 <span style={{ fontSize: 11, color: T.sub, lineHeight: 1.5 }}>Queue work below, set the dial, hit Run — nothing happens until you say so.</span>
+                {onOpenLearn && skillCount !== null && (
+                  <button onClick={onOpenLearn} style={{ background: "none", border: "none", padding: 0, cursor: "pointer", textAlign: "left", fontSize: 10, fontFamily: mono, color: T.brass, letterSpacing: "0.05em" }}>
+                    {typeof skillCount === "number" && skillCount > 0 ? `◈ ${skillCount} skill${skillCount > 1 ? "s" : ""} loaded →` : "◈ Teach it skills →"}
+                  </button>
+                )}
                 {worker.state !== "ok" && worker.state !== "checking" && mini.enabled !== false && <span style={{ fontSize: 10, color: T.amber, lineHeight: 1.5 }}>{worker.detail}</span>}
               </span>
               <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 5, flex: "none" }}>
@@ -3632,7 +4120,7 @@ Decide which of the two his message actually addresses — often just one. Outpu
             <div style={{ fontSize: 9, fontWeight: 700, color: T.brass, textTransform: "uppercase", letterSpacing: "0.1em", fontFamily: syne, marginBottom: 9 }}>Quality &amp; Review</div>
             <div style={{ display: "flex", gap: 6, marginBottom: 8 }}>
               {EFFORT_LEVELS.map(e => (
-                <button key={e.key} onClick={() => setEffort(e.key)} style={{ flex: 1, padding: "9px 4px", background: effort === e.key ? `linear-gradient(135deg, ${T.brass}, ${T.brassDeep})` : "rgba(34,29,20,0.04)", border: effort === e.key ? "none" : "1px solid rgba(34,29,20,0.08)", borderRadius: 9, color: effort === e.key ? "#FCFBF9" : T.sub, fontSize: 10.5, fontWeight: 700, fontFamily: syne, cursor: "pointer" }}>{e.label}</button>
+                <button key={e.key} onClick={() => setEffort(e.key)} style={{ flex: 1, padding: "9px 4px", background: effort === e.key ? T.brass : "rgba(34,29,20,0.04)", border: effort === e.key ? "none" : "1px solid rgba(34,29,20,0.08)", borderRadius: 9, color: effort === e.key ? T.surface : T.sub, fontSize: 10.5, fontWeight: 700, fontFamily: syne, cursor: "pointer" }}>{e.label}</button>
               ))}
             </div>
             <div style={{ fontSize: 10, color: T.faint, lineHeight: 1.5, marginBottom: 13 }}>{EFFORT_LEVELS.find(e => e.key === effort)?.desc}</div>
@@ -3657,7 +4145,7 @@ Decide which of the two his message actually addresses — often just one. Outpu
 function ModalShell({ onClose, children, isMobile, z = 300 }) {
   return (
     <div onClick={onClose} style={{ position: "fixed", inset: 0, background: "rgba(4,7,14,0.72)", zIndex: z, display: "flex", alignItems: isMobile ? "flex-end" : "center", justifyContent: "center", animation: "fadein 0.15s ease both" }}>
-      <div onClick={e => e.stopPropagation()} style={{ background: "linear-gradient(180deg,#FFFFFF,#F6F3ED)", borderRadius: isMobile ? "20px 20px 0 0" : 18, padding: "24px 24px calc(24px + env(safe-area-inset-bottom))", width: isMobile ? "100%" : 560, maxWidth: 560, border: `1px solid rgba(34,29,20,0.1)`, boxShadow: "0 32px 80px rgba(30,25,17,0.42), inset 0 1px 0 rgba(255,255,255,0.07)", animation: "sheetup 0.2s ease both", color: T.ink }}>
+      <div onClick={e => e.stopPropagation()} style={{ background: T.surface, borderRadius: isMobile ? "20px 20px 0 0" : 18, padding: "24px 24px calc(24px + env(safe-area-inset-bottom))", width: isMobile ? "100%" : 560, maxWidth: 560, border: `1px solid rgba(34,29,20,0.1)`, boxShadow: "0 32px 80px rgba(30,25,17,0.42), inset 0 1px 0 rgba(255,255,255,0.07)", animation: "sheetup 0.2s ease both", color: T.ink }}>
         {children}
       </div>
     </div>
@@ -3836,7 +4324,7 @@ function SeatNotesModal({ seatKey, initial, onSave, onClose, isMobile }) {
 function MigrationModal({ counts, onImport, onSkip, importing }) {
   return (
     <div style={{ position: "fixed", inset: 0, background: "rgba(5,8,16,0.75)", zIndex: 400, display: "flex", alignItems: "center", justifyContent: "center", animation: "fadein 0.15s ease both" }}>
-      <div style={{ background: "linear-gradient(180deg,#FFFFFF,#F6F3ED)", borderRadius: 18, padding: "26px 28px", width: 440, maxWidth: "94vw", border: `1px solid rgba(34,29,20,0.1)`, boxShadow: "0 32px 80px rgba(30,25,17,0.38)", color: T.ink }}>
+      <div style={{ background: T.surface, borderRadius: 18, padding: "26px 28px", width: 440, maxWidth: "94vw", border: `1px solid rgba(34,29,20,0.1)`, boxShadow: "0 32px 80px rgba(30,25,17,0.38)", color: T.ink }}>
         <div style={{ fontSize: 16, fontWeight: 700, fontFamily: syne, marginBottom: 8 }}>Import your existing memory?</div>
         <div style={{ fontSize: 12.5, color: T.sub, lineHeight: 1.7, marginBottom: 18 }}>
           This browser has data from before your account existed:{" "}
@@ -3857,7 +4345,7 @@ function MigrationModal({ counts, onImport, onSkip, importing }) {
 function SetupNotice() {
   return (
     <div style={{ minHeight: "100vh", display: "flex", alignItems: "center", justifyContent: "center", color: T.ink, padding: 20 }}>
-      <div style={{ maxWidth: 480, padding: "28px 30px", background: "#FCFBF9", border: `1px solid ${T.line}`, borderRadius: 18 }}>
+      <div style={{ maxWidth: 480, padding: "28px 30px", background: T.surface, border: `1px solid ${T.line}`, borderRadius: 18 }}>
         <div style={{ fontSize: 16, fontWeight: 700, fontFamily: syne, marginBottom: 10 }}>Supabase not configured</div>
         <div style={{ fontSize: 13, color: T.sub, lineHeight: 1.7 }}>
           This build expects two environment variables on the Netlify site:<br />
@@ -3893,10 +4381,10 @@ function LoginScreen() {
 
   return (
     <div style={{ minHeight: "100vh", display: "flex", alignItems: "center", justifyContent: "center", color: T.ink, padding: 20 }}>
-      <div style={{ width: 380, maxWidth: "94vw", padding: "30px 32px", background: "linear-gradient(180deg,#FFFFFF,#F6F3ED)", border: `1px solid ${T.line}`, borderRadius: 18, boxShadow: "0 32px 80px rgba(30,25,17,0.38), inset 0 1px 0 rgba(255,255,255,0.07)" }}>
+      <div style={{ width: 380, maxWidth: "94vw", padding: "30px 32px", background: T.surface, border: `1px solid ${T.line}`, borderRadius: 18, boxShadow: "0 32px 80px rgba(30,25,17,0.38), inset 0 1px 0 rgba(255,255,255,0.07)" }}>
         <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 6 }}>
-          <span style={{ width: 22, height: 22, borderRadius: 7, background: `linear-gradient(135deg, ${T.brass} 0%, ${T.brassDeep} 100%)`, boxShadow: "0 2px 8px rgba(143,107,30,0.45), inset 0 1px 0 rgba(255,255,255,0.4)" }} />
-          <span style={{ fontSize: 13, fontWeight: 800, letterSpacing: "0.15em", textTransform: "uppercase", fontFamily: syne }}>The Board Room</span>
+          <span style={{ width: 15, height: 15, transform: "rotate(45deg)", borderRadius: 3, background: T.brass }} />
+          <span style={{ fontSize: 13, fontWeight: 700, letterSpacing: "0.15em", textTransform: "uppercase", fontFamily: syne }}>The Board Room</span>
         </div>
         <div style={{ fontSize: 12, color: T.faint, marginBottom: 22 }}>One mind, any device. Sign in to continue.</div>
         <input value={email} onChange={e => setEmail(e.target.value)} placeholder="email" type="email" autoComplete="email"
@@ -3908,7 +4396,7 @@ function LoginScreen() {
         {err && <div style={{ fontSize: 11, color: T.red, marginBottom: 10 }}>{err}</div>}
         {sent && <div style={{ fontSize: 11, color: T.green, marginBottom: 10 }}>Login link sent — check your email.</div>}
         <button onClick={mode === "password" ? signIn : sendMagic} disabled={disabled}
-          style={{ ...(disabled ? { background: "rgba(34,29,20,0.06)", color: T.faint, border: "none", borderRadius: 10, fontFamily: syne, fontWeight: 800 } : S.brassBtn), width: "100%", padding: 12, fontSize: 12, cursor: disabled ? "default" : "pointer" }}>
+          style={{ ...(disabled ? { background: "rgba(34,29,20,0.06)", color: T.faint, border: "none", borderRadius: 10, fontFamily: syne, fontWeight: 700 } : S.brassBtn), width: "100%", padding: 12, fontSize: 12, cursor: disabled ? "default" : "pointer" }}>
           {busy ? (mode === "password" ? "Signing in…" : "Sending…") : (mode === "password" ? "Sign in" : "Email me a login link")}
         </button>
         <div onClick={() => { setMode(mode === "password" ? "magic" : "password"); setErr(null); setSent(false); }}
@@ -3926,15 +4414,15 @@ function LoginScreen() {
 // keys: nothing to learn twice.
 const NAV = [
   { key: "brief", label: "Brief", sub: "BTC · stocks · wires · ZTS", mark: T.amber },
-  { key: "personal", label: "Personal", sub: "notes · calendar", mark: "#8B5CF6" },
-  { key: "boardroom", label: "Board Room", sub: "mini me · smart routing · 5 seats", mark: T.brass },
+  { key: "personal", label: "Personal", sub: "notes · calendar · workout", mark: "#8B5CF6" },
+  { key: "boardroom", label: "Board Room", sub: "mini me · learn · 5 seats", mark: T.brass },
   { key: "assets", label: "Assets", sub: "4 live properties · site auditor", mark: T.blue },
   { key: "systems", label: "Systems", sub: "usage · status · deploy · supabase", mark: "#0E9F6E" },
 ];
 const HEADERS = {
   brief: ["Brief", "live markets, wires, and your stores"],
-  boardroom: ["Board Room", "mini me · smart routing · 5 seats on call"],
-  personal: ["Personal", "notes and calendar, just for you"],
+  boardroom: ["Board Room", "mini me · learned skills · 5 seats on call"],
+  personal: ["Personal", "notes, calendar, and training — just for you"],
   assets: ["Assets", "everything you run, one click away"],
   systems: ["Systems", "usage, status, deploys, and supabase"],
 };
@@ -4150,6 +4638,41 @@ export default function App() {
     });
   };
   const [personalJumpTo, setPersonalJumpTo] = useState(null); // tells PersonalPage which sub-tab to open on arrival
+
+  // Learned skills — loaded once per session, refreshed whenever the Learn
+  // tab or /learn command changes them; injected into the Chief's prompt.
+  const [skills, setSkills] = useState([]);
+  const refreshSkills = async () => {
+    try { setSkills(await makeSkillsDb(supabase).loadEnabled()); }
+    catch { setSkills([]); } // table not created yet — chat just runs without skills
+  };
+  useEffect(() => { if (session?.user?.id) refreshSkills(); }, [session?.user?.id]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Summon (⌘K) — global jump + quick capture
+  const [summon, setSummon] = useState(false);
+  const [jump, setJump] = useState(null); // { t, page, sub, noteId?, skillId? }
+  useEffect(() => {
+    const onKey = (e) => {
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "k") { e.preventDefault(); setSummon(s => !s); }
+      if (e.key === "Escape") setSummon(false);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
+  useEffect(() => { if (!session) setSummon(false); }, [session]);
+  const summonGo = (target) => { setSummon(false); goToPage(target.page); setJump({ t: Date.now(), ...target }); };
+  const summonJot = async (text) => { await db.saveNote({ id: crypto.randomUUID(), title: "", body: text }); };
+  const summonQueueTask = async (text) => {
+    const t = { id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`, text, status: "queued", queued_at: Date.now() };
+    updateSetting("mini_tasks", [t, ...(settings?.mini_tasks || [])]);
+  };
+  const summonEl = summon ? <Summon onClose={() => setSummon(false)} onGo={summonGo} onJot={summonJot} onQueueTask={summonQueueTask} isMobile={isMobile} /> : null;
+  const summonBtn = (compact) => (
+    <button onClick={() => setSummon(true)} aria-label="Summon — search everything"
+      style={{ display: "inline-flex", alignItems: "center", gap: 6, padding: compact ? "5px 9px" : "5px 11px", background: "transparent", border: `1px solid ${T.lineStrong}`, borderRadius: 8, color: T.sub, fontSize: 9.5, fontFamily: mono, letterSpacing: "0.08em", cursor: "pointer" }}>
+      <span style={{ width: 5, height: 5, transform: "rotate(45deg)", background: T.brass, borderRadius: 1 }} />{compact ? "⌘K" : "SUMMON ⌘K"}
+    </button>
+  );
   const goToCalendar = () => { setPersonalJumpTo(Date.now()); goToPage("personal"); }; // timestamp so re-tapping still re-triggers even if already on Personal
 
   const send = async () => {
@@ -4161,8 +4684,37 @@ export default function App() {
     setMessages(next);
     db.saveMessage({ role: "user", content: q });
     setThinking(true);
+
+    // "/learn <url or anything>" — teach a skill right from the chat instead
+    // of convening the board. Mirrors the Learn tab pipeline exactly.
+    const learnCmd = parseLearnCommand(q);
+    if (learnCmd) {
+      let reply;
+      if (learnCmd.open) {
+        reply = "Give me something to learn — `/learn <url or pasted text>` — or use the Learn tab up top, which also shows everything I've been taught.";
+      } else {
+        const result = await learnFromInput({
+          text: learnCmd.text, supabase, callClaude,
+          modelKey: (settings?.mini || {}).model || "haiku",
+          accessToken: session?.access_token || "",
+        });
+        if (result.error === "missing_table") reply = "The skills table isn't set up yet — open the Learn tab and it'll hand you the one-time SQL to paste into Supabase.";
+        else if (result.error) reply = `Couldn't learn that: ${result.error}`;
+        else {
+          const skipped = result.failedUrls?.length ? `\n\n(Couldn't read ${result.failedUrls.map(f => f.url).join(", ")} — learned from the rest.)` : "";
+          reply = `◆ Learned "${result.skill.title}" — ${result.skill.description}${skipped}\n\nIt's loaded into every chat and queue run from here on. It lives in the Learn tab if you want to edit or disable it.`;
+          refreshSkills();
+        }
+      }
+      setThinking(false);
+      const asstMsg = { role: "assistant", content: reply, ts: Date.now() };
+      setMessages([...next, asstMsg]);
+      db.saveMessage({ role: "assistant", content: reply });
+      return;
+    }
+
     const models = { ...DEFAULT_MODELS, ...(settings?.models || {}) };
-    const result = await convene(q, next, { models, seatNotes });
+    const result = await convene(q, next, { models, seatNotes, skills });
     setThinking(false);
     const asstMsg = { role: "assistant", content: result.answer, consulted: result.consulted, ts: Date.now() };
     setMessages([...next, asstMsg]);
@@ -4203,8 +4755,8 @@ export default function App() {
   const renderPage = (key) => {
     switch (key) {
       case "brief": return <MorningBriefPage btc={btc} isMobile={isMobile} settings={settings} updateSetting={updateSetting} onOpenCalendar={goToCalendar} refreshSignal={briefRefreshSignal} />;
-      case "boardroom": return <BoardRoomPage messages={messages} thinking={thinking} loadingData={loadingData} input={input} setInput={setInput} onSend={send} onClearChat={clearChat} endRef={endRef} seatNotes={seatNotes} onEditSeat={setEditSeat} settings={settings} updateSetting={updateSetting} session={session} onWorkerRun={refreshData} isMobile={isMobile} />;
-      case "personal": return <PersonalPage isMobile={isMobile} jumpSignal={personalJumpTo} settings={settings} updateSetting={updateSetting} />;
+      case "boardroom": return <BoardRoomPage messages={messages} thinking={thinking} loadingData={loadingData} input={input} setInput={setInput} onSend={send} onClearChat={clearChat} endRef={endRef} seatNotes={seatNotes} onEditSeat={setEditSeat} settings={settings} updateSetting={updateSetting} session={session} onWorkerRun={refreshData} onSkillsChanged={refreshSkills} jump={jump} isMobile={isMobile} />;
+      case "personal": return <PersonalPage isMobile={isMobile} jumpSignal={personalJumpTo} jump={jump} settings={settings} updateSetting={updateSetting} />;
       case "assets": return <PropertiesPage isMobile={isMobile} settings={settings} updateSetting={updateSetting} session={session} />;
       case "systems": return <SystemsPage settings={settings} updateSetting={updateSetting} session={session} btc={btc} isMobile={isMobile} />;
       default: return null;
@@ -4220,10 +4772,13 @@ export default function App() {
       <div style={{ height: "100dvh", display: "flex", flexDirection: "column", color: T.ink, position: "relative", overflow: "hidden" }}>
         <div style={{ flex: "none", height: 54, display: "flex", alignItems: "center", justifyContent: "space-between", padding: "0 16px", borderBottom: `1px solid ${T.line}`, background: "rgba(243,241,236,0.9)", backdropFilter: "blur(14px)" }}>
           <div style={{ display: "flex", alignItems: "center", gap: 9 }}>
-            <span style={{ width: 20, height: 20, borderRadius: 6, background: `linear-gradient(135deg, ${T.brass} 0%, ${T.brassDeep} 100%)`, boxShadow: "0 2px 6px rgba(143,107,30,0.45), inset 0 1px 0 rgba(255,255,255,0.4)" }} />
-            <span style={{ fontSize: 11.5, fontWeight: 800, letterSpacing: "0.15em", textTransform: "uppercase", fontFamily: syne }}>Board Room</span>
+            <span style={{ width: 13, height: 13, transform: "rotate(45deg)", borderRadius: 2.5, background: T.brass }} />
+            <span style={{ fontSize: 11.5, fontWeight: 700, letterSpacing: "0.16em", textTransform: "uppercase", fontFamily: syne }}>{HEADERS[page][0]}</span>
           </div>
-          <TopStatus now={now} dataStamp={dataStamp} refreshing={refreshing} onRefresh={refreshData} compact />
+          <div style={{ display: "flex", alignItems: "center", gap: 9 }}>
+            {summonBtn(true)}
+            <TopStatus now={now} dataStamp={dataStamp} refreshing={refreshing} onRefresh={refreshData} compact />
+          </div>
         </div>
 
         <div id="page-scroll" style={{ flex: 1, minHeight: 0, overflowY: "auto", display: "flex", flexDirection: "column" }}>
@@ -4237,14 +4792,15 @@ export default function App() {
             const Icon = NAV_ICONS[n.key];
             return (
               <button key={n.key} onClick={() => goToPage(n.key)} title={n.label} aria-label={n.label} aria-current={active ? "page" : undefined}
-                style={{ flex: 1, minHeight: 66, position: "relative", background: active ? "linear-gradient(180deg, rgba(143,107,30,0.10), transparent)" : "none", border: "none", cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", padding: "9px 0 calc(9px + env(safe-area-inset-bottom))" }}>
-                <span style={{ position: "absolute", top: 7, left: "50%", transform: "translateX(-50%)", width: 6, height: 6, borderRadius: "50%", background: T.brass, opacity: active ? 1 : 0, transition: "opacity 0.15s", boxShadow: "0 0 8px rgba(143,107,30,0.85)" }} />
+                style={{ flex: 1, minHeight: 66, position: "relative", background: "none", border: "none", cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", padding: "9px 0 calc(9px + env(safe-area-inset-bottom))" }}>
+                <span style={{ position: "absolute", top: 7, left: "50%", transform: "translateX(-50%)", width: 6, height: 6, borderRadius: "50%", background: T.brass, opacity: active ? 1 : 0, transition: "opacity 0.15s", transform: "translateX(-50%) rotate(45deg)", borderRadius: 1.5 }} />
                 <Icon width={23} height={23} color={active ? T.ink : T.faint} style={{ transition: "color 0.15s" }} />
               </button>
             );
           })}
         </div>
 
+        {summonEl}
         {editSeat && <SeatNotesModal seatKey={editSeat} initial={seatNotes[editSeat]} onSave={saveSeatNote} onClose={() => setEditSeat(null)} isMobile />}
         {migration && <MigrationModal counts={migration} onImport={runImport} onSkip={skipImport} importing={importing} />}
       </div>
@@ -4255,21 +4811,21 @@ export default function App() {
   return (
     <div style={{ minHeight: "100vh", display: "grid", gridTemplateColumns: "264px minmax(0,1fr)", color: T.ink }}>
       {/* Nav rail */}
-      <div style={{ borderRight: `1px solid ${T.line}`, padding: "26px 16px 16px", display: "flex", flexDirection: "column", gap: 20, height: "100vh", position: "sticky", top: 0, overflowY: "auto", background: "linear-gradient(180deg,rgba(34,29,20,0.015),transparent 30%)" }}>
+      <div style={{ borderRight: `1px solid ${T.line}`, padding: "26px 16px 16px", display: "flex", flexDirection: "column", gap: 20, height: "100vh", position: "sticky", top: 0, overflowY: "auto", background: "transparent" }}>
         <div style={{ padding: "0 6px" }}>
           <div style={{ display: "flex", alignItems: "center", gap: 11 }}>
-            <span style={{ width: 24, height: 24, borderRadius: 7, background: `linear-gradient(135deg, ${T.brass} 0%, ${T.brassDeep} 100%)`, boxShadow: "0 2px 8px rgba(143,107,30,0.45), inset 0 1px 0 rgba(255,255,255,0.4)" }} />
-            <span style={{ fontSize: 13, fontWeight: 800, letterSpacing: "0.15em", textTransform: "uppercase", fontFamily: syne }}>Board Room</span>
+            <span style={{ width: 15, height: 15, transform: "rotate(45deg)", borderRadius: 3, background: T.brass }} />
+            <span style={{ fontSize: 13, fontWeight: 700, letterSpacing: "0.15em", textTransform: "uppercase", fontFamily: syne }}>Board Room</span>
           </div>
-          <div style={{ height: 1, background: "linear-gradient(90deg,rgba(143,107,30,0.45),transparent)", marginTop: 16 }} />
+          <div style={{ height: 1, background: T.line, marginTop: 16 }} />
         </div>
 
         <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
           {NAV.map(n => {
             const active = page === n.key;
             return (
-              <div key={n.key} onClick={() => goToPage(n.key)} style={{ display: "flex", alignItems: "center", gap: 12, padding: "12px 13px", borderRadius: 12, cursor: "pointer", background: active ? "linear-gradient(180deg, rgba(143,107,30,0.13), rgba(143,107,30,0.05))" : "transparent", border: `1px solid ${active ? "rgba(143,107,30,0.3)" : "transparent"}` }}>
-                <span style={{ width: 8, height: 8, transform: "rotate(45deg)", background: active ? n.mark : "rgba(34,29,20,0.18)", boxShadow: active ? `0 0 10px ${n.mark}99` : "none", flex: "none", borderRadius: 2 }} />
+              <div key={n.key} onClick={() => goToPage(n.key)} style={{ display: "flex", alignItems: "center", gap: 12, padding: "12px 13px", borderRadius: 12, cursor: "pointer", background: active ? "rgba(138,103,28,0.07)" : "transparent", border: "1px solid transparent" }}>
+                <span style={{ width: 7, height: 7, transform: "rotate(45deg)", background: active ? n.mark : "rgba(32,27,18,0.18)", flex: "none", borderRadius: 1.5 }} />
                 <span style={{ display: "flex", flexDirection: "column", gap: 2, minWidth: 0 }}>
                   <span style={{ fontSize: 12.5, fontWeight: 700, fontFamily: syne, color: active ? T.ink : T.sub, letterSpacing: "0.02em" }}>{n.label}</span>
                   <span style={{ fontSize: 9.5, color: T.faint, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{n.sub}</span>
@@ -4281,10 +4837,10 @@ export default function App() {
 
         {/* Signals cluster */}
         <div style={{ marginTop: "auto", display: "flex", flexDirection: "column", gap: 10 }}>
-          <div style={{ padding: "13px 14px", background: "linear-gradient(180deg,rgba(34,29,20,0.05),rgba(34,29,20,0.02))", border: `1px solid ${T.line}`, borderRadius: 14, boxShadow: "inset 0 1px 0 rgba(255,255,255,0.06)" }}>
+          <div style={{ padding: "13px 14px", background: "rgba(32,27,18,0.03)", border: `1px solid ${T.line}`, borderRadius: 12, boxShadow: "inset 0 1px 0 rgba(255,255,255,0.06)" }}>
             <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 7 }}>
               <div style={{ display: "flex", alignItems: "center", gap: 7 }}>
-                <span style={{ width: 15, height: 15, borderRadius: "50%", background: "linear-gradient(135deg,#F7931A,#C77416)", display: "inline-flex", alignItems: "center", justifyContent: "center", fontSize: 8, fontWeight: 800, color: "#1A0F00" }}>₿</span>
+                <span style={{ width: 15, height: 15, borderRadius: "50%", background: "#F7931A", display: "inline-flex", alignItems: "center", justifyContent: "center", fontSize: 8, fontWeight: 700, color: "#1A0F00" }}>₿</span>
                 <span style={{ fontSize: 13, fontWeight: 500, fontFamily: mono }}>{btc.loading ? "…" : btc.error ? "—" : "$" + btc.price?.toLocaleString(undefined, { maximumFractionDigits: 0 })}</span>
               </div>
               {!btc.loading && !btc.error && (
@@ -4317,14 +4873,15 @@ export default function App() {
 
       {/* Main column */}
       <div style={{ display: "flex", flexDirection: "column", height: "100vh", minWidth: 0 }}>
-        <div style={{ height: 58, flex: "none", borderBottom: `1px solid ${T.line}`, display: "flex", alignItems: "center", justifyContent: "space-between", padding: "0 34px", background: "linear-gradient(180deg,rgba(34,29,20,0.02),transparent)" }}>
-          <div style={{ display: "flex", alignItems: "baseline", gap: 12 }}>
-            <span style={{ fontSize: 14, fontWeight: 700, fontFamily: syne, letterSpacing: "0.02em" }}>{HEADERS[page][0]}</span>
-            <span style={{ fontSize: 10.5, color: T.faint }}>{HEADERS[page][1]}</span>
+        <div style={{ height: 58, flex: "none", borderBottom: `1px solid ${T.line}`, display: "flex", alignItems: "center", justifyContent: "space-between", padding: "0 34px", background: "transparent" }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+            <span style={{ fontSize: 13, fontWeight: 700, fontFamily: syne, letterSpacing: "0.18em", textTransform: "uppercase" }}>{HEADERS[page][0]}</span>
+            <span style={{ width: 5, height: 5, transform: "rotate(45deg)", background: "rgba(138,103,28,0.5)", borderRadius: 1, flex: "none" }} />
+            <span style={{ fontSize: 9.5, color: T.faint, fontFamily: mono, letterSpacing: "0.08em" }}>{HEADERS[page][1]}</span>
           </div>
           <div style={{ display: "flex", alignItems: "center", gap: 16 }}>
+            {summonBtn(false)}
             <span style={{ fontSize: 9.5, color: T.faint, fontFamily: mono, letterSpacing: "0.05em" }}>SESSION ${totalSpend.toFixed(3)} · {obs.all().length} CALLS</span>
-            <span style={{ width: 1, height: 22, background: T.line, flex: "none" }} />
             <TopStatus now={now} dataStamp={dataStamp} refreshing={refreshing} onRefresh={refreshData} />
           </div>
         </div>
@@ -4334,6 +4891,7 @@ export default function App() {
         </div>
       </div>
 
+      {summonEl}
       {editSeat && <SeatNotesModal seatKey={editSeat} initial={seatNotes[editSeat]} onSave={saveSeatNote} onClose={() => setEditSeat(null)} />}
       {migration && <MigrationModal counts={migration} onImport={runImport} onSkip={skipImport} importing={importing} />}
     </div>
