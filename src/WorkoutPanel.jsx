@@ -1,4 +1,5 @@
 import { useState, useEffect, useMemo } from "react";
+import { T, syne, mono } from "./theme.js";
 
 // ════════════════════════════════════════════════════════════════════════════
 // WORKOUT — the Personal tab's training room.
@@ -17,23 +18,17 @@ import { useState, useEffect, useMemo } from "react";
 // other table); localStorage only checkpoints the in-progress session.
 // ════════════════════════════════════════════════════════════════════════════
 
-// Tokens duplicated from App.jsx's S/T so this panel is pixel-identical to its
-// siblings (Notes, Movies, Food). If those ever move to theme.js, point here too.
-const syne = "'Cinzel', 'Times New Roman', serif", mono = "'DM Mono', monospace";
-const T = {
-  bg: "#F4F2ED", surface: "#FBFAF8", ink: "#201B12", sub: "#635C4C", faint: "#99917E",
-  brass: "#8A671C", brassDeep: "#6A4D12", line: "rgba(32,27,18,0.09)", lineStrong: "rgba(32,27,18,0.18)",
-  green: "#1F7A55", red: "#B23A2E", amber: "#A2700E", blue: "#31589C",
-};
+// Palette tokens come from theme.js (CSS variables — Daylight/Nocturne aware).
+// S keeps this panel's plate shapes, pixel-identical to its siblings.
 const S = {
   card: { padding: "19px 21px", background: T.surface, border: `1px solid ${T.line}`, borderRadius: 14, boxShadow: "none" },
   cardM: { padding: 17, background: T.surface, border: `1px solid ${T.line}`, borderRadius: 13, boxShadow: "none" },
   inner: { background: "transparent", border: `1px solid ${T.line}`, borderRadius: 10 },
   title: { fontSize: 11, fontWeight: 600, fontFamily: syne, color: T.ink, letterSpacing: "0.18em", textTransform: "uppercase" },
   microLabel: { fontSize: 9, color: T.faint, fontFamily: mono, letterSpacing: "0.14em", textTransform: "uppercase" },
-  brassBtn: { background: T.brass, border: "none", borderRadius: 9, color: "#FCFBF8", fontWeight: 700, fontFamily: syne, letterSpacing: "0.04em", cursor: "pointer", boxShadow: "none" },
+  brassBtn: { background: T.brass, border: "none", borderRadius: 9, color: T.onBrass, fontWeight: 700, fontFamily: syne, letterSpacing: "0.04em", cursor: "pointer", boxShadow: "none" },
   ghostBtn: { background: "transparent", border: `1px solid ${T.lineStrong}`, borderRadius: 9, color: T.sub, fontWeight: 600, cursor: "pointer" },
-  input: { background: "#FFFFFF", border: `1px solid ${T.lineStrong}`, borderRadius: 9, color: T.ink },
+  input: { background: T.surface2, border: `1px solid ${T.lineStrong}`, borderRadius: 9, color: T.ink },
 };
 
 // ─── One-time Supabase setup (shown in-app if the tables don't exist yet) ────
@@ -343,7 +338,7 @@ function PillNav({ value, onChange }) {
     <div style={{ display: "flex", gap: 6 }}>
       {opts.map((o) => (
         <button key={o.key} onClick={() => onChange(o.key)}
-          style={{ padding: "7px 13px", background: value === o.key ? "rgba(138,103,28,0.12)" : "rgba(34,29,20,0.03)", border: `1px solid ${value === o.key ? "rgba(143,107,30,0.4)" : "rgba(34,29,20,0.09)"}`, borderRadius: 10, color: value === o.key ? T.brass : T.sub, fontSize: 11, fontWeight: 700, fontFamily: syne, cursor: "pointer" }}>
+          style={{ padding: "7px 13px", background: value === o.key ? "var(--brass-a12)" : "var(--ink-a03)", border: `1px solid ${value === o.key ? "var(--brass-a40)" : "var(--line)"}`, borderRadius: 10, color: value === o.key ? T.brass : T.sub, fontSize: 11, fontWeight: 700, fontFamily: syne, cursor: "pointer" }}>
           {o.label}
         </button>
       ))}
@@ -379,14 +374,14 @@ function NumField({ value, onChange, width = 52, decimals = false, style }) {
 }
 
 function Stepper({ value, onChange, step, min = 0, inputWidth = 52, decimals = false }) {
-  const btn = { width: 30, height: 42, background: "rgba(34,29,20,0.04)", border: "1px solid rgba(34,29,20,0.12)", color: T.sub, fontSize: 16, fontWeight: 700, cursor: "pointer", lineHeight: 1, padding: 0, flex: "none" };
+  const btn = { width: 30, height: 42, background: "var(--ink-a04)", border: "1px solid var(--ink-a12)", color: T.sub, fontSize: 16, fontWeight: 700, cursor: "pointer", lineHeight: 1, padding: 0, flex: "none" };
   const clamp = (n) => Math.max(min, Math.round(n * 10) / 10);
   const bind = useNumText(value, onChange, { decimals, min });
   return (
     <div style={{ display: "flex", alignItems: "stretch", flex: "none" }}>
       <button onClick={() => onChange(clamp((value || 0) - step))} style={{ ...btn, borderRadius: "10px 0 0 10px", borderRight: "none" }} aria-label="decrease">−</button>
       <input {...bind}
-        style={{ ...S.input, width: inputWidth, borderRadius: 0, textAlign: "center", fontFamily: mono, fontWeight: 600, fontSize: 15, padding: 0, height: 42, borderLeft: "1px solid rgba(34,29,20,0.12)", borderRight: "1px solid rgba(34,29,20,0.12)" }}
+        style={{ ...S.input, width: inputWidth, borderRadius: 0, textAlign: "center", fontFamily: mono, fontWeight: 600, fontSize: 15, padding: 0, height: 42, borderLeft: "1px solid var(--ink-a12)", borderRight: "1px solid var(--ink-a12)" }}
       />
       <button onClick={() => onChange(clamp((value || 0) + step))} style={{ ...btn, borderRadius: "0 10px 10px 0", borderLeft: "none" }} aria-label="increase">+</button>
     </div>
@@ -396,7 +391,7 @@ function Stepper({ value, onChange, step, min = 0, inputWidth = 52, decimals = f
 function SheetShell({ onClose, children, isMobile }) {
   return (
     <div onClick={onClose} style={{ position: "fixed", inset: 0, background: "rgba(4,7,14,0.72)", zIndex: 320, display: "flex", alignItems: isMobile ? "flex-end" : "center", justifyContent: "center", animation: "fadein 0.15s ease both" }}>
-      <div onClick={(e) => e.stopPropagation()} style={{ background: T.surface, borderRadius: isMobile ? "20px 20px 0 0" : 18, padding: "22px 22px calc(22px + env(safe-area-inset-bottom))", width: isMobile ? "100%" : 520, maxWidth: 520, maxHeight: "84dvh", overflowY: "auto", border: "1px solid rgba(34,29,20,0.1)", boxShadow: "0 32px 80px rgba(30,25,17,0.42)", animation: "sheetup 0.2s ease both", color: T.ink }}>
+      <div onClick={(e) => e.stopPropagation()} style={{ background: T.surface, borderRadius: isMobile ? "20px 20px 0 0" : 18, padding: "22px 22px calc(22px + env(safe-area-inset-bottom))", width: isMobile ? "100%" : 520, maxWidth: 520, maxHeight: "84dvh", overflowY: "auto", border: "1px solid var(--ink-a10)", boxShadow: "var(--shadow-deep)", animation: "sheetup 0.2s ease both", color: T.ink }}>
         {children}
       </div>
     </div>
@@ -443,7 +438,7 @@ function TrainHome({ card, isMobile, templates, sessions, active, unit, savedFla
       )}
 
       {active && (
-        <div style={{ ...card, borderTop: "2px solid rgba(143,107,30,0.9)", display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12 }}>
+        <div style={{ ...card, borderTop: "2px solid var(--brass-a85)", display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12 }}>
           <div style={{ minWidth: 0 }}>
             <div style={{ ...S.microLabel, color: T.brass }}>IN PROGRESS</div>
             <div style={{ fontSize: 13, fontWeight: 700, fontFamily: syne, marginTop: 3, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{active.templateName}</div>
@@ -512,7 +507,7 @@ function TrainHome({ card, isMobile, templates, sessions, active, unit, savedFla
             <div style={{ display: "flex" }}>
               {["lb", "kg"].map((u, i) => (
                 <button key={u} onClick={() => setWs({ unit: u, bar: u === "kg" ? 20 : 45 })}
-                  style={{ padding: "9px 16px", fontSize: 11.5, fontWeight: 700, fontFamily: syne, cursor: "pointer", background: unit === u ? T.brass : "rgba(34,29,20,0.03)", border: `1px solid ${unit === u ? "rgba(143,107,30,0.4)" : "rgba(34,29,20,0.12)"}`, color: unit === u ? T.brass : T.sub, borderRadius: i === 0 ? "10px 0 0 10px" : "0 10px 10px 0", borderRight: i === 0 ? "none" : undefined }}>
+                  style={{ padding: "9px 16px", fontSize: 11.5, fontWeight: 700, fontFamily: syne, cursor: "pointer", background: unit === u ? T.brass : "var(--ink-a03)", border: `1px solid ${unit === u ? "var(--brass-a40)" : "var(--ink-a12)"}`, color: unit === u ? T.onBrass : T.sub, borderRadius: i === 0 ? "10px 0 0 10px" : "0 10px 10px 0", borderRight: i === 0 ? "none" : undefined }}>
                   {u}
                 </button>
               ))}
@@ -630,8 +625,8 @@ function ActiveSession({ card, isMobile, active, setActive, bar, bestByEx, prevB
 
       {/* The rest meridian — starts itself, one tap to skip or extend */}
       {resting && (
-        <div style={{ position: "sticky", bottom: isMobile ? 8 : 12, zIndex: 5, borderRadius: 12, overflow: "hidden", border: "1px solid rgba(143,107,30,0.45)", background: T.surface, boxShadow: "0 8px 28px rgba(34,29,20,0.18)", animation: restRemain > 0 ? "breathe 2.6s ease-in-out infinite" : "none" }}>
-          <div style={{ position: "absolute", inset: 0, width: `${Math.max(0, Math.min(100, (restRemain / active.rest.total) * 100))}%`, background: "rgba(138,103,28,0.16)", transition: "width 0.5s linear" }} />
+        <div style={{ position: "sticky", bottom: isMobile ? 8 : 12, zIndex: 5, borderRadius: 12, overflow: "hidden", border: "1px solid var(--brass-a40)", background: T.surface, boxShadow: "var(--shadow-float)", animation: restRemain > 0 ? "breathe 2.6s ease-in-out infinite" : "none" }}>
+          <div style={{ position: "absolute", inset: 0, width: `${Math.max(0, Math.min(100, (restRemain / active.rest.total) * 100))}%`, background: "var(--brass-a16)", transition: "width 0.5s linear" }} />
           <div style={{ position: "relative", display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, padding: "10px 14px" }}>
             <div style={{ minWidth: 0 }}>
               <div style={{ ...S.microLabel, color: restRemain > 0 ? T.brass : T.green }}>{restRemain > 0 ? "REST" : "GO"}</div>
@@ -663,7 +658,7 @@ function ExerciseCard({ card, isMobile, ex, index, count, unit, bar, onToggleSet
   const nextSet = ex.sets.find((s) => !s.done) || ex.sets[ex.sets.length - 1];
   const plates = nextSet ? plateBreakdown(nextSet.weight, unit, bar) : null;
   const arrow = { background: "none", border: "none", color: T.faint, cursor: "pointer", fontSize: 11, padding: "1px 3px", lineHeight: 1 };
-  const chip = { background: "rgba(34,29,20,0.04)", border: "1px solid rgba(34,29,20,0.1)", borderRadius: 999, color: T.sub, fontSize: 9.5, fontWeight: 700, cursor: "pointer", padding: "5px 10px", fontFamily: mono, letterSpacing: "0.03em", flex: "none" };
+  const chip = { background: "var(--ink-a04)", border: "1px solid var(--ink-a10)", borderRadius: 999, color: T.sub, fontSize: 9.5, fontWeight: 700, cursor: "pointer", padding: "5px 10px", fontFamily: mono, letterSpacing: "0.03em", flex: "none" };
 
   return (
     <div style={{ ...card, padding: isMobile ? "14px 13px" : "16px 18px" }}>
@@ -674,7 +669,7 @@ function ExerciseCard({ card, isMobile, ex, index, count, unit, bar, onToggleSet
         </div>
         <span style={{ fontSize: 13, fontWeight: 700, fontFamily: syne, flex: 1, minWidth: 0, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{ex.name}</span>
         <button onClick={onCycleRest} style={chip} title="Tap to change rest for this exercise">{ex.restSec > 0 ? `${ex.restSec}s rest` : "no rest"}</button>
-        <button onClick={() => setShowPlates((v) => !v)} style={{ ...chip, color: showPlates ? T.brass : T.sub, borderColor: showPlates ? "rgba(143,107,30,0.4)" : "rgba(34,29,20,0.1)" }}>plates</button>
+        <button onClick={() => setShowPlates((v) => !v)} style={{ ...chip, color: showPlates ? T.brass : T.sub, borderColor: showPlates ? "var(--brass-a40)" : "var(--ink-a10)" }}>plates</button>
         <button onClick={onRemove} style={{ background: "none", border: "none", color: T.faint, cursor: "pointer", fontSize: 15, padding: 2, lineHeight: 1, flex: "none" }} aria-label="remove exercise">×</button>
       </div>
 
@@ -696,14 +691,14 @@ function ExerciseCard({ card, isMobile, ex, index, count, unit, bar, onToggleSet
             <Stepper value={set.weight} step={unit === "kg" ? 2.5 : 5} inputWidth={isMobile ? 52 : 62} decimals onChange={(v) => onSetChange(set.id, { weight: v })} />
             <Stepper value={set.reps} step={1} inputWidth={isMobile ? 36 : 44} onChange={(v) => onSetChange(set.id, { reps: v })} />
             <button onClick={() => onToggleSet(set)} aria-label={set.done ? "undo set" : "log set"}
-              style={{ width: 42, height: 42, flex: "none", borderRadius: 10, cursor: "pointer", fontSize: 16, fontWeight: 700, transition: "all 0.15s ease", ...(set.done ? { ...S.brassBtn, borderRadius: 10 } : { background: "rgba(143,107,30,0.06)", border: "1.5px solid rgba(143,107,30,0.45)", color: T.brass }) }}>
+              style={{ width: 42, height: 42, flex: "none", borderRadius: 10, cursor: "pointer", fontSize: 16, fontWeight: 700, transition: "all 0.15s ease", ...(set.done ? { ...S.brassBtn, borderRadius: 10 } : { background: "var(--brass-a06)", border: "1.5px solid var(--brass-a40)", color: T.brass }) }}>
               ✓
             </button>
             <button onClick={() => onRemoveSet(set.id)} style={{ background: "none", border: "none", color: T.faint, cursor: "pointer", fontSize: 13, padding: 2, flex: "none", lineHeight: 1 }} aria-label="remove set">×</button>
           </div>
         ))}
       </div>
-      <button onClick={onAddSet} style={{ background: "none", border: `1px dashed rgba(143,107,30,0.4)`, borderRadius: 9, color: T.brass, fontSize: 10.5, fontWeight: 700, fontFamily: syne, cursor: "pointer", padding: "8px 0", width: "100%", marginTop: 9 }}>+ Add set</button>
+      <button onClick={onAddSet} style={{ background: "none", border: `1px dashed var(--brass-a40)`, borderRadius: 9, color: T.brass, fontSize: 10.5, fontWeight: 700, fontFamily: syne, cursor: "pointer", padding: "8px 0", width: "100%", marginTop: 9 }}>+ Add set</button>
     </div>
   );
 }

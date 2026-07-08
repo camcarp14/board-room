@@ -4,6 +4,36 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
     <title>The Board Room</title>
+    <meta name="theme-color" content="#F4F2ED" />
+    <meta name="description" content="Your command center — markets, ventures, board of advisors, and the day's brief." />
+    <link rel="manifest" href="/manifest.webmanifest" />
+    <link rel="icon" type="image/png" sizes="192x192" href="/icons/icon-192.png" />
+    <link rel="apple-touch-icon" href="/icons/icon-180.png" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <meta name="apple-mobile-web-app-title" content="Board Room" />
+    <script>
+      // Resolve the room's theme before first paint — no flash, ever.
+      // Mirrors resolveTheme() in src/theme.js; keep the two in sync.
+      (function () {
+        var t = "day";
+        try {
+          var p = localStorage.getItem("br_theme") || "auto";
+          var h = new Date().getHours();
+          t = p === "day" || p === "night" ? p : (h >= 19 || h < 7 ? "night" : "day");
+        } catch (e) {}
+        document.documentElement.setAttribute("data-theme", t);
+        var m = document.querySelector('meta[name="theme-color"]');
+        if (m) m.setAttribute("content", t === "night" ? "#14110B" : "#F4F2ED");
+      })();
+    </script>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      rel="stylesheet"
+      href="https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=Inter:wght@400;500;600;700&family=Cinzel:wght@500;600;700;800&display=swap"
+    />
   </head>
   <body>
     <div id="root"></div>

@@ -1,0 +1,414 @@
+/* ═══════════════════════════════════════════════════════════════════════════
+   THE BOARD ROOM — design foundation.
+   Two rooms, one architecture: Daylight (marble, bronze, morning light) and
+   Nocturne (obsidian, candlelit brass). Every color in the app resolves
+   through these variables; theme.js exports the same names for inline styles.
+   Motion is one system: same durations, same easings, everywhere.
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+:root {
+  /* motion tokens — the only physics in the building */
+  --dur-1: 140ms;
+  --dur-2: 240ms;
+  --dur-3: 420ms;
+  --dur-4: 700ms;
+  --ease-out: cubic-bezier(0.22, 1, 0.36, 1);
+  --ease-spring: cubic-bezier(0.34, 1.4, 0.44, 1);
+  --ease-inout: cubic-bezier(0.65, 0, 0.35, 1);
+
+  /* type */
+  --font-display: 'Cinzel', 'Times New Roman', serif;
+  --font-body: 'Inter', system-ui, sans-serif;
+  --font-mono: 'DM Mono', 'SF Mono', Menlo, monospace;
+}
+
+/* ── DAYLIGHT — marble surfaces, bronze accents, inscription capitals ──────── */
+:root, [data-theme="day"] {
+  color-scheme: light;
+  --bg: #F4F2ED;
+  --surface: #FBFAF8;
+  --surface-2: #FFFFFF;
+  --ink: #201B12;
+  --sub: #635C4C;
+  --faint: #99917E;
+  --brass: #8A671C;
+  --brass-hi: #A2700E;
+  --brass-deep: #6A4D12;
+  --on-brass: #FCFBF8;
+  --line: rgba(32, 27, 18, 0.09);
+  --line-strong: rgba(32, 27, 18, 0.18);
+  --green: #1F7A55;
+  --red: #B23A2E;
+  --amber: #A2700E;
+  --blue: #31589C;
+  --purple: #7C3AED;
+  --pink: #DB2777;
+  --btc: #F7931A;
+
+  /* ink alpha ladder — hairlines, washes, whispers */
+  --ink-a02: rgba(32, 27, 18, 0.02);
+  --ink-a03: rgba(32, 27, 18, 0.03);
+  --ink-a04: rgba(32, 27, 18, 0.04);
+  --ink-a06: rgba(32, 27, 18, 0.06);
+  --ink-a08: rgba(32, 27, 18, 0.08);
+  --ink-a10: rgba(32, 27, 18, 0.10);
+  --ink-a12: rgba(32, 27, 18, 0.12);
+  --ink-a14: rgba(32, 27, 18, 0.14);
+  --ink-a18: rgba(32, 27, 18, 0.18);
+
+  /* brass alpha ladder — the metal, spent sparingly */
+  --brass-a06: rgba(138, 103, 28, 0.06);
+  --brass-a08: rgba(138, 103, 28, 0.08);
+  --brass-a10: rgba(138, 103, 28, 0.10);
+  --brass-a12: rgba(138, 103, 28, 0.12);
+  --brass-a16: rgba(138, 103, 28, 0.16);
+  --brass-a20: rgba(138, 103, 28, 0.20);
+  --brass-a25: rgba(138, 103, 28, 0.25);
+  --brass-a32: rgba(138, 103, 28, 0.32);
+  --brass-a40: rgba(138, 103, 28, 0.40);
+  --brass-a55: rgba(138, 103, 28, 0.55);
+
+  --ink-a05: rgba(32, 27, 18, 0.05);
+  --ink-a20: rgba(32, 27, 18, 0.20);
+  --ink-a25: rgba(32, 27, 18, 0.25);
+  --brass-a85: rgba(138, 103, 28, 0.85);
+  --amber-a08: rgba(162, 112, 14, 0.08);
+  --amber-a35: rgba(162, 112, 14, 0.35);
+  --red-a32: rgba(178, 58, 46, 0.32);
+  --green-a06: rgba(14, 159, 110, 0.06);
+  --green-a50: rgba(14, 159, 110, 0.50);
+  --chip-ink: #FFFFFF;
+  --white-edge: rgba(255, 255, 255, 0.07);
+  --white-inset: rgba(255, 255, 255, 0.30);
+  --scrim: rgba(24, 20, 12, 0.55);
+  --glass: rgba(244, 242, 237, 0.86);
+  --shadow-card: 0 1px 2px rgba(58, 51, 35, 0.05), 0 4px 16px rgba(58, 51, 35, 0.05);
+  --shadow-float: 0 18px 50px rgba(30, 25, 17, 0.22);
+  --shadow-deep: 0 32px 80px rgba(30, 25, 17, 0.38);
+  --glow-brass: 0 0 0 rgba(0, 0, 0, 0);
+  --focus-ring: 0 0 0 2px var(--bg), 0 0 0 4px var(--brass-a55);
+  --canvas-wash: radial-gradient(1400px 600px at 50% -20%, rgba(255, 255, 255, 0.65), transparent 55%);
+}
+
+/* ── NOCTURNE — the room after dark: obsidian, candlelit brass ─────────────── */
+[data-theme="night"] {
+  color-scheme: dark;
+  --bg: #14110B;
+  --surface: #1B1710;
+  --surface-2: #231E14;
+  --ink: #EFE8D8;
+  --sub: #B3A88F;
+  --faint: #7D745C;
+  --brass: #D2AC58;
+  --brass-hi: #E7C77B;
+  --brass-deep: #B18C39;
+  --on-brass: #1C130A;
+  --line: rgba(239, 232, 216, 0.09);
+  --line-strong: rgba(239, 232, 216, 0.20);
+  --green: #5CBE8F;
+  --red: #E0796A;
+  --amber: #D9AC52;
+  --blue: #8AA9DE;
+  --purple: #A78BFA;
+  --pink: #F472B6;
+  --btc: #F7931A;
+
+  --ink-a02: rgba(239, 232, 216, 0.02);
+  --ink-a03: rgba(239, 232, 216, 0.03);
+  --ink-a04: rgba(239, 232, 216, 0.045);
+  --ink-a06: rgba(239, 232, 216, 0.065);
+  --ink-a08: rgba(239, 232, 216, 0.085);
+  --ink-a10: rgba(239, 232, 216, 0.10);
+  --ink-a12: rgba(239, 232, 216, 0.12);
+  --ink-a14: rgba(239, 232, 216, 0.14);
+  --ink-a18: rgba(239, 232, 216, 0.18);
+
+  --brass-a06: rgba(210, 172, 88, 0.07);
+  --brass-a08: rgba(210, 172, 88, 0.09);
+  --brass-a10: rgba(210, 172, 88, 0.11);
+  --brass-a12: rgba(210, 172, 88, 0.13);
+  --brass-a16: rgba(210, 172, 88, 0.17);
+  --brass-a20: rgba(210, 172, 88, 0.21);
+  --brass-a25: rgba(210, 172, 88, 0.26);
+  --brass-a32: rgba(210, 172, 88, 0.33);
+  --brass-a40: rgba(210, 172, 88, 0.42);
+  --brass-a55: rgba(210, 172, 88, 0.55);
+
+  --ink-a05: rgba(239, 232, 216, 0.055);
+  --ink-a20: rgba(239, 232, 216, 0.20);
+  --ink-a25: rgba(239, 232, 216, 0.25);
+  --brass-a85: rgba(210, 172, 88, 0.85);
+  --amber-a08: rgba(217, 172, 82, 0.10);
+  --amber-a35: rgba(217, 172, 82, 0.38);
+  --red-a32: rgba(224, 121, 106, 0.35);
+  --green-a06: rgba(92, 190, 143, 0.08);
+  --green-a50: rgba(92, 190, 143, 0.55);
+  --chip-ink: #14110B;
+  --white-edge: rgba(255, 255, 255, 0.03);
+  --white-inset: rgba(255, 255, 255, 0.045);
+  --scrim: rgba(6, 4, 1, 0.72);
+  --glass: rgba(18, 15, 9, 0.82);
+  --shadow-card: 0 1px 2px rgba(0, 0, 0, 0.25), 0 6px 20px rgba(0, 0, 0, 0.22);
+  --shadow-float: 0 18px 50px rgba(0, 0, 0, 0.55);
+  --shadow-deep: 0 32px 80px rgba(0, 0, 0, 0.65);
+  --glow-brass: 0 0 26px rgba(210, 172, 88, 0.16);
+  --focus-ring: 0 0 0 2px var(--bg), 0 0 0 4px var(--brass-a55);
+  --canvas-wash: radial-gradient(1200px 520px at 50% -12%, rgba(210, 172, 88, 0.055), transparent 60%);
+}
+
+/* ── base ──────────────────────────────────────────────────────────────────── */
+*, *::before, *::after { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+* { -webkit-font-smoothing: antialiased; text-rendering: optimizeLegibility; }
+html, body { margin: 0; font-family: var(--font-body); overscroll-behavior-y: none; }
+html { background: var(--bg); } /* iOS rubber-band shows html, not body */
+body {
+  color: var(--ink);
+  background-color: var(--bg);
+  background-image: var(--canvas-wash);
+  background-repeat: no-repeat;
+}
+h1, h2, h3 { text-wrap: balance; }
+::selection { background: var(--brass-a25); color: var(--ink); }
+* { scrollbar-width: thin; scrollbar-color: var(--ink-a18) transparent; }
+::-webkit-scrollbar { width: 8px; height: 8px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: var(--ink-a18); border-radius: 10px; }
+textarea, input, select, button { font-family: var(--font-body); }
+button, a, input, textarea {
+  transition: color var(--dur-1) ease, background-color var(--dur-1) ease,
+    border-color var(--dur-1) ease, opacity var(--dur-1) ease,
+    transform var(--dur-1) var(--ease-out), box-shadow var(--dur-2) var(--ease-out);
+}
+button:focus-visible, input:focus-visible, textarea:focus-visible { outline: none; box-shadow: var(--focus-ring); }
+input::placeholder, textarea::placeholder { color: var(--faint); }
+textarea:focus, input:focus { outline: none; }
+@media (max-width: 760px) { input, textarea, select { font-size: 16px !important; } }
+
+/* numbers behave like instruments — nothing jiggles on update */
+.mono, .num, table td, kbd { font-variant-numeric: tabular-nums; }
+
+/* theme cross-fade: .theme-anim rides along for one beat when the room changes */
+html.theme-anim, html.theme-anim body,
+html.theme-anim *, html.theme-anim *::before, html.theme-anim *::after {
+  transition: background-color 480ms var(--ease-inout), color 480ms var(--ease-inout),
+    border-color 480ms var(--ease-inout), box-shadow 480ms var(--ease-inout),
+    fill 480ms var(--ease-inout), stroke 480ms var(--ease-inout) !important;
+}
+
+/* ── press physics — every touch acknowledged inside 100ms ─────────────────── */
+button:active:not(:disabled) { transform: scale(0.97); }
+.press:active { transform: scale(0.97); }
+.lift { transition: transform var(--dur-2) var(--ease-out), box-shadow var(--dur-2) var(--ease-out), border-color var(--dur-2) ease; }
+.lift:hover { transform: translateY(-1px); box-shadow: var(--shadow-card); }
+
+/* ── page + tab transitions — nothing hard-cuts ────────────────────────────── */
+.pagefade { animation: pagein var(--dur-3) var(--ease-out) both; }
+@keyframes pagein {
+  from { opacity: 0; transform: translateY(7px); filter: blur(2px); }
+  to { opacity: 1; transform: none; filter: none; }
+}
+
+/* entrance choreography: plates develop top-to-bottom */
+.stagger > * { animation: rise var(--dur-3) var(--ease-out) both; animation-delay: calc(var(--i, 0) * 45ms); }
+@keyframes rise { from { opacity: 0; transform: translateY(9px); } to { opacity: 1; transform: none; } }
+.stagger > *:nth-child(1) { --i: 0 } .stagger > *:nth-child(2) { --i: 1 }
+.stagger > *:nth-child(3) { --i: 2 } .stagger > *:nth-child(4) { --i: 3 }
+.stagger > *:nth-child(5) { --i: 4 } .stagger > *:nth-child(6) { --i: 5 }
+.stagger > *:nth-child(7) { --i: 6 } .stagger > *:nth-child(8) { --i: 7 }
+.stagger > *:nth-child(9) { --i: 7 } .stagger > *:nth-child(n+10) { --i: 7 }
+
+/* ── skeletons — pages develop instead of arrive ───────────────────────────── */
+.sk { position: relative; overflow: hidden; background: var(--ink-a06); border-radius: 8px; }
+.sk::after {
+  content: ''; position: absolute; inset: 0; transform: translateX(-100%);
+  background: linear-gradient(90deg, transparent, var(--ink-a04), transparent);
+  animation: shimmer 1.4s infinite;
+}
+@keyframes shimmer { 100% { transform: translateX(100%); } }
+.sk-line { height: 12px; margin: 8px 0; }
+.sk-line.w40 { width: 40%; } .sk-line.w60 { width: 60%; } .sk-line.w80 { width: 80%; }
+.sk-big { height: 28px; width: 55%; margin: 10px 0 6px; }
+
+/* ── height:auto expansion, zero measuring, zero jank ──────────────────────── */
+.expand { display: grid; grid-template-rows: 0fr; transition: grid-template-rows var(--dur-3) var(--ease-out); }
+.expand.open { grid-template-rows: 1fr; }
+.expand > div { overflow: hidden; min-height: 0; }
+
+/* ── toasts — spring in, fade out, never shift layout ──────────────────────── */
+.toasts {
+  position: fixed; bottom: calc(88px + env(safe-area-inset-bottom)); left: 50%;
+  transform: translateX(-50%); z-index: 900; display: flex; flex-direction: column;
+  gap: 8px; align-items: center; pointer-events: none; padding: 0 14px; width: 100%; max-width: 440px;
+}
+@media (min-width: 761px) { .toasts { bottom: 22px; } }
+.toast {
+  pointer-events: auto; background: var(--surface); border: 1px solid var(--line-strong);
+  color: var(--ink); border-radius: 12px; padding: 11px 16px; font-size: 13px;
+  box-shadow: var(--shadow-float); animation: toastin var(--dur-3) var(--ease-spring) both;
+  display: flex; gap: 10px; align-items: center;
+}
+.toast.out { animation: toastout var(--dur-2) var(--ease-out) both; }
+.toast .tdot { width: 7px; height: 7px; flex: none; transform: rotate(45deg); border-radius: 1.5px; background: var(--green); }
+.toast.err .tdot { background: var(--red); }
+@keyframes toastin { from { opacity: 0; transform: translateY(14px) scale(0.97); } to { opacity: 1; transform: none; } }
+@keyframes toastout { to { opacity: 0; transform: translateY(8px) scale(0.98); } }
+
+/* ── shared keyframes (legacy names kept — call sites reference them) ──────── */
+@keyframes fadein { from { opacity: 0; transform: translateY(5px); } to { opacity: 1; transform: none; } }
+@keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.35; } }
+@keyframes sheetup { from { opacity: 0; transform: translateY(40px); } to { opacity: 1; transform: none; } }
+@keyframes breathe {
+  0%, 100% { box-shadow: 0 0 10px var(--brass-a25), inset 0 1px 0 var(--white-inset); }
+  50% { box-shadow: 0 0 22px var(--brass-a40), inset 0 1px 0 var(--white-inset); }
+}
+@keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
+@keyframes shake {
+  10%, 90% { transform: translateX(-2px); } 20%, 80% { transform: translateX(4px); }
+  30%, 50%, 70% { transform: translateX(-8px); } 40%, 60% { transform: translateX(8px); }
+}
+
+/* ── controls ──────────────────────────────────────────────────────────────── */
+input[type=range].scoreSlider {
+  -webkit-appearance: none; appearance: none; width: 100%; height: 6px; border-radius: 999px;
+  background: linear-gradient(to right, var(--slider-color, var(--faint)) 0%, var(--slider-color, var(--faint)) var(--slider-fill, 50%), var(--ink-a12) var(--slider-fill, 50%), var(--ink-a12) 100%);
+  outline: none; cursor: pointer; margin: 0;
+}
+input[type=range].scoreSlider::-webkit-slider-thumb {
+  -webkit-appearance: none; appearance: none; width: 18px; height: 18px; border-radius: 50%;
+  background: var(--slider-color, var(--faint)); border: 2px solid var(--bg);
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.3); cursor: pointer;
+}
+input[type=range].scoreSlider::-moz-range-thumb {
+  width: 18px; height: 18px; border-radius: 50%; background: var(--slider-color, var(--faint));
+  border: 2px solid var(--bg); box-shadow: 0 1px 4px rgba(0, 0, 0, 0.3); cursor: pointer;
+}
+input[type=range].scoreSlider::-moz-range-track { height: 6px; border-radius: 999px; background: var(--ink-a12); }
+input[type=range].scoreSlider::-moz-range-progress { height: 6px; border-radius: 999px; background: var(--slider-color, var(--faint)); }
+
+kbd {
+  font-family: var(--font-mono); font-size: 10px; color: var(--sub);
+  border: 1px solid var(--line-strong); border-bottom-width: 2px; border-radius: 5px; padding: 1px 5px;
+}
+
+/* ── convening: the seats light up one by one ──────────────────────────────── */
+.convene { display: inline-flex; align-items: center; gap: 7px; }
+.convene .cd {
+  width: 6px; height: 6px; flex: none; transform: rotate(45deg); border-radius: 1.5px;
+  background: var(--brass); animation: convene 1.25s var(--ease-inout) infinite;
+}
+.convene .cd:nth-child(2) { animation-delay: 0.16s; }
+.convene .cd:nth-child(3) { animation-delay: 0.32s; }
+@keyframes convene {
+  0%, 100% { opacity: 0.25; transform: rotate(45deg) scale(0.75); }
+  40% { opacity: 1; transform: rotate(45deg) scale(1); }
+}
+
+/* ── shell: header ─────────────────────────────────────────────────────────── */
+.shell-header {
+  flex: none; display: flex; align-items: center; justify-content: space-between;
+  padding: env(safe-area-inset-top) 16px 0; height: calc(54px + env(safe-area-inset-top));
+  border-bottom: 1px solid var(--line);
+  background: var(--glass);
+  -webkit-backdrop-filter: blur(16px); backdrop-filter: blur(16px);
+}
+.page-title { display: inline-block; animation: trackin var(--dur-3) var(--ease-out) both; }
+@keyframes trackin {
+  from { opacity: 0; letter-spacing: 0.34em; filter: blur(2px); }
+  to { opacity: 1; letter-spacing: 0.16em; filter: none; }
+}
+
+/* ── shell: the dock — floating brass-and-glass tab bar ────────────────────── */
+.dock-wrap {
+  position: absolute; left: 0; right: 0; bottom: 0; z-index: 100;
+  padding: 0 12px calc(10px + env(safe-area-inset-bottom)); pointer-events: none;
+}
+.dock {
+  pointer-events: auto; position: relative; display: flex;
+  background: var(--glass);
+  -webkit-backdrop-filter: blur(20px); backdrop-filter: blur(20px);
+  border: 1px solid var(--line-strong); border-radius: 22px;
+  box-shadow: var(--shadow-float), var(--glow-brass);
+  max-width: 430px; margin: 0 auto;
+}
+.dock-tab {
+  flex: 1; min-height: 58px; position: relative; background: none; border: none;
+  cursor: pointer; display: flex; flex-direction: column; align-items: center;
+  justify-content: center; gap: 3px; padding: 8px 0 7px; border-radius: 22px;
+}
+.dock-tab .dock-label {
+  font-family: var(--font-display); font-size: 8px; font-weight: 700;
+  letter-spacing: 0.12em; text-transform: uppercase; line-height: 1;
+  white-space: nowrap; max-width: 100%; overflow: hidden;
+  transition: color var(--dur-2) ease, opacity var(--dur-2) ease;
+}
+.dock-ember {
+  position: absolute; top: 6px; width: 5px; height: 5px; border-radius: 1.5px;
+  background: var(--brass); transform: translateX(-50%) rotate(45deg);
+  box-shadow: 0 0 8px var(--brass-a55);
+  transition: left var(--dur-3) var(--ease-spring);
+  pointer-events: none;
+}
+
+/* ── boot: the seal draws itself while the room wakes ──────────────────────── */
+.boot {
+  position: fixed; inset: 0; display: flex; flex-direction: column;
+  align-items: center; justify-content: center; gap: 22px;
+  background: var(--bg); background-image: var(--canvas-wash); background-repeat: no-repeat;
+  z-index: 1000; animation: fadein var(--dur-3) ease both;
+}
+.boot.leaving { animation: bootout var(--dur-3) var(--ease-out) both; }
+@keyframes bootout { to { opacity: 0; filter: blur(3px); } }
+.boot .seal-ring {
+  fill: none; stroke: var(--brass); stroke-width: 1.6; stroke-linecap: round;
+  stroke-dasharray: 232; stroke-dashoffset: 232;
+  animation: drawring 1.5s var(--ease-inout) 0.15s forwards;
+  transform-box: fill-box; transform: rotate(-90deg); transform-origin: center;
+}
+@keyframes drawring { to { stroke-dashoffset: 0; } }
+.boot .seal-diamond {
+  fill: var(--brass); opacity: 0;
+  animation: sealdia 0.7s var(--ease-spring) 1.1s forwards;
+  transform-box: fill-box; transform-origin: center;
+}
+@keyframes sealdia { from { opacity: 0; transform: rotate(45deg) scale(0.4); } to { opacity: 1; transform: rotate(45deg) scale(1); } }
+.boot-title {
+  font-family: var(--font-display); font-size: 13px; font-weight: 700;
+  text-transform: uppercase; color: var(--ink);
+  animation: trackin var(--dur-4) var(--ease-out) 0.9s both;
+}
+.boot-sub {
+  font-family: var(--font-mono); font-size: 9px; letter-spacing: 0.22em;
+  text-transform: uppercase; color: var(--faint);
+  animation: fadein var(--dur-4) ease 1.4s both;
+}
+
+/* ── entrance (login) ──────────────────────────────────────────────────────── */
+.entrance {
+  min-height: 100dvh; display: flex; align-items: center; justify-content: center;
+  padding: 20px; flex-direction: column; gap: 26px;
+}
+.entrance-card {
+  width: 380px; max-width: 94vw; padding: 30px 32px;
+  background: var(--surface); border: 1px solid var(--line); border-radius: 18px;
+  box-shadow: var(--shadow-deep), inset 0 1px 0 var(--white-inset);
+  animation: rise var(--dur-4) var(--ease-out) 0.5s both;
+}
+.entrance .seal-ring {
+  fill: none; stroke: var(--brass); stroke-width: 1.6; stroke-linecap: round;
+  stroke-dasharray: 232; stroke-dashoffset: 232;
+  animation: drawring 1.4s var(--ease-inout) 0.1s forwards;
+  transform-box: fill-box; transform: rotate(-90deg); transform-origin: center;
+}
+.entrance .seal-diamond {
+  fill: var(--brass); opacity: 0;
+  animation: sealdia 0.7s var(--ease-spring) 0.9s forwards;
+  transform-box: fill-box; transform-origin: center;
+}
+
+/* ── the mandate: motion is optional to the user's nervous system ──────────── */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation-duration: 0.01ms !important; animation-delay: 0s !important; transition-duration: 0.01ms !important; }
+  .pagefade, .stagger > *, .toast, .page-title { animation: none !important; }
+  .expand, .dock-ember { transition: none; }
+  .sk::after { animation: none; }
+}

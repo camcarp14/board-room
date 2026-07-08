@@ -1,14 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { createChart, CandlestickSeries, ColorType } from "lightweight-charts";
-
-// Small standalone theme subset so this file has no dependency on App.jsx's
-// internals — it just needs a callFnFull(name, payload) passed in as a prop,
-// which App.jsx already has defined at module scope.
-const T = {
-  ink: "#221D14", sub: "#6C6455", faint: "#9A9280",
-  brass: "#8F6B1E", line: "rgba(34,29,20,0.10)",
-  green: "#1F7A55", red: "#B23A2E",
-};
+import { T, cssVar } from "./theme.js";
 
 const INTERVALS = [
   { key: "1m", label: "1m" },
@@ -23,10 +15,11 @@ export default function BtcChartModal({ isMobile, onClose, callFnFull }) {
   const [interval, setInterval_] = useState("1m");
   const [candles, setCandles] = useState(null);
   const [candleErr, setCandleErr] = useState(null);
+  const [retryNonce, setRetryNonce] = useState(0);
 
   const containerRef = useRef(null);
 
-  // Fetch candles whenever the interval changes
+  // Fetch candles whenever the interval changes (or Retry is tapped)
   useEffect(() => {
     let cancelled = false;
     setCandles(null);
@@ -37,26 +30,32 @@ export default function BtcChartModal({ isMobile, onClose, callFnFull }) {
       else setCandleErr(data?.error || "Couldn't load candles — try again in a moment.");
     });
     return () => { cancelled = true; };
-  }, [interval]);
+  }, [interval, retryNonce]);
 
   // Render the candlestick chart
   useEffect(() => {
     if (!containerRef.current || !candles || !candles.length) return;
+    // lightweight-charts draws to canvas — resolve the CSS variables to
+    // literals at creation so the chart matches the room's current theme.
+    const C = {
+      sub: cssVar("--sub"), line: cssVar("--line"), brass: cssVar("--brass"),
+      green: cssVar("--green"), red: cssVar("--red"),
+    };
     const chart = createChart(containerRef.current, {
-      layout: { background: { type: ColorType.Solid, color: "transparent" }, textColor: T.sub, fontFamily: "'DM Mono', monospace", fontSize: 11 },
-      grid: { vertLines: { color: T.line }, horzLines: { color: T.line } },
-      rightPriceScale: { borderColor: T.line },
-      timeScale: { borderColor: T.line, timeVisible: interval !== "1d" && interval !== "1w" },
+      layout: { background: { type: ColorType.Solid, color: "transparent" }, textColor: C.sub, fontFamily: "'DM Mono', monospace", fontSize: 11 },
+      grid: { vertLines: { color: C.line }, horzLines: { color: C.line } },
+      rightPriceScale: { borderColor: C.line },
+      timeScale: { borderColor: C.line, timeVisible: interval !== "1d" && interval !== "1w" },
       crosshair: {
-        vertLine: { color: T.brass, labelBackgroundColor: T.brass },
-        horzLine: { color: T.brass, labelBackgroundColor: T.brass },
+        vertLine: { color: C.brass, labelBackgroundColor: C.brass },
+        horzLine: { color: C.brass, labelBackgroundColor: C.brass },
       },
       width: containerRef.current.clientWidth,
       height: isMobile ? 300 : 400,
     });
     const series = chart.addSeries(CandlestickSeries, {
-      upColor: T.green, downColor: T.red, borderVisible: false,
-      wickUpColor: T.green, wickDownColor: T.red,
+      upColor: C.green, downColor: C.red, borderVisible: false,
+      wickUpColor: C.green, wickDownColor: C.red,
     });
     series.setData(candles);
     chart.timeScale().fitContent();
@@ -67,12 +66,12 @@ export default function BtcChartModal({ isMobile, onClose, callFnFull }) {
   }, [candles, interval, isMobile]);
 
   return (
-    <div onClick={onClose} style={{ position: "fixed", inset: 0, background: "rgba(4,7,14,0.72)", zIndex: 500, display: "flex", alignItems: "center", justifyContent: "center", padding: isMobile ? 16 : 0, animation: "fadein 0.15s ease both" }}>
+    <div onClick={onClose} style={{ position: "fixed", inset: 0, background: "var(--scrim)", zIndex: 500, display: "flex", alignItems: "center", justifyContent: "center", padding: isMobile ? 16 : 0, animation: "fadein 0.15s ease both" }}>
       <div onClick={e => e.stopPropagation()} style={{
-        background: "linear-gradient(180deg,#FFFFFF,#F6F3ED)", borderRadius: 18,
+        background: "linear-gradient(180deg, var(--surface-2), var(--surface))", borderRadius: 18,
         padding: "20px 20px calc(20px + env(safe-area-inset-bottom))", width: isMobile ? "100%" : 720, maxWidth: 720,
         maxHeight: isMobile ? "88vh" : "86vh", overflowY: "auto",
-        border: "1px solid rgba(34,29,20,0.1)", boxShadow: "0 32px 80px rgba(30,25,17,0.42)", color: T.ink,
+        border: "1px solid var(--line)", boxShadow: "var(--shadow-deep)", color: T.ink,
       }}>
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 14 }}>
           <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
@@ -92,7 +91,7 @@ export default function BtcChartModal({ isMobile, onClose, callFnFull }) {
                   padding: "6px 14px", borderRadius: 999, cursor: "pointer",
                   border: selected ? `1px solid ${T.brass}` : `1px solid ${T.line}`,
                   background: selected ? T.brass : "transparent",
-                  color: selected ? "#FCFBF9" : T.sub,
+                  color: selected ? "var(--on-brass)" : T.sub,
                   transition: "all 120ms ease",
                 }}>
                 {iv.label}
@@ -101,8 +100,18 @@ export default function BtcChartModal({ isMobile, onClose, callFnFull }) {
           })}
         </div>
 
-        {candleErr && <div style={{ fontSize: 11.5, color: T.faint, padding: "30px 0", textAlign: "center", lineHeight: 1.6 }}>{candleErr}</div>}
-        {!candleErr && !candles && <div style={{ fontSize: 11.5, color: T.faint, padding: "30px 0", textAlign: "center", animation: "pulse 1.4s infinite" }}>Loading candles…</div>}
+        {candleErr && (
+          <div style={{ padding: "30px 0", textAlign: "center" }}>
+            <div style={{ fontSize: 11.5, color: T.faint, lineHeight: 1.6, marginBottom: 10 }}>{candleErr}</div>
+            <button onClick={() => setRetryNonce(n => n + 1)}
+              style={{ background: "transparent", border: "1px solid var(--line-strong)", borderRadius: 8, color: T.sub, fontWeight: 600, cursor: "pointer", padding: "7px 16px", fontSize: 11 }}>
+              Retry
+            </button>
+          </div>
+        )}
+        {!candleErr && !candles && (
+          <div className="sk" style={{ width: "100%", height: isMobile ? 300 : 400, borderRadius: 12 }} />
+        )}
         {!candleErr && candles && <div ref={containerRef} style={{ width: "100%" }} />}
       </div>
     </div>

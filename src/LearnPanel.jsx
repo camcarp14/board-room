@@ -16,24 +16,19 @@
 //                           worker has a mirrored copy (keep in sync).
 //   SKILLS_SETUP_SQL      — one-time table + RLS, shown in-app if missing.
 import { useState, useEffect, useMemo, useRef } from "react";
+import { T, syne, mono } from "./theme.js";
 
-// ─── design tokens — duplicated from App.jsx on purpose (keep in sync) ───────
-const syne = "'Cinzel', 'Trajan Pro', Georgia, serif";
-const mono = "'DM Mono', 'SF Mono', Menlo, monospace";
-const T = {
-  bg: "#F4F2ED", surface: "#FBFAF8", ink: "#201B12", sub: "#635C4C", faint: "#99917E",
-  brass: "#8A671C", brassDeep: "#6A4D12", line: "rgba(32,27,18,0.09)", lineStrong: "rgba(32,27,18,0.18)",
-  green: "#1F7A55", red: "#B23A2E", amber: "#A2700E", blue: "#31589C",
-};
+// Palette tokens come from theme.js (CSS variables — Daylight/Nocturne aware).
+// S keeps this panel's plate shapes, pixel-identical to its siblings.
 const S = {
   card: { background: T.surface, border: `1px solid ${T.line}`, borderRadius: 14, padding: "20px 22px", boxShadow: "none" },
   cardM: { background: T.surface, border: `1px solid ${T.line}`, borderRadius: 13, padding: "17px 16px", boxShadow: "none" },
   inner: { background: "transparent", border: `1px solid ${T.line}`, borderRadius: 10 },
   title: { fontSize: 11, fontWeight: 600, fontFamily: syne, color: T.ink, letterSpacing: "0.18em", textTransform: "uppercase" },
   microLabel: { fontSize: 9, color: T.faint, fontFamily: mono, letterSpacing: "0.14em", textTransform: "uppercase" },
-  brassBtn: { background: T.brass, color: "#FCFBF8", border: "none", borderRadius: 9, fontWeight: 700, fontFamily: syne, letterSpacing: "0.04em", cursor: "pointer" },
+  brassBtn: { background: T.brass, color: T.onBrass, border: "none", borderRadius: 9, fontWeight: 700, fontFamily: syne, letterSpacing: "0.04em", cursor: "pointer" },
   ghostBtn: { background: "transparent", border: `1px solid ${T.lineStrong}`, borderRadius: 9, color: T.sub, fontWeight: 600, cursor: "pointer" },
-  input: { background: "#FFFFFF", border: `1px solid ${T.lineStrong}`, borderRadius: 9, color: T.ink, outline: "none", fontSize: 13, fontFamily: "inherit" },
+  input: { background: T.surface2, border: `1px solid ${T.lineStrong}`, borderRadius: 9, color: T.ink, outline: "none", fontSize: 13, fontFamily: "inherit" },
 };
 
 // ─── one-time setup SQL ───────────────────────────────────────────────────────
@@ -212,8 +207,8 @@ function SetupCard({ isMobile }) {
 function Toggle({ on, onChange, label }) {
   return (
     <button onClick={onChange} aria-label={label}
-      style={{ width: 34, height: 20, borderRadius: 12, border: `1px solid ${on ? T.brass : T.lineStrong}`, background: on ? T.brass : "rgba(32,27,18,0.06)", position: "relative", cursor: "pointer", flex: "none", padding: 0 }}>
-      <span style={{ position: "absolute", top: 2, left: on ? 16 : 2, width: 14, height: 14, borderRadius: "50%", background: "#FCFBF8", boxShadow: "0 1px 2px rgba(34,29,20,0.25)", transition: "left 0.15s ease" }} />
+      style={{ width: 34, height: 20, borderRadius: 12, border: `1px solid ${on ? T.brass : T.lineStrong}`, background: on ? T.brass : "var(--ink-a06)", position: "relative", cursor: "pointer", flex: "none", padding: 0 }}>
+      <span style={{ position: "absolute", top: 2, left: on ? 16 : 2, width: 14, height: 14, borderRadius: "50%", background: "var(--on-brass)", boxShadow: "0 1px 2px rgba(0,0,0,0.3)", transition: "left 0.15s ease" }} />
     </button>
   );
 }
@@ -232,7 +227,7 @@ function SkillCard({ skill, isMobile, onToggle, onSave, onDelete, spotlight }) {
   const commit = () => { onSave({ ...skill, ...draft }); setEditing(false); };
 
   return (
-    <div ref={cardRef} style={{ ...S.inner, padding: "12px 14px", opacity: skill.enabled ? 1 : 0.55, transition: "opacity 0.15s ease", ...(spotlight ? { borderColor: "rgba(138,103,28,0.45)" } : {}) }}>
+    <div ref={cardRef} style={{ ...S.inner, padding: "12px 14px", opacity: skill.enabled ? 1 : 0.55, transition: "opacity 0.15s ease", ...(spotlight ? { borderColor: "var(--brass-a40)" } : {}) }}>
       <div style={{ display: "flex", alignItems: "flex-start", gap: 10 }}>
         <span style={{ marginTop: 3, width: 8, height: 8, borderRadius: 2, transform: "rotate(45deg)", background: skill.enabled ? T.brass : T.faint, flex: "none" }} />
         <div style={{ flex: 1, minWidth: 0, cursor: "pointer" }} onClick={() => !editing && setOpen(o => !o)}>
@@ -249,11 +244,11 @@ function SkillCard({ skill, isMobile, onToggle, onSave, onDelete, spotlight }) {
 
       {open && !editing && (
         <div style={{ marginTop: 10 }}>
-          <div style={{ background: "rgba(34,29,20,0.045)", border: "1px solid rgba(34,29,20,0.05)", borderRadius: 9, padding: "11px 13px", fontSize: 11.5, color: T.sub, lineHeight: 1.7, whiteSpace: "pre-wrap", maxHeight: 300, overflowY: "auto" }}>{skill.content}</div>
+          <div style={{ background: "var(--ink-a04)", border: "1px solid var(--ink-a05)", borderRadius: 9, padding: "11px 13px", fontSize: 11.5, color: T.sub, lineHeight: 1.7, whiteSpace: "pre-wrap", maxHeight: 300, overflowY: "auto" }}>{skill.content}</div>
           <div style={{ display: "flex", gap: 8, marginTop: 9 }}>
             <button onClick={startEdit} style={{ ...S.ghostBtn, padding: "7px 14px", fontSize: 10.5 }}>Edit</button>
             <button onClick={() => { if (window.confirm(`Forget "${skill.title}"? This can't be undone.`)) onDelete(skill.id); }}
-              style={{ ...S.ghostBtn, padding: "7px 14px", fontSize: 10.5, color: T.red, borderColor: "rgba(178,58,46,0.3)" }}>Forget</button>
+              style={{ ...S.ghostBtn, padding: "7px 14px", fontSize: 10.5, color: T.red, borderColor: "var(--red-a32)" }}>Forget</button>
           </div>
         </div>
       )}
@@ -329,7 +324,7 @@ export default function LearnPanel({ isMobile, supabase, callClaude, session, mo
     <div style={{ display: "flex", flexDirection: "column", gap: isMobile ? 12 : 14 }}>
 
       {/* teach it */}
-      <div style={{ ...card, background: "rgba(138,103,28,0.05)", border: "1px solid rgba(138,103,28,0.22)" }}>
+      <div style={{ ...card, background: "var(--brass-a06)", border: "1px solid var(--brass-a20)" }}>
         <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", gap: 10, marginBottom: 4 }}>
           <span style={S.title}>Teach Mini Me</span>
           <span style={S.microLabel}>also works as /learn in chat</span>

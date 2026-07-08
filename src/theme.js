@@ -1,75 +1,79 @@
-// ─── Board Room design tokens ──────────────────────────────────────────────
-// Same token SHAPE as clarify-outreach/theme.js and zts-command-center/theme.js
-// (gold/ink/canvas/signals/type/radii/shadows) so the three apps stay easy to
-// maintain side by side — but different VALUES on purpose. Board Room is your
-// personal command center, not a business-facing tool, and keeps its own
-// bronze/Roman identity (Cinzel display face, warmer cream canvas) rather than
-// matching Clarify/ZTS's cooler gold-on-slate look.
-//
-// Extracted from the hex values already in use across App.jsx — nothing here
-// changes how anything currently looks, it just gives those values one home.
-// Note: the `syne` variable name still used at ~100 call sites in App.jsx
-// actually holds the Cinzel font stack now (left over from the reskin) —
-// this file uses honest names; renaming the call sites is separate work.
+// ─── Board Room design tokens — the bridge between styles.css and JSX ────────
+// Every value here is a CSS custom property defined (twice) in styles.css:
+// once for Daylight, once for Nocturne. Inline styles that reference T.*
+// re-resolve automatically when [data-theme] flips — no re-render needed.
+// Anything that draws to a real canvas (lightweight-charts) can't use var()
+// and should resolve literals through cssVar() at draw time instead.
+
+export const syne = "var(--font-display)"; // historical name — carries Cinzel
+export const mono = "var(--font-mono)";
 
 export const T = {
-  // brand (bronze/gold range — Board Room uses more of this range than
-  // Clarify/ZTS, which lean on a single gold)
-  gold: "#B68A2E",       // shared value with Clarify/ZTS — same gold, coincidentally
-  goldHi: "#C77416",
-  goldDeep: "#A2700E",
-  bronze: "#8F6B1E",
-  bronzeDeep: "#6A4D12",
-  bronzeWarm: "#9a7b4f",
-  goldSoft: "rgba(143,107,30,0.06)",
-
-  // ink & text
-  ink: "#221D14",
-  inkDeep: "#1A0F00",
-  inkBrand: "#3A3323",
-  muted: "#6C6455",
-  faint: "#9A9280",
-
-  // canvas
-  bg: "#F3F1EC",
-  surface: "#FFFFFF",
-  subtle: "#FCFBF9",
-  subtleAlt: "#F5F3EE",
-  line: "rgba(58,51,35,0.08)",
-  lineSoft: "rgba(58,51,35,0.06)",
-
-  // signals
-  red: "#B23A2E",
-  blue: "#31589C",
-  pink: "#EC4899",
-  purple: "#7C3AED",
-  purpleHi: "#8B5CF6",
-  green: "#0E9F6E",
-  greenDeep: "#1F7A55",
-  greenDeep2: "#166042",
-  btcOrange: "#F7931A", // Bitcoin's own brand orange — used for BTC-specific UI only, not a general signal color
-
-  // type
-  fontDisplay: "'Cinzel', 'Times New Roman', serif",
-  fontBody: "'Inter', system-ui, sans-serif",
-  fontMono: "'DM Mono', monospace",
-
-  // radii
-  rSm: "8px",
-  rMd: "10px",
-  rLg: "14px",
-  rPill: "999px",
-
-  // shadows
-  shadowCard: "0 1px 2px rgba(58,51,35,0.05), 0 4px 16px rgba(58,51,35,0.05), 0 0 0 1px rgba(58,51,35,0.03)",
-  shadowTab: "0 1px 2px rgba(58,51,35,0.08), 0 2px 6px rgba(58,51,35,0.06)",
-  focusRing: "0 0 0 3px rgba(182,138,46,0.32)",
+  bg: "var(--bg)",
+  surface: "var(--surface)",
+  surface2: "var(--surface-2)",
+  ink: "var(--ink)",
+  sub: "var(--sub)",
+  faint: "var(--faint)",
+  brass: "var(--brass)",
+  brassHi: "var(--brass-hi)",
+  brassDeep: "var(--brass-deep)",
+  onBrass: "var(--on-brass)",
+  line: "var(--line)",
+  lineStrong: "var(--line-strong)",
+  green: "var(--green)",
+  red: "var(--red)",
+  amber: "var(--amber)",
+  blue: "var(--blue)",
+  purple: "var(--purple)",
+  pink: "var(--pink)",
+  btc: "var(--btc)",
 };
 
-// One severity vocabulary — same meanings, same shape as the other two apps.
+// One severity vocabulary across the app.
 export const SEV = {
   critical: T.red,
-  warning: T.goldHi,
-  info: T.muted,
+  warning: T.amber,
+  info: T.sub,
   pass: T.green,
 };
+
+// Resolve a CSS variable to its literal value (canvas renderers need this).
+export function cssVar(name) {
+  return getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+}
+
+// ─── Theme controller — the room follows the sun ─────────────────────────────
+// Preference lives in localStorage (must apply before auth/data, no flash):
+//   "auto" (default) — Nocturne from 19:00 to 07:00, Daylight otherwise
+//   "day" / "night"  — pinned
+// index.html runs the same logic inline pre-paint; these keep it live after.
+
+const THEME_KEY = "br_theme";
+export const THEME_COLORS = { day: "#F4F2ED", night: "#14110B" };
+
+export function getThemePref() {
+  try { return localStorage.getItem(THEME_KEY) || "auto"; } catch { return "auto"; }
+}
+
+export function setThemePref(pref) {
+  try { localStorage.setItem(THEME_KEY, pref); } catch {}
+}
+
+export function resolveTheme(pref = getThemePref(), d = new Date()) {
+  if (pref === "day" || pref === "night") return pref;
+  const h = d.getHours();
+  return h >= 19 || h < 7 ? "night" : "day";
+}
+
+export function applyTheme(resolved, { animate = false } = {}) {
+  const root = document.documentElement;
+  if (root.dataset.theme === resolved) return;
+  if (animate) {
+    root.classList.add("theme-anim");
+    window.setTimeout(() => root.classList.remove("theme-anim"), 520);
+  }
+  root.dataset.theme = resolved;
+  const meta = document.querySelector('meta[name="theme-color"]');
+  if (meta) meta.content = THEME_COLORS[resolved] || THEME_COLORS.day;
+}

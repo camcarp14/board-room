@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef, useCallback, useMemo } from "react";
 import { createClient } from "@supabase/supabase-js";
+import { T, syne, mono, getThemePref, setThemePref, resolveTheme, applyTheme } from "./theme.js";
 import GscLineChart from "./GscLineChart.jsx";
 import BtcChartModal from "./BtcChartModal.jsx";
 import WorkoutPanel from "./WorkoutPanel.jsx";
@@ -18,6 +19,16 @@ const SUPABASE_ANON_KEY = import.meta.env.VITE_SUPABASE_ANON_KEY || "";
 const supabase = SUPABASE_URL && SUPABASE_ANON_KEY ? createClient(SUPABASE_URL, SUPABASE_ANON_KEY) : null;
 
 const ANTHROPIC_API_KEY = import.meta.env.VITE_ANTHROPIC_API_KEY || "";
+
+// Dev-only design preview: `vite` + VITE_PREVIEW=1 renders the shell with no
+// session, so every card shows its designed empty/loading/error state.
+// import.meta.env.DEV is compile-time false in production builds — this whole
+// path is stripped from the deployed bundle.
+const PREVIEW = import.meta.env.DEV && import.meta.env.VITE_PREVIEW === "1";
+const previewParam = (k) => (PREVIEW ? new URLSearchParams(window.location.search).get(k) : null);
+
+// Tint any color — literal or var() — without string math on hex codes.
+const tint = (color, pct) => `color-mix(in srgb, ${color} ${pct}%, transparent)`;
 
 // ─── Model registry — every layer starts on the cheapest model ───────────────
 const MODEL_IDS = {
@@ -317,23 +328,23 @@ async function callClaude({ system, messages, modelKey = "haiku", maxTokens = 80
 
 // ─── The Board ────────────────────────────────────────────────────────────────
 const BOARD = [
-  { key: "clarify", name: "Clarify Lead", emoji: "🎯", color: "#B68A2E",
+  { key: "clarify", name: "Clarify Lead", emoji: "🎯", color: "var(--brass)",
     charter: "You run Clarify Paid Search — a boutique Google Ads agency targeting high-value local service verticals (legal, med spa, dental, home services). You own the outreach pipeline, client delivery, and agency growth. You think in pipeline value, reply rates, and retainer economics. You are direct about what will and won't move revenue.",
     blurb: "Owns the outreach pipeline, client delivery, and agency growth. Thinks in pipeline value, reply rates, retainer economics.",
     domains: "agency, outreach, paid search, Google Ads, clients, prospecting, Clarify" },
-  { key: "zts", name: "ZTS Lead", emoji: "🔐", color: "#0E9F6E",
+  { key: "zts", name: "ZTS Lead", emoji: "🔐", color: "var(--green)",
     charter: "You run Zero To Secure — a premium stainless-steel seed phrase backup kit ($150, DTC Shopify). You own creator collabs, YouTube Shorts production, SEO content, and conversion. You think in audience-fit reach, content cadence, and DTC unit economics. Bitcoin self-custody conviction, empowerment over fear.",
     blurb: "Owns creator collabs, Shorts production, SEO, and conversion for Zero To Secure. Empowerment over fear.",
     domains: "ZTS, Zero To Secure, creators, YouTube, Shorts, SEO, Shopify, ecommerce, Bitcoin product" },
-  { key: "macro", name: "Macro Strategist", emoji: "📈", color: "#31589C",
+  { key: "macro", name: "Macro Strategist", emoji: "📈", color: "var(--blue)",
     charter: "You are the markets and macro seat. Cameron holds long-term Bitcoin conviction with a leveraged WBTC position on Aave he manages carefully, and has a developed thesis about an AI investment bubble (circular hyperscaler financing, private credit exposure). Your job is honest pressure-testing, never validation. Flag risk asymmetries. He has explicitly asked you not to glaze over weaknesses.",
     blurb: "Markets and macro. Honest pressure-testing, never validation — flags risk asymmetries in the BTC position and AI-bubble thesis.",
     domains: "markets, macro, Bitcoin, BTC, crypto, investing, trading, Fed, positions, portfolio" },
-  { key: "ops", name: "Ops & Finance", emoji: "⚙️", color: "#7C3AED",
+  { key: "ops", name: "Ops & Finance", emoji: "⚙️", color: "var(--purple)",
     charter: "You are the operations and finance seat across all ventures. You watch time allocation, AI/tool spend, and whether effort matches expected return. Cameron's stated goal: decouple income from hours sold; near-term success = meaningful recurring revenue from either venture. You are the one who asks 'is this the best use of the next 10 hours?'",
     blurb: "Watches time allocation and spend across ventures. The one who asks: is this the best use of the next 10 hours?",
     domains: "operations, priorities, time, spend, budget, focus, tradeoffs, planning, week" },
-  { key: "career", name: "Career Advisor", emoji: "🧭", color: "#EC4899",
+  { key: "career", name: "Career Advisor", emoji: "🧭", color: "var(--pink)",
     charter: "You are the career seat. Cameron is a Senior Analyst in paid search at Ovative Group (Chicago, healthcare portfolio) with limited upward mobility due to tenure-weighted promotions. Identified path: RevOps Manager at a mid-size SaaS company within ~2 years for significantly higher compensation; Salesforce-adjacent skills matter. You weigh day-job moves against the ventures without romanticizing either.",
     blurb: "Weighs day-job moves against the ventures — the RevOps path, Salesforce-adjacent skills — without romanticizing either.",
     domains: "career, Ovative, job, RevOps, Salesforce, promotion, resume, interviews, work" },
@@ -416,15 +427,9 @@ async function callFnFull(name, payload) {
 }
 
 // ─── Design system ────────────────────────────────────────────────────────────
-// Modern Roman, light: marble surfaces, bronze accents, inscription capitals.
-// `syne` keeps its name (100+ call sites) but now carries Cinzel.
-const syne = "'Cinzel', 'Times New Roman', serif", mono = "'DM Mono', monospace";
-const T = {
-  bg: "#F4F2ED", surface: "#FBFAF8", ink: "#201B12", sub: "#635C4C", faint: "#99917E",
-  brass: "#8A671C", brassDeep: "#6A4D12", line: "rgba(32,27,18,0.09)", lineStrong: "rgba(32,27,18,0.18)",
-  green: "#1F7A55", red: "#B23A2E", amber: "#A2700E", blue: "#31589C",
-};
-// The plate system: every card is a quiet paper plate with a hairline edge —
+// Tokens live in theme.js as CSS variables; styles.css defines their Daylight
+// and Nocturne values, so every inline style below follows the room's theme.
+// The plate system: every card is a quiet plate with a hairline edge —
 // no stripes, no glow. Titles are engraved (Cinzel small caps, wide tracking).
 // Brass is spent in exactly three places: the active mark, the primary
 // action, and live data. Shadows exist only on things that float.
@@ -434,47 +439,37 @@ const S = {
   inner: { background: "transparent", border: `1px solid ${T.line}`, borderRadius: 10 },
   title: { fontSize: 11, fontWeight: 600, fontFamily: syne, color: T.ink, letterSpacing: "0.18em", textTransform: "uppercase" },
   microLabel: { fontSize: 9, color: T.faint, fontFamily: mono, letterSpacing: "0.14em", textTransform: "uppercase" },
-  brassBtn: { background: T.brass, border: "none", borderRadius: 9, color: "#FCFBF8", fontWeight: 700, fontFamily: syne, letterSpacing: "0.04em", cursor: "pointer", boxShadow: "none" },
+  brassBtn: { background: T.brass, border: "none", borderRadius: 9, color: T.onBrass, fontWeight: 700, fontFamily: syne, letterSpacing: "0.04em", cursor: "pointer", boxShadow: "none" },
   ghostBtn: { background: "transparent", border: `1px solid ${T.lineStrong}`, borderRadius: 9, color: T.sub, fontWeight: 600, fontFamily: "inherit", cursor: "pointer" },
-  input: { background: "#FFFFFF", border: `1px solid ${T.lineStrong}`, borderRadius: 9, color: T.ink },
+  input: { background: T.surface2, border: `1px solid ${T.lineStrong}`, borderRadius: 9, color: T.ink },
 };
 
-function useGlobalStyles() {
+// The room follows the sun: Nocturne 19:00–07:00, Daylight otherwise, unless
+// pinned. index.html applies the same resolution pre-paint; this keeps it
+// live afterwards (the minute-tick catches sunset while the app is open).
+function useThemeController() {
+  const [pref, setPrefState] = useState(getThemePref);
+  const [resolved, setResolved] = useState(() => resolveTheme(getThemePref()));
   useEffect(() => {
-    const link = document.createElement("link");
-    link.rel = "stylesheet";
-    link.href = "https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=Inter:wght@400;500;600;700&family=Cinzel:wght@500;600;700;800&display=swap";
-    document.head.appendChild(link);
-    const style = document.createElement("style");
-    style.textContent = `
-      *, *::before, *::after { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
-      * { -webkit-font-smoothing: antialiased; text-rendering: optimizeLegibility; }
-      html, body { margin: 0; font-family: 'Inter', system-ui, sans-serif; overscroll-behavior-y: none; }
-      body { color: #201B12; background-color: #F4F2ED; }
-      ::-webkit-scrollbar { width: 8px; height: 8px; } ::-webkit-scrollbar-track { background: transparent; }
-      ::-webkit-scrollbar-thumb { background: rgba(34,29,20,0.18); border-radius: 10px; }
-      textarea, input, select, button { font-family: 'Inter', system-ui, sans-serif; }
-      ::selection { background: rgba(143,107,30,0.22); color: #221D14; }
-      button, a, input, textarea { transition: color 0.15s ease, background-color 0.15s ease, border-color 0.15s ease, opacity 0.15s ease, transform 0.15s ease, box-shadow 0.15s ease; }
-      button:focus-visible, input:focus-visible, textarea:focus-visible { outline: none; box-shadow: 0 0 0 2px #F4F2ED, 0 0 0 4px rgba(138,103,28,0.55); }
-      input::placeholder, textarea::placeholder { color: #9A9280; }
-      textarea:focus, input:focus { outline: none; }
-      @media (max-width: 760px) { input, textarea, select { font-size: 16px !important; } }
-      @media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation-duration: 0.01ms !important; transition-duration: 0.01ms !important; } }
-      @keyframes fadein { from { opacity: 0; transform: translateY(5px); } to { opacity: 1; transform: none; } }
-      @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.35; } }
-      @keyframes sheetup { from { opacity: 0; transform: translateY(40px); } to { opacity: 1; transform: none; } }
-      @keyframes breathe { 0%,100% { box-shadow: 0 0 10px rgba(143,107,30,0.25), inset 0 1px 0 rgba(255,255,255,0.3); } 50% { box-shadow: 0 0 22px rgba(143,107,30,0.4), inset 0 1px 0 rgba(255,255,255,0.3); } }
-      @keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
-      @keyframes shake { 10%,90% { transform: translateX(-2px); } 20%,80% { transform: translateX(4px); } 30%,50%,70% { transform: translateX(-8px); } 40%,60% { transform: translateX(8px); } }
-      input[type=range].scoreSlider { -webkit-appearance: none; appearance: none; width: 100%; height: 6px; border-radius: 999px; background: linear-gradient(to right, var(--slider-color, #9A9280) 0%, var(--slider-color, #9A9280) var(--slider-fill, 50%), rgba(34,29,20,0.12) var(--slider-fill, 50%), rgba(34,29,20,0.12) 100%); outline: none; cursor: pointer; margin: 0; }
-      input[type=range].scoreSlider::-webkit-slider-thumb { -webkit-appearance: none; appearance: none; width: 18px; height: 18px; border-radius: 50%; background: var(--slider-color, #9A9280); border: 2px solid #F3F1EC; box-shadow: 0 1px 4px rgba(0,0,0,0.3); cursor: pointer; }
-      input[type=range].scoreSlider::-moz-range-thumb { width: 18px; height: 18px; border-radius: 50%; background: var(--slider-color, #9A9280); border: 2px solid #F3F1EC; box-shadow: 0 1px 4px rgba(0,0,0,0.3); cursor: pointer; }
-      input[type=range].scoreSlider::-moz-range-track { height: 6px; border-radius: 999px; background: rgba(34,29,20,0.12); }
-      input[type=range].scoreSlider::-moz-range-progress { height: 6px; border-radius: 999px; background: var(--slider-color, #9A9280); }
-    `;
-    document.head.appendChild(style);
-  }, []);
+    applyTheme(resolveTheme(pref));
+    setResolved(resolveTheme(pref));
+    if (pref !== "auto") return;
+    const iv = setInterval(() => {
+      const r = resolveTheme("auto");
+      setResolved(prev => {
+        if (prev !== r) applyTheme(r, { animate: true });
+        return r;
+      });
+    }, 60 * 1000);
+    return () => clearInterval(iv);
+  }, [pref]);
+  const setPref = (p) => {
+    setThemePref(p);
+    setPrefState(p);
+    applyTheme(resolveTheme(p), { animate: true });
+    setResolved(resolveTheme(p));
+  };
+  return { pref, setPref, resolved };
 }
 
 function useIsMobile() {
@@ -489,10 +484,10 @@ function useIsMobile() {
 }
 
 const PROPERTIES = [
-  { name: "Zero To Secure", desc: "Premium seed phrase backup", url: "https://zerotosecure.com", appUrl: "https://zts-command-center.netlify.app", color: "#0E9F6E", repo: "camcarp14/zts-command-center", site: "zero-to-secure" },
-  { name: "Clarify Paid Search", desc: "Boutique Google Ads agency", url: "https://clarifypaidsearch.com", appUrl: "https://clarify-outreach.netlify.app/", color: "#B68A2E", repo: "camcarp14/clarify-outreach", site: "clarify-paid-search" },
-  { name: "Clarify SaaS", desc: "Google Ads auditing tool", url: null, appUrl: "https://clarify-saas.netlify.app/", color: "#B68A2E", repo: "camcarp14/clarify-saas", site: "clarify-saas" },
-  { name: "Macro Command Center", desc: "Markets, portfolio, thesis", url: null, appUrl: "https://macro-command-center.netlify.app/", color: "#31589C", repo: "camcarp14/macro-command-center", site: "macro-command-center" },
+  { name: "Zero To Secure", desc: "Premium seed phrase backup", url: "https://zerotosecure.com", appUrl: "https://zts-command-center.netlify.app", color: "var(--green)", repo: "camcarp14/zts-command-center", site: "zero-to-secure" },
+  { name: "Clarify Paid Search", desc: "Boutique Google Ads agency", url: "https://clarifypaidsearch.com", appUrl: "https://clarify-outreach.netlify.app/", color: "var(--brass)", repo: "camcarp14/clarify-outreach", site: "clarify-paid-search" },
+  { name: "Clarify SaaS", desc: "Google Ads auditing tool", url: null, appUrl: "https://clarify-saas.netlify.app/", color: "var(--brass)", repo: "camcarp14/clarify-saas", site: "clarify-saas" },
+  { name: "Macro Command Center", desc: "Markets, portfolio, thesis", url: null, appUrl: "https://macro-command-center.netlify.app/", color: "var(--blue)", repo: "camcarp14/macro-command-center", site: "macro-command-center" },
 ];
 
 // ─── Bitcoin ──────────────────────────────────────────────────────────────────
@@ -536,6 +531,32 @@ function useBitcoinPrice() {
   return { ...state, refresh: () => setNonce(n => n + 1) };
 }
 
+// Numbers behave like instruments: big metrics count to their value.
+function useTween(target, dur = 700) {
+  const [v, setV] = useState(target ?? 0);
+  const fromRef = useRef(target ?? 0);
+  useEffect(() => {
+    if (target == null) return;
+    const from = fromRef.current ?? 0;
+    if (from === target) { setV(target); return; }
+    let raf;
+    const t0 = performance.now();
+    const step = (now) => {
+      const p = Math.min(1, (now - t0) / dur);
+      setV(from + (target - from) * (1 - Math.pow(1 - p, 3)));
+      if (p < 1) raf = requestAnimationFrame(step);
+      else fromRef.current = target;
+    };
+    raf = requestAnimationFrame(step);
+    return () => cancelAnimationFrame(raf);
+  }, [target, dur]);
+  return target == null ? null : Math.round(v);
+}
+function NumTween({ v, f = (x) => x.toLocaleString() }) {
+  const shown = useTween(typeof v === "number" ? v : null);
+  return shown == null ? <>—</> : <>{f(shown)}</>;
+}
+
 function Sparkline({ points, color, height = 44 }) {
   if (!points || points.length < 2) return <div style={{ height }} />;
   const min = Math.min(...points), max = Math.max(...points);
@@ -567,8 +588,8 @@ function Bars({ data, from, to, height = 54 }) {
 function Toggle({ on, onToggle, size = 20 }) {
   const w = size * 1.7, knob = size - 4;
   return (
-    <span onClick={onToggle} style={{ width: w, height: size, borderRadius: size / 2 + 1, background: on ? T.green : "rgba(32,27,18,0.16)", position: "relative", cursor: "pointer", display: "inline-block", flex: "none", transition: "background 0.15s", boxShadow: "inset 0 1px 2px rgba(34,29,20,0.12)" }}>
-      <span style={{ position: "absolute", top: 2, left: on ? w - knob - 2 : 2, width: knob, height: knob, borderRadius: "50%", background: "#FFFFFF", transition: "left 0.15s", boxShadow: "0 1px 3px rgba(34,29,20,0.18)" }} />
+    <span onClick={onToggle} style={{ width: w, height: size, borderRadius: size / 2 + 1, background: on ? T.green : "var(--line-strong)", position: "relative", cursor: "pointer", display: "inline-block", flex: "none", transition: "background 0.15s", boxShadow: "inset 0 1px 2px rgba(0,0,0,0.14)" }}>
+      <span style={{ position: "absolute", top: 2, left: on ? w - knob - 2 : 2, width: knob, height: knob, borderRadius: "50%", background: "#FFFFFF", transition: "left 0.15s", boxShadow: "0 1px 3px rgba(0,0,0,0.22)" }} />
     </span>
   );
 }
@@ -587,13 +608,13 @@ function ToggleRow({ title, sub, on, onToggle, size }) {
 
 function Segmented({ value, onChange }) {
   return (
-    <div style={{ display: "flex", gap: 4, background: "rgba(34,29,20,0.05)", border: "1px solid rgba(34,29,20,0.06)", borderRadius: 11, padding: 3 }}>
+    <div style={{ display: "flex", gap: 4, background: "var(--ink-a05)", border: "1px solid var(--ink-a06)", borderRadius: 11, padding: 3 }}>
       {MODEL_META.map(m => {
         const active = value === m.key;
         return (
-          <button key={m.key} onClick={() => onChange(m.key)} style={{ flex: 1, padding: "7px 0 6px", background: active ? T.brass : "transparent", border: "none", borderRadius: 8, cursor: "pointer", display: "flex", flexDirection: "column", alignItems: "center", gap: 1, boxShadow: active ? "inset 0 1px 0 rgba(255,255,255,0.35), 0 2px 8px rgba(143,107,30,0.3)" : "none" }}>
+          <button key={m.key} onClick={() => onChange(m.key)} style={{ flex: 1, padding: "7px 0 6px", background: active ? T.brass : "transparent", border: "none", borderRadius: 8, cursor: "pointer", display: "flex", flexDirection: "column", alignItems: "center", gap: 1, boxShadow: active ? "inset 0 1px 0 var(--white-inset), 0 2px 8px var(--brass-a32)" : "none" }}>
             <span style={{ fontSize: 10, fontWeight: 700, fontFamily: syne, color: active ? T.bg : T.sub }}>{m.label}</span>
-            <span style={{ fontSize: 7.5, fontFamily: mono, color: active ? "rgba(252,251,249,0.78)" : T.faint }}>{m.price}</span>
+            <span style={{ fontSize: 7.5, fontFamily: mono, color: active ? "var(--on-brass)" : T.faint }}>{m.price}</span>
           </button>
         );
       })}
@@ -607,7 +628,7 @@ function Chips({ options, value, onChange, fmt = (v) => v }) {
       {options.map(o => {
         const active = value === o;
         return (
-          <button key={o} onClick={() => onChange(o)} style={{ flex: 1, padding: "9px 0", background: active ? "rgba(143,107,30,0.14)" : "rgba(34,29,20,0.045)", border: `1px solid ${active ? "rgba(143,107,30,0.4)" : "rgba(34,29,20,0.06)"}`, borderRadius: 10, color: active ? T.brass : T.sub, fontSize: 11, fontWeight: 700, cursor: "pointer", fontFamily: mono }}>{fmt(o)}</button>
+          <button key={o} onClick={() => onChange(o)} style={{ flex: 1, padding: "9px 0", background: active ? "var(--brass-a16)" : "var(--ink-a04)", border: `1px solid ${active ? "var(--brass-a40)" : "var(--ink-a06)"}`, borderRadius: 10, color: active ? T.brass : T.sub, fontSize: 11, fontWeight: 700, cursor: "pointer", fontFamily: mono }}>{fmt(o)}</button>
         );
       })}
     </div>
@@ -627,14 +648,15 @@ function StatBox({ value, label, delta, deltaColor = T.green, valueColor = T.ink
   return (
     <div
       onClick={onClick}
+      className={onClick ? "press" : undefined}
       style={{
         ...S.inner, padding: "10px 8px", textAlign: "center", borderRadius: 10,
-        ...(onClick ? { cursor: "pointer", transition: "border-color 120ms ease, box-shadow 120ms ease" } : {}),
-        ...(selected ? { border: "1px solid #9a7b4f", boxShadow: "0 0 0 1px #9a7b4f33" } : {}),
+        ...(onClick ? { cursor: "pointer", transition: "border-color 120ms ease, box-shadow 120ms ease, transform var(--dur-1) var(--ease-out)" } : {}),
+        ...(selected ? { border: "1px solid var(--brass)", boxShadow: "0 0 0 1px var(--brass-a25)" } : {}),
       }}
     >
-      <div style={{ fontSize: 14, fontWeight: 700, fontFamily: mono, color: valueColor }}>{value}</div>
-      <div style={{ fontSize: 8, color: selected ? "#9a7b4f" : T.faint, letterSpacing: "0.08em", textTransform: "uppercase", marginTop: 2 }}>{label}</div>
+      <div style={{ fontSize: 14, fontWeight: 700, fontFamily: mono, color: valueColor, fontVariantNumeric: "tabular-nums" }}>{value}</div>
+      <div style={{ fontSize: 8, color: selected ? "var(--brass)" : T.faint, letterSpacing: "0.08em", textTransform: "uppercase", marginTop: 2 }}>{label}</div>
       {delta && <div style={{ fontSize: 9, color: deltaColor, fontFamily: mono, marginTop: 2 }}>{delta}</div>}
     </div>
   );
@@ -646,14 +668,20 @@ const SUGGESTIONS = ["What should I prioritize this week?", "Is ZTS or Clarify c
 function ChatThread({ messages, thinking, loadingData, setInput, endRef, compact }) {
   return (
     <>
-      {loadingData && <div style={{ fontSize: 11, color: T.faint, textAlign: "center", animation: "pulse 1.4s infinite" }}>Loading your memory…</div>}
+      {loadingData && (
+        <div style={{ display: "flex", flexDirection: "column", gap: 10, padding: "6px 0" }}>
+          <div className="sk" style={{ alignSelf: "flex-end", width: "52%", height: 38, borderRadius: "14px 14px 4px 14px" }} />
+          <div className="sk" style={{ alignSelf: "flex-start", width: "68%", height: 58, borderRadius: "14px 14px 14px 4px" }} />
+          <div className="sk" style={{ alignSelf: "flex-end", width: "40%", height: 34, borderRadius: "14px 14px 4px 14px" }} />
+        </div>
+      )}
       {!loadingData && messages.length === 0 && !thinking && (
         <div style={{ margin: "auto", textAlign: "center", maxWidth: 460, paddingTop: compact ? "7vh" : "14vh", display: "flex", flexDirection: "column", alignItems: "center", gap: 12 }}>
           <div style={{ fontSize: compact ? 22 : 32, fontWeight: 700, fontFamily: syne, color: T.ink, letterSpacing: "0.03em" }}>The room is yours.</div>
           <div style={{ fontSize: compact ? 12.5 : 13, color: T.sub, lineHeight: 1.7 }}>Ask the Chief of Staff anything. It routes each question to the seats that matter and brings back one synthesized answer — with the disagreements left in.</div>
           <div style={{ display: "flex", flexDirection: compact ? "column" : "row", flexWrap: "wrap", gap: 8, justifyContent: "center", marginTop: 8, width: "100%" }}>
             {SUGGESTIONS.map((s, i) => (
-              <button key={i} onClick={() => setInput(s)} style={{ padding: compact ? "12px 15px" : "10px 16px", background: "rgba(34,29,20,0.035)", border: `1px solid rgba(34,29,20,0.1)`, borderRadius: compact ? 12 : 20, color: T.sub, fontSize: 11.5, cursor: "pointer", textAlign: compact ? "left" : "center" }}>{s}</button>
+              <button key={i} onClick={() => setInput(s)} style={{ padding: compact ? "12px 15px" : "10px 16px", background: "var(--ink-a03)", border: `1px solid var(--ink-a10)`, borderRadius: compact ? 12 : 20, color: T.sub, fontSize: 11.5, cursor: "pointer", textAlign: compact ? "left" : "center" }}>{s}</button>
             ))}
           </div>
         </div>
@@ -665,18 +693,21 @@ function ChatThread({ messages, thinking, loadingData, setInput, endRef, compact
             {!user && (m.consulted || []).length > 0 && (
               <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
                 {m.consulted.map((c, j) => (
-                  <span key={j} title={c.take} style={{ fontSize: 9, fontWeight: 700, color: c.color, background: c.color + "1A", border: `1px solid ${c.color}40`, padding: "3.5px 10px", borderRadius: 14, fontFamily: syne, cursor: "help", letterSpacing: "0.03em" }}>{c.emoji} {c.name}</span>
+                  <span key={j} title={c.take} style={{ fontSize: 9, fontWeight: 700, color: c.color, background: tint(c.color, 10), border: `1px solid ${tint(c.color, 25)}`, padding: "3.5px 10px", borderRadius: 14, fontFamily: syne, cursor: "help", letterSpacing: "0.03em" }}>{c.emoji} {c.name}</span>
                 ))}
               </div>
             )}
-            <div style={{ padding: compact ? "11px 14px" : "13px 17px", borderRadius: user ? "16px 16px 5px 16px" : "16px 16px 16px 5px", background: user ? "rgba(138,103,28,0.08)" : T.surface, border: `1px solid ${user ? "rgba(143,107,30,0.32)" : T.line}`, fontSize: 13.5, lineHeight: 1.68, whiteSpace: "pre-wrap", color: T.ink, boxShadow: "0 8px 24px rgba(34,29,20,0.045)" }}>{m.content}</div>
+            <div style={{ padding: compact ? "11px 14px" : "13px 17px", borderRadius: user ? "16px 16px 5px 16px" : "16px 16px 16px 5px", background: user ? "var(--brass-a08)" : T.surface, border: `1px solid ${user ? "var(--brass-a32)" : T.line}`, fontSize: 13.5, lineHeight: 1.68, whiteSpace: "pre-wrap", color: T.ink, boxShadow: "0 8px 24px rgba(0,0,0,0.06)" }}>{m.content}</div>
             {m.source === "discord" && <div style={{ fontSize: 8.5, color: T.faint, fontFamily: mono, letterSpacing: "0.06em" }}>VIA DISCORD</div>}
           </div>
         );
       })}
       {thinking && (
-        <div style={{ alignSelf: "flex-start", padding: "12px 16px", borderRadius: "16px 16px 16px 5px", background: "rgba(34,29,20,0.04)", border: `1px solid ${T.line}`, fontSize: 12, color: T.sub }}>
-          <span style={{ animation: "pulse 1.4s infinite" }}>Convening the room…</span>
+        <div style={{ alignSelf: "flex-start", padding: "12px 16px", borderRadius: "16px 16px 16px 5px", background: "var(--ink-a04)", border: `1px solid ${T.line}`, fontSize: 12, color: T.sub }}>
+          <span className="convene" aria-label="Convening the room">
+            <span className="cd" /><span className="cd" /><span className="cd" />
+            <span style={{ marginLeft: 2 }}>Convening the room…</span>
+          </span>
         </div>
       )}
       <div ref={endRef} />
@@ -687,11 +718,11 @@ function ChatThread({ messages, thinking, loadingData, setInput, endRef, compact
 function Composer({ input, setInput, onSend, thinking, compact }) {
   const canSend = !!input.trim() && !thinking;
   return (
-    <div style={{ display: "flex", gap: compact ? 8 : 10, background: "#FFFFFF", border: "1px solid rgba(34,29,20,0.12)", borderRadius: 16, padding: compact ? "5px 5px 5px 16px" : "6px 6px 6px 20px", boxShadow: compact ? "0 1px 3px rgba(34,29,20,0.06)" : "0 2px 6px rgba(34,29,20,0.05), 0 14px 36px rgba(34,29,20,0.08)" }}>
+    <div style={{ display: "flex", gap: compact ? 8 : 10, background: "var(--surface-2)", border: "1px solid var(--ink-a12)", borderRadius: 16, padding: compact ? "5px 5px 5px 16px" : "6px 6px 6px 20px", boxShadow: compact ? "0 1px 3px rgba(0,0,0,0.08)" : "0 2px 6px rgba(0,0,0,0.06), 0 14px 36px rgba(0,0,0,0.10)" }}>
       <textarea value={input} onChange={e => setInput(e.target.value)} onKeyDown={e => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); onSend(); } }}
         placeholder={compact ? "Ask the Chief…" : "Ask the Chief of Staff…"} rows={1}
         style={{ flex: 1, background: "transparent", border: "none", color: T.ink, fontSize: 13.5, resize: "none", padding: compact ? "11px 0" : "12px 0", lineHeight: 1.5, outline: "none" }} />
-      <button onClick={onSend} disabled={!canSend} style={{ padding: compact ? "0 18px" : "0 26px", minHeight: compact ? 44 : undefined, background: canSend ? T.brass : "rgba(32,27,18,0.06)", border: "none", borderRadius: 11, color: canSend ? T.bg : T.faint, fontSize: 12, fontWeight: 700, cursor: canSend ? "pointer" : "default", fontFamily: syne, boxShadow: canSend ? "0 4px 14px rgba(143,107,30,0.35), inset 0 1px 0 rgba(255,255,255,0.35)" : "none" }}>Ask</button>
+      <button onClick={onSend} disabled={!canSend} style={{ padding: compact ? "0 18px" : "0 26px", minHeight: compact ? 44 : undefined, background: canSend ? T.brass : "var(--ink-a06)", border: "none", borderRadius: 11, color: canSend ? T.bg : T.faint, fontSize: 12, fontWeight: 700, cursor: canSend ? "pointer" : "default", fontFamily: syne, boxShadow: canSend ? "0 4px 14px var(--brass-a32), inset 0 1px 0 var(--white-inset)" : "none" }}>Ask</button>
     </div>
   );
 }
@@ -710,12 +741,12 @@ function TopStatus({ now, dataStamp, refreshing, onRefresh, compact }) {
         <span style={{ fontSize: compact ? 10 : 11, fontWeight: 600, color: T.ink, fontFamily: mono, lineHeight: 1 }}>{time}</span>
         <span style={{ fontSize: compact ? 8 : 8.5, color: T.faint, fontFamily: mono, letterSpacing: "0.06em", lineHeight: 1.3, textTransform: "uppercase" }}>{date}</span>
       </span>
-      <span style={{ display: "flex", alignItems: "center", gap: 5, padding: compact ? "4px 8px" : "5px 10px", background: freshColor + "14", border: `1px solid ${freshColor}35`, borderRadius: 11 }}>
-        <span style={{ width: 5, height: 5, borderRadius: "50%", background: freshColor, boxShadow: `0 0 6px ${freshColor}90`, animation: ageMin !== null && ageMin < 1 ? "pulse 2s infinite" : "none" }} />
+      <span style={{ display: "flex", alignItems: "center", gap: 5, padding: compact ? "4px 8px" : "5px 10px", background: tint(freshColor, 8), border: `1px solid ${tint(freshColor, 21)}`, borderRadius: 11 }}>
+        <span style={{ width: 5, height: 5, borderRadius: "50%", background: freshColor, boxShadow: `0 0 6px ${tint(freshColor, 56)}`, animation: ageMin !== null && ageMin < 1 ? "pulse 2s infinite" : "none" }} />
         <span style={{ fontSize: 8, fontWeight: 700, color: freshColor, fontFamily: mono, letterSpacing: "0.08em", whiteSpace: "nowrap" }}>{compact ? fresh : `DATA ${fresh}`}</span>
       </span>
       <button onClick={onRefresh} disabled={refreshing} title="Refresh data" aria-label="Refresh data"
-        style={{ width: compact ? 34 : 30, height: compact ? 34 : 30, display: "inline-flex", alignItems: "center", justifyContent: "center", background: "rgba(143,107,30,0.1)", border: "1px solid rgba(143,107,30,0.3)", borderRadius: 9, cursor: refreshing ? "default" : "pointer", flex: "none", padding: 0 }}>
+        style={{ width: compact ? 34 : 30, height: compact ? 34 : 30, display: "inline-flex", alignItems: "center", justifyContent: "center", background: "var(--brass-a10)", border: "1px solid var(--brass-a32)", borderRadius: 9, cursor: refreshing ? "default" : "pointer", flex: "none", padding: 0 }}>
         <svg width={compact ? 15 : 14} height={compact ? 15 : 14} viewBox="0 0 24 24" fill="none" stroke={T.brass} strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round"
           style={{ animation: refreshing ? "spin 0.9s linear infinite" : "none", opacity: refreshing ? 0.7 : 1 }}>
           <path d="M21 12a9 9 0 1 1-2.64-6.36" />
@@ -789,7 +820,7 @@ function formatSnapshotForChat() {
 }
 
 function StancePill({ text, color }) {
-  return <span style={{ fontSize: 8.5, fontWeight: 700, color, background: color + "1A", border: `1px solid ${color}4D`, padding: "4px 10px", borderRadius: 12, fontFamily: mono, letterSpacing: "0.08em" }}>{text}</span>;
+  return <span style={{ fontSize: 8.5, fontWeight: 700, color, background: tint(color, 10), border: `1px solid ${tint(color, 30)}`, padding: "4px 10px", borderRadius: 12, fontFamily: mono, letterSpacing: "0.08em" }}>{text}</span>;
 }
 const CARD_STATES = {
   loading: { label: "…", color: T.faint },
@@ -800,7 +831,7 @@ const CARD_STATES = {
 };
 function StatusTag({ status }) {
   const s = CARD_STATES[status?.state || "loading"];
-  return <span style={{ fontSize: 8, fontWeight: 700, color: s.color, background: s.color + "1A", border: `1px solid ${s.color}40`, padding: "3.5px 9px", borderRadius: 10, fontFamily: mono, letterSpacing: "0.06em" }}>{s.label}</span>;
+  return <span style={{ fontSize: 8, fontWeight: 700, color: s.color, background: tint(s.color, 10), border: `1px solid ${tint(s.color, 25)}`, padding: "3.5px 9px", borderRadius: 10, fontFamily: mono, letterSpacing: "0.06em" }}>{s.label}</span>;
 }
 
 function MorningBriefPage({ btc, isMobile, settings, updateSetting, onOpenCalendar, refreshSignal }) {
@@ -916,7 +947,7 @@ function MorningBriefPage({ btc, isMobile, settings, updateSetting, onOpenCalend
         setBirthdays(rows);
         const soon = (rows || []).map(b => ({ name: b.name, ...nextBirthdayOccurrence(b.month, b.day) })).filter(b => b.daysUntil <= 14).sort((a, b) => a.daysUntil - b.daysUntil);
         updateSnapshot({ todayBirthdays: soon });
-      }).catch(e => { if (alive) setBirthdaysErr(e.message || "Couldn't load birthdays."); }),
+      }).catch(e => { if (alive) setBirthdaysErr(/fetch/i.test(e?.message || "") ? "Couldn't reach Supabase — check the connection and refresh." : e?.message || "Couldn't load birthdays."); }),
       db.loadEvents().then(rows => {
         if (!alive) return;
         setMiniEvents(rows);
@@ -1007,10 +1038,19 @@ function MorningBriefPage({ btc, isMobile, settings, updateSetting, onOpenCalend
   const grid = { maxWidth: 1020, margin: "0 auto", display: "grid", gridTemplateColumns: isMobile ? "1fr" : "1fr 1fr", gap: isMobile ? 12 : 14, alignItems: "start" };
   const col = { display: "flex", flexDirection: "column", gap: isMobile ? 12 : 14 };
   const card = isMobile ? S.cardM : S.card;
-  const FeedFallbackRow = ({ status }) => (
+  const FeedFallbackRow = ({ status }) => status.state === "loading" ? (
+    // skeleton matches the row it resolves into — pages develop, not arrive
+    <div style={{ ...S.inner, padding: "12px 13px" }}>
+      <div className="sk sk-line w60" style={{ margin: "0 0 8px" }} />
+      <div className="sk sk-line w40" style={{ margin: 0 }} />
+    </div>
+  ) : (
     <div style={{ ...S.inner, display: "flex", alignItems: "center", gap: 11, padding: "11px 13px" }}>
       <span style={{ width: 7, height: 7, borderRadius: "50%", background: CARD_STATES[status.state]?.color || T.faint, flex: "none" }} />
-      <span style={{ fontSize: 10.5, color: T.faint, lineHeight: 1.5, flex: 1 }}>{status.state === "loading" ? "Loading…" : status.detail || "Feed unavailable."}</span>
+      <span style={{ fontSize: 10.5, color: T.faint, lineHeight: 1.5, flex: 1 }}>{status.detail || "Feed unavailable."}</span>
+      {status.state === "error" && (
+        <button onClick={() => refreshBrief()} style={{ ...S.ghostBtn, flex: "none", padding: "5px 10px", fontSize: 9.5, borderRadius: 7 }}>Retry</button>
+      )}
     </div>
   );
 
@@ -1032,7 +1072,7 @@ function MorningBriefPage({ btc, isMobile, settings, updateSetting, onOpenCalend
                     </div>
                     <div onClick={() => setBtcChartOpen(true)} style={{ cursor: "pointer" }} title="Tap for the full chart">
                       <div style={{ display: "flex", alignItems: "baseline", gap: 10, marginBottom: 13 }}>
-                        <span style={{ fontSize: 26, fontWeight: 500, fontFamily: mono, color: T.ink }}>{price}</span>
+                        <span style={{ fontSize: 26, fontWeight: 500, fontFamily: mono, color: T.ink, fontVariantNumeric: "tabular-nums" }}>{btc.price != null && !btc.error ? <NumTween v={btc.price} f={n => "$" + n.toLocaleString(undefined, { maximumFractionDigits: 0 })} /> : price}</span>
                         {hasChange && <span style={{ fontSize: 12, fontWeight: 700, color: up ? T.green : T.red, fontFamily: mono }}>{up ? "▲" : "▼"} {Math.abs(btc.changePct || 0).toFixed(2)}%</span>}
                       </div>
                       {!btc.loading && !btc.error && (
@@ -1071,12 +1111,12 @@ function MorningBriefPage({ btc, isMobile, settings, updateSetting, onOpenCalend
                         events.length ? events.map((e, i) => {
                           const analysis = eventAnalysis[i];
                           return (
-                            <div key={i} style={{ ...S.inner, padding: "11px 13px", display: "flex", flexDirection: "column", gap: 4, background: e.isPast ? "rgba(14,159,110,0.04)" : undefined }}>
+                            <div key={i} style={{ ...S.inner, padding: "11px 13px", display: "flex", flexDirection: "column", gap: 4, background: e.isPast ? "var(--green-a06)" : undefined }}>
                               <div style={{ display: "flex", alignItems: "center", gap: 11 }}>
-                                <span style={{ width: 7, height: 7, borderRadius: "50%", background: e.color, flex: "none", boxShadow: `0 0 8px ${e.color}80` }} />
+                                <span style={{ width: 7, height: 7, borderRadius: "50%", background: e.color, flex: "none", boxShadow: `0 0 8px ${tint(e.color, 50)}` }} />
                                 <span style={{ fontSize: 9, color: T.faint, fontFamily: mono, flex: "none", whiteSpace: "nowrap" }}>{e.time}</span>
-                                <span style={{ fontSize: 11, color: "#3A3323", lineHeight: 1.5, flex: 1 }}>{e.text}</span>
-                                {e.isPast && <span style={{ fontSize: 7.5, fontWeight: 700, color: T.green, border: `1px solid ${T.green}40`, background: T.green + "1A", borderRadius: 5, padding: "1.5px 5px", flex: "none", fontFamily: mono, letterSpacing: "0.04em" }}>RESULT</span>}
+                                <span style={{ fontSize: 11, color: "var(--ink)", lineHeight: 1.5, flex: 1 }}>{e.text}</span>
+                                {e.isPast && <span style={{ fontSize: 7.5, fontWeight: 700, color: T.green, border: `1px solid ${tint(T.green, 25)}`, background: tint(T.green, 10), borderRadius: 5, padding: "1.5px 5px", flex: "none", fontFamily: mono, letterSpacing: "0.04em" }}>RESULT</span>}
                               </div>
                               <div style={{ fontSize: 10, color: T.faint, lineHeight: 1.45, paddingLeft: 18 }}>
                                 {analysis === "loading" || !analysis ? <span style={{ animation: "pulse 1.4s infinite" }}>{e.isPast ? "Reading the actual impact…" : "Reading the likely impact…"}</span>
@@ -1096,7 +1136,7 @@ function MorningBriefPage({ btc, isMobile, settings, updateSetting, onOpenCalend
                   <div style={card}>
                     <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 12 }}>
                       <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                        <span style={{ width: 8, height: 8, borderRadius: "50%", background: "#0E9F6E", boxShadow: "0 0 8px rgba(14,159,110,0.5)" }} />
+                        <span style={{ width: 8, height: 8, borderRadius: "50%", background: "var(--green)", boxShadow: "0 0 8px var(--green-a50)" }} />
                         <span style={S.title}>Zero To Secure · Search Console</span>
                       </div>
                       <StatusTag status={gscStatus} />
@@ -1194,10 +1234,10 @@ function MorningBriefPage({ btc, isMobile, settings, updateSetting, onOpenCalend
                         const dayEvents = miniEventsByDay[miniDateKey(day)] || [];
                         const isToday = day === todayDate;
                         return (
-                          <div key={day} style={{ display: "flex", flexDirection: "column", alignItems: "stretch", gap: 1, textAlign: "left", minHeight: 34, padding: "2px 2px", borderRadius: 5, border: isToday ? `1.5px solid ${T.brass}` : "1px solid transparent", background: isToday ? "rgba(143,107,30,0.08)" : "transparent" }}>
+                          <div key={day} style={{ display: "flex", flexDirection: "column", alignItems: "stretch", gap: 1, textAlign: "left", minHeight: 34, padding: "2px 2px", borderRadius: 5, border: isToday ? `1.5px solid ${T.brass}` : "1px solid transparent", background: isToday ? "var(--brass-a08)" : "transparent" }}>
                             <span style={{ fontSize: 9, fontWeight: isToday ? 800 : 500, color: isToday ? T.brass : T.ink, fontFamily: mono, paddingLeft: 1 }}>{day}</span>
                             {dayEvents.length > 0 && (
-                              <span style={{ fontSize: 6.5, fontWeight: 700, color: "#FFFFFF", background: miniCatColor(dayEvents[0].category), borderRadius: 3, padding: "1px 2px", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", lineHeight: 1.4 }}>{dayEvents[0].title}</span>
+                              <span style={{ fontSize: 6.5, fontWeight: 700, color: "var(--chip-ink)", background: miniCatColor(dayEvents[0].category), borderRadius: 3, padding: "1px 2px", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", lineHeight: 1.4 }}>{dayEvents[0].title}</span>
                             )}
                           </div>
                         );
@@ -1215,12 +1255,12 @@ function MorningBriefPage({ btc, isMobile, settings, updateSetting, onOpenCalend
                       {birthdaysErr ? (
                         <div style={{ fontSize: 10.5, color: T.faint, padding: "6px 0" }}>{birthdaysErr}</div>
                       ) : birthdays === null ? (
-                        <div style={{ fontSize: 10.5, color: T.faint, padding: "6px 0", animation: "pulse 1.4s infinite" }}>Loading…</div>
+                        <div style={{ padding: "6px 0" }}><div className="sk sk-line w80" style={{ margin: 0 }} /></div>
                       ) : upcomingBirthdays.length ? upcomingBirthdays.map((b) => (
                         <div key={b.id} style={{ ...S.inner, display: "flex", alignItems: "center", gap: 11, padding: "11px 13px", flexShrink: 0 }}>
-                          <span style={{ width: 7, height: 7, borderRadius: "50%", background: "#8B5CF6", flex: "none" }} />
+                          <span style={{ width: 7, height: 7, borderRadius: "50%", background: "var(--purple)", flex: "none" }} />
                           <span style={{ display: "flex", flexDirection: "column", gap: 1, flex: 1, minWidth: 0 }}>
-                            <span style={{ fontSize: 11, color: "#3A3323", lineHeight: 1.4 }}>{b.name}{b.year ? ` — turns ${b.next.getFullYear() - b.year}` : ""}</span>
+                            <span style={{ fontSize: 11, color: "var(--ink)", lineHeight: 1.4 }}>{b.name}{b.year ? ` — turns ${b.next.getFullYear() - b.year}` : ""}</span>
                             <span style={{ fontSize: 9, color: T.faint, fontFamily: mono }}>{MONTH_NAMES[b.month - 1]} {b.day} · {b.daysUntil === 0 ? "Today!" : b.daysUntil === 1 ? "Tomorrow" : `in ${b.daysUntil}d`}</span>
                           </span>
                         </div>
@@ -1241,7 +1281,7 @@ function MorningBriefPage({ btc, isMobile, settings, updateSetting, onOpenCalend
                           <div key={i} style={{ ...S.inner, display: "flex", alignItems: "center", gap: 11, padding: "11px 13px", flexShrink: 0 }}>
                             <span style={{ width: 7, height: 7, borderRadius: "50%", background: T.blue, flex: "none" }} />
                             <span style={{ display: "flex", flexDirection: "column", gap: 1, flex: 1, minWidth: 0 }}>
-                              <span style={{ fontSize: 11, color: "#3A3323", lineHeight: 1.4 }}>{m.title}</span>
+                              <span style={{ fontSize: 11, color: "var(--ink)", lineHeight: 1.4 }}>{m.title}</span>
                               <span style={{ fontSize: 9, color: T.faint, fontFamily: mono }}>{m.when}{m.location ? " · " + m.location : ""}</span>
                             </span>
                           </div>
@@ -1286,7 +1326,7 @@ function MorningBriefPage({ btc, isMobile, settings, updateSetting, onOpenCalend
                               <Row key={i} {...(w.link ? { href: w.link, target: "_blank", rel: "noreferrer" } : {})}
                                 style={{ display: "flex", alignItems: "baseline", gap: 8, textDecoration: "none", color: "inherit", flexShrink: 0 }}>
                                 <span style={{ fontSize: 9, fontFamily: mono, color: T.faint, flexShrink: 0 }}>{w.time}</span>
-                                <span style={{ fontSize: 8, fontWeight: 700, color: w.tagColor, border: `1px solid ${w.tagColor}40`, background: w.tagColor + "1A", borderRadius: 5, padding: "1.5px 5px", flexShrink: 0, fontFamily: mono }}>{w.tag}</span>
+                                <span style={{ fontSize: 8, fontWeight: 700, color: w.tagColor, border: `1px solid ${tint(w.tagColor, 25)}`, background: tint(w.tagColor, 10), borderRadius: 5, padding: "1.5px 5px", flexShrink: 0, fontFamily: mono }}>{w.tag}</span>
                                 <span style={{ fontSize: 11.5, color: T.ink, lineHeight: 1.4, minWidth: 0, flex: 1 }}>{w.text}</span>
                               </Row>
                             );
@@ -1325,7 +1365,7 @@ function MorningBriefPage({ btc, isMobile, settings, updateSetting, onOpenCalend
                                   <span style={{ fontSize: 10.5, color: T.ink, flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
                                     {g.away?.abbr} {g.away?.score ?? ""} @ {g.home?.abbr} {g.home?.score ?? ""}
                                   </span>
-                                  {g.significance && <span style={{ fontSize: 7, fontWeight: 700, color: T.brass, border: `1px solid ${T.brass}40`, background: "rgba(143,107,30,0.1)", borderRadius: 4, padding: "1px 4px", flex: "none", fontFamily: mono }}>{g.significance.toUpperCase()}</span>}
+                                  {g.significance && <span style={{ fontSize: 7, fontWeight: 700, color: T.brass, border: `1px solid ${tint(T.brass, 25)}`, background: "var(--brass-a10)", borderRadius: 4, padding: "1px 4px", flex: "none", fontFamily: mono }}>{g.significance.toUpperCase()}</span>}
                                   <span style={{ fontSize: 8.5, color: T.faint, fontFamily: mono, flex: "none" }}>{g.statusDetail}</span>
                                   <span onClick={(e) => { e.stopPropagation(); excludeGame(g.id); }} title="Hide this game" style={{ color: T.faint, fontSize: 12, lineHeight: 1, padding: "0 2px", flex: "none" }}>×</span>
                                 </div>
@@ -1381,12 +1421,12 @@ function MorningBriefPage({ btc, isMobile, settings, updateSetting, onOpenCalend
       const sectionHeader = (label) => (
         <div style={{ display: "flex", alignItems: "center", gap: 10, padding: isMobile ? "2px 2px 0" : "0 2px" }}>
           <span style={{ fontSize: 10, fontWeight: 700, letterSpacing: "0.22em", textTransform: "uppercase", color: T.faint, fontFamily: mono }}>{label}</span>
-          <span style={{ flex: 1, height: 1, background: "rgba(34,29,20,0.1)" }} />
+          <span style={{ flex: 1, height: 1, background: "var(--ink-a10)" }} />
         </div>
       );
       return isMobile ? (
       <div style={grid}>
-        <div style={col}>
+        <div className="stagger" style={col}>
           {sectionHeader("Market")}
           {card_bitcoin}{card_stocks}{card_watch}{card_wire}
           {sectionHeader("Ops")}
@@ -1396,11 +1436,11 @@ function MorningBriefPage({ btc, isMobile, settings, updateSetting, onOpenCalend
       </div>
       ) : (
       <div style={grid}>
-        <div style={col}>
+        <div className="stagger" style={col}>
           {sectionHeader("Market")}
           {card_bitcoin}{card_stocks}{card_watch}{card_wire}
         </div>
-        <div style={col}>
+        <div className="stagger" style={col}>
           {sectionHeader("Ops")}
           {card_minicalendar}{card_gsc}{card_clarify}{card_zts}{card_shopify}{card_birthdays}{card_meetings}{card_sports}
         </div>
@@ -1417,10 +1457,10 @@ function BoardPage({ seatNotes, onEditSeat, onEnterRoom, isMobile }) {
   const card = isMobile ? S.cardM : S.card;
   return (
     <div style={{ flex: 1, overflowY: "auto", padding: isMobile ? "18px 16px 24px" : "30px 34px 40px" }}>
-      <div style={{ maxWidth: 920, margin: "0 auto", display: "flex", flexDirection: "column", gap: isMobile ? 10 : 14 }}>
+      <div className="stagger" style={{ maxWidth: 920, margin: "0 auto", display: "flex", flexDirection: "column", gap: isMobile ? 10 : 14 }}>
         {!isMobile && (
-          <div style={{ padding: "20px 24px", background: "rgba(138,103,28,0.05)", border: "1px solid rgba(143,107,30,0.22)", borderRadius: 18, display: "flex", alignItems: "center", gap: 18, boxShadow: "inset 0 1px 0 rgba(255,255,255,0.06)" }}>
-            <span style={{ width: 44, height: 44, borderRadius: 13, background: T.brass, display: "inline-flex", alignItems: "center", justifyContent: "center", fontSize: 20, flex: "none", boxShadow: "0 4px 16px rgba(143,107,30,0.4), inset 0 1px 0 rgba(255,255,255,0.4)" }}>♛</span>
+          <div style={{ padding: "20px 24px", background: "var(--brass-a06)", border: "1px solid var(--brass-a20)", borderRadius: 18, display: "flex", alignItems: "center", gap: 18, boxShadow: "inset 0 1px 0 var(--white-edge)" }}>
+            <span style={{ width: 44, height: 44, borderRadius: 13, background: T.brass, display: "inline-flex", alignItems: "center", justifyContent: "center", fontSize: 20, flex: "none", boxShadow: "0 4px 16px var(--brass-a40), inset 0 1px 0 var(--white-inset)" }}>♛</span>
             <span style={{ display: "flex", flexDirection: "column", gap: 3, flex: 1 }}>
               <span style={{ fontSize: 15, fontWeight: 700, fontFamily: syne, color: T.ink }}>Chief of Staff</span>
               <span style={{ fontSize: 11.5, color: T.sub, lineHeight: 1.5 }}>Your single point of contact. Routes every question to the seats below, synthesizes, and keeps the disagreements visible.</span>
@@ -1435,7 +1475,7 @@ function BoardPage({ seatNotes, onEditSeat, onEnterRoom, isMobile }) {
             return (
               <div key={b.key} onClick={() => onEditSeat(b.key)} style={{ ...card, cursor: "pointer", display: "flex", flexDirection: "column", gap: 11 }}>
                 <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
-                  <span style={{ width: 40, height: 40, borderRadius: 12, background: b.color + "1F", display: "inline-flex", alignItems: "center", justifyContent: "center", fontSize: 18, flex: "none" }}>{b.emoji}</span>
+                  <span style={{ width: 40, height: 40, borderRadius: 12, background: tint(b.color, 12), display: "inline-flex", alignItems: "center", justifyContent: "center", fontSize: 18, flex: "none" }}>{b.emoji}</span>
                   <span style={{ display: "flex", flexDirection: "column", gap: 2 }}>
                     <span style={{ fontSize: 14, fontWeight: 700, fontFamily: syne, color: T.ink }}>{b.name}</span>
                     <span style={{ fontSize: 10, color: has ? T.green : T.faint }}>{has ? "✓ context loaded" : "tap to add context"}</span>
@@ -1464,7 +1504,7 @@ function BoardSeatsSidebar({ seatNotes, onEditSeat }) {
         return (
           <div key={b.key} onClick={() => onEditSeat(b.key)} style={{ ...S.card, padding: "12px 13px", cursor: "pointer", display: "flex", flexDirection: "column", gap: 7 }}>
             <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-              <span style={{ width: 30, height: 30, borderRadius: 9, background: b.color + "1F", display: "inline-flex", alignItems: "center", justifyContent: "center", fontSize: 14, flex: "none" }}>{b.emoji}</span>
+              <span style={{ width: 30, height: 30, borderRadius: 9, background: tint(b.color, 12), display: "inline-flex", alignItems: "center", justifyContent: "center", fontSize: 14, flex: "none" }}>{b.emoji}</span>
               <span style={{ display: "flex", flexDirection: "column", gap: 1, minWidth: 0 }}>
                 <span style={{ fontSize: 12, fontWeight: 700, fontFamily: syne, color: T.ink }}>{b.name}</span>
                 <span style={{ fontSize: 9, color: has ? T.green : T.faint }}>{has ? "✓ context loaded" : "tap to add context"}</span>
@@ -1520,10 +1560,12 @@ function BoardRoomPage({ messages, thinking, loadingData, input, setInput, onSen
       <div style={{ flex: "none", padding: "10px 14px 0" }}>
         <SubTabs options={BOARDROOM_SUBTABS} value={sub} onChange={setSub} />
       </div>
-      {sub === "mini" && <MiniMePage settings={settings} updateSetting={updateSetting} session={session} onWorkerRun={onWorkerRun} onOpenLearn={() => setSub("learn")} isMobile={true} />}
-      {sub === "learn" && learnPanel}
-      {sub === "chat" && <RoomPage messages={messages} thinking={thinking} loadingData={loadingData} input={input} setInput={setInput} onSend={onSend} onClearChat={onClearChat} endRef={endRef} isMobile={true} />}
-      {sub === "seats" && <BoardPage seatNotes={seatNotes} onEditSeat={onEditSeat} onEnterRoom={() => setSub("chat")} isMobile={true} />}
+      <div key={sub} className="pagefade" style={{ display: "flex", flexDirection: "column", flex: 1, minHeight: 0 }}>
+        {sub === "mini" && <MiniMePage settings={settings} updateSetting={updateSetting} session={session} onWorkerRun={onWorkerRun} onOpenLearn={() => setSub("learn")} isMobile={true} />}
+        {sub === "learn" && learnPanel}
+        {sub === "chat" && <RoomPage messages={messages} thinking={thinking} loadingData={loadingData} input={input} setInput={setInput} onSend={onSend} onClearChat={onClearChat} endRef={endRef} isMobile={true} />}
+        {sub === "seats" && <BoardPage seatNotes={seatNotes} onEditSeat={onEditSeat} onEnterRoom={() => setSub("chat")} isMobile={true} />}
+      </div>
     </>
   );
 }
@@ -1565,29 +1607,31 @@ function PersonalPage({ isMobile, jumpSignal, jump, settings, updateSetting }) {
     <div style={{ flex: 1, overflowY: "auto", padding: isMobile ? "18px 16px 24px" : "30px 34px 40px" }}>
       <div style={{ maxWidth: 900, margin: "0 auto", display: "flex", flexDirection: "column", gap: 14 }}>
         <SubTabs options={isMobile ? PERSONAL_SUBTABS_MOBILE : PERSONAL_SUBTABS} value={sub} onChange={setSub} />
-        {isMobile ? (
-          <>
-            {sub === "notescal" && (
-              <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
-                <CalendarPanel isMobile={isMobile} />
-                <NotesPanel isMobile={isMobile} openSignal={noteSignal} />
-              </div>
-            )}
-            {sub === "workout" && <WorkoutPanel isMobile={isMobile} supabase={supabase} settings={settings} updateSetting={updateSetting} />}
-            {sub === "birthdays" && <BirthdaysPanel isMobile={isMobile} />}
-            {sub === "movies" && <MoviesPanel isMobile={isMobile} />}
-            {sub === "food" && <FoodPanel isMobile={isMobile} settings={settings} updateSetting={updateSetting} />}
-          </>
-        ) : (
-          <>
-            {sub === "notes" && <NotesPanel isMobile={isMobile} openSignal={noteSignal} />}
-            {sub === "calendar" && <CalendarPanel isMobile={isMobile} />}
-            {sub === "workout" && <WorkoutPanel isMobile={isMobile} supabase={supabase} settings={settings} updateSetting={updateSetting} />}
-            {sub === "birthdays" && <BirthdaysPanel isMobile={isMobile} />}
-            {sub === "movies" && <MoviesPanel isMobile={isMobile} />}
-            {sub === "food" && <FoodPanel isMobile={isMobile} settings={settings} updateSetting={updateSetting} />}
-          </>
-        )}
+        <div key={sub} className="pagefade" style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+          {isMobile ? (
+            <>
+              {sub === "notescal" && (
+                <>
+                  <CalendarPanel isMobile={isMobile} />
+                  <NotesPanel isMobile={isMobile} openSignal={noteSignal} />
+                </>
+              )}
+              {sub === "workout" && <WorkoutPanel isMobile={isMobile} supabase={supabase} settings={settings} updateSetting={updateSetting} />}
+              {sub === "birthdays" && <BirthdaysPanel isMobile={isMobile} />}
+              {sub === "movies" && <MoviesPanel isMobile={isMobile} />}
+              {sub === "food" && <FoodPanel isMobile={isMobile} settings={settings} updateSetting={updateSetting} />}
+            </>
+          ) : (
+            <>
+              {sub === "notes" && <NotesPanel isMobile={isMobile} openSignal={noteSignal} />}
+              {sub === "calendar" && <CalendarPanel isMobile={isMobile} />}
+              {sub === "workout" && <WorkoutPanel isMobile={isMobile} supabase={supabase} settings={settings} updateSetting={updateSetting} />}
+              {sub === "birthdays" && <BirthdaysPanel isMobile={isMobile} />}
+              {sub === "movies" && <MoviesPanel isMobile={isMobile} />}
+              {sub === "food" && <FoodPanel isMobile={isMobile} settings={settings} updateSetting={updateSetting} />}
+            </>
+          )}
+        </div>
       </div>
     </div>
   );
@@ -1808,7 +1852,7 @@ function NotesPanel({ isMobile, openSignal }) {
     <span style={{ display: "inline-flex", gap: 6, alignItems: "center" }}>
       {NOTE_SEALS.map(s => (
         <button key={s.key} onClick={() => onPick(value === s.key ? null : s.key)} aria-label={`Seal ${s.key}`}
-          style={{ width: size, height: size, borderRadius: "50%", border: value === s.key ? `2px solid ${T.ink}` : `1px solid rgba(34,29,20,0.2)`, background: s.c, cursor: "pointer", padding: 0, opacity: value && value !== s.key ? 0.45 : 1 }} />
+          style={{ width: size, height: size, borderRadius: "50%", border: value === s.key ? `2px solid ${T.ink}` : `1px solid var(--ink-a20)`, background: s.c, cursor: "pointer", padding: 0, opacity: value && value !== s.key ? 0.45 : 1 }} />
       ))}
     </span>
   );
@@ -1877,10 +1921,10 @@ function NotesPanel({ isMobile, openSignal }) {
       </div>
 
       {legacy && notes !== null && (
-        <div style={{ ...S.inner, border: "1px solid rgba(162,112,14,0.3)", background: "rgba(162,112,14,0.06)", padding: "10px 12px", marginBottom: 10, display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+        <div style={{ ...S.inner, border: "1px solid var(--amber-a35)", background: "var(--amber-a08)", padding: "10px 12px", marginBottom: 10, display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
           <span style={{ fontSize: 10.5, color: T.amber, lineHeight: 1.5, flex: 1, minWidth: 180 }}>Pins &amp; color seals need two columns — one paste in Supabase → SQL Editor unlocks them.</span>
           <button onClick={(e) => { navigator.clipboard?.writeText(NOTES_UPGRADE_SQL); e.target.textContent = "Copied ✓"; }}
-            style={{ ...S.ghostBtn, padding: "6px 12px", fontSize: 10, fontFamily: mono, color: T.amber, borderColor: "rgba(162,112,14,0.4)" }}>COPY SQL</button>
+            style={{ ...S.ghostBtn, padding: "6px 12px", fontSize: 10, fontFamily: mono, color: T.amber, borderColor: "var(--amber-a35)" }}>COPY SQL</button>
         </div>
       )}
 
@@ -1908,14 +1952,23 @@ function NotesPanel({ isMobile, openSignal }) {
           <button onClick={() => setSealFilter(null)} style={{ ...S.ghostBtn, padding: "4px 10px", fontSize: 10, ...(sealFilter === null ? { borderColor: T.brass, color: T.brass } : {}) }}>All</button>
           {usedSeals.map(s => (
             <button key={s.key} onClick={() => setSealFilter(f => f === s.key ? null : s.key)} aria-label={`Filter ${s.key}`}
-              style={{ width: 18, height: 18, borderRadius: "50%", background: s.c, border: sealFilter === s.key ? `2px solid ${T.ink}` : "1px solid rgba(34,29,20,0.2)", cursor: "pointer", padding: 0 }} />
+              style={{ width: 18, height: 18, borderRadius: "50%", background: s.c, border: sealFilter === s.key ? `2px solid ${T.ink}` : "1px solid var(--ink-a20)", cursor: "pointer", padding: 0 }} />
           ))}
           <button onClick={() => setSealFilter(f => f === "none" ? null : "none")} style={{ ...S.ghostBtn, padding: "4px 10px", fontSize: 10, ...(sealFilter === "none" ? { borderColor: T.brass, color: T.brass } : {}) }}>Unsealed</button>
         </div>
       )}
 
       {loadErr && <div style={{ fontSize: 11.5, color: T.faint, padding: "20px 0", textAlign: "center" }}>{loadErr}</div>}
-      {!loadErr && notes === null && <div style={{ fontSize: 11.5, color: T.faint, padding: "20px 0", textAlign: "center", animation: "pulse 1.4s infinite" }}>Loading notes…</div>}
+      {!loadErr && notes === null && (
+        <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+          {[0, 1, 2].map(i => (
+            <div key={i} style={{ ...S.inner, padding: "14px 15px" }}>
+              <div className="sk sk-line w40" style={{ margin: "0 0 9px" }} />
+              <div className="sk sk-line w80" style={{ margin: 0 }} />
+            </div>
+          ))}
+        </div>
+      )}
       {!loadErr && notes && notes.length === 0 && (
         <div style={{ fontSize: 11.5, color: T.faint, padding: "24px 0", textAlign: "center" }}>No notes yet — jot the first one above.</div>
       )}
@@ -1928,9 +1981,9 @@ function NotesPanel({ isMobile, openSignal }) {
             const isSel = selected.has(n.id);
             return (
               <div key={n.id} onClick={() => (selectMode ? toggleSelected(n.id) : openNote(n))}
-                style={{ ...S.inner, padding: "10px 12px", cursor: "pointer", display: "flex", alignItems: "flex-start", gap: 10, borderLeft: n.color ? `3px solid ${sealColor(n.color)}` : undefined, ...(isSel ? { border: `1px solid ${T.brass}`, background: "rgba(143,107,30,0.06)" } : {}) }}>
+                style={{ ...S.inner, padding: "10px 12px", cursor: "pointer", display: "flex", alignItems: "flex-start", gap: 10, borderLeft: n.color ? `3px solid ${sealColor(n.color)}` : undefined, ...(isSel ? { border: `1px solid ${T.brass}`, background: "var(--brass-a06)" } : {}) }}>
                 {selectMode && (
-                  <span style={{ marginTop: 2, width: 16, height: 16, borderRadius: 5, flex: "none", border: `1.5px solid ${isSel ? T.brass : "rgba(34,29,20,0.25)"}`, background: isSel ? T.brass : "transparent", display: "inline-flex", alignItems: "center", justifyContent: "center", color: "#FDFCF9", fontSize: 10, fontWeight: 700 }}>{isSel ? "✓" : ""}</span>
+                  <span style={{ marginTop: 2, width: 16, height: 16, borderRadius: 5, flex: "none", border: `1.5px solid ${isSel ? T.brass : "var(--ink-a25)"}`, background: isSel ? T.brass : "transparent", display: "inline-flex", alignItems: "center", justifyContent: "center", color: "var(--on-brass)", fontSize: 10, fontWeight: 700 }}>{isSel ? "✓" : ""}</span>
                 )}
                 <div style={{ minWidth: 0, flex: 1 }}>
                   <div style={{ fontSize: 12.5, fontWeight: 700, fontFamily: syne, color: T.ink, marginBottom: 2, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
@@ -1955,7 +2008,7 @@ function NotesPanel({ isMobile, openSignal }) {
 
       {/* select-mode action bar */}
       {selectMode && (
-        <div style={{ position: "sticky", bottom: isMobile ? 8 : 12, marginTop: 12, background: T.surface, border: `1px solid ${T.brass}`, borderRadius: 14, padding: "10px 12px", display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", boxShadow: "0 4px 18px rgba(34,29,20,0.12)", zIndex: 5 }}>
+        <div style={{ position: "sticky", bottom: isMobile ? 8 : 12, marginTop: 12, background: T.surface, border: `1px solid ${T.brass}`, borderRadius: 14, padding: "10px 12px", display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", boxShadow: "0 4px 18px rgba(0,0,0,0.15)", zIndex: 5 }}>
           <span style={{ fontSize: 11, fontFamily: mono, color: T.brass, fontWeight: 700, marginRight: 2 }}>{selected.size} selected</span>
           <button onClick={() => setSelected(new Set((visible || []).map(n => n.id)))} style={{ ...S.ghostBtn, padding: "6px 10px", fontSize: 10 }}>All</button>
           <button onClick={() => setSelected(new Set())} style={{ ...S.ghostBtn, padding: "6px 10px", fontSize: 10 }}>None</button>
@@ -1971,7 +2024,7 @@ function NotesPanel({ isMobile, openSignal }) {
                 <span style={{ position: "relative" }}>
                   <button onClick={() => setSealMenu(m => !m)} style={{ ...S.ghostBtn, padding: "7px 12px", fontSize: 10.5 }}>Seal ▾</button>
                   {sealMenu && (
-                    <span style={{ position: "absolute", bottom: "calc(100% + 6px)", right: 0, background: T.surface, border: `1px solid ${T.line}`, borderRadius: 10, padding: "8px 10px", display: "flex", gap: 7, alignItems: "center", boxShadow: "0 4px 14px rgba(34,29,20,0.14)" }}>
+                    <span style={{ position: "absolute", bottom: "calc(100% + 6px)", right: 0, background: T.surface, border: `1px solid ${T.line}`, borderRadius: 10, padding: "8px 10px", display: "flex", gap: 7, alignItems: "center", boxShadow: "0 4px 14px rgba(0,0,0,0.17)" }}>
                       {sealDots(null, bulkSeal, 16)}
                       <button onClick={() => bulkSeal(null)} style={{ ...S.ghostBtn, padding: "3px 8px", fontSize: 9.5 }}>Clear</button>
                     </span>
@@ -1979,7 +2032,7 @@ function NotesPanel({ isMobile, openSignal }) {
                 </span>
               )}
               {selected.size > 1 && <button onClick={bulkMerge} style={{ ...S.ghostBtn, padding: "7px 12px", fontSize: 10.5 }}>Merge</button>}
-              <button onClick={bulkDelete} style={{ ...S.ghostBtn, padding: "7px 12px", fontSize: 10.5, color: T.red, borderColor: "rgba(178,58,46,0.35)" }}>Delete</button>
+              <button onClick={bulkDelete} style={{ ...S.ghostBtn, padding: "7px 12px", fontSize: 10.5, color: T.red, borderColor: "var(--red-a32)" }}>Delete</button>
             </>
           )}
         </div>
@@ -1987,9 +2040,9 @@ function NotesPanel({ isMobile, openSignal }) {
 
       {/* undo toast */}
       {undo && (
-        <div style={{ position: "fixed", left: "50%", transform: "translateX(-50%)", bottom: isMobile ? 88 : 26, background: T.ink, color: "#F3F1EC", borderRadius: 12, padding: "10px 16px", display: "flex", alignItems: "center", gap: 14, fontSize: 12, boxShadow: "0 6px 22px rgba(34,29,20,0.35)", zIndex: 60, animation: "fadein 0.2s ease" }}>
+        <div style={{ position: "fixed", left: "50%", transform: "translateX(-50%)", bottom: isMobile ? 88 : 26, background: T.surface, color: T.ink, border: `1px solid ${T.lineStrong}`, borderRadius: 12, padding: "10px 16px", display: "flex", alignItems: "center", gap: 14, fontSize: 12, boxShadow: "var(--shadow-float)", zIndex: 60, animation: "fadein 0.2s ease" }}>
           <span>{undo.label}</span>
-          <button onClick={runUndo} style={{ background: "none", border: "none", color: "#D9B45B", fontWeight: 700, fontFamily: syne, fontSize: 12, cursor: "pointer", letterSpacing: "0.04em", padding: 0 }}>Undo</button>
+          <button onClick={runUndo} style={{ background: "none", border: "none", color: T.brass, fontWeight: 700, fontFamily: syne, fontSize: 12, cursor: "pointer", letterSpacing: "0.04em", padding: 0 }}>Undo</button>
         </div>
       )}
     </div>
@@ -2099,7 +2152,7 @@ function BirthdaysPanel({ isMobile }) {
         <textarea value={form.notes} onChange={e => setForm(f => ({ ...f, notes: e.target.value }))} placeholder="Notes (optional)" rows={3}
           style={{ ...S.input, width: "100%", padding: "10px 12px", fontSize: 13, lineHeight: 1.6, resize: "vertical", marginBottom: 10 }} />
 
-        {saveErr && <div style={{ fontSize: 11, color: "#B23A2E", marginBottom: 8 }}>{saveErr}</div>}
+        {saveErr && <div style={{ fontSize: 11, color: "var(--red)", marginBottom: 8 }}>{saveErr}</div>}
 
         <div style={{ display: "flex", gap: 8 }}>
           <button onClick={save} disabled={saving} style={{ ...S.brassBtn, padding: "9px 18px", fontSize: 12, opacity: saving ? 0.6 : 1 }}>{saving ? "Saving…" : "Save"}</button>
@@ -2134,7 +2187,7 @@ function BirthdaysPanel({ isMobile }) {
                 </div>
                 <textarea value={bulkText} onChange={e => setBulkText(e.target.value)} rows={6} placeholder={"e.g.\nMom - March 3\nJohn Smith 12/25/1990\nSarah's birthday is June 1st"}
                   style={{ ...S.input, width: "100%", padding: "10px 12px", fontSize: 13, lineHeight: 1.6, resize: "vertical", marginBottom: 8 }} />
-                {bulkErr && <div style={{ fontSize: 11, color: "#B23A2E", marginBottom: 8 }}>{bulkErr}</div>}
+                {bulkErr && <div style={{ fontSize: 11, color: "var(--red)", marginBottom: 8 }}>{bulkErr}</div>}
                 <button onClick={parseBulk} disabled={bulkParsing || !bulkText.trim()} style={{ ...S.brassBtn, padding: "8px 16px", fontSize: 11.5, opacity: (bulkParsing || !bulkText.trim()) ? 0.55 : 1 }}>
                   {bulkParsing ? "Parsing…" : "Parse with Claude"}
                 </button>
@@ -2153,7 +2206,7 @@ function BirthdaysPanel({ isMobile }) {
                     </div>
                   ))}
                 </div>
-                {bulkErr && <div style={{ fontSize: 11, color: "#B23A2E", marginBottom: 8 }}>{bulkErr}</div>}
+                {bulkErr && <div style={{ fontSize: 11, color: "var(--red)", marginBottom: 8 }}>{bulkErr}</div>}
                 <div style={{ display: "flex", gap: 8 }}>
                   <button onClick={confirmBulk} disabled={bulkSaving || !bulkPreview.length} style={{ ...S.brassBtn, padding: "8px 16px", fontSize: 11.5, opacity: bulkSaving ? 0.6 : 1 }}>
                     {bulkSaving ? "Adding…" : `Add all (${bulkPreview.length})`}
@@ -2166,7 +2219,11 @@ function BirthdaysPanel({ isMobile }) {
         )}
 
         {loadErr && <div style={{ fontSize: 11.5, color: T.faint, padding: "20px 0", textAlign: "center" }}>{loadErr}</div>}
-        {!loadErr && rows === null && <div style={{ fontSize: 11.5, color: T.faint, padding: "20px 0", textAlign: "center", animation: "pulse 1.4s infinite" }}>Loading birthdays…</div>}
+        {!loadErr && rows === null && (
+          <div style={{ display: "flex", flexDirection: "column", gap: 9, padding: "4px 0" }}>
+            {[0, 1, 2].map(i => <div key={i} className="sk sk-line w60" style={{ margin: 0, height: 30, borderRadius: 9 }} />)}
+          </div>
+        )}
         {!loadErr && rows && rows.length === 0 && !bulkOpen && (
           <div style={{ fontSize: 11.5, color: T.faint, padding: "24px 0", textAlign: "center" }}>No birthdays yet — add one, or bulk-add a whole list at once.</div>
         )}
@@ -2318,7 +2375,7 @@ function MoviesPanel({ isMobile }) {
       </div>
 
       {loadErr ? <div style={{ fontSize: 11, color: T.faint }}>{loadErr}</div>
-        : movies === null ? <div style={{ fontSize: 11, color: T.faint, animation: "pulse 1.4s infinite" }}>Loading…</div>
+        : movies === null ? <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>{[0, 1].map(i => <div key={i} className="sk sk-line w60" style={{ margin: 0, height: 26, borderRadius: 8 }} />)}</div>
         : (
           <>
             {watchlist.length > 0 && (
@@ -2386,7 +2443,7 @@ function FoodPanel({ isMobile, settings, updateSetting }) {
   const removeRecipe = (id) => { if (!window.confirm("Delete this saved recipe?")) return; db.deleteRecipe(id).then(refreshRecipes); };
 
   const tag = (text, onRemove, color) => (
-    <span onClick={onRemove} style={{ fontSize: 10.5, color, border: `1px solid ${color}40`, background: color + "14", borderRadius: 999, padding: "4px 10px", cursor: "pointer" }}>{text} ×</span>
+    <span onClick={onRemove} style={{ fontSize: 10.5, color, border: `1px solid ${tint(color, 25)}`, background: tint(color, 8), borderRadius: 999, padding: "4px 10px", cursor: "pointer" }}>{text} ×</span>
   );
 
   return (
@@ -2423,7 +2480,7 @@ function FoodPanel({ isMobile, settings, updateSetting }) {
           <button onClick={addGroceryItem} style={{ ...S.brassBtn, padding: "8px 14px", fontSize: 11.5 }}>Add</button>
         </div>
         <div style={{ display: "flex", flexDirection: "column", gap: 5 }}>
-          {groceries === null ? <div style={{ fontSize: 11, color: T.faint, animation: "pulse 1.4s infinite" }}>Loading…</div>
+          {groceries === null ? <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>{[0, 1].map(i => <div key={i} className="sk sk-line w60" style={{ margin: 0, height: 26, borderRadius: 8 }} />)}</div>
             : groceries.length ? groceries.map(it => (
               <div key={it.id} style={{ display: "flex", alignItems: "center", gap: 9, padding: "6px 2px" }}>
                 <input type="checkbox" checked={it.checked} onChange={() => toggleItem(it)} />
@@ -2682,7 +2739,7 @@ Only extract entries you can read with real confidence — skip anything blurry,
           {EVENT_CATEGORIES.map(c => (
             <button key={c.key} onClick={() => setForm(f => ({ ...f, category: c.key }))}
               style={{ display: "flex", alignItems: "center", gap: 5, padding: "5px 10px", borderRadius: 999, fontSize: 10.5, fontWeight: 700, fontFamily: syne, cursor: "pointer",
-                border: `1px solid ${form.category === c.key ? c.color : T.line}`, background: form.category === c.key ? c.color + "1A" : "transparent", color: form.category === c.key ? c.color : T.sub }}>
+                border: `1px solid ${form.category === c.key ? c.color : T.line}`, background: form.category === c.key ? tint(c.color, 10) : "transparent", color: form.category === c.key ? c.color : T.sub }}>
               <span style={{ width: 6, height: 6, borderRadius: "50%", background: c.color }} />
               {c.label}
             </button>
@@ -2723,7 +2780,7 @@ Only extract entries you can read with real confidence — skip anything blurry,
           style={{ ...S.input, width: "100%", padding: "10px 12px", fontSize: 13, lineHeight: 1.6, resize: "vertical", marginBottom: 10 }}
         />
 
-        {saveErr && <div style={{ fontSize: 11, color: "#B23A2E", marginBottom: 8 }}>{saveErr}</div>}
+        {saveErr && <div style={{ fontSize: 11, color: "var(--red)", marginBottom: 8 }}>{saveErr}</div>}
 
         <div style={{ display: "flex", gap: 8 }}>
           <button onClick={save} disabled={saving} style={{ ...S.brassBtn, padding: "9px 18px", fontSize: 12, opacity: saving ? 0.6 : 1 }}>
@@ -2813,7 +2870,7 @@ Only extract entries you can read with real confidence — skip anything blurry,
                 </div>
               )}
 
-              {bulkErr && <div style={{ fontSize: 11, color: "#B23A2E", marginBottom: 8 }}>{bulkErr}</div>}
+              {bulkErr && <div style={{ fontSize: 11, color: "var(--red)", marginBottom: 8 }}>{bulkErr}</div>}
 
               <button onClick={parseBulkImages} disabled={bulkParsing || !bulkImages.length} style={{ ...S.brassBtn, padding: "8px 16px", fontSize: 11.5, opacity: (bulkParsing || !bulkImages.length) ? 0.55 : 1 }}>
                 {bulkParsing ? `Reading ${bulkImages.length} image${bulkImages.length === 1 ? "" : "s"}…` : `Parse ${bulkImages.length || ""} image${bulkImages.length === 1 ? "" : "s"}`}
@@ -2843,7 +2900,7 @@ Only extract entries you can read with real confidence — skip anything blurry,
                   </div>
                 ))}
               </div>
-              {bulkErr && <div style={{ fontSize: 11, color: "#B23A2E", marginBottom: 8 }}>{bulkErr}</div>}
+              {bulkErr && <div style={{ fontSize: 11, color: "var(--red)", marginBottom: 8 }}>{bulkErr}</div>}
               <div style={{ display: "flex", gap: 8 }}>
                 <button onClick={confirmBulkImport} disabled={bulkSaving} style={{ ...S.brassBtn, padding: "8px 16px", fontSize: 11.5, opacity: bulkSaving ? 0.6 : 1 }}>
                   {bulkSaving ? "Saving…" : `Confirm (${bulkPreview.filter(r => r.action !== "skip").length})`}
@@ -2856,7 +2913,11 @@ Only extract entries you can read with real confidence — skip anything blurry,
       )}
 
       {loadErr && <div style={{ fontSize: 11.5, color: T.faint, padding: "20px 0", textAlign: "center" }}>{loadErr}</div>}
-      {!loadErr && events === null && <div style={{ fontSize: 11.5, color: T.faint, padding: "20px 0", textAlign: "center", animation: "pulse 1.4s infinite" }}>Loading calendar…</div>}
+      {!loadErr && events === null && (
+        <div style={{ display: "flex", flexDirection: "column", gap: 9, padding: "4px 0" }}>
+          {[0, 1, 2, 3].map(i => <div key={i} className="sk sk-line" style={{ margin: 0, height: 34, borderRadius: 9, width: `${88 - i * 9}%` }} />)}
+        </div>
+      )}
 
       {!loadErr && events !== null && !bulkOpen && selectedDay === null && (
         <div>
@@ -2882,12 +2943,12 @@ Only extract entries you can read with real confidence — skip anything blurry,
                     display: "flex", flexDirection: "column", alignItems: "stretch", gap: 2, textAlign: "left",
                     borderRadius: 8, cursor: "pointer", padding: "4px 3px", minHeight: 56,
                     border: todayFlag ? `1.5px solid ${T.brass}` : "1px solid transparent",
-                    background: todayFlag ? "rgba(143,107,30,0.08)" : "transparent",
+                    background: todayFlag ? "var(--brass-a08)" : "transparent",
                   }}>
                   <span style={{ fontSize: 10.5, fontWeight: todayFlag ? 800 : 500, color: todayFlag ? T.brass : T.ink, fontFamily: mono, paddingLeft: 2, marginBottom: 1 }}>{day}</span>
                   {dayEvents.slice(0, 2).map((ev, j) => (
                     <span key={j} onClick={(e) => { e.stopPropagation(); openEdit(ev); }}
-                      style={{ fontSize: 8, fontWeight: 700, color: "#FFFFFF", background: catColor(ev.category), borderRadius: 4, padding: "1.5px 4px", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", lineHeight: 1.5, marginBottom: 1, cursor: "pointer" }}>{ev.title}</span>
+                      style={{ fontSize: 8, fontWeight: 700, color: "var(--chip-ink)", background: catColor(ev.category), borderRadius: 4, padding: "1.5px 4px", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", lineHeight: 1.5, marginBottom: 1, cursor: "pointer" }}>{ev.title}</span>
                   ))}
                   {dayEvents.length > 2 && (
                     <span onClick={(e) => { e.stopPropagation(); setSelectedDay(key); }}
@@ -2936,7 +2997,7 @@ function PropertiesPage({ isMobile, settings, updateSetting, session }) {
   const card = isMobile ? S.cardM : S.card;
   return (
     <div style={{ flex: 1, overflowY: "auto", padding: isMobile ? "18px 16px 24px" : "30px 34px 40px" }}>
-      <div style={{ maxWidth: 920, margin: "0 auto", display: "grid", gridTemplateColumns: isMobile ? "1fr" : "1fr 1fr", gap: isMobile ? 10 : 14 }}>
+      <div className="stagger" style={{ maxWidth: 920, margin: "0 auto", display: "grid", gridTemplateColumns: isMobile ? "1fr" : "1fr 1fr", gap: isMobile ? 10 : 14 }}>
         {PROPERTIES.map((p, i) => {
           const key = p.url || p.appUrl;
           const s = status[key];
@@ -2945,7 +3006,7 @@ function PropertiesPage({ isMobile, settings, updateSetting, session }) {
           return (
           <div key={i} style={{ ...card, display: "flex", flexDirection: "column", gap: 12 }}>
             <div style={{ display: "flex", alignItems: "center", gap: 11 }}>
-              <span style={{ width: 9, height: 9, borderRadius: "50%", background: p.color, flex: "none", boxShadow: `0 0 10px ${p.color}66` }} />
+              <span style={{ width: 9, height: 9, borderRadius: "50%", background: p.color, flex: "none", boxShadow: `0 0 10px ${tint(p.color, 40)}` }} />
               <span style={{ display: "flex", flexDirection: "column", gap: 1, minWidth: 0 }}>
                 <span style={{ fontSize: 13.5, fontWeight: 700, fontFamily: syne, color: T.ink }}>{p.name}</span>
                 <span style={{ fontSize: 10.5, color: T.faint }}>{p.desc}</span>
@@ -2953,8 +3014,8 @@ function PropertiesPage({ isMobile, settings, updateSetting, session }) {
               <span style={{ marginLeft: "auto", fontSize: 8.5, color: pillColor, fontFamily: mono, letterSpacing: "0.06em", flex: "none", whiteSpace: "nowrap" }}>{pillText}</span>
             </div>
             <div style={{ display: "flex", gap: 8 }}>
-              {p.url && <a href={p.url} target="_blank" rel="noopener" style={{ flex: 1, padding: 10, textAlign: "center", background: "rgba(34,29,20,0.05)", border: `1px solid rgba(34,29,20,0.1)`, borderRadius: 10, color: p.color, fontSize: 11, fontWeight: 700, textDecoration: "none" }}>Site ›</a>}
-              <a href={p.appUrl} target="_blank" rel="noopener" style={{ flex: 1, padding: 10, textAlign: "center", background: "rgba(34,29,20,0.05)", border: `1px solid rgba(34,29,20,0.1)`, borderRadius: 10, color: T.sub, fontSize: 11, fontWeight: 600, textDecoration: "none" }}>Command Center ›</a>
+              {p.url && <a href={p.url} target="_blank" rel="noopener" style={{ flex: 1, padding: 10, textAlign: "center", background: "var(--ink-a05)", border: `1px solid var(--ink-a10)`, borderRadius: 10, color: p.color, fontSize: 11, fontWeight: 700, textDecoration: "none" }}>Site ›</a>}
+              <a href={p.appUrl} target="_blank" rel="noopener" style={{ flex: 1, padding: 10, textAlign: "center", background: "var(--ink-a05)", border: `1px solid var(--ink-a10)`, borderRadius: 10, color: T.sub, fontSize: 11, fontWeight: 600, textDecoration: "none" }}>Command Center ›</a>
             </div>
           </div>
           );
@@ -3050,7 +3111,7 @@ function AuditorCard({ settings, updateSetting, session, isMobile }) {
         <span style={S.title}>Site Auditor</span>
         <Toggle on={enabled} onToggle={() => updateSetting("auditor_enabled", !enabled)} size={isMobile ? 24 : 20} />
       </div>
-      <button onClick={() => runAll()} disabled={running} style={{ width: "100%", padding: isMobile ? 12 : 10, background: running ? "rgba(34,29,20,0.05)" : "rgba(143,107,30,0.12)", border: `1px solid ${running ? T.line : "rgba(143,107,30,0.3)"}`, borderRadius: 10, color: running ? T.faint : T.brass, fontSize: 11, fontWeight: 700, cursor: running ? "default" : "pointer", fontFamily: syne, marginBottom: 9 }}>
+      <button onClick={() => runAll()} disabled={running} style={{ width: "100%", padding: isMobile ? 12 : 10, background: running ? "var(--ink-a05)" : "var(--brass-a12)", border: `1px solid ${running ? T.line : "var(--brass-a32)"}`, borderRadius: 10, color: running ? T.faint : T.brass, fontSize: 11, fontWeight: 700, cursor: running ? "default" : "pointer", fontFamily: syne, marginBottom: 9 }}>
         {running ? "Auditing all properties…" : "Run audit now"}
       </button>
       <div style={{ display: "flex", gap: 8, marginBottom: 9 }}>
@@ -3068,7 +3129,7 @@ function AuditorCard({ settings, updateSetting, session, isMobile }) {
         <div style={{ display: "flex", flexDirection: "column", gap: 7, marginTop: 10, maxHeight: 230, overflowY: "auto" }}>
           {findings.length === 0 && <div style={{ fontSize: 10, color: T.faint, textAlign: "center", padding: "8px 0" }}>No findings yet.</div>}
           {findings.slice(0, 12).map((f, i) => (
-            <div key={i} style={{ padding: "10px 12px", background: "rgba(34,29,20,0.045)", borderRadius: 10, border: "1px solid rgba(34,29,20,0.05)", borderLeft: `2px solid ${sevColor[f.severity] || T.sub}` }}>
+            <div key={i} style={{ padding: "10px 12px", background: "var(--ink-a04)", borderRadius: 10, border: "1px solid var(--ink-a05)", borderLeft: `2px solid ${sevColor[f.severity] || T.sub}` }}>
               <div style={{ display: "flex", justifyContent: "space-between", gap: 8, marginBottom: 4 }}>
                 <span style={{ fontSize: 9, fontWeight: 700, color: propColor(f.property), fontFamily: syne }}>{f.property}</span>
                 <span style={{ fontSize: 8, color: sevColor[f.severity] || T.sub, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.1em" }}>{f.severity}</span>
@@ -3087,7 +3148,7 @@ function AuditorCard({ settings, updateSetting, session, isMobile }) {
       <div style={{ fontSize: 9.5, color: T.faint, lineHeight: 1.5, marginBottom: 9 }}>Commits straight to the site's repo — nothing goes live until you approve. Works for the static template (meta tags, title, robots.txt, sitemap) — not page content rendered by app code yet.</div>
       <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginBottom: 8 }}>
         {PROPERTIES.filter(p => p.repo).map(p => (
-          <button key={p.name} onClick={() => setFixProp(p.name)} style={{ padding: "6px 11px", background: fixProp === p.name ? "rgba(143,107,30,0.14)" : "rgba(34,29,20,0.035)", border: `1px solid ${fixProp === p.name ? "rgba(143,107,30,0.4)" : "rgba(34,29,20,0.09)"}`, borderRadius: 12, color: fixProp === p.name ? T.brass : T.sub, fontSize: 9.5, fontWeight: 700, cursor: "pointer", fontFamily: syne }}>{p.name}</button>
+          <button key={p.name} onClick={() => setFixProp(p.name)} style={{ padding: "6px 11px", background: fixProp === p.name ? "var(--brass-a16)" : "var(--ink-a03)", border: `1px solid ${fixProp === p.name ? "var(--brass-a40)" : "var(--line)"}`, borderRadius: 12, color: fixProp === p.name ? T.brass : T.sub, fontSize: 9.5, fontWeight: 700, cursor: "pointer", fontFamily: syne }}>{p.name}</button>
         ))}
       </div>
       <div style={{ display: "flex", gap: 8 }}>
@@ -3098,17 +3159,17 @@ function AuditorCard({ settings, updateSetting, session, isMobile }) {
       {fixError && <div style={{ fontSize: 10.5, color: T.red, lineHeight: 1.5, marginTop: 9 }}>{fixError}</div>}
       {committed && <div style={{ fontSize: 10.5, color: T.green, lineHeight: 1.5, marginTop: 9 }}>✓ {committed.message}</div>}
       {fixProposal && (
-        <div style={{ background: "rgba(34,29,20,0.045)", border: "1px solid rgba(34,29,20,0.08)", borderRadius: 10, padding: "11px 13px", marginTop: 10 }}>
+        <div style={{ background: "var(--ink-a04)", border: "1px solid var(--ink-a08)", borderRadius: 10, padding: "11px 13px", marginTop: 10 }}>
           <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", marginBottom: 5 }}>
             <span style={{ fontSize: 10.5, color: T.ink, fontWeight: 700, fontFamily: mono }}>{fixProposal.path}</span>
             <span style={{ fontSize: 9, color: propColor(fixProposal.site), fontFamily: syne, fontWeight: 700 }}>{fixProposal.site}</span>
           </div>
           <div style={{ fontSize: 10.5, color: T.sub, lineHeight: 1.5, marginBottom: 8 }}>{fixProposal.note}</div>
           <button onClick={() => setFixExpanded(!fixExpanded)} style={{ background: "none", border: "none", color: T.brass, fontSize: 9.5, cursor: "pointer", padding: 0, marginBottom: fixExpanded ? 8 : 0 }}>{fixExpanded ? "Hide full file ▲" : "Show full file ▼"}</button>
-          {fixExpanded && <pre style={{ background: "rgba(34,29,20,0.05)", border: "1px solid rgba(34,29,20,0.06)", borderRadius: 9, padding: "10px 12px", fontSize: 9.5, fontFamily: mono, color: T.sub, lineHeight: 1.5, whiteSpace: "pre-wrap", maxHeight: 220, overflowY: "auto", marginBottom: 8 }}>{fixProposal.after}</pre>}
+          {fixExpanded && <pre style={{ background: "var(--ink-a05)", border: "1px solid var(--ink-a06)", borderRadius: 9, padding: "10px 12px", fontSize: 9.5, fontFamily: mono, color: T.sub, lineHeight: 1.5, whiteSpace: "pre-wrap", maxHeight: 220, overflowY: "auto", marginBottom: 8 }}>{fixProposal.after}</pre>}
           <div style={{ display: "flex", gap: 8, marginTop: 8 }}>
             <button onClick={commitFix} disabled={committing} style={{ ...S.brassBtn, flex: 1, padding: "9px 0", fontSize: 10.5, opacity: committing ? 0.6 : 1 }}>{committing ? "Committing…" : "Approve & Commit"}</button>
-            <button onClick={discardFix} disabled={committing} style={{ flex: "none", padding: "9px 16px", background: "transparent", border: `1px solid rgba(34,29,20,0.12)`, borderRadius: 10, color: T.sub, fontSize: 10.5, fontWeight: 600, cursor: "pointer" }}>Discard</button>
+            <button onClick={discardFix} disabled={committing} style={{ flex: "none", padding: "9px 16px", background: "transparent", border: `1px solid var(--ink-a12)`, borderRadius: 10, color: T.sub, fontSize: 10.5, fontWeight: 600, cursor: "pointer" }}>Discard</button>
           </div>
         </div>
       )}
@@ -3172,7 +3233,7 @@ function UsageCard({ isMobile }) {
         <span style={S.title}>Usage</span>
         <div style={{ display: "flex", gap: 4 }}>
           {USAGE_WINDOWS.map(([label], i) => (
-            <button key={label} onClick={() => setWindowIdx(i)} style={{ padding: "4px 9px", background: windowIdx === i ? "rgba(143,107,30,0.16)" : "transparent", border: `1px solid ${windowIdx === i ? "rgba(143,107,30,0.4)" : "rgba(34,29,20,0.1)"}`, borderRadius: 8, color: windowIdx === i ? T.brass : T.faint, fontSize: 9.5, fontWeight: 700, cursor: "pointer", fontFamily: mono }}>{label}</button>
+            <button key={label} onClick={() => setWindowIdx(i)} style={{ padding: "4px 9px", background: windowIdx === i ? "var(--brass-a16)" : "transparent", border: `1px solid ${windowIdx === i ? "var(--brass-a40)" : "var(--ink-a10)"}`, borderRadius: 8, color: windowIdx === i ? T.brass : T.faint, fontSize: 9.5, fontWeight: 700, cursor: "pointer", fontFamily: mono }}>{label}</button>
           ))}
         </div>
       </div>
@@ -3188,13 +3249,13 @@ function UsageCard({ isMobile }) {
             <StatBox value={summary === null ? "…" : String(failed)} label="failed calls" valueColor={failed ? T.red : T.green} />
           </div>
 
-          <div style={{ fontSize: 9.5, fontWeight: 700, color: "rgba(143,107,30,0.8)", textTransform: "uppercase", letterSpacing: "0.12em", fontFamily: syne, marginBottom: 8 }}>By feature</div>
+          <div style={{ fontSize: 9.5, fontWeight: 700, color: "var(--brass-a85)", textTransform: "uppercase", letterSpacing: "0.12em", fontFamily: syne, marginBottom: 8 }}>By feature</div>
           <div style={{ display: "flex", flexDirection: "column", gap: 6, marginBottom: 13 }}>
             {summary === null && <div style={{ fontSize: 10.5, color: T.faint, textAlign: "center", padding: "8px 0" }}>Loading…</div>}
             {summary !== null && topFns.length === 0 && <div style={{ fontSize: 10.5, color: T.faint, textAlign: "center", padding: "8px 0" }}>No calls logged in this window yet.</div>}
             {topFns.map(([fn, s]) => (
               <div key={fn} style={{ ...S.inner, display: "flex", alignItems: "center", gap: 10, padding: "8px 12px" }}>
-                <span style={{ fontSize: 10.5, color: "#3A3323", fontFamily: mono, flex: 1, minWidth: 0, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{fn}</span>
+                <span style={{ fontSize: 10.5, color: "var(--ink)", fontFamily: mono, flex: 1, minWidth: 0, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{fn}</span>
                 {s.failed > 0 && <span style={{ fontSize: 8.5, color: T.red, fontFamily: mono, flex: "none" }}>{s.failed} FAILED</span>}
                 <span style={{ fontSize: 9.5, color: T.faint, fontFamily: mono, flex: "none" }}>{s.calls} calls</span>
                 <span style={{ fontSize: 10.5, color: T.brass, fontFamily: mono, fontWeight: 700, flex: "none", width: 56, textAlign: "right" }}>{s.cost > 0 ? "$" + s.cost.toFixed(3) : "—"}</span>
@@ -3202,17 +3263,17 @@ function UsageCard({ isMobile }) {
             ))}
           </div>
 
-          <button onClick={() => setShowLog(!showLog)} style={{ width: "100%", padding: 9, background: "rgba(34,29,20,0.03)", border: `1px solid rgba(34,29,20,0.08)`, borderRadius: 9, color: T.sub, fontSize: 10.5, fontWeight: 600, cursor: "pointer", marginBottom: showLog ? 9 : 0 }}>
+          <button onClick={() => setShowLog(!showLog)} style={{ width: "100%", padding: 9, background: "var(--ink-a03)", border: `1px solid var(--ink-a08)`, borderRadius: 9, color: T.sub, fontSize: 10.5, fontWeight: 600, cursor: "pointer", marginBottom: showLog ? 9 : 0 }}>
             {showLog ? "Hide recent log ▲" : `Show recent log (up to 300) ▼`}
           </button>
           {showLog && (
-            <div style={{ background: "rgba(34,29,20,0.045)", border: "1px solid rgba(34,29,20,0.05)", borderRadius: 10, maxHeight: 280, overflowY: "auto", display: "flex", flexDirection: "column" }}>
+            <div style={{ background: "var(--ink-a04)", border: "1px solid var(--ink-a05)", borderRadius: 10, maxHeight: 280, overflowY: "auto", display: "flex", flexDirection: "column" }}>
               {recentRows === null && <div style={{ fontSize: 10.5, color: T.faint, textAlign: "center", padding: "14px 0" }}>Loading…</div>}
               {(recentRows || []).map((r, i) => (
-                <div key={i} style={{ display: "flex", alignItems: "center", gap: 9, padding: "7px 11px", borderBottom: i < recentRows.length - 1 ? "1px solid rgba(34,29,20,0.04)" : "none" }}>
+                <div key={i} style={{ display: "flex", alignItems: "center", gap: 9, padding: "7px 11px", borderBottom: i < recentRows.length - 1 ? "1px solid var(--ink-a04)" : "none" }}>
                   <span style={{ width: 6, height: 6, borderRadius: "50%", background: r.ok ? T.green : T.red, flex: "none" }} />
                   <span style={{ fontSize: 9, color: T.faint, fontFamily: mono, flex: "none", width: 32 }}>{ago(r.created_at)}</span>
-                  <span style={{ fontSize: 10, color: "#3A3323", fontFamily: mono, flex: 1, minWidth: 0, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{r.fn}{r.model ? ` · ${r.model}` : ""}{!r.ok && r.detail ? ` · ${r.detail}` : ""}</span>
+                  <span style={{ fontSize: 10, color: "var(--ink)", fontFamily: mono, flex: 1, minWidth: 0, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{r.fn}{r.model ? ` · ${r.model}` : ""}{!r.ok && r.detail ? ` · ${r.detail}` : ""}</span>
                   <span style={{ fontSize: 9, color: T.faint, fontFamily: mono, flex: "none" }}>{r.ms ? `${r.ms}ms` : ""}</span>
                   <span style={{ fontSize: 9.5, color: T.brass, fontFamily: mono, flex: "none", width: 48, textAlign: "right" }}>{r.cost_usd ? "$" + r.cost_usd.toFixed(4) : ""}</span>
                 </div>
@@ -3361,13 +3422,13 @@ function ConnRow({ meta, check }) {
   const st = CONN_STATUS[check?.status || "checking"];
   return (
     <div style={{ ...S.inner, display: "flex", alignItems: "center", gap: 12, padding: "12px 14px" }}>
-      <span style={{ width: 8, height: 8, borderRadius: "50%", background: st.color, flex: "none", boxShadow: `0 0 9px ${st.color}80`, animation: check?.status === "checking" ? "pulse 1.2s infinite" : "none" }} />
+      <span style={{ width: 8, height: 8, borderRadius: "50%", background: st.color, flex: "none", boxShadow: `0 0 9px ${tint(st.color, 50)}`, animation: check?.status === "checking" ? "pulse 1.2s infinite" : "none" }} />
       <span style={{ display: "flex", flexDirection: "column", gap: 2, flex: 1, minWidth: 0 }}>
         <span style={{ fontSize: 11.5, fontWeight: 700, fontFamily: syne, color: T.ink }}>{meta.name}</span>
         <span style={{ fontSize: 9.5, color: T.faint, lineHeight: 1.45 }}>{check?.detail || meta.desc}</span>
       </span>
       {typeof check?.ms === "number" && <span style={{ fontSize: 9, color: T.faint, fontFamily: mono, flex: "none" }}>{check.ms}ms</span>}
-      <span style={{ fontSize: 8, fontWeight: 700, color: st.color, background: st.color + "1A", border: `1px solid ${st.color}40`, padding: "4px 9px", borderRadius: 11, fontFamily: mono, letterSpacing: "0.08em", flex: "none" }}>{st.label}</span>
+      <span style={{ fontSize: 8, fontWeight: 700, color: st.color, background: tint(st.color, 10), border: `1px solid ${tint(st.color, 25)}`, padding: "4px 9px", borderRadius: 11, fontFamily: mono, letterSpacing: "0.08em", flex: "none" }}>{st.label}</span>
     </div>
   );
 }
@@ -3465,9 +3526,9 @@ function Summon({ onClose, onGo, onJot, onQueueTask, isMobile }) {
   const sectionOf = (r) => r.kind === "act" ? "Actions" : r.kind === "go" ? "Go to" : r.kind === "note" ? "Notes" : "Skills";
 
   return (
-    <div onClick={onClose} style={{ position: "fixed", inset: 0, background: "rgba(28,24,16,0.34)", backdropFilter: "blur(3px)", zIndex: 120, display: "flex", alignItems: "flex-start", justifyContent: "center", padding: isMobile ? "12vh 14px 0" : "16vh 20px 0", animation: "fadein 0.14s ease" }}>
+    <div onClick={onClose} style={{ position: "fixed", inset: 0, background: "var(--scrim)", backdropFilter: "blur(3px)", zIndex: 120, display: "flex", alignItems: "flex-start", justifyContent: "center", padding: isMobile ? "12vh 14px 0" : "16vh 20px 0", animation: "fadein 0.14s ease" }}>
       <div onClick={e => e.stopPropagation()} onKeyDown={onKey}
-        style={{ width: "100%", maxWidth: 560, background: T.surface, border: `1px solid ${T.lineStrong}`, borderRadius: 16, boxShadow: "0 30px 90px rgba(28,24,16,0.35)", overflow: "hidden", display: "flex", flexDirection: "column", maxHeight: isMobile ? "70dvh" : "62vh" }}>
+        style={{ width: "100%", maxWidth: 560, background: T.surface, border: `1px solid ${T.lineStrong}`, borderRadius: 16, boxShadow: "var(--shadow-deep)", overflow: "hidden", display: "flex", flexDirection: "column", maxHeight: isMobile ? "70dvh" : "62vh" }}>
 
         {/* the diamond rule */}
         <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "0 18px", height: 34, borderBottom: `1px solid ${T.line}`, flex: "none" }}>
@@ -3498,8 +3559,8 @@ function Summon({ onClose, onGo, onJot, onQueueTask, isMobile }) {
                   <div key={`${r.kind}-${r.label}-${i}`}>
                     {showSection && <div style={{ ...S.microLabel, padding: "12px 12px 5px" }}>{sectionOf(r)}</div>}
                     <div onClick={() => choose(r)} onMouseEnter={() => setIdx(i)}
-                      style={{ display: "flex", alignItems: "center", gap: 10, padding: "9px 12px", borderRadius: 9, cursor: "pointer", background: i === idx ? "rgba(138,103,28,0.09)" : "transparent" }}>
-                      <span style={{ width: 5, height: 5, transform: "rotate(45deg)", background: i === idx ? T.brass : "rgba(32,27,18,0.16)", borderRadius: 1, flex: "none" }} />
+                      style={{ display: "flex", alignItems: "center", gap: 10, padding: "9px 12px", borderRadius: 9, cursor: "pointer", background: i === idx ? "var(--brass-a08)" : "transparent" }}>
+                      <span style={{ width: 5, height: 5, transform: "rotate(45deg)", background: i === idx ? T.brass : "var(--line-strong)", borderRadius: 1, flex: "none" }} />
                       <span style={{ fontSize: 13, color: T.ink, flex: 1, minWidth: 0, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{r.label}</span>
                       {r.hint && <span style={{ fontSize: 9.5, color: T.faint, fontFamily: mono, flex: "none" }}>{r.hint}</span>}
                     </div>
@@ -3636,6 +3697,7 @@ function SystemsPage({ settings, updateSetting, session, btc, isMobile }) {
       <div style={{ maxWidth: 1020, margin: "0 auto", display: "flex", flexDirection: "column", gap: isMobile ? 12 : 14 }}>
         <SubTabs options={SYSTEMS_SUBTABS} value={sub} onChange={setSub} />
 
+        <div key={sub} className="pagefade" style={{ display: "flex", flexDirection: "column", gap: isMobile ? 12 : 14 }}>
         {sub === "status" && (
           <>
             <div style={{ ...card, display: "flex", alignItems: "center", gap: isMobile ? 12 : 18, flexWrap: "wrap" }}>
@@ -3688,7 +3750,7 @@ function SystemsPage({ settings, updateSetting, session, btc, isMobile }) {
             <div style={card}>
               <CardHeader title="Replace a File" tag="SINGLE-FILE SWAP" />
               <div style={{ fontSize: 10.5, color: T.faint, lineHeight: 1.5, margin: "2px 0 13px" }}>Swaps one file on the sites you pick — every other file on the live site is left exactly as it is. For a full rebuild, use Deployments above instead.</div>
-              <label style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 6, padding: 16, background: "rgba(34,29,20,0.02)", border: "1px dashed rgba(143,107,30,0.35)", borderRadius: 12, cursor: "pointer", marginBottom: 10 }}>
+              <label style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 6, padding: 16, background: "var(--ink-a02)", border: "1px dashed var(--brass-a32)", borderRadius: 12, cursor: "pointer", marginBottom: 10 }}>
                 <input type="file" onChange={e => { const f = e.target.files?.[0] || null; setReplaceFile(f); setReplaceResults({}); if (f && !replacePath) setReplacePath("/" + f.name); }} style={{ display: "none" }} />
                 <span style={{ fontSize: 11.5, fontWeight: 700, color: T.brass, fontFamily: syne }}>{replaceFile ? "✓ " + replaceFile.name : "Choose a file"}</span>
                 <span style={{ fontSize: 9.5, color: T.faint }}>{replaceFile ? "set the path below, pick sites, then replace" : "HTML, JS, CSS, images — keep it under 4MB"}</span>
@@ -3705,7 +3767,7 @@ function SystemsPage({ settings, updateSetting, session, btc, isMobile }) {
                     {PROPERTIES.map(p => {
                       const sel = replaceTargets.includes(p.name);
                       return (
-                        <button key={p.name} onClick={() => toggleTarget(p.name)} style={{ padding: "7px 12px", background: sel ? "rgba(143,107,30,0.14)" : "rgba(34,29,20,0.035)", border: `1px solid ${sel ? "rgba(143,107,30,0.4)" : "rgba(34,29,20,0.09)"}`, borderRadius: 12, color: sel ? T.brass : T.sub, fontSize: 10, fontWeight: 700, cursor: "pointer", fontFamily: syne }}>{sel ? "✓ " : ""}{p.name}</button>
+                        <button key={p.name} onClick={() => toggleTarget(p.name)} style={{ padding: "7px 12px", background: sel ? "var(--brass-a16)" : "var(--ink-a03)", border: `1px solid ${sel ? "var(--brass-a40)" : "var(--line)"}`, borderRadius: 12, color: sel ? T.brass : T.sub, fontSize: 10, fontWeight: 700, cursor: "pointer", fontFamily: syne }}>{sel ? "✓ " : ""}{p.name}</button>
                       );
                     })}
                   </div>
@@ -3732,15 +3794,15 @@ function SystemsPage({ settings, updateSetting, session, btc, isMobile }) {
             <div style={{ fontSize: 9.5, color: T.faint, marginBottom: 6 }}>Project</div>
             <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginBottom: 12 }}>
               {projects.map(p => (
-                <button key={p} onClick={() => setProject(p)} style={{ padding: "7px 12px", background: project === p ? "rgba(143,107,30,0.14)" : "rgba(34,29,20,0.035)", border: `1px solid ${project === p ? "rgba(143,107,30,0.4)" : "rgba(34,29,20,0.09)"}`, borderRadius: 12, color: project === p ? T.brass : T.sub, fontSize: 10, fontWeight: 700, cursor: "pointer", fontFamily: syne }}>{p}</button>
+                <button key={p} onClick={() => setProject(p)} style={{ padding: "7px 12px", background: project === p ? "var(--brass-a16)" : "var(--ink-a03)", border: `1px solid ${project === p ? "var(--brass-a40)" : "var(--line)"}`, borderRadius: 12, color: project === p ? T.brass : T.sub, fontSize: 10, fontWeight: 700, cursor: "pointer", fontFamily: syne }}>{p}</button>
               ))}
             </div>
             <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginBottom: 10 }}>
               {["backup chat_messages", "vacuum seat_notes", "clear findings > 30d"].map(q => (
-                <button key={q} onClick={() => setSqlInput(q)} style={{ padding: "6px 11px", background: "rgba(34,29,20,0.035)", border: `1px solid rgba(34,29,20,0.09)`, borderRadius: 14, color: T.sub, fontSize: 9.5, cursor: "pointer", fontFamily: mono }}>{q}</button>
+                <button key={q} onClick={() => setSqlInput(q)} style={{ padding: "6px 11px", background: "var(--ink-a03)", border: `1px solid var(--line)`, borderRadius: 14, color: T.sub, fontSize: 9.5, cursor: "pointer", fontFamily: mono }}>{q}</button>
               ))}
             </div>
-            <div style={{ background: "rgba(34,29,20,0.05)", border: "1px solid rgba(34,29,20,0.06)", borderRadius: 11, padding: "12px 14px", minHeight: 110, maxHeight: 180, overflowY: "auto", display: "flex", flexDirection: "column", gap: 5, marginBottom: 9 }}>
+            <div style={{ background: "var(--ink-a05)", border: "1px solid var(--ink-a06)", borderRadius: 11, padding: "12px 14px", minHeight: 110, maxHeight: 180, overflowY: "auto", display: "flex", flexDirection: "column", gap: 5, marginBottom: 9 }}>
               {sqlLog.map((l, i) => (
                 <div key={i} style={{ fontSize: 10, fontFamily: mono, color: l.kind === "cmd" ? T.sub : l.kind === "err" ? T.red : T.green, lineHeight: 1.5, whiteSpace: "pre-wrap" }}>{l.text}</div>
               ))}
@@ -3778,6 +3840,7 @@ function SystemsPage({ settings, updateSetting, session, btc, isMobile }) {
             <UsageCard isMobile={isMobile} />
           </>
         )}
+        </div>
       </div>
     </div>
   );
@@ -3940,18 +4003,18 @@ Decide which of the two his message actually addresses — often just one. Outpu
     return (
       <div style={{ ...S.inner, padding: "11px 13px", display: "flex", flexDirection: "column", gap: 8 }}>
         <div onClick={() => t.output && setOpenTask(open ? null : t.id)} style={{ display: "flex", alignItems: "center", gap: 11, cursor: t.output ? "pointer" : "default" }}>
-          <span style={{ width: 7, height: 7, borderRadius: "50%", background: c, flex: "none", boxShadow: `0 0 8px ${c}80` }} />
-          <span style={{ flex: 1, fontSize: 11, color: "#3A3323", lineHeight: 1.5 }}>{t.text}</span>
+          <span style={{ width: 7, height: 7, borderRadius: "50%", background: c, flex: "none", boxShadow: `0 0 8px ${tint(c, 50)}` }} />
+          <span style={{ flex: 1, fontSize: 11, color: "var(--ink)", lineHeight: 1.5 }}>{t.text}</span>
           <span style={{ fontSize: 8.5, color: c, fontFamily: mono, letterSpacing: "0.06em", flex: "none", textTransform: "uppercase" }}>{t.status}{t.output ? (open ? " ▲" : " ▼") : ""}</span>
-          <button onClick={(e) => { e.stopPropagation(); removeTask(t.id); }} title="Remove" style={{ width: 24, height: 24, background: "rgba(34,29,20,0.04)", border: `1px solid rgba(34,29,20,0.09)`, borderRadius: 7, color: T.faint, fontSize: 10, cursor: "pointer", flex: "none" }}>✕</button>
+          <button onClick={(e) => { e.stopPropagation(); removeTask(t.id); }} title="Remove" style={{ width: 24, height: 24, background: "var(--ink-a04)", border: `1px solid var(--line)`, borderRadius: 7, color: T.faint, fontSize: 10, cursor: "pointer", flex: "none" }}>✕</button>
         </div>
         {open && t.output && (
-          <div style={{ background: "rgba(34,29,20,0.045)", border: "1px solid rgba(34,29,20,0.05)", borderRadius: 9, padding: "11px 13px", fontSize: 11, color: T.sub, lineHeight: 1.65, whiteSpace: "pre-wrap", maxHeight: 260, overflowY: "auto" }}>{t.output}</div>
+          <div style={{ background: "var(--ink-a04)", border: "1px solid var(--ink-a05)", borderRadius: 9, padding: "11px 13px", fontSize: 11, color: T.sub, lineHeight: 1.65, whiteSpace: "pre-wrap", maxHeight: 260, overflowY: "auto" }}>{t.output}</div>
         )}
         {t.status === "review" && (
           <div style={{ display: "flex", gap: 8 }}>
             <button onClick={() => approveTask(t.id)} disabled={running} style={{ ...S.brassBtn, flex: 1, padding: "8px 0", fontSize: 10.5, opacity: running ? 0.5 : 1 }}>Approve</button>
-            <button onClick={() => rejectTask(t.id)} disabled={running} style={{ flex: 1, padding: "8px 0", background: "transparent", border: `1px solid rgba(34,29,20,0.12)`, borderRadius: 10, color: T.sub, fontSize: 10.5, fontWeight: 600, cursor: running ? "default" : "pointer" }}>Reject &amp; redo</button>
+            <button onClick={() => rejectTask(t.id)} disabled={running} style={{ flex: 1, padding: "8px 0", background: "transparent", border: `1px solid var(--ink-a12)`, borderRadius: 10, color: T.sub, fontSize: 10.5, fontWeight: 600, cursor: running ? "default" : "pointer" }}>Reject &amp; redo</button>
           </div>
         )}
       </div>
@@ -3968,7 +4031,7 @@ Decide which of the two his message actually addresses — often just one. Outpu
         <div style={col}>
 
           {/* Hero — identity, directive, role. No XP/level — just what it is and what it's doing. */}
-          <div style={{ ...card, background: "rgba(138,103,28,0.05)", border: "1px solid rgba(143,107,30,0.22)" }}>
+          <div style={{ ...card, background: "var(--brass-a06)", border: "1px solid var(--brass-a20)" }}>
             <div style={{ display: "flex", alignItems: "center", gap: 16, marginBottom: 14 }}>
               <span style={{ width: isMobile ? 48 : 56, height: isMobile ? 48 : 56, borderRadius: "50%", background: T.brass, display: "inline-flex", alignItems: "center", justifyContent: "center", flex: "none", animation: "breathe 3.2s ease-in-out infinite" }}>
                 <span style={{ width: 22, height: 22, borderRadius: "50%", background: T.bg, display: "inline-flex", alignItems: "center", justifyContent: "center" }}>
@@ -4002,7 +4065,7 @@ Decide which of the two his message actually addresses — often just one. Outpu
                 {mini.directive ? (
                   <div style={{ ...S.inner, padding: "11px 13px", fontSize: 11.5, color: T.ink, lineHeight: 1.5, fontStyle: "italic" }}>"{mini.directive}"</div>
                 ) : (
-                  <div style={{ ...S.inner, padding: "11px 13px", fontSize: 10, color: T.faint, lineHeight: 1.45, border: `1px dashed rgba(34,29,20,0.14)`, background: "transparent" }}>No directive yet — the mission that shapes every task.</div>
+                  <div style={{ ...S.inner, padding: "11px 13px", fontSize: 10, color: T.faint, lineHeight: 1.45, border: `1px dashed var(--ink-a14)`, background: "transparent" }}>No directive yet — the mission that shapes every task.</div>
                 )}
               </div>
               <div>
@@ -4010,7 +4073,7 @@ Decide which of the two his message actually addresses — often just one. Outpu
                 {mini.role ? (
                   <div style={{ ...S.inner, padding: "11px 13px", fontSize: 11.5, color: T.ink, lineHeight: 1.5 }}>{mini.role}</div>
                 ) : (
-                  <div style={{ ...S.inner, padding: "11px 13px", fontSize: 10, color: T.faint, lineHeight: 1.45, border: `1px dashed rgba(34,29,20,0.14)`, background: "transparent" }}>No role yet — the identity it works from.</div>
+                  <div style={{ ...S.inner, padding: "11px 13px", fontSize: 10, color: T.faint, lineHeight: 1.45, border: `1px dashed var(--ink-a14)`, background: "transparent" }}>No role yet — the identity it works from.</div>
                 )}
               </div>
             </div>
@@ -4120,7 +4183,7 @@ Decide which of the two his message actually addresses — often just one. Outpu
             <div style={{ fontSize: 9, fontWeight: 700, color: T.brass, textTransform: "uppercase", letterSpacing: "0.1em", fontFamily: syne, marginBottom: 9 }}>Quality &amp; Review</div>
             <div style={{ display: "flex", gap: 6, marginBottom: 8 }}>
               {EFFORT_LEVELS.map(e => (
-                <button key={e.key} onClick={() => setEffort(e.key)} style={{ flex: 1, padding: "9px 4px", background: effort === e.key ? T.brass : "rgba(34,29,20,0.04)", border: effort === e.key ? "none" : "1px solid rgba(34,29,20,0.08)", borderRadius: 9, color: effort === e.key ? T.surface : T.sub, fontSize: 10.5, fontWeight: 700, fontFamily: syne, cursor: "pointer" }}>{e.label}</button>
+                <button key={e.key} onClick={() => setEffort(e.key)} style={{ flex: 1, padding: "9px 4px", background: effort === e.key ? T.brass : "var(--ink-a04)", border: effort === e.key ? "none" : "1px solid var(--ink-a08)", borderRadius: 9, color: effort === e.key ? T.surface : T.sub, fontSize: 10.5, fontWeight: 700, fontFamily: syne, cursor: "pointer" }}>{e.label}</button>
               ))}
             </div>
             <div style={{ fontSize: 10, color: T.faint, lineHeight: 1.5, marginBottom: 13 }}>{EFFORT_LEVELS.find(e => e.key === effort)?.desc}</div>
@@ -4145,7 +4208,7 @@ Decide which of the two his message actually addresses — often just one. Outpu
 function ModalShell({ onClose, children, isMobile, z = 300 }) {
   return (
     <div onClick={onClose} style={{ position: "fixed", inset: 0, background: "rgba(4,7,14,0.72)", zIndex: z, display: "flex", alignItems: isMobile ? "flex-end" : "center", justifyContent: "center", animation: "fadein 0.15s ease both" }}>
-      <div onClick={e => e.stopPropagation()} style={{ background: T.surface, borderRadius: isMobile ? "20px 20px 0 0" : 18, padding: "24px 24px calc(24px + env(safe-area-inset-bottom))", width: isMobile ? "100%" : 560, maxWidth: 560, border: `1px solid rgba(34,29,20,0.1)`, boxShadow: "0 32px 80px rgba(30,25,17,0.42), inset 0 1px 0 rgba(255,255,255,0.07)", animation: "sheetup 0.2s ease both", color: T.ink }}>
+      <div onClick={e => e.stopPropagation()} style={{ background: T.surface, borderRadius: isMobile ? "20px 20px 0 0" : 18, padding: "24px 24px calc(24px + env(safe-area-inset-bottom))", width: isMobile ? "100%" : 560, maxWidth: 560, border: `1px solid var(--ink-a10)`, boxShadow: "var(--shadow-deep), inset 0 1px 0 var(--white-edge)", animation: "sheetup 0.2s ease both", color: T.ink }}>
         {children}
       </div>
     </div>
@@ -4221,7 +4284,7 @@ function SportsSettingsModal({ cfg, onSave, onClose, isMobile }) {
 
   const label = { fontSize: 10, fontWeight: 700, color: T.sub, letterSpacing: "0.04em", marginBottom: 7, display: "block" };
   const sel = { padding: "8px 10px", fontSize: 11.5, border: `1px solid ${T.line}`, borderRadius: 8, background: T.bg, color: T.ink, flex: 1, minWidth: 0 };
-  const chip = (active) => ({ fontSize: 10.5, fontWeight: 600, padding: "6px 11px", borderRadius: 999, cursor: "pointer", border: `1px solid ${active ? T.brass : T.line}`, background: active ? "rgba(143,107,30,0.12)" : "transparent", color: active ? T.brass : T.sub });
+  const chip = (active) => ({ fontSize: 10.5, fontWeight: 600, padding: "6px 11px", borderRadius: 999, cursor: "pointer", border: `1px solid ${active ? T.brass : T.line}`, background: active ? "var(--brass-a12)" : "transparent", color: active ? T.brass : T.sub });
   const teamsFor = (league) => { const { sport } = leagueByKey(league); const t = teamOptions[`${sport}/${league}`]; return Array.isArray(t) ? t : []; };
 
   return (
@@ -4306,16 +4369,16 @@ function SeatNotesModal({ seatKey, initial, onSave, onClose, isMobile }) {
   return (
     <ModalShell onClose={onClose} isMobile={isMobile}>
       <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 5 }}>
-        <span style={{ width: 34, height: 34, borderRadius: 10, background: seat.color + "1F", display: "inline-flex", alignItems: "center", justifyContent: "center", fontSize: 16 }}>{seat.emoji}</span>
+        <span style={{ width: 34, height: 34, borderRadius: 10, background: tint(seat.color, 12), display: "inline-flex", alignItems: "center", justifyContent: "center", fontSize: 16 }}>{seat.emoji}</span>
         <span style={{ fontSize: 16, fontWeight: 700, fontFamily: syne }}>{seat.name}</span>
       </div>
       <div style={{ fontSize: 11, color: T.faint, lineHeight: 1.6, marginBottom: 15 }}>{seat.charter.slice(0, 160)}…</div>
-      <div style={{ fontSize: 9.5, fontWeight: 700, color: "rgba(143,107,30,0.8)", textTransform: "uppercase", letterSpacing: "0.14em", fontFamily: syne, marginBottom: 8 }}>Current context · treated as ground truth · synced everywhere</div>
+      <div style={{ fontSize: 9.5, fontWeight: 700, color: "var(--brass-a85)", textTransform: "uppercase", letterSpacing: "0.14em", fontFamily: syne, marginBottom: 8 }}>Current context · treated as ground truth · synced everywhere</div>
       <textarea value={notes} onChange={e => setNotes(e.target.value)} placeholder="Paste what's current — pipeline numbers, open questions, this week's state. The fresher this is, the sharper the seat's takes."
         style={{ ...S.input, width: "100%", minHeight: 150, padding: "12px 14px", fontSize: 13, resize: "vertical", lineHeight: 1.6 }} />
       <div style={{ display: "flex", gap: 8, marginTop: 14 }}>
         <button onClick={save} disabled={saving} style={{ ...S.brassBtn, flex: 1, padding: 13, fontSize: 12, opacity: saving ? 0.5 : 1 }}>{saving ? "Saving…" : "Save context"}</button>
-        <button onClick={onClose} style={{ padding: "13px 18px", background: "transparent", border: `1px solid rgba(34,29,20,0.1)`, borderRadius: 10, color: T.sub, fontSize: 12, fontWeight: 600, cursor: "pointer" }}>Cancel</button>
+        <button onClick={onClose} style={{ padding: "13px 18px", background: "transparent", border: `1px solid var(--ink-a10)`, borderRadius: 10, color: T.sub, fontSize: 12, fontWeight: 600, cursor: "pointer" }}>Cancel</button>
       </div>
     </ModalShell>
   );
@@ -4324,7 +4387,7 @@ function SeatNotesModal({ seatKey, initial, onSave, onClose, isMobile }) {
 function MigrationModal({ counts, onImport, onSkip, importing }) {
   return (
     <div style={{ position: "fixed", inset: 0, background: "rgba(5,8,16,0.75)", zIndex: 400, display: "flex", alignItems: "center", justifyContent: "center", animation: "fadein 0.15s ease both" }}>
-      <div style={{ background: T.surface, borderRadius: 18, padding: "26px 28px", width: 440, maxWidth: "94vw", border: `1px solid rgba(34,29,20,0.1)`, boxShadow: "0 32px 80px rgba(30,25,17,0.38)", color: T.ink }}>
+      <div style={{ background: T.surface, borderRadius: 18, padding: "26px 28px", width: 440, maxWidth: "94vw", border: `1px solid var(--ink-a10)`, boxShadow: "var(--shadow-deep)", color: T.ink }}>
         <div style={{ fontSize: 16, fontWeight: 700, fontFamily: syne, marginBottom: 8 }}>Import your existing memory?</div>
         <div style={{ fontSize: 12.5, color: T.sub, lineHeight: 1.7, marginBottom: 18 }}>
           This browser has data from before your account existed:{" "}
@@ -4334,7 +4397,7 @@ function MigrationModal({ counts, onImport, onSkip, importing }) {
         </div>
         <div style={{ display: "flex", gap: 8 }}>
           <button onClick={onImport} disabled={importing} style={{ ...S.brassBtn, flex: 1, padding: 12, fontSize: 12, opacity: importing ? 0.5 : 1 }}>{importing ? "Importing…" : "Import"}</button>
-          <button onClick={onSkip} disabled={importing} style={{ padding: "12px 18px", background: "transparent", border: `1px solid rgba(34,29,20,0.1)`, borderRadius: 10, color: T.sub, fontSize: 12, fontWeight: 600, cursor: "pointer" }}>Skip</button>
+          <button onClick={onSkip} disabled={importing} style={{ padding: "12px 18px", background: "transparent", border: `1px solid var(--ink-a10)`, borderRadius: 10, color: T.sub, fontSize: 12, fontWeight: 600, cursor: "pointer" }}>Skip</button>
         </div>
       </div>
     </div>
@@ -4342,6 +4405,60 @@ function MigrationModal({ counts, onImport, onSkip, importing }) {
 }
 
 // ─── Auth screens ────────────────────────────────────────────────────────────
+// ─── The seal — ring draws itself, the diamond lands. Boot + entrance. ──────
+function Seal({ size = 92 }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 92 92" aria-hidden="true">
+      <circle className="seal-ring" cx="46" cy="46" r="37" />
+      <rect className="seal-diamond" x="34" y="34" width="24" height="24" rx="2.5" />
+    </svg>
+  );
+}
+
+function BootScreen() {
+  return (
+    <div className="boot">
+      <Seal size={92} />
+      <div className="boot-title">The Board Room</div>
+      <div className="boot-sub">convening</div>
+    </div>
+  );
+}
+
+// Cycle auto → day → night → auto. Auto is the house default: the room
+// follows the sun (Nocturne 19:00–07:00).
+const THEME_CYCLE = { auto: "day", day: "night", night: "auto" };
+const THEME_LABEL = { auto: "Auto — follows the sun", day: "Daylight", night: "Nocturne" };
+function ThemeToggle({ theme, compact }) {
+  const icon = theme.pref === "auto"
+    ? ( // half-lit diamond — auto
+      <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8">
+        <rect x="5.6" y="5.6" width="12.8" height="12.8" rx="2" transform="rotate(45 12 12)" />
+        <path d="M12 3.5 L12 20.5" strokeWidth="1.2" />
+      </svg>
+    ) : theme.pref === "day"
+      ? ( // sun
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round">
+          <circle cx="12" cy="12" r="4.2" />
+          <line x1="12" y1="2.5" x2="12" y2="5" /><line x1="12" y1="19" x2="12" y2="21.5" />
+          <line x1="2.5" y1="12" x2="5" y2="12" /><line x1="19" y1="12" x2="21.5" y2="12" />
+          <line x1="5.3" y1="5.3" x2="7" y2="7" /><line x1="17" y1="17" x2="18.7" y2="18.7" />
+          <line x1="5.3" y1="18.7" x2="7" y2="17" /><line x1="17" y1="7" x2="18.7" y2="5.3" />
+        </svg>
+      ) : ( // moon
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+          <path d="M20 13.2A8.2 8.2 0 0 1 10.8 4a8.2 8.2 0 1 0 9.2 9.2z" />
+        </svg>
+      );
+  return (
+    <button onClick={() => theme.setPref(THEME_CYCLE[theme.pref])}
+      aria-label={`Theme: ${THEME_LABEL[theme.pref]} — tap to change`} title={`Theme: ${THEME_LABEL[theme.pref]}`}
+      style={{ display: "inline-flex", alignItems: "center", justifyContent: "center", width: compact ? 34 : 32, height: compact ? 34 : 32, background: "transparent", border: `1px solid ${T.lineStrong}`, borderRadius: 9, color: T.sub, cursor: "pointer", padding: 0 }}>
+      {icon}
+    </button>
+  );
+}
+
 function SetupNotice() {
   return (
     <div style={{ minHeight: "100vh", display: "flex", alignItems: "center", justifyContent: "center", color: T.ink, padding: 20 }}>
@@ -4380,27 +4497,29 @@ function LoginScreen() {
   const disabled = busy || !email || (mode === "password" && !password);
 
   return (
-    <div style={{ minHeight: "100vh", display: "flex", alignItems: "center", justifyContent: "center", color: T.ink, padding: 20 }}>
-      <div style={{ width: 380, maxWidth: "94vw", padding: "30px 32px", background: T.surface, border: `1px solid ${T.line}`, borderRadius: 18, boxShadow: "0 32px 80px rgba(30,25,17,0.38), inset 0 1px 0 rgba(255,255,255,0.07)" }}>
-        <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 6 }}>
-          <span style={{ width: 15, height: 15, transform: "rotate(45deg)", borderRadius: 3, background: T.brass }} />
-          <span style={{ fontSize: 13, fontWeight: 700, letterSpacing: "0.15em", textTransform: "uppercase", fontFamily: syne }}>The Board Room</span>
+    <div className="entrance" style={{ color: T.ink }}>
+      <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 14 }}>
+        <Seal size={84} />
+        <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 6 }}>
+          <span className="boot-title" style={{ fontSize: 15 }}>The Board Room</span>
+          <span className="boot-sub">one mind · any device</span>
         </div>
-        <div style={{ fontSize: 12, color: T.faint, marginBottom: 22 }}>One mind, any device. Sign in to continue.</div>
+      </div>
+      <div className="entrance-card">
         <input value={email} onChange={e => setEmail(e.target.value)} placeholder="email" type="email" autoComplete="email"
-          style={{ ...S.input, width: "100%", padding: "11px 13px", fontSize: 13, marginBottom: 10 }} />
+          style={{ ...S.input, width: "100%", padding: "12px 14px", fontSize: 13, marginBottom: 10 }} />
         {mode === "password" && (
           <input value={password} onChange={e => setPassword(e.target.value)} onKeyDown={e => { if (e.key === "Enter") signIn(); }} placeholder="password" type="password" autoComplete="current-password"
-            style={{ ...S.input, width: "100%", padding: "11px 13px", fontSize: 13, marginBottom: 10 }} />
+            style={{ ...S.input, width: "100%", padding: "12px 14px", fontSize: 13, marginBottom: 10 }} />
         )}
         {err && <div style={{ fontSize: 11, color: T.red, marginBottom: 10 }}>{err}</div>}
         {sent && <div style={{ fontSize: 11, color: T.green, marginBottom: 10 }}>Login link sent — check your email.</div>}
         <button onClick={mode === "password" ? signIn : sendMagic} disabled={disabled}
-          style={{ ...(disabled ? { background: "rgba(34,29,20,0.06)", color: T.faint, border: "none", borderRadius: 10, fontFamily: syne, fontWeight: 700 } : S.brassBtn), width: "100%", padding: 12, fontSize: 12, cursor: disabled ? "default" : "pointer" }}>
-          {busy ? (mode === "password" ? "Signing in…" : "Sending…") : (mode === "password" ? "Sign in" : "Email me a login link")}
+          style={{ ...(disabled ? { background: "var(--ink-a06)", color: T.faint, border: "none", borderRadius: 10, fontFamily: syne, fontWeight: 700 } : S.brassBtn), width: "100%", padding: 13, fontSize: 12, cursor: disabled ? "default" : "pointer" }}>
+          {busy ? (mode === "password" ? "Signing in…" : "Sending…") : (mode === "password" ? "Enter the room" : "Email me a login link")}
         </button>
         <div onClick={() => { setMode(mode === "password" ? "magic" : "password"); setErr(null); setSent(false); }}
-          style={{ fontSize: 10, color: T.faint, textAlign: "center", marginTop: 12, cursor: "pointer" }}>
+          style={{ fontSize: 10, color: T.faint, textAlign: "center", marginTop: 14, cursor: "pointer" }}>
           {mode === "password" ? "Use a magic link instead" : "Use a password instead"}
         </div>
       </div>
@@ -4414,10 +4533,10 @@ function LoginScreen() {
 // keys: nothing to learn twice.
 const NAV = [
   { key: "brief", label: "Brief", sub: "BTC · stocks · wires · ZTS", mark: T.amber },
-  { key: "personal", label: "Personal", sub: "notes · calendar · workout", mark: "#8B5CF6" },
+  { key: "personal", label: "Personal", sub: "notes · calendar · workout", mark: "var(--purple)" },
   { key: "boardroom", label: "Board Room", sub: "mini me · learn · 5 seats", mark: T.brass },
   { key: "assets", label: "Assets", sub: "4 live properties · site auditor", mark: T.blue },
-  { key: "systems", label: "Systems", sub: "usage · status · deploy · supabase", mark: "#0E9F6E" },
+  { key: "systems", label: "Systems", sub: "usage · status · deploy · supabase", mark: "var(--green)" },
 ];
 const HEADERS = {
   brief: ["Brief", "live markets, wires, and your stores"],
@@ -4520,7 +4639,7 @@ const NAV_ICONS = {
 
 // ─── Main app ────────────────────────────────────────────────────────────────
 export default function App() {
-  useGlobalStyles();
+  const theme = useThemeController();
   const isMobile = useIsMobile();
   const btc = useBitcoinPrice();
 
@@ -4535,7 +4654,7 @@ export default function App() {
   const [migration, setMigration] = useState(null);
   const [importing, setImporting] = useState(false);
   const [loadingData, setLoadingData] = useState(false);
-  const [page, setPage] = useState("brief"); // single nav state — same source of truth on mobile and desktop
+  const [page, setPage] = useState(() => previewParam("p") || "brief"); // single nav state — same source of truth on mobile and desktop
   const [editingCal, setEditingCal] = useState(false);
   const [calDraft, setCalDraft] = useState("");
   const [dataStamp, setDataStamp] = useState(null);
@@ -4669,7 +4788,7 @@ export default function App() {
   const summonEl = summon ? <Summon onClose={() => setSummon(false)} onGo={summonGo} onJot={summonJot} onQueueTask={summonQueueTask} isMobile={isMobile} /> : null;
   const summonBtn = (compact) => (
     <button onClick={() => setSummon(true)} aria-label="Summon — search everything"
-      style={{ display: "inline-flex", alignItems: "center", gap: 6, padding: compact ? "5px 9px" : "5px 11px", background: "transparent", border: `1px solid ${T.lineStrong}`, borderRadius: 8, color: T.sub, fontSize: 9.5, fontFamily: mono, letterSpacing: "0.08em", cursor: "pointer" }}>
+      style={{ display: "inline-flex", alignItems: "center", gap: 6, padding: compact ? "9px 10px" : "5px 11px", background: "transparent", border: `1px solid ${T.lineStrong}`, borderRadius: 9, color: T.sub, fontSize: 9.5, fontFamily: mono, letterSpacing: "0.08em", cursor: "pointer" }}>
       <span style={{ width: 5, height: 5, transform: "rotate(45deg)", background: T.brass, borderRadius: 1 }} />{compact ? "⌘K" : "SUMMON ⌘K"}
     </button>
   );
@@ -4745,9 +4864,12 @@ export default function App() {
     } catch { /* best-effort — never surface oversight failures to the user */ }
   };
 
+  if (previewParam("view") === "setup") return <SetupNotice />;
+  if (previewParam("view") === "login") return <LoginScreen />;
+  if (previewParam("view") === "boot") return <BootScreen />;
   if (!supabase) return <SetupNotice />;
-  if (!authChecked) return <div style={{ minHeight: "100vh", display: "flex", alignItems: "center", justifyContent: "center", color: T.faint, fontSize: 13 }}><span style={{ animation: "pulse 1.4s infinite" }}>Waking the room…</span></div>;
-  if (!session) return <LoginScreen />;
+  if (!authChecked && !PREVIEW) return <BootScreen />;
+  if (!session && !PREVIEW) return <LoginScreen />;
 
   const calUrl = settings?.calendar_url || "";
   const totalSpend = obs.all().reduce((s, l) => s + (l.cost || 0), 0);
@@ -4764,40 +4886,46 @@ export default function App() {
   };
 
   // ═══ MOBILE SHELL ═══
-  // Same NAV, same pages, same order as desktop — only the chrome differs
-  // (icons instead of labels). Room used to be a special floating pill that
-  // expanded into a sheet; it's now a normal tab like everything else.
+  // Same NAV, same pages, same order as desktop. The chrome: a glass header
+  // that respects the notch, and a floating dock whose brass ember glides to
+  // the active tab. Pages cross-fade; content scrolls under the dock.
   if (isMobile) {
+    const activeIdx = Math.max(0, NAV.findIndex(n => n.key === page));
     return (
       <div style={{ height: "100dvh", display: "flex", flexDirection: "column", color: T.ink, position: "relative", overflow: "hidden" }}>
-        <div style={{ flex: "none", height: 54, display: "flex", alignItems: "center", justifyContent: "space-between", padding: "0 16px", borderBottom: `1px solid ${T.line}`, background: "rgba(243,241,236,0.9)", backdropFilter: "blur(14px)" }}>
-          <div style={{ display: "flex", alignItems: "center", gap: 9 }}>
-            <span style={{ width: 13, height: 13, transform: "rotate(45deg)", borderRadius: 2.5, background: T.brass }} />
-            <span style={{ fontSize: 11.5, fontWeight: 700, letterSpacing: "0.16em", textTransform: "uppercase", fontFamily: syne }}>{HEADERS[page][0]}</span>
+        <div className="shell-header">
+          <div style={{ display: "flex", alignItems: "center", gap: 9, minWidth: 0 }}>
+            <span style={{ width: 13, height: 13, transform: "rotate(45deg)", borderRadius: 2.5, background: T.brass, flex: "none" }} />
+            <span key={page} className="page-title" style={{ fontSize: 11.5, fontWeight: 700, textTransform: "uppercase", fontFamily: syne }}>{HEADERS[page][0]}</span>
           </div>
-          <div style={{ display: "flex", alignItems: "center", gap: 9 }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+            <ThemeToggle theme={theme} compact />
             {summonBtn(true)}
             <TopStatus now={now} dataStamp={dataStamp} refreshing={refreshing} onRefresh={refreshData} compact />
           </div>
         </div>
 
         <div id="page-scroll" style={{ flex: 1, minHeight: 0, overflowY: "auto", display: "flex", flexDirection: "column" }}>
-          {renderPage(page)}
+          <div key={page} className="pagefade" style={{ display: "flex", flexDirection: "column", flex: 1, paddingBottom: "calc(86px + env(safe-area-inset-bottom))" }}>
+            {renderPage(page)}
+          </div>
         </div>
 
-        {/* Bottom nav — icon-only, same 6 destinations as the desktop rail */}
-        <div style={{ flex: "none", display: "flex", borderTop: `1px solid ${T.line}`, background: "rgba(243,241,236,0.94)", backdropFilter: "blur(12px)" }}>
-          {NAV.map(n => {
-            const active = page === n.key;
-            const Icon = NAV_ICONS[n.key];
-            return (
-              <button key={n.key} onClick={() => goToPage(n.key)} title={n.label} aria-label={n.label} aria-current={active ? "page" : undefined}
-                style={{ flex: 1, minHeight: 66, position: "relative", background: "none", border: "none", cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", padding: "9px 0 calc(9px + env(safe-area-inset-bottom))" }}>
-                <span style={{ position: "absolute", top: 7, left: "50%", transform: "translateX(-50%)", width: 6, height: 6, borderRadius: "50%", background: T.brass, opacity: active ? 1 : 0, transition: "opacity 0.15s", transform: "translateX(-50%) rotate(45deg)", borderRadius: 1.5 }} />
-                <Icon width={23} height={23} color={active ? T.ink : T.faint} style={{ transition: "color 0.15s" }} />
-              </button>
-            );
-          })}
+        {/* The dock — floating glass, brass ember slides to the active seat */}
+        <div className="dock-wrap">
+          <nav className="dock" aria-label="Primary">
+            <span className="dock-ember" style={{ left: `${(activeIdx + 0.5) * (100 / NAV.length)}%` }} />
+            {NAV.map(n => {
+              const active = page === n.key;
+              const Icon = NAV_ICONS[n.key];
+              return (
+                <button key={n.key} className="dock-tab" onClick={() => goToPage(n.key)} title={n.label} aria-label={n.label} aria-current={active ? "page" : undefined}>
+                  <Icon width={21} height={21} color={active ? T.ink : T.faint} style={{ transition: `color var(--dur-2) ease` }} />
+                  <span className="dock-label" style={{ color: active ? T.brass : T.faint }}>{n.key === "boardroom" ? "Board" : n.label}</span>
+                </button>
+              );
+            })}
+          </nav>
         </div>
 
         {summonEl}
@@ -4824,8 +4952,10 @@ export default function App() {
           {NAV.map(n => {
             const active = page === n.key;
             return (
-              <div key={n.key} onClick={() => goToPage(n.key)} style={{ display: "flex", alignItems: "center", gap: 12, padding: "12px 13px", borderRadius: 12, cursor: "pointer", background: active ? "rgba(138,103,28,0.07)" : "transparent", border: "1px solid transparent" }}>
-                <span style={{ width: 7, height: 7, transform: "rotate(45deg)", background: active ? n.mark : "rgba(32,27,18,0.18)", flex: "none", borderRadius: 1.5 }} />
+              <div key={n.key} onClick={() => goToPage(n.key)} className="press lift" role="button" tabIndex={0}
+                onKeyDown={e => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); goToPage(n.key); } }}
+                style={{ display: "flex", alignItems: "center", gap: 12, padding: "12px 13px", borderRadius: 12, cursor: "pointer", background: active ? "var(--brass-a08)" : "transparent", border: `1px solid ${active ? "var(--brass-a16)" : "transparent"}` }}>
+                <span style={{ width: 7, height: 7, transform: "rotate(45deg)", background: active ? n.mark : "var(--ink-a18)", flex: "none", borderRadius: 1.5, transition: "background var(--dur-2) ease" }} />
                 <span style={{ display: "flex", flexDirection: "column", gap: 2, minWidth: 0 }}>
                   <span style={{ fontSize: 12.5, fontWeight: 700, fontFamily: syne, color: active ? T.ink : T.sub, letterSpacing: "0.02em" }}>{n.label}</span>
                   <span style={{ fontSize: 9.5, color: T.faint, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{n.sub}</span>
@@ -4837,11 +4967,11 @@ export default function App() {
 
         {/* Signals cluster */}
         <div style={{ marginTop: "auto", display: "flex", flexDirection: "column", gap: 10 }}>
-          <div style={{ padding: "13px 14px", background: "rgba(32,27,18,0.03)", border: `1px solid ${T.line}`, borderRadius: 12, boxShadow: "inset 0 1px 0 rgba(255,255,255,0.06)" }}>
+          <div style={{ padding: "13px 14px", background: "var(--ink-a03)", border: `1px solid ${T.line}`, borderRadius: 12, boxShadow: "inset 0 1px 0 var(--white-edge)" }}>
             <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 7 }}>
               <div style={{ display: "flex", alignItems: "center", gap: 7 }}>
                 <span style={{ width: 15, height: 15, borderRadius: "50%", background: "#F7931A", display: "inline-flex", alignItems: "center", justifyContent: "center", fontSize: 8, fontWeight: 700, color: "#1A0F00" }}>₿</span>
-                <span style={{ fontSize: 13, fontWeight: 500, fontFamily: mono }}>{btc.loading ? "…" : btc.error ? "—" : "$" + btc.price?.toLocaleString(undefined, { maximumFractionDigits: 0 })}</span>
+                <span style={{ fontSize: 13, fontWeight: 500, fontFamily: mono, fontVariantNumeric: "tabular-nums" }}>{btc.loading ? "…" : btc.error ? "—" : <NumTween v={btc.price} f={n => "$" + n.toLocaleString(undefined, { maximumFractionDigits: 0 })} />}</span>
               </div>
               {!btc.loading && !btc.error && (
                 <span style={{ fontSize: 10, fontWeight: 700, color: (btc.changePct || 0) >= 0 ? T.green : T.red, fontFamily: mono }}>{(btc.changePct || 0) >= 0 ? "▲" : "▼"} {Math.abs(btc.changePct || 0).toFixed(2)}%</span>
@@ -4851,22 +4981,25 @@ export default function App() {
           </div>
 
           {calUrl && !editingCal ? (
-            <a href={calUrl} target="_blank" rel="noopener" style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "11px 14px", background: "rgba(143,107,30,0.08)", border: "1px solid rgba(143,107,30,0.25)", borderRadius: 12, color: T.brass, fontSize: 11, fontWeight: 700, textDecoration: "none" }}>Open Calendar <span>›</span></a>
+            <a href={calUrl} target="_blank" rel="noopener" style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "11px 14px", background: "var(--brass-a08)", border: "1px solid var(--brass-a25)", borderRadius: 12, color: T.brass, fontSize: 11, fontWeight: 700, textDecoration: "none" }}>Open Calendar <span>›</span></a>
           ) : !editingCal ? (
-            <button onClick={() => { setEditingCal(true); setCalDraft(calUrl); }} style={{ width: "100%", padding: "11px 14px", background: "rgba(34,29,20,0.02)", border: "1px dashed rgba(34,29,20,0.14)", borderRadius: 12, color: T.sub, fontSize: 10.5, cursor: "pointer", textAlign: "left" }}>+ Link your calendar</button>
+            <button onClick={() => { setEditingCal(true); setCalDraft(calUrl); }} style={{ width: "100%", padding: "11px 14px", background: "var(--ink-a02)", border: "1px dashed var(--ink-a14)", borderRadius: 12, color: T.sub, fontSize: 10.5, cursor: "pointer", textAlign: "left" }}>+ Link your calendar</button>
           ) : (
             <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
               <input value={calDraft} onChange={e => setCalDraft(e.target.value)} placeholder="calendar share URL" style={{ ...S.input, width: "100%", padding: "9px 11px", fontSize: 11, borderRadius: 9 }} />
               <div style={{ display: "flex", gap: 6 }}>
                 <button onClick={() => { updateSetting("calendar_url", calDraft.trim()); setEditingCal(false); }} style={{ ...S.brassBtn, flex: 1, padding: 8, fontSize: 10.5, borderRadius: 8 }}>Save</button>
-                <button onClick={() => setEditingCal(false)} style={{ padding: "8px 11px", background: "transparent", border: `1px solid rgba(34,29,20,0.1)`, borderRadius: 8, color: T.sub, fontSize: 10.5, cursor: "pointer" }}>Cancel</button>
+                <button onClick={() => setEditingCal(false)} style={{ padding: "8px 11px", background: "transparent", border: `1px solid var(--ink-a10)`, borderRadius: 8, color: T.sub, fontSize: 10.5, cursor: "pointer" }}>Cancel</button>
               </div>
             </div>
           )}
 
           <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8, borderTop: `1px solid ${T.line}`, paddingTop: 12 }}>
-            <span style={{ fontSize: 9.5, color: T.faint, fontFamily: mono, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{session.user?.email}</span>
-            <button onClick={() => supabase.auth.signOut()} style={{ background: "none", border: `1px solid rgba(34,29,20,0.1)`, borderRadius: 7, color: T.sub, fontSize: 9, padding: "4px 9px", cursor: "pointer", fontWeight: 600 }}>Sign out</button>
+            <span style={{ fontSize: 9.5, color: T.faint, fontFamily: mono, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{session?.user?.email}</span>
+            <div style={{ display: "flex", alignItems: "center", gap: 6, flex: "none" }}>
+              <ThemeToggle theme={theme} compact />
+              <button onClick={() => supabase.auth.signOut()} style={{ background: "none", border: `1px solid var(--ink-a10)`, borderRadius: 7, color: T.sub, fontSize: 9, padding: "4px 9px", cursor: "pointer", fontWeight: 600 }}>Sign out</button>
+            </div>
           </div>
         </div>
       </div>
@@ -4875,8 +5008,8 @@ export default function App() {
       <div style={{ display: "flex", flexDirection: "column", height: "100vh", minWidth: 0 }}>
         <div style={{ height: 58, flex: "none", borderBottom: `1px solid ${T.line}`, display: "flex", alignItems: "center", justifyContent: "space-between", padding: "0 34px", background: "transparent" }}>
           <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
-            <span style={{ fontSize: 13, fontWeight: 700, fontFamily: syne, letterSpacing: "0.18em", textTransform: "uppercase" }}>{HEADERS[page][0]}</span>
-            <span style={{ width: 5, height: 5, transform: "rotate(45deg)", background: "rgba(138,103,28,0.5)", borderRadius: 1, flex: "none" }} />
+            <span key={page} className="page-title" style={{ fontSize: 13, fontWeight: 700, fontFamily: syne, textTransform: "uppercase" }}>{HEADERS[page][0]}</span>
+            <span style={{ width: 5, height: 5, transform: "rotate(45deg)", background: "var(--brass-a55)", borderRadius: 1, flex: "none" }} />
             <span style={{ fontSize: 9.5, color: T.faint, fontFamily: mono, letterSpacing: "0.08em" }}>{HEADERS[page][1]}</span>
           </div>
           <div style={{ display: "flex", alignItems: "center", gap: 16 }}>
@@ -4887,7 +5020,9 @@ export default function App() {
         </div>
 
         <div id="page-scroll" style={{ flex: 1, minHeight: 0, overflowY: "auto", display: "flex", flexDirection: "column" }}>
-          {renderPage(page)}
+          <div key={page} className="pagefade" style={{ display: "flex", flexDirection: "column", flex: 1 }}>
+            {renderPage(page)}
+          </div>
         </div>
       </div>
 

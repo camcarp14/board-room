@@ -1,11 +1,11 @@
-import { useMemo, useState } from "react";
+﻿import { useMemo, useState } from "react";
 
 /**
- * GscLineChart — Board Room GSC card chart
+ * GscLineChart â€” Board Room GSC card chart
  *
  * Props:
  *   rows:   [{ date: "2026-06-21", impressions: 807, clicks: 2, position: 18.7 }, ...]
- *   metric: "impressions" | "clicks" | "position"  (controlled by the parent —
+ *   metric: "impressions" | "clicks" | "position"  (controlled by the parent â€”
  *           the card's StatBoxes act as the selector)
  *
  * Behavior:
@@ -81,26 +81,26 @@ export default function GscLineChart({ rows = [], metric = "impressions" }) {
     >
       <defs>
         <linearGradient id="gscArea" x1="0" y1="0" x2="0" y2="1">
-          <stop offset="0%" stopColor="#3fbf9a" stopOpacity="0.28" />
-          <stop offset="100%" stopColor="#3fbf9a" stopOpacity="0.02" />
+          <stop offset="0%" stopColor="var(--green)" stopOpacity="0.28" />
+          <stop offset="100%" stopColor="var(--green)" stopOpacity="0.02" />
         </linearGradient>
       </defs>
 
       {/* Baseline */}
       <line
         x1={PAD.left} y1={H - PAD.bottom} x2={W - PAD.right} y2={H - PAD.bottom}
-        stroke="#d8cfc0" strokeWidth="1"
+        stroke="var(--line-strong)" strokeWidth="1"
       />
 
       {points.length > 1 && (
         <>
           <path d={areaPath} fill="url(#gscArea)" />
-          <path d={linePath} fill="none" stroke="#2ea583" strokeWidth="2.25"
+          <path d={linePath} fill="none" stroke="var(--green)" strokeWidth="2.25"
             strokeLinejoin="round" strokeLinecap="round" />
         </>
       )}
 
-      {/* Data points — hover to show callout; generous invisible hit area
+      {/* Data points â€” hover to show callout; generous invisible hit area
           also makes taps easy on mobile */}
       {points.map((p, i) => (
         <g
@@ -116,8 +116,8 @@ export default function GscLineChart({ rows = [], metric = "impressions" }) {
           <circle
             cx={p.x} cy={p.y}
             r={activeIdx === i ? 5 : 3.25}
-            fill={activeIdx === i ? "#9a7b4f" : "#2ea583"}
-            stroke="#faf6ee"
+            fill={activeIdx === i ? "var(--brass)" : "var(--green)"}
+            stroke="var(--surface)"
             strokeWidth="1.5"
           />
         </g>
@@ -126,9 +126,9 @@ export default function GscLineChart({ rows = [], metric = "impressions" }) {
       {/* First/last date labels */}
       {points.length > 1 && (
         <>
-          <text x={PAD.left} y={H - 6} fontSize="10" fill="#8a7c66"
+          <text x={PAD.left} y={H - 6} fontSize="10" fill="var(--faint)"
             fontFamily="'IBM Plex Mono', monospace">{fmtDate(points[0].date)}</text>
-          <text x={W - PAD.right} y={H - 6} fontSize="10" fill="#8a7c66" textAnchor="end"
+          <text x={W - PAD.right} y={H - 6} fontSize="10" fill="var(--faint)" textAnchor="end"
             fontFamily="'IBM Plex Mono', monospace">{fmtDate(points[points.length - 1].date)}</text>
         </>
       )}
@@ -137,18 +137,18 @@ export default function GscLineChart({ rows = [], metric = "impressions" }) {
       {active && (
         <g pointerEvents="none">
           <line x1={active.x} y1={active.y} x2={active.x} y2={H - PAD.bottom}
-            stroke="#9a7b4f" strokeWidth="1" strokeDasharray="3 3" opacity="0.6" />
+            stroke="var(--brass)" strokeWidth="1" strokeDasharray="3 3" opacity="0.6" />
           <rect
             x={calloutX} y={calloutY} width={calloutW} height={40} rx={6}
-            fill="#faf6ee" stroke="#9a7b4f" strokeWidth="1"
+            fill="var(--surface-2)" stroke="var(--brass)" strokeWidth="1"
           />
           <text x={calloutX + calloutW / 2} y={calloutY + 17} textAnchor="middle"
-            fontSize="13" fontWeight="700" fill="#3d3426"
+            fontSize="13" fontWeight="700" fill="var(--ink)"
             fontFamily="'IBM Plex Mono', monospace">
             {m.format(active.value)}
           </text>
           <text x={calloutX + calloutW / 2} y={calloutY + 32} textAnchor="middle"
-            fontSize="10" fill="#8a7c66"
+            fontSize="10" fill="var(--faint)"
             fontFamily="'IBM Plex Mono', monospace">
             {fmtDate(active.date)}
           </text>
