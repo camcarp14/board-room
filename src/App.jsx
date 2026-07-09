@@ -491,10 +491,15 @@ function useThemeController() {
   return { pref, setPref, resolved };
 }
 
-// The one viewport number iOS standalone reports truthfully. The initial
-// containing block (what 100%/100dvh/fixed-inset resolve against) excludes
-// the bottom safe area there, which left the dock floating and a dead band
-// below it — visualViewport.height is the real visible height.
+// iOS standalone under-reports the viewport through several APIs at once
+// (ICB, 100%/dvh, sometimes visualViewport), which left the dock floating
+// with a dead band below it. Belt and suspenders: take the LARGEST of
+// visualViewport and 100lvh when installed, and keep a tap-the-title-5x
+// diagnostics overlay so any remaining device quirk shows its numbers.
+const IS_STANDALONE = typeof window !== "undefined" &&
+  (window.matchMedia?.("(display-mode: standalone)")?.matches || window.navigator.standalone === true);
+const SUPPORTS_LVH = typeof CSS !== "undefined" && !!CSS.supports?.("height", "100lvh");
+
 function useVisualViewport() {
   const get = () => (typeof window !== "undefined" && window.visualViewport ? Math.round(window.visualViewport.height) : null);
   const [vvh, setVvh] = useState(get);
@@ -510,6 +515,55 @@ function useVisualViewport() {
     return () => { cancelAnimationFrame(raf); vv.removeEventListener("resize", on); vv.removeEventListener("scroll", on); window.removeEventListener("orientationchange", on); };
   }, []);
   return vvh;
+}
+
+// Tap the page title 5 times to open this — every number the device is
+// willing to admit about its viewport, so a geometry quirk can be diagnosed
+// from a single screenshot instead of blind deploys.
+function ViewportDiag({ onClose }) {
+  const [info, setInfo] = useState(null);
+  useEffect(() => {
+    const probe = (css) => {
+      const el = document.createElement("div");
+      el.style.cssText = `position:fixed;left:-9999px;top:0;width:10px;height:${css};`;
+      document.body.appendChild(el);
+      const h = el.getBoundingClientRect().height;
+      el.remove();
+      return Math.round(h);
+    };
+    const vv = window.visualViewport;
+    const dock = document.querySelector(".dock")?.getBoundingClientRect();
+    const shell = document.getElementById("page-scroll")?.parentElement?.getBoundingClientRect();
+    setInfo({
+      standalone: String(IS_STANDALONE),
+      "screen h×w": `${window.screen?.height}×${window.screen?.width}`,
+      innerHeight: window.innerHeight,
+      clientHeight: document.documentElement.clientHeight,
+      "vv.height": vv ? Math.round(vv.height) : "n/a",
+      "vv.offsetTop": vv ? Math.round(vv.offsetTop) : "n/a",
+      "100vh": probe("100vh"),
+      "100dvh": probe("100dvh"),
+      "100svh": probe("100svh"),
+      "100lvh": probe("100lvh"),
+      "env(top)": probe("env(safe-area-inset-top)"),
+      "env(bottom)": probe("env(safe-area-inset-bottom)"),
+      "shell bottom": shell ? Math.round(shell.bottom) : "n/a",
+      "dock bottom": dock ? Math.round(dock.bottom) : "n/a",
+    });
+  }, []);
+  return (
+    <div onClick={onClose} style={{ position: "fixed", inset: 0, zIndex: 5000, background: "var(--scrim)", display: "flex", alignItems: "center", justifyContent: "center", padding: 20 }}>
+      <div style={{ background: T.surface, border: `1px solid ${T.lineStrong}`, borderRadius: 14, padding: "16px 18px", width: "100%", maxWidth: 340, fontFamily: mono, fontSize: 11.5, color: T.ink, lineHeight: 1.9, boxShadow: "var(--shadow-deep)" }}>
+        <div style={{ ...S.title, marginBottom: 8 }}>Viewport Diagnostics</div>
+        {info && Object.entries(info).map(([k, v]) => (
+          <div key={k} style={{ display: "flex", justifyContent: "space-between", gap: 10 }}>
+            <span style={{ color: T.sub }}>{k}</span><span style={{ fontVariantNumeric: "tabular-nums" }}>{String(v)}</span>
+          </div>
+        ))}
+        <div style={{ marginTop: 8, fontSize: 9.5, color: T.faint, fontFamily: "inherit" }}>Tap anywhere to close · screenshot this if the dock sits wrong</div>
+      </div>
+    </div>
+  );
 }
 
 function useIsMobile() {
@@ -5015,6 +5069,8 @@ export default function App() {
   const theme = useThemeController();
   const isMobile = useIsMobile();
   const vvh = useVisualViewport();
+  const diagTaps = useRef({ n: 0, t: 0 });
+  const [diagOpen, setDiagOpen] = useState(false);
   const btc = useBitcoinPrice();
 
   const [session, setSession] = useState(null);
@@ -5265,16 +5321,28 @@ export default function App() {
   // the active tab. Pages cross-fade; content scrolls under the dock.
   if (isMobile) {
     const activeIdx = Math.max(0, NAV.findIndex(n => n.key === page));
-    // vvh is the truth on iOS standalone (fixed/100%/dvh all stop short of the
-    // bottom safe area there); when the keyboard eats most of it, slide the
-    // dock away instead of letting it hover mid-screen.
+    const onTitleTap = () => {
+      const now = Date.now();
+      const d = diagTaps.current;
+      d.n = now - d.t < 2000 ? d.n + 1 : 1;
+      d.t = now;
+      if (d.n >= 5) { d.n = 0; setDiagOpen(true); }
+    };
+    // When the keyboard eats most of the viewport, slide the dock away
+    // instead of letting it hover mid-screen.
     const keyboardOpen = vvh != null && window.screen?.height ? vvh < window.screen.height * 0.72 : false;
+    // Installed app: trust whichever is tallest — 100lvh (full screen incl.
+    // safe areas; no dynamic chrome exists in standalone) or visualViewport.
+    // In a browser tab lvh overshoots the visible area, so vvh only there.
+    const shellHeight = vvh == null ? "100%"
+      : IS_STANDALONE && SUPPORTS_LVH ? `max(100lvh, ${vvh}px)`
+      : `${vvh}px`;
     return (
-      <div style={{ position: "fixed", top: 0, left: 0, right: 0, height: vvh != null ? vvh : "100%", display: "flex", flexDirection: "column", color: T.ink, overflow: "hidden" }}>
+      <div style={{ position: "fixed", top: 0, left: 0, right: 0, height: shellHeight, display: "flex", flexDirection: "column", color: T.ink, overflow: "hidden" }}>
         <div className="shell-header">
           <div style={{ display: "flex", alignItems: "center", gap: 9, minWidth: 0 }}>
             <span style={{ width: 13, height: 13, transform: "rotate(45deg)", borderRadius: 2.5, background: T.brass, flex: "none" }} />
-            <span key={page} className="page-title" style={{ fontSize: 11.5, fontWeight: 700, textTransform: "uppercase", fontFamily: syne }}>{HEADERS[page][0]}</span>
+            <span key={page} className="page-title" onClick={onTitleTap} style={{ fontSize: 11.5, fontWeight: 700, textTransform: "uppercase", fontFamily: syne }}>{HEADERS[page][0]}</span>
           </div>
           <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
             <ThemeToggle theme={theme} compact />
@@ -5309,6 +5377,7 @@ export default function App() {
         {summonEl}
         {editSeat && <SeatNotesModal seatKey={editSeat} initial={seatNotes[editSeat]} onSave={saveSeatNote} onClose={() => setEditSeat(null)} isMobile />}
         {migration && <MigrationModal counts={migration} onImport={runImport} onSkip={skipImport} importing={importing} />}
+        {diagOpen && <ViewportDiag onClose={() => setDiagOpen(false)} />}
       </div>
     );
   }
