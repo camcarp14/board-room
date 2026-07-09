@@ -5481,8 +5481,13 @@ export default function App() {
     // canvas): 100vh/100lvh report the full screen, but iOS standalone clips
     // everything below vvh — content sized past it gets cut, never shown.
     const shellHeight = vvh == null ? "100%" : `${vvh}px`;
+    // Letterboxed standalone window (renderable height falls short of the
+    // screen): the OS strip already clears the home indicator, so the
+    // env(safe-area-inset-bottom) it still reports is dead space — collapse
+    // the tab bar to its tight browser-mode geometry instead.
+    const letterboxed = IS_STANDALONE && vvh != null && window.screen?.height ? window.screen.height - vvh >= 20 : false;
     return (
-      <div style={{ position: "fixed", top: 0, left: 0, right: 0, height: shellHeight, display: "flex", flexDirection: "column", color: T.ink, overflow: "hidden" }}>
+      <div className={letterboxed ? "lbx" : undefined} style={{ position: "fixed", top: 0, left: 0, right: 0, height: shellHeight, display: "flex", flexDirection: "column", color: T.ink, overflow: "hidden" }}>
         <div className="shell-header">
           <div style={{ display: "flex", alignItems: "center", gap: 9, minWidth: 0 }}>
             <span style={{ width: 13, height: 13, transform: "rotate(45deg)", borderRadius: 2.5, background: T.brass, flex: "none" }} />

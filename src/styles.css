@@ -348,6 +348,10 @@ kbd {
   cursor: pointer; display: flex; align-items: center; justify-content: center;
   padding: 9px 0 calc(9px + env(safe-area-inset-bottom));
 }
+/* Letterboxed standalone window (.lbx set by the shell): the OS already
+   reserves the home-indicator zone below the renderable area, so the
+   reported env(bottom) is dead space — use the tight browser-mode bar. */
+.lbx .dock-tab { padding: 9px 0; min-height: 56px; }
 .dock-ember {
   position: absolute; top: 6px; width: 5px; height: 5px; border-radius: 1.5px;
   background: var(--brass); transform: translateX(-50%) rotate(45deg);
