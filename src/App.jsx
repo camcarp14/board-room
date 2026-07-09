@@ -5352,13 +5352,16 @@ export default function App() {
         </div>
 
         <div id="page-scroll" style={{ flex: 1, minHeight: 0, overflowY: "auto", display: "flex", flexDirection: "column" }}>
-          <div key={page} className="pagefade" style={{ display: "flex", flexDirection: "column", flex: 1, paddingBottom: "calc(74px + env(safe-area-inset-bottom))" }}>
+          <div key={page} className="pagefade" style={{ display: "flex", flexDirection: "column", flex: 1, paddingBottom: 18 }}>
             {renderPage(page)}
           </div>
         </div>
 
-        {/* The dock — floating glass, brass ember slides to the active seat */}
-        <div className="dock-wrap" style={{ transform: keyboardOpen ? "translateY(120%)" : "none", opacity: keyboardOpen ? 0 : 1, transition: "transform var(--dur-3) var(--ease-out), opacity var(--dur-2) ease" }}>
+        {/* The dock — last flex child, IN FLOW. Every positioned approach
+            (dvh, fixed-inset, visualViewport, lvh) got lied to by some iOS
+            standalone coordinate system; normal flow at the bottom of the
+            flex column cannot be. Hidden entirely while the keyboard is up. */}
+        <div className="dock-wrap" style={{ flex: "none", display: keyboardOpen ? "none" : undefined }}>
           <nav className="dock" aria-label="Primary">
             <span className="dock-ember" style={{ left: `${(activeIdx + 0.5) * (100 / NAV.length)}%` }} />
             {NAV.map(n => {

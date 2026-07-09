@@ -323,12 +323,11 @@ kbd {
 
 /* ── shell: the dock — floating brass-and-glass tab bar ────────────────────── */
 .dock-wrap {
-  /* fixed to the viewport's own bottom, independent of the shell box —
-     if a viewport API lies about the shell height, the dock still lands */
-  position: fixed; left: 0; right: 0; bottom: 0; z-index: 100;
-  /* hug the bottom: the home indicator's safe-area is clearance enough —
-     just 4px of breathing room on top of it (14px floor in a browser tab) */
-  padding: 0 12px max(calc(4px + env(safe-area-inset-bottom)), 14px); pointer-events: none;
+  /* in normal flow as the shell's last flex child — no positioning, no
+     viewport math, nothing for iOS standalone to lie about. The home
+     indicator's safe-area is clearance enough; 4px of breathing room on
+     top of it, 8px floor when there's no inset (browser tabs). */
+  padding: 6px 12px max(calc(4px + env(safe-area-inset-bottom)), 8px);
 }
 .dock {
   pointer-events: auto; position: relative; display: flex;
