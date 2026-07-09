@@ -5535,9 +5535,10 @@ export default function App() {
               const active = page === n.key;
               const Icon = NAV_ICONS[n.key];
               return (
-                <button key={n.key} className="dock-tab" onClick={() => goToPage(n.key)} title={n.label} aria-label={n.label} aria-current={active ? "page" : undefined}
-                  style={{ background: active ? "linear-gradient(180deg, var(--brass-a10), transparent)" : "none" }}>
-                  <Icon width={23} height={23} color={active ? T.brass : T.faint} />
+                <button key={n.key} className="dock-tab" onClick={() => goToPage(n.key)} title={n.label} aria-label={n.label} aria-current={active ? "page" : undefined}>
+                  <span style={{ width: 44, height: 30, borderRadius: 9, display: "inline-flex", alignItems: "center", justifyContent: "center", background: active ? "var(--brass-a12)" : "transparent" }}>
+                    <Icon width={23} height={23} color={active ? T.brass : T.faint} />
+                  </span>
                 </button>
               );
             })}
