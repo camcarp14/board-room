@@ -5232,6 +5232,7 @@ export default function App() {
   const { vvh, envTop } = useVisualViewport();
   const diagTaps = useRef({ n: 0, t: 0 });
   const [diagOpen, setDiagOpen] = useState(false);
+  const [navDir, setNavDir] = useState(null); // "l" | "r" | null — drives the page slide direction
   const btc = useBitcoinPrice();
 
   const [session, setSession] = useState(null);
@@ -5341,12 +5342,71 @@ export default function App() {
   // actually somewhere to scroll from, skipped entirely if already at top
   // so it's not a pointless animation on every tap.
   const goToPage = (key) => {
+    // Direction-aware: pages to the right slide in from the right, and vice
+    // versa — the same physics whether the trigger was a tab tap or a swipe.
+    const from = NAV.findIndex(n => n.key === page);
+    const to = NAV.findIndex(n => n.key === key);
+    setNavDir(to > from ? "l" : to < from ? "r" : null);
     setPage(key);
     requestAnimationFrame(() => {
       const el = document.getElementById("page-scroll");
       if (el && el.scrollTop > 0) el.scrollTo({ top: 0, behavior: "smooth" });
     });
   };
+
+  // Swipe between tabs (mobile): a quick, mostly-horizontal touch drag on the
+  // page switches to the neighboring tab. Native listeners (not React
+  // delegation) on the scroller; touch-action: pan-y leaves horizontal
+  // gestures to us while the browser keeps vertical scrolling. Ignores
+  // gestures that start on form controls, inside horizontally scrollable
+  // regions, or at the screen edges (those belong to iOS's history gesture).
+  const pageRef = useRef(page);
+  pageRef.current = page;
+  const goToPageRef = useRef(null);
+  goToPageRef.current = goToPage;
+  useEffect(() => {
+    if (!isMobile) return;
+    // Document-level delegation: the shell (and #page-scroll) may not exist
+    // yet when this runs (boot screen), and remounts must not shed listeners.
+    let start = null;
+    const onDown = (e) => {
+      start = null;
+      if (e.pointerType !== "touch" || !e.isPrimary) return;
+      const root = document.getElementById("page-scroll");
+      if (!root || !root.contains(e.target)) return;
+      let el = e.target, blocked = false;
+      while (el && el !== root) {
+        const tag = el.tagName;
+        if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") { blocked = true; break; }
+        if (el.scrollWidth > el.clientWidth + 8) {
+          const ox = getComputedStyle(el).overflowX;
+          if (ox === "auto" || ox === "scroll") { blocked = true; break; }
+        }
+        el = el.parentElement;
+      }
+      if (blocked || e.clientX < 24 || e.clientX > window.innerWidth - 24) return;
+      start = { x: e.clientX, y: e.clientY, t: Date.now() };
+    };
+    const onUp = (e) => {
+      const s = start;
+      start = null;
+      if (!s || e.pointerType !== "touch") return;
+      const dx = e.clientX - s.x, dy = e.clientY - s.y;
+      if (Date.now() - s.t > 600 || Math.abs(dx) < 64 || Math.abs(dx) < 2.2 * Math.abs(dy)) return;
+      const idx = NAV.findIndex(n => n.key === pageRef.current);
+      const next = dx < 0 ? idx + 1 : idx - 1;
+      if (next >= 0 && next < NAV.length) goToPageRef.current?.(NAV[next].key);
+    };
+    const onCancel = () => { start = null; };
+    document.addEventListener("pointerdown", onDown);
+    document.addEventListener("pointerup", onUp);
+    document.addEventListener("pointercancel", onCancel);
+    return () => {
+      document.removeEventListener("pointerdown", onDown);
+      document.removeEventListener("pointerup", onUp);
+      document.removeEventListener("pointercancel", onCancel);
+    };
+  }, [isMobile]);
   const [personalJumpTo, setPersonalJumpTo] = useState(null); // tells PersonalPage which sub-tab to open on arrival
 
   // Learned skills — loaded once per session, refreshed whenever the Learn
@@ -5518,8 +5578,8 @@ export default function App() {
           </div>
         </div>
 
-        <div id="page-scroll" style={{ flex: 1, minHeight: 0, overflowY: "auto", display: "flex", flexDirection: "column" }}>
-          <div key={page} className="pagefade" style={{ display: "flex", flexDirection: "column", flex: 1, paddingBottom: 18 }}>
+        <div id="page-scroll" style={{ flex: 1, minHeight: 0, overflowY: "auto", display: "flex", flexDirection: "column", touchAction: "pan-y" }}>
+          <div key={page} className={navDir === "l" ? "pageslide-l" : navDir === "r" ? "pageslide-r" : "pagefade"} style={{ display: "flex", flexDirection: "column", flex: 1, paddingBottom: 18 }}>
             {renderPage(page)}
           </div>
         </div>
@@ -5536,9 +5596,10 @@ export default function App() {
               const Icon = NAV_ICONS[n.key];
               return (
                 <button key={n.key} className="dock-tab" onClick={() => goToPage(n.key)} title={n.label} aria-label={n.label} aria-current={active ? "page" : undefined}>
-                  <span style={{ width: 44, height: 30, borderRadius: 9, display: "inline-flex", alignItems: "center", justifyContent: "center", background: active ? "var(--brass-a12)" : "transparent" }}>
-                    <Icon width={23} height={23} color={active ? T.brass : T.faint} />
+                  <span style={{ width: 44, height: 30, borderRadius: 9, display: "inline-flex", alignItems: "center", justifyContent: "center", background: active ? "var(--brass-a12)" : "transparent", flex: "none" }}>
+                    <Icon width={22} height={22} color={active ? T.brass : T.faint} />
                   </span>
+                  <span className="dock-label" style={{ color: active ? T.brass : T.faint }}>{n.key === "boardroom" ? "Board" : n.label}</span>
                 </button>
               );
             })}
