@@ -50,7 +50,7 @@ export function cssVar(name) {
 // index.html runs the same logic inline pre-paint; these keep it live after.
 
 const THEME_KEY = "br_theme";
-export const THEME_COLORS = { day: "#F4F2ED", night: "#100F0E" };
+export const THEME_COLORS = { day: "#F4F2ED", night: "#0D1120" };
 
 export function getThemePref() {
   try { return localStorage.getItem(THEME_KEY) || "auto"; } catch { return "auto"; }
@@ -69,11 +69,17 @@ export function resolveTheme(pref = getThemePref(), d = new Date()) {
 export function applyTheme(resolved, { animate = false } = {}) {
   const root = document.documentElement;
   if (root.dataset.theme === resolved) return;
-  if (animate) {
-    root.classList.add("theme-anim");
-    window.setTimeout(() => root.classList.remove("theme-anim"), 520);
-  }
   root.dataset.theme = resolved;
   const meta = document.querySelector('meta[name="theme-color"]');
   if (meta) meta.content = THEME_COLORS[resolved] || THEME_COLORS.day;
+  // Cross-fade with a one-shot veil, never per-element color transitions —
+  // an always-on color transition with a var() endpoint wedges Chromium's
+  // transition engine on theme flips and freezes elements at the old palette.
+  if (animate && !window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
+    const veil = document.createElement("div");
+    veil.style.cssText = `position:fixed;inset:0;z-index:3000;pointer-events:none;background:${THEME_COLORS[resolved] || THEME_COLORS.day};opacity:0.9;transition:opacity 460ms cubic-bezier(0.22,1,0.36,1)`;
+    document.body.appendChild(veil);
+    requestAnimationFrame(() => requestAnimationFrame(() => { veil.style.opacity = "0"; }));
+    window.setTimeout(() => veil.remove(), 540);
+  }
 }

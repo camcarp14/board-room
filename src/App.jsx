@@ -491,6 +491,27 @@ function useThemeController() {
   return { pref, setPref, resolved };
 }
 
+// The one viewport number iOS standalone reports truthfully. The initial
+// containing block (what 100%/100dvh/fixed-inset resolve against) excludes
+// the bottom safe area there, which left the dock floating and a dead band
+// below it — visualViewport.height is the real visible height.
+function useVisualViewport() {
+  const get = () => (typeof window !== "undefined" && window.visualViewport ? Math.round(window.visualViewport.height) : null);
+  const [vvh, setVvh] = useState(get);
+  useEffect(() => {
+    const vv = window.visualViewport;
+    if (!vv) return;
+    let raf = 0;
+    const on = () => { cancelAnimationFrame(raf); raf = requestAnimationFrame(() => setVvh(Math.round(vv.height))); };
+    on();
+    vv.addEventListener("resize", on);
+    vv.addEventListener("scroll", on);
+    window.addEventListener("orientationchange", on);
+    return () => { cancelAnimationFrame(raf); vv.removeEventListener("resize", on); vv.removeEventListener("scroll", on); window.removeEventListener("orientationchange", on); };
+  }, []);
+  return vvh;
+}
+
 function useIsMobile() {
   const [is, setIs] = useState(() => window.matchMedia("(max-width: 760px)").matches);
   useEffect(() => {
@@ -607,7 +628,7 @@ function Bars({ data, from, to, height = 54 }) {
 function Toggle({ on, onToggle, size = 20 }) {
   const w = size * 1.7, knob = size - 4;
   return (
-    <span onClick={onToggle} style={{ width: w, height: size, borderRadius: size / 2 + 1, background: on ? T.green : "var(--line-strong)", position: "relative", cursor: "pointer", display: "inline-block", flex: "none", transition: "background 0.15s", boxShadow: "inset 0 1px 2px rgba(0,0,0,0.14)" }}>
+    <span onClick={onToggle} style={{ width: w, height: size, borderRadius: size / 2 + 1, background: on ? T.green : "var(--line-strong)", position: "relative", cursor: "pointer", display: "inline-block", flex: "none", boxShadow: "inset 0 1px 2px rgba(0,0,0,0.14)" }}>
       <span style={{ position: "absolute", top: 2, left: on ? w - knob - 2 : 2, width: knob, height: knob, borderRadius: "50%", background: "#FFFFFF", transition: "left 0.15s", boxShadow: "0 1px 3px rgba(0,0,0,0.22)" }} />
     </span>
   );
@@ -670,7 +691,7 @@ function StatBox({ value, label, delta, deltaColor = T.green, valueColor = T.ink
       className={onClick ? "press" : undefined}
       style={{
         ...S.inner, padding: "10px 8px", textAlign: "center", borderRadius: 10,
-        ...(onClick ? { cursor: "pointer", transition: "border-color 120ms ease, box-shadow 120ms ease, transform var(--dur-1) var(--ease-out)" } : {}),
+        ...(onClick ? { cursor: "pointer", transition: "transform var(--dur-1) var(--ease-out)" } : {}),
         ...(selected ? { border: "1px solid var(--brass)", boxShadow: "0 0 0 1px var(--brass-a25)" } : {}),
       }}
     >
@@ -2241,7 +2262,13 @@ const upkeepDueText = (meta) =>
   : `DUE IN ${meta.dueIn}D`;
 const upkeepDueColor = (meta) =>
   meta.never || meta.dueIn <= 0 ? T.red : meta.dueIn <= 14 ? T.amber : T.green;
-const isMissingTable = (e, name) => /42P01/.test(e?.code || "") || new RegExp(`relation .*${name}.* does not exist`, "i").test(e?.message || "");
+// Postgres says 42P01 ("relation does not exist"); PostgREST/supabase-js says
+// PGRST205 ("Could not find the table ... in the schema cache"). Both mean
+// the one-time SQL hasn't been run yet — show the setup card, not a raw error.
+const isMissingTable = (e, name) =>
+  /42P01|PGRST205/.test(e?.code || "") ||
+  new RegExp(`relation .*${name}.* does not exist`, "i").test(e?.message || "") ||
+  (/schema cache|could not find the table/i.test(e?.message || "") && (e?.message || "").includes(name));
 
 function UpkeepPanel({ isMobile }) {
   const card = isMobile ? S.cardM : S.card;
@@ -4987,6 +5014,7 @@ const NAV_ICONS = {
 export default function App() {
   const theme = useThemeController();
   const isMobile = useIsMobile();
+  const vvh = useVisualViewport();
   const btc = useBitcoinPrice();
 
   const [session, setSession] = useState(null);
@@ -5237,10 +5265,12 @@ export default function App() {
   // the active tab. Pages cross-fade; content scrolls under the dock.
   if (isMobile) {
     const activeIdx = Math.max(0, NAV.findIndex(n => n.key === page));
+    // vvh is the truth on iOS standalone (fixed/100%/dvh all stop short of the
+    // bottom safe area there); when the keyboard eats most of it, slide the
+    // dock away instead of letting it hover mid-screen.
+    const keyboardOpen = vvh != null && window.screen?.height ? vvh < window.screen.height * 0.72 : false;
     return (
-      // position:fixed inset:0 — not 100dvh, which under-measures in iOS
-      // standalone mode and left a dead band under the dock.
-      <div style={{ position: "fixed", inset: 0, display: "flex", flexDirection: "column", color: T.ink, overflow: "hidden" }}>
+      <div style={{ position: "fixed", top: 0, left: 0, right: 0, height: vvh != null ? vvh : "100%", display: "flex", flexDirection: "column", color: T.ink, overflow: "hidden" }}>
         <div className="shell-header">
           <div style={{ display: "flex", alignItems: "center", gap: 9, minWidth: 0 }}>
             <span style={{ width: 13, height: 13, transform: "rotate(45deg)", borderRadius: 2.5, background: T.brass, flex: "none" }} />
@@ -5260,7 +5290,7 @@ export default function App() {
         </div>
 
         {/* The dock — floating glass, brass ember slides to the active seat */}
-        <div className="dock-wrap">
+        <div className="dock-wrap" style={{ transform: keyboardOpen ? "translateY(120%)" : "none", opacity: keyboardOpen ? 0 : 1, transition: "transform var(--dur-3) var(--ease-out), opacity var(--dur-2) ease" }}>
           <nav className="dock" aria-label="Primary">
             <span className="dock-ember" style={{ left: `${(activeIdx + 0.5) * (100 / NAV.length)}%` }} />
             {NAV.map(n => {
@@ -5268,7 +5298,7 @@ export default function App() {
               const Icon = NAV_ICONS[n.key];
               return (
                 <button key={n.key} className="dock-tab" onClick={() => goToPage(n.key)} title={n.label} aria-label={n.label} aria-current={active ? "page" : undefined}>
-                  <Icon width={21} height={21} color={active ? T.ink : T.faint} style={{ transition: `color var(--dur-2) ease` }} />
+                  <Icon width={21} height={21} color={active ? T.ink : T.faint} />
                   <span className="dock-label" style={{ color: active ? T.brass : T.faint }}>{n.key === "boardroom" ? "Board" : n.label}</span>
                 </button>
               );
@@ -5303,7 +5333,7 @@ export default function App() {
               <div key={n.key} onClick={() => goToPage(n.key)} className="press lift" role="button" tabIndex={0}
                 onKeyDown={e => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); goToPage(n.key); } }}
                 style={{ display: "flex", alignItems: "center", gap: 12, padding: "12px 13px", borderRadius: 12, cursor: "pointer", background: active ? "var(--brass-a08)" : "transparent", border: `1px solid ${active ? "var(--brass-a16)" : "transparent"}` }}>
-                <span style={{ width: 7, height: 7, transform: "rotate(45deg)", background: active ? n.mark : "var(--ink-a18)", flex: "none", borderRadius: 1.5, transition: "background var(--dur-2) ease" }} />
+                <span style={{ width: 7, height: 7, transform: "rotate(45deg)", background: active ? n.mark : "var(--ink-a18)", flex: "none", borderRadius: 1.5 }} />
                 <span style={{ display: "flex", flexDirection: "column", gap: 2, minWidth: 0 }}>
                   <span style={{ fontSize: 12.5, fontWeight: 700, fontFamily: syne, color: active ? T.ink : T.sub, letterSpacing: "0.02em" }}>{n.label}</span>
                   <span style={{ fontSize: 9.5, color: T.faint, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{n.sub}</span>
