@@ -535,6 +535,7 @@ function ViewportDiag({ onClose }) {
     const dock = document.querySelector(".dock")?.getBoundingClientRect();
     const shell = document.getElementById("page-scroll")?.parentElement?.getBoundingClientRect();
     setInfo({
+      build: typeof __BUILD__ !== "undefined" ? __BUILD__ : "dev",
       standalone: String(IS_STANDALONE),
       "screen h×w": `${window.screen?.height}×${window.screen?.width}`,
       innerHeight: window.innerHeight,
@@ -551,8 +552,21 @@ function ViewportDiag({ onClose }) {
       "dock bottom": dock ? Math.round(dock.bottom) : "n/a",
     });
   }, []);
+  // Physical ruler: absolutely-positioned lines at the client-y of each
+  // reported height. A screenshot shows exactly where each coordinate
+  // system believes the bottom is versus where the glass actually ends.
+  const rulers = info ? [
+    { y: Number(info["vv.height"]) || 0, color: "var(--red)", label: "vv" },
+    { y: Number(info["100lvh"]) || 0, color: "var(--green)", label: "lvh" },
+    { y: Number(info.innerHeight) || 0, color: "var(--blue)", label: "inner" },
+  ] : [];
   return (
     <div onClick={onClose} style={{ position: "fixed", inset: 0, zIndex: 5000, background: "var(--scrim)", display: "flex", alignItems: "center", justifyContent: "center", padding: 20 }}>
+      {rulers.map((r, i) => r.y > 0 && (
+        <div key={i} style={{ position: "absolute", left: 0, right: 0, top: r.y - 2, height: 2, background: r.color, opacity: 0.9, pointerEvents: "none" }}>
+          <span style={{ position: "absolute", right: 6, bottom: 3, fontSize: 9, fontFamily: mono, color: r.color }}>{r.label} {r.y}</span>
+        </div>
+      ))}
       <div style={{ background: T.surface, border: `1px solid ${T.lineStrong}`, borderRadius: 14, padding: "16px 18px", width: "100%", maxWidth: 340, fontFamily: mono, fontSize: 11.5, color: T.ink, lineHeight: 1.9, boxShadow: "var(--shadow-deep)" }}>
         <div style={{ ...S.title, marginBottom: 8 }}>Viewport Diagnostics</div>
         {info && Object.entries(info).map(([k, v]) => (
@@ -5501,7 +5515,7 @@ export default function App() {
               const Icon = NAV_ICONS[n.key];
               return (
                 <button key={n.key} className="dock-tab" onClick={() => goToPage(n.key)} title={n.label} aria-label={n.label} aria-current={active ? "page" : undefined}>
-                  <Icon width={21} height={21} color={active ? T.ink : T.sub} />
+                  <Icon width={21} height={21} color={active ? T.brass : T.sub} />
                   <span className="dock-label" style={{ color: active ? T.brass : T.sub }}>{n.key === "boardroom" ? "Board" : n.label}</span>
                 </button>
               );
