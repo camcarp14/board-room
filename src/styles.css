@@ -333,26 +333,20 @@ kbd {
      so icons sit above the home indicator like a native tab bar. */
   padding: 0;
 }
+/* Anatomy lifted verbatim from the reference build Cameron confirmed correct:
+   icon-only tabs, canvas-colored glass (no raised slab — a visible box makes
+   the safe-area read as a dead gap), and the safe-area padding INSIDE each
+   tab so icons sit optically centered above the home indicator. */
 .dock {
   pointer-events: auto; position: relative; display: flex;
-  /* raised glass — the bar must read as a BAR against the canvas, or the
-     safe-area zone under the icons looks like a dead gap (field-tested) */
-  background: var(--glass-raised);
-  -webkit-backdrop-filter: blur(20px); backdrop-filter: blur(20px);
-  border: none; border-top: 1px solid var(--line-strong); border-radius: 0;
-  box-shadow: var(--shadow-bar), inset 0 1px 0 var(--white-edge);
-  padding-bottom: env(safe-area-inset-bottom);
+  background: var(--glass);
+  -webkit-backdrop-filter: blur(14px); backdrop-filter: blur(14px);
+  border: none; border-top: 1px solid var(--line); border-radius: 0;
 }
 .dock-tab {
-  flex: 1; min-height: 52px; position: relative; background: none; border: none;
-  cursor: pointer; display: flex; flex-direction: column; align-items: center;
-  justify-content: center; gap: 3px; padding: 6px 0 5px; border-radius: 14px;
-}
-.dock-tab .dock-label {
-  font-family: var(--font-display); font-size: 9px; font-weight: 700;
-  letter-spacing: 0.14em; text-transform: uppercase; line-height: 1;
-  white-space: nowrap; max-width: 100%; overflow: hidden;
-  transition: opacity var(--dur-2) ease;
+  flex: 1; min-height: 66px; position: relative; background: none; border: none;
+  cursor: pointer; display: flex; align-items: center; justify-content: center;
+  padding: 9px 0 calc(9px + env(safe-area-inset-bottom));
 }
 .dock-ember {
   position: absolute; top: 6px; width: 5px; height: 5px; border-radius: 1.5px;
