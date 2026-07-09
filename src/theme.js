@@ -50,7 +50,7 @@ export function cssVar(name) {
 // index.html runs the same logic inline pre-paint; these keep it live after.
 
 const THEME_KEY = "br_theme";
-export const THEME_COLORS = { day: "#F4F2ED", night: "#14110B" };
+export const THEME_COLORS = { day: "#F4F2ED", night: "#100F0E" };
 
 export function getThemePref() {
   try { return localStorage.getItem(THEME_KEY) || "auto"; } catch { return "auto"; }

@@ -33,13 +33,19 @@ exports.handler = async (event) => {
   try {
     const [spx, ndq, tnx, dxy] = await Promise.all(Object.values(SYMBOLS).map(quote));
     const pct = (q) => ((q.price - q.prevClose) / q.prevClose) * 100;
+    const pctStr = (q) => `${pct(q) >= 0 ? "+" : ""}${pct(q).toFixed(2)}%`;
+    const level = (n) => n.toLocaleString("en-US", { maximumFractionDigits: 0 });
+    // ^TNX quotes the 10-year yield ×10 (a legacy CBOE convention) — divide to
+    // get the real yield; the day move reads best in basis points.
+    const tnxBp = Math.round((tnx.price - tnx.prevClose) * 10);
+    // `price` = the actual level, `delta` = the day move; `value` keeps the old
+    // shape (chat snapshot + any stale client reads it during rollout).
     const payload = {
       success: true,
-      spx: { value: `${pct(spx) >= 0 ? "+" : ""}${pct(spx).toFixed(2)}%`, up: pct(spx) >= 0 },
-      ndq: { value: `${pct(ndq) >= 0 ? "+" : ""}${pct(ndq).toFixed(2)}%`, up: pct(ndq) >= 0 },
-      // ^TNX quotes the 10-year yield ×10 (a legacy CBOE convention) — divide to get the real yield.
-      tnx: { value: `${(tnx.price / 10).toFixed(2)}%`, up: tnx.price >= tnx.prevClose },
-      dxy: { value: dxy.price.toFixed(1), up: pct(dxy) >= 0 },
+      spx: { price: level(spx.price), delta: pctStr(spx), value: pctStr(spx), up: pct(spx) >= 0 },
+      ndq: { price: level(ndq.price), delta: pctStr(ndq), value: pctStr(ndq), up: pct(ndq) >= 0 },
+      tnx: { price: `${(tnx.price / 10).toFixed(2)}%`, delta: `${tnxBp >= 0 ? "+" : ""}${tnxBp}bp`, value: `${(tnx.price / 10).toFixed(2)}%`, up: tnx.price >= tnx.prevClose },
+      dxy: { price: dxy.price.toFixed(1), delta: pctStr(dxy), value: dxy.price.toFixed(1), up: pct(dxy) >= 0 },
     };
     cache = { data: payload, ts: Date.now() };
     return json(200, payload);

@@ -280,6 +280,25 @@ const db = {
     if (error) throw error;
     return data;
   },
+  async loadUpkeep() {
+    const { data, error } = await supabase.from("upkeep_items")
+      .select("id,name,interval_days,last_done,notes")
+      .order("created_at", { ascending: true });
+    if (error) throw error;
+    return data || [];
+  },
+  async saveUpkeepItem(item) {
+    const user_id = await db.uid();
+    if (!user_id) throw new Error("Not signed in");
+    const row = { id: item.id, user_id, name: item.name, interval_days: item.interval_days, last_done: item.last_done || null, notes: item.notes || "", updated_at: new Date().toISOString() };
+    const { data, error } = await supabase.from("upkeep_items").upsert(row, { onConflict: "id" }).select().single();
+    if (error) throw error;
+    return data;
+  },
+  async deleteUpkeepItem(id) {
+    const { error } = await supabase.from("upkeep_items").delete().eq("id", id);
+    if (error) throw error;
+  },
   async deleteBirthday(id) {
     try { await supabase.from("personal_birthdays").delete().eq("id", id); } catch {}
   },
@@ -834,6 +853,110 @@ function StatusTag({ status }) {
   return <span style={{ fontSize: 8, fontWeight: 700, color: s.color, background: tint(s.color, 10), border: `1px solid ${tint(s.color, 25)}`, padding: "3.5px 9px", borderRadius: 10, fontFamily: mono, letterSpacing: "0.06em" }}>{s.label}</span>;
 }
 
+// ─── The Docket — the day, assembled ─────────────────────────────────────────
+// A zero-token overview above the market section: today's calendar, birthdays
+// on approach, upkeep that's come due, the next macro event, and what's queued
+// for Mini Me. Pure aggregation of data the app already owns — nothing here
+// ever spends a model call.
+function DocketCard({ isMobile, birthdays, macroEvents, settings, refreshSignal, onOpenCalendar }) {
+  const [todayEvents, setTodayEvents] = useState(null); // null = loading
+  const [upkeepDueItems, setUpkeepDueItems] = useState(null);
+  useEffect(() => {
+    let alive = true;
+    const now = new Date();
+    const sameDay = (iso) => {
+      const x = new Date(iso);
+      return x.getFullYear() === now.getFullYear() && x.getMonth() === now.getMonth() && x.getDate() === now.getDate();
+    };
+    db.loadEvents()
+      .then(evs => { if (alive) setTodayEvents((evs || []).filter(e => e.start_time && sameDay(e.start_time))); })
+      .catch(() => { if (alive) setTodayEvents([]); });
+    db.loadUpkeep()
+      .then(items => {
+        if (!alive) return;
+        setUpkeepDueItems((items || []).map(it => ({ ...it, meta: upkeepDue(it) }))
+          .filter(x => x.meta.never || x.meta.dueIn <= 3)
+          .sort((a, b) => (a.meta.never ? -9999 : a.meta.dueIn) - (b.meta.never ? -9999 : b.meta.dueIn)));
+      })
+      .catch(() => { if (alive) setUpkeepDueItems([]); }); // table missing → section just stays quiet
+    return () => { alive = false; };
+  }, [refreshSignal]);
+
+  const h = new Date().getHours();
+  const greeting = h >= 5 && h < 12 ? "Good morning" : h >= 12 && h < 17 ? "Good afternoon" : h >= 17 && h < 22 ? "Good evening" : "Burning the midnight oil";
+  const dateLabel = new Date().toLocaleDateString("en-US", { weekday: "long", month: "short", day: "numeric" }).toUpperCase();
+
+  const bdays = (birthdays || []).map(b => ({ ...b, ...nextBirthdayOccurrence(b.month, b.day) }))
+    .filter(b => b.daysUntil <= 7).sort((a, b) => a.daysUntil - b.daysUntil);
+  const nextMacro = (macroEvents || []).find(e => !e.isPast);
+  const queued = (settings?.mini_tasks || []).filter(t => t.status === "queued").length;
+  const loading = todayEvents === null || upkeepDueItems === null;
+
+  const fmtEvTime = (e) => e.all_day ? "ALL DAY" : new Date(e.start_time).toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" }).toUpperCase();
+  const bdayTag = (b) => b.daysUntil === 0 ? "TODAY" : b.daysUntil === 1 ? "TMRW" : new Date(Date.now() + b.daysUntil * 86400000).toLocaleDateString("en-US", { weekday: "short" }).toUpperCase();
+
+  // one flat, prioritized list: birthdays today → calendar → macro → upkeep → queue
+  const rows = [];
+  if (!loading) {
+    bdays.filter(b => b.daysUntil === 0).forEach(b => rows.push({ c: T.pink, tag: "TODAY", text: `${b.name}'s birthday — don't let it slide` }));
+    (todayEvents || []).forEach(e => rows.push({ c: T.brass, tag: fmtEvTime(e), text: e.title + (e.location ? ` · ${e.location}` : ""), onClick: onOpenCalendar }));
+    if (nextMacro) rows.push({ c: T.blue, tag: nextMacro.time, text: nextMacro.text });
+    (upkeepDueItems || []).forEach(it => rows.push({
+      c: it.meta.never || it.meta.dueIn <= 0 ? T.red : T.amber,
+      tag: it.meta.never ? "START" : it.meta.dueIn <= 0 ? "OVERDUE" : "DUE SOON",
+      text: it.name + (it.meta.dueIn < 0 ? ` — ${Math.abs(it.meta.dueIn)} days past due` : it.meta.dueIn > 0 ? ` — due in ${it.meta.dueIn}d` : " — due today"),
+    }));
+    bdays.filter(b => b.daysUntil > 0).forEach(b => rows.push({ c: T.pink, tag: bdayTag(b), text: `${b.name}'s birthday in ${b.daysUntil}d` }));
+    if (queued > 0) rows.push({ c: T.purple, tag: "QUEUE", text: `${queued} task${queued === 1 ? "" : "s"} waiting on Mini Me` });
+  }
+
+  const summaryBits = [];
+  if (!loading) {
+    if ((todayEvents || []).length) summaryBits.push(`${todayEvents.length} on the calendar`);
+    const od = (upkeepDueItems || []).filter(x => x.meta.never || x.meta.dueIn <= 0).length;
+    if (od) summaryBits.push(`${od} upkeep item${od === 1 ? "" : "s"} due`);
+    if (bdays.length) summaryBits.push(`${bdays.length} birthday${bdays.length === 1 ? "" : "s"} this week`);
+  }
+  const summary = loading ? "Pulling the day together…"
+    : summaryBits.length ? `${summaryBits.join(" · ")}.`
+    : "Clear slate — nothing on the books. Set the agenda yourself.";
+
+  return (
+    <div style={{
+      padding: isMobile ? "18px 17px 15px" : "22px 24px 18px",
+      background: "linear-gradient(180deg, var(--brass-a06), transparent 70%), var(--surface)",
+      border: "1px solid var(--brass-a20)", borderRadius: isMobile ? 15 : 16,
+      boxShadow: "inset 0 1px 0 var(--white-edge)",
+    }}>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 10 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+          <span style={{ width: 7, height: 7, transform: "rotate(45deg)", borderRadius: 1.5, background: T.brass, boxShadow: "0 0 8px var(--brass-a55)" }} />
+          <span style={S.title}>The Docket</span>
+        </div>
+        <span style={{ ...S.microLabel, letterSpacing: "0.1em" }}>{dateLabel}</span>
+      </div>
+      <div style={{ fontSize: isMobile ? 16.5 : 18, fontWeight: 700, fontFamily: syne, color: T.ink, marginBottom: 4 }}>{greeting}, Cameron.</div>
+      <div style={{ fontSize: 11.5, color: T.sub, lineHeight: 1.6, marginBottom: rows.length || loading ? 13 : 2 }}>{summary}</div>
+      {loading ? (
+        <div style={{ display: "flex", flexDirection: "column", gap: 7 }}>
+          <div className="sk sk-line w80" style={{ margin: 0 }} />
+          <div className="sk sk-line w60" style={{ margin: 0 }} />
+        </div>
+      ) : rows.length > 0 && (
+        <div style={{ display: "flex", flexDirection: "column", gap: 0 }}>
+          {rows.map((r, i) => (
+            <div key={i} onClick={r.onClick} style={{ display: "flex", alignItems: "baseline", gap: 11, padding: "7.5px 0", borderTop: i === 0 ? "1px solid var(--ink-a06)" : "1px solid var(--ink-a04)", cursor: r.onClick ? "pointer" : "default" }}>
+              <span style={{ width: 6, height: 6, flex: "none", transform: "rotate(45deg) translateY(-1px)", borderRadius: 1.5, background: r.c }} />
+              <span style={{ fontSize: 8.5, fontWeight: 700, color: r.c, fontFamily: mono, letterSpacing: "0.06em", flex: "none", minWidth: 52, whiteSpace: "nowrap" }}>{r.tag}</span>
+              <span style={{ fontSize: 11.5, color: T.ink, lineHeight: 1.5, flex: 1, minWidth: 0 }}>{r.text}</span>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function MorningBriefPage({ btc, isMobile, settings, updateSetting, onOpenCalendar, refreshSignal }) {
   const sportsCfg = settings?.sports || { followedTeams: [], watchLeagues: [], watchGames: [], excludedGames: [] };
   const [sportsGames, setSportsGames] = useState([]);
@@ -1015,26 +1138,36 @@ function MorningBriefPage({ btc, isMobile, settings, updateSetting, onOpenCalend
     const posInRange = (btc.price - btc.low24) / range;
     stance = up ? "CONSTRUCTIVE" : "CAUTIOUS"; stanceColor = up ? T.green : T.amber;
     const pos = posInRange > 0.7 ? "near the top of" : posInRange < 0.3 ? "near the bottom of" : "mid";
-    narrative = `24h range ${fmtK(btc.low24)}–${fmtK(btc.high24)}, currently trading ${pos === "mid" ? "in the middle of" : pos} that range and ${up ? "up" : "down"} ${Math.abs(btc.changePct || 0).toFixed(1)}% on the day. Support sits at the 24h low (${fmtK(btc.low24)}); a break below ${invalidation} would put you outside the recent range and is worth checking your Aave health factor against.`;
+    narrative = `24h range ${fmtK(btc.low24)}–${fmtK(btc.high24)}, currently trading ${pos === "mid" ? "in the middle of" : pos} that range and ${up ? "up" : "down"} ${Math.abs(btc.changePct || 0).toFixed(1)}% on the day. Support sits at the 24h low (${fmtK(btc.low24)}); a break below ${invalidation} would put price outside the recent range.`;
   }
-  // Rule-based `narrative` above shows instantly with zero latency/cost — good
-  // as a floor, but the same sentence shape every time is exactly the
-  // "stale" Cameron flagged. This upgrades it with an actual take that can
-  // reference today's broader tape (stocks, wire), not just BTC's own range.
-  // Regenerates roughly every 10 min (tied to the price poll cadence) rather
-  // than on every tick, so it's fresher without regenerating needlessly.
+  // AI take on the setup — cached in app_settings (cross-device) with a 4h
+  // TTL: it regenerates at most every ~4 hours, lazily, while the app is
+  // open — not on every open, and never on the poll cadence. Strictly market
+  // analysis: no references to personal positions or holdings.
+  const OUTLOOK_TTL = 4 * 60 * 60 * 1000;
+  const outlookAt = settings?.btc_outlook?.at || 0;
   useEffect(() => {
-    if (!hasRange) return;
-    const now = Date.now();
-    if (aiBtcNarrativeKey.current && now - aiBtcNarrativeKey.current < 10 * 60 * 1000) return;
-    aiBtcNarrativeKey.current = now;
+    if (!hasRange || settings == null) return;
+    const cached = settings.btc_outlook;
+    if (cached?.text && Date.now() - (cached.at || 0) < OUTLOOK_TTL) {
+      setAiBtcNarrative(cached.text);
+      return;
+    }
+    // stale or absent — generate once; the ref throttles retries so a failed
+    // call doesn't re-fire on every price poll
+    if (Date.now() - (aiBtcNarrativeKey.current || 0) < 10 * 60 * 1000) return;
+    aiBtcNarrativeKey.current = Date.now();
     (async () => {
-      const system = `You write one tight, genuinely informative take (2-3 sentences, no more) on Bitcoin's current setup, for a solo trader/investor who holds a leveraged WBTC position on Aave he manages carefully. Don't just restate the numbers you're given — say what they actually mean, and weave in today's broader market tape only if it's genuinely relevant (correlated risk-on/risk-off moves, a notable macro headline) — cut it if it doesn't add something real. Only bring up the Aave health-factor angle if price action genuinely warrants it — a real approach toward the invalidation level — not as a reflexive line every time. No preamble, no markdown, no hedging filler.`;
+      const system = `You write one tight, genuinely informative take (2-3 sentences, no more) on Bitcoin's current setup for a sharp market watcher. Don't just restate the numbers you're given — say what they actually mean, and weave in today's broader market tape only if it's genuinely relevant (correlated risk-on/risk-off moves, a notable macro headline) — cut it if it doesn't add something real. Market analysis only: never reference the reader's personal positions, holdings, or leverage. No preamble, no markdown, no hedging filler.`;
       const context = `Price: $${Math.round(btc.price).toLocaleString()}, ${up ? "+" : ""}${(btc.changePct || 0).toFixed(1)}% 24h. 24h range: ${fmtK(btc.low24)}\u2013${fmtK(btc.high24)}. Day target: ${dayTarget}. Support: ${support}. Invalidation: ${invalidation}.${formatSnapshotForChat()}`;
       const raw = await callClaude({ system, messages: [{ role: "user", content: context }], modelKey: "haiku", maxTokens: 130, fn: "btc_narrative" });
-      if (raw && raw.trim()) setAiBtcNarrative(raw.trim());
+      if (raw && raw.trim()) {
+        setAiBtcNarrative(raw.trim());
+        updateSetting("btc_outlook", { text: raw.trim(), at: Date.now() });
+      }
     })();
-  }, [hasRange, btc.fetchedAt]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [hasRange, settings == null, btc.fetchedAt]);
   const grid = { maxWidth: 1020, margin: "0 auto", display: "grid", gridTemplateColumns: isMobile ? "1fr" : "1fr 1fr", gap: isMobile ? 12 : 14, alignItems: "start" };
   const col = { display: "flex", flexDirection: "column", gap: isMobile ? 12 : 14 };
   const card = isMobile ? S.cardM : S.card;
@@ -1091,7 +1224,7 @@ function MorningBriefPage({ btc, isMobile, settings, updateSetting, onOpenCalend
                       {hasMore && <div style={{ fontSize: 9, color: T.brass, marginTop: 4, fontWeight: 600 }}>{btcNarrativeExpanded ? "Show less" : "Tap for more"}</div>}
                     </div>
                     <div style={{ marginTop: 9, display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-                      <span style={{ ...S.microLabel, letterSpacing: "0.04em" }}>{btc.fetchedAt ? `UPDATED ${new Date(btc.fetchedAt).toLocaleTimeString("en-US", { timeZone: "America/Chicago", hour: "numeric", minute: "2-digit" })} CT` : "UPDATING…"}</span>
+                      <span style={{ ...S.microLabel, letterSpacing: "0.04em" }}>{btc.fetchedAt ? `UPDATED ${new Date(btc.fetchedAt).toLocaleTimeString("en-US", { timeZone: "America/Chicago", hour: "numeric", minute: "2-digit" })} CT` : "UPDATING…"}{aiBtcNarrative && outlookAt && Date.now() - outlookAt > 45 * 60 * 1000 ? ` · TAKE ${Math.round((Date.now() - outlookAt) / 3600000)}H AGO` : ""}</span>
                       <span onClick={() => setBtcChartOpen(true)} style={{ ...S.microLabel, color: T.brass, flex: "none", marginLeft: 8, cursor: "pointer" }}>CHART ›</span>
                     </div>
                   </div>
@@ -1187,15 +1320,19 @@ function MorningBriefPage({ btc, isMobile, settings, updateSetting, onOpenCalend
                       <StatusTag status={stocksStatus} />
                     </div>
                     <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 7, marginBottom: 13 }}>
-                      {[["S&P FUT", stocks.spx], ["NASDAQ FUT", stocks.ndq], ["10Y YIELD", stocks.tnx], ["DXY", stocks.dxy]].map(([l, s], i) => (
-                        <div key={i} style={{ ...S.inner, padding: "10px 12px", borderRadius: 10, display: "flex", alignItems: "center", justifyContent: "space-between", gap: 6 }}>
-                          <span style={{ fontSize: 9, color: T.faint, letterSpacing: "0.06em" }}>{l}</span>
-                          <span style={{ display: "flex", alignItems: "baseline", gap: 6 }}>
-                            {s.price && s.price !== s.value && <span style={{ fontSize: 11, color: T.ink, fontFamily: mono }}>{s.price}</span>}
-                            <span style={{ fontSize: 11.5, fontWeight: 700, color: s.value === "—" ? T.faint : s.up ? T.green : T.red, fontFamily: mono }}>{s.value}</span>
-                          </span>
-                        </div>
-                      ))}
+                      {[["S&P FUT", stocks.spx], ["NASDAQ FUT", stocks.ndq], ["10Y YIELD", stocks.tnx], ["DXY", stocks.dxy]].map(([l, s], i) => {
+                        // level + day move; a stale payload without `delta` falls back to the old single-value row
+                        const lvl = s.price && s.price !== "—" ? s.price : s.value;
+                        return (
+                          <div key={i} style={{ ...S.inner, padding: "9px 12px 8px", borderRadius: 10, display: "flex", flexDirection: "column", gap: 3 }}>
+                            <span style={{ fontSize: 9, color: T.faint, letterSpacing: "0.06em" }}>{l}</span>
+                            <span style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", gap: 6 }}>
+                              <span style={{ fontSize: 13.5, fontWeight: 600, color: lvl === "—" ? T.faint : T.ink, fontFamily: mono, fontVariantNumeric: "tabular-nums" }}>{lvl}</span>
+                              {s.delta && <span style={{ fontSize: 10, fontWeight: 700, color: s.up ? T.green : T.red, fontFamily: mono }}>{s.delta}</span>}
+                            </span>
+                          </div>
+                        );
+                      })}
                     </div>
                     <div style={{ fontSize: 11.5, color: T.sub, lineHeight: 1.65 }}>{stocksOutlook}</div>
                     <div style={{ marginTop: 9, ...S.microLabel, letterSpacing: "0.04em" }}>{freshnessLabel(briefRefreshedAt)}</div>
@@ -1424,9 +1561,11 @@ function MorningBriefPage({ btc, isMobile, settings, updateSetting, onOpenCalend
           <span style={{ flex: 1, height: 1, background: "var(--ink-a10)" }} />
         </div>
       );
+      const card_docket = <DocketCard isMobile={isMobile} birthdays={birthdays} macroEvents={eventsStatus.state === "live" ? events : []} settings={settings} refreshSignal={refreshSignal} onOpenCalendar={onOpenCalendar} />;
       return isMobile ? (
       <div style={grid}>
         <div className="stagger" style={col}>
+          {card_docket}
           {sectionHeader("Market")}
           {card_bitcoin}{card_stocks}{card_watch}{card_wire}
           {sectionHeader("Ops")}
@@ -1436,6 +1575,9 @@ function MorningBriefPage({ btc, isMobile, settings, updateSetting, onOpenCalend
       </div>
       ) : (
       <div style={grid}>
+        <div className="stagger" style={{ gridColumn: "1 / -1" }}>
+          {card_docket}
+        </div>
         <div className="stagger" style={col}>
           {sectionHeader("Market")}
           {card_bitcoin}{card_stocks}{card_watch}{card_wire}
@@ -1587,8 +1729,8 @@ function nextBirthdayOccurrence(month, day, fromDate = new Date()) {
 }
 
 // ─── Page: Personal (Notes + Calendar + Birthdays) ────────────────────────────
-const PERSONAL_SUBTABS = [{ key: "notes", label: "Notes" }, { key: "calendar", label: "Calendar" }, { key: "workout", label: "Workout" }, { key: "birthdays", label: "Birthdays" }, { key: "movies", label: "Movies" }, { key: "food", label: "Food" }];
-const PERSONAL_SUBTABS_MOBILE = [{ key: "notescal", label: "Notes & Calendar" }, { key: "workout", label: "Workout" }, { key: "birthdays", label: "Birthdays" }, { key: "movies", label: "Movies" }, { key: "food", label: "Food" }];
+const PERSONAL_SUBTABS = [{ key: "notes", label: "Notes" }, { key: "calendar", label: "Calendar" }, { key: "workout", label: "Workout" }, { key: "upkeep", label: "Upkeep" }, { key: "birthdays", label: "Birthdays" }, { key: "movies", label: "Movies" }, { key: "food", label: "Food" }];
+const PERSONAL_SUBTABS_MOBILE = [{ key: "notescal", label: "Notes & Calendar" }, { key: "workout", label: "Workout" }, { key: "upkeep", label: "Upkeep" }, { key: "birthdays", label: "Birthdays" }, { key: "movies", label: "Movies" }, { key: "food", label: "Food" }];
 
 function PersonalPage({ isMobile, jumpSignal, jump, settings, updateSetting }) {
   const [sub, setSub] = useState(isMobile ? "notescal" : "notes");
@@ -1617,6 +1759,7 @@ function PersonalPage({ isMobile, jumpSignal, jump, settings, updateSetting }) {
                 </>
               )}
               {sub === "workout" && <WorkoutPanel isMobile={isMobile} supabase={supabase} settings={settings} updateSetting={updateSetting} />}
+              {sub === "upkeep" && <UpkeepPanel isMobile={isMobile} />}
               {sub === "birthdays" && <BirthdaysPanel isMobile={isMobile} />}
               {sub === "movies" && <MoviesPanel isMobile={isMobile} />}
               {sub === "food" && <FoodPanel isMobile={isMobile} settings={settings} updateSetting={updateSetting} />}
@@ -1626,6 +1769,7 @@ function PersonalPage({ isMobile, jumpSignal, jump, settings, updateSetting }) {
               {sub === "notes" && <NotesPanel isMobile={isMobile} openSignal={noteSignal} />}
               {sub === "calendar" && <CalendarPanel isMobile={isMobile} />}
               {sub === "workout" && <WorkoutPanel isMobile={isMobile} supabase={supabase} settings={settings} updateSetting={updateSetting} />}
+              {sub === "upkeep" && <UpkeepPanel isMobile={isMobile} />}
               {sub === "birthdays" && <BirthdaysPanel isMobile={isMobile} />}
               {sub === "movies" && <MoviesPanel isMobile={isMobile} />}
               {sub === "food" && <FoodPanel isMobile={isMobile} settings={settings} updateSetting={updateSetting} />}
@@ -2050,6 +2194,207 @@ function NotesPanel({ isMobile, openSignal }) {
 }
 
 const MONTH_NAMES = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+
+// ─── Upkeep — recurring maintenance with a memory ─────────────────────────────
+// Oil change, AC filter, anything on a cadence. One tap logs a completion and
+// the clock restarts. Due/overdue items also surface on the Brief's Docket.
+const UPKEEP_SETUP_SQL = `-- Board Room · Upkeep — one-time setup
+create table if not exists public.upkeep_items (
+  id uuid primary key,
+  user_id uuid not null references auth.users(id) on delete cascade,
+  name text not null,
+  interval_days integer not null default 90,
+  last_done date,
+  notes text not null default '',
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+alter table public.upkeep_items enable row level security;
+drop policy if exists "upkeep own rows" on public.upkeep_items;
+create policy "upkeep own rows" on public.upkeep_items
+  for all using (auth.uid() = user_id) with check (auth.uid() = user_id);`;
+
+const UPKEEP_INTERVALS = [
+  { key: 30, label: "Monthly" }, { key: 91, label: "3 months" },
+  { key: 182, label: "6 months" }, { key: 365, label: "Yearly" },
+  { key: "custom", label: "Custom" },
+];
+const upkeepIntervalLabel = (days) => {
+  const hit = UPKEEP_INTERVALS.find(i => i.key === days);
+  if (hit) return hit.label.toLowerCase() === "monthly" || hit.label.toLowerCase() === "yearly" ? hit.label.toLowerCase() : `every ${hit.label.toLowerCase()}`;
+  if (days % 365 === 0) return `every ${days / 365} years`;
+  if (days % 30 === 0) return `every ${days / 30} months`;
+  if (days % 7 === 0) return `every ${days / 7} weeks`;
+  return `every ${days} days`;
+};
+function upkeepDue(item, now = new Date()) {
+  if (!item.last_done) return { never: true, dueIn: 0 };
+  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  const [y, m, d] = String(item.last_done).slice(0, 10).split("-").map(Number);
+  const due = new Date(y, m - 1, d + Number(item.interval_days || 0));
+  return { never: false, dueIn: Math.round((due - today) / 86400000), due };
+}
+const upkeepDueText = (meta) =>
+  meta.never ? "NEVER LOGGED"
+  : meta.dueIn < 0 ? `OVERDUE ${Math.abs(meta.dueIn)}D`
+  : meta.dueIn === 0 ? "DUE TODAY"
+  : `DUE IN ${meta.dueIn}D`;
+const upkeepDueColor = (meta) =>
+  meta.never || meta.dueIn <= 0 ? T.red : meta.dueIn <= 14 ? T.amber : T.green;
+const isMissingTable = (e, name) => /42P01/.test(e?.code || "") || new RegExp(`relation .*${name}.* does not exist`, "i").test(e?.message || "");
+
+function UpkeepPanel({ isMobile }) {
+  const card = isMobile ? S.cardM : S.card;
+  const [rows, setRows] = useState(null); // null = loading
+  const [loadErr, setLoadErr] = useState(null);
+  const [needsSetup, setNeedsSetup] = useState(false);
+  const [copied, setCopied] = useState(false);
+  const [form, setForm] = useState(null);
+  const [saving, setSaving] = useState(false);
+  const [saveErr, setSaveErr] = useState(null);
+  const [doneFlash, setDoneFlash] = useState(null); // id that just got logged
+
+  const refresh = () => {
+    db.loadUpkeep().then(r => { setRows(r); setLoadErr(null); }).catch(e => {
+      if (isMissingTable(e, "upkeep_items")) setNeedsSetup(true);
+      else setLoadErr(e.message || "Couldn't load upkeep items.");
+    });
+  };
+  useEffect(() => { refresh(); }, []);
+
+  const openNew = () => {
+    setSaveErr(null);
+    setForm({ id: crypto.randomUUID(), name: "", interval: 182, customDays: "", last_done: new Date().toISOString().slice(0, 10), notes: "", isNew: true });
+  };
+  const openEdit = (it) => {
+    setSaveErr(null);
+    const preset = UPKEEP_INTERVALS.some(x => x.key === it.interval_days);
+    setForm({ id: it.id, name: it.name, interval: preset ? it.interval_days : "custom", customDays: preset ? "" : String(it.interval_days), last_done: it.last_done ? String(it.last_done).slice(0, 10) : "", notes: it.notes || "", isNew: false });
+  };
+  const save = () => {
+    const days = form.interval === "custom" ? parseInt(form.customDays, 10) : form.interval;
+    if (!form.name.trim()) { setSaveErr("Name the task."); return; }
+    if (!days || days < 1) { setSaveErr("Give it a real cadence."); return; }
+    setSaving(true); setSaveErr(null);
+    db.saveUpkeepItem({ id: form.id, name: form.name.trim(), interval_days: days, last_done: form.last_done || null, notes: form.notes.trim() })
+      .then(() => { setSaving(false); setForm(null); refresh(); })
+      .catch(e => { setSaving(false); setSaveErr(e.message || "Couldn't save."); });
+  };
+  const remove = () => {
+    setSaving(true);
+    db.deleteUpkeepItem(form.id).then(() => { setSaving(false); setForm(null); refresh(); })
+      .catch(e => { setSaving(false); setSaveErr(e.message || "Couldn't delete."); });
+  };
+  const markDone = (it) => {
+    const today = new Date().toISOString().slice(0, 10);
+    setRows(prev => (prev || []).map(r => r.id === it.id ? { ...r, last_done: today } : r)); // optimistic
+    setDoneFlash(it.id);
+    setTimeout(() => setDoneFlash(null), 1600);
+    db.saveUpkeepItem({ ...it, last_done: today }).catch(() => refresh());
+  };
+
+  if (needsSetup) return (
+    <div style={card}>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 10 }}>
+        <span style={S.title}>Upkeep · One-Time Setup</span>
+      </div>
+      <div style={{ fontSize: 11.5, color: T.sub, lineHeight: 1.65, marginBottom: 12 }}>
+        The upkeep table doesn't exist yet. Paste this into the Supabase SQL editor (safe to re-run), then come back — everything else is already wired.
+      </div>
+      <pre style={{ ...S.inner, margin: 0, padding: "12px 14px", fontSize: 10, fontFamily: mono, color: T.sub, lineHeight: 1.6, overflowX: "auto", whiteSpace: "pre" }}>{UPKEEP_SETUP_SQL}</pre>
+      <div style={{ display: "flex", gap: 8, marginTop: 12 }}>
+        <button onClick={() => { navigator.clipboard?.writeText(UPKEEP_SETUP_SQL).then(() => { setCopied(true); setTimeout(() => setCopied(false), 1800); }).catch(() => {}); }} style={{ ...S.brassBtn, padding: "9px 16px", fontSize: 11 }}>{copied ? "Copied ✓" : "Copy SQL"}</button>
+        <button onClick={() => { setNeedsSetup(false); setRows(null); refresh(); }} style={{ ...S.ghostBtn, padding: "9px 16px", fontSize: 11 }}>I ran it — retry</button>
+      </div>
+    </div>
+  );
+
+  const sorted = (rows || []).map(it => ({ ...it, meta: upkeepDue(it) }))
+    .sort((a, b) => (a.meta.never ? -9999 : a.meta.dueIn) - (b.meta.never ? -9999 : b.meta.dueIn));
+
+  return (
+    <div style={card}>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 4 }}>
+        <span style={S.title}>Upkeep</span>
+        {!form && <button onClick={openNew} style={{ ...S.brassBtn, padding: "7px 14px", fontSize: 10.5 }}>+ Add</button>}
+      </div>
+      <div style={{ fontSize: 10.5, color: T.faint, lineHeight: 1.5, marginBottom: 12 }}>
+        The stuff that keeps life running — oil changes, filters, renewals. Log it once, the clock does the rest. Due items surface on your Brief.
+      </div>
+
+      {form && (
+        <div style={{ ...S.inner, padding: "14px 15px", marginBottom: 12, display: "flex", flexDirection: "column", gap: 10 }}>
+          <input value={form.name} onChange={e => setForm(f => ({ ...f, name: e.target.value }))} placeholder="What needs doing? (oil change, AC filter…)" autoFocus
+            style={{ ...S.input, width: "100%", padding: "10px 12px", fontSize: 13 }} />
+          <div>
+            <div style={{ ...S.microLabel, marginBottom: 6 }}>How often</div>
+            <Chips options={UPKEEP_INTERVALS.map(i => i.key)} value={form.interval} onChange={(v) => setForm(f => ({ ...f, interval: v }))} fmt={(v) => UPKEEP_INTERVALS.find(i => i.key === v)?.label || v} />
+            {form.interval === "custom" && (
+              <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 8 }}>
+                <input value={form.customDays} onChange={e => setForm(f => ({ ...f, customDays: e.target.value.replace(/\D/g, "") }))} placeholder="days" inputMode="numeric"
+                  style={{ ...S.input, width: 90, padding: "8px 10px", fontSize: 13, fontFamily: mono }} />
+                <span style={{ fontSize: 10.5, color: T.faint }}>days between passes</span>
+              </div>
+            )}
+          </div>
+          <div>
+            <div style={{ ...S.microLabel, marginBottom: 6 }}>Last done <span style={{ textTransform: "none", letterSpacing: 0 }}>(leave empty if never)</span></div>
+            <input type="date" value={form.last_done} onChange={e => setForm(f => ({ ...f, last_done: e.target.value }))}
+              style={{ ...S.input, padding: "8px 10px", fontSize: 13, fontFamily: mono, colorScheme: "inherit" }} />
+          </div>
+          <input value={form.notes} onChange={e => setForm(f => ({ ...f, notes: e.target.value }))} placeholder="Notes — filter size, oil type, who to call…"
+            style={{ ...S.input, width: "100%", padding: "10px 12px", fontSize: 12.5 }} />
+          {saveErr && <div style={{ fontSize: 11, color: T.red }}>{saveErr}</div>}
+          <div style={{ display: "flex", gap: 8 }}>
+            <button onClick={save} disabled={saving} style={{ ...S.brassBtn, flex: 1, padding: 10, fontSize: 11.5, opacity: saving ? 0.6 : 1 }}>{saving ? "Saving…" : form.isNew ? "Add to the rotation" : "Save changes"}</button>
+            {!form.isNew && <button onClick={remove} disabled={saving} style={{ ...S.ghostBtn, padding: "10px 14px", fontSize: 11, color: T.red, borderColor: "var(--red-a32)" }}>Delete</button>}
+            <button onClick={() => setForm(null)} style={{ ...S.ghostBtn, padding: "10px 14px", fontSize: 11 }}>Cancel</button>
+          </div>
+        </div>
+      )}
+
+      {rows === null && !loadErr ? (
+        <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+          <div className="sk" style={{ height: 52, borderRadius: 10 }} />
+          <div className="sk" style={{ height: 52, borderRadius: 10 }} />
+        </div>
+      ) : loadErr ? (
+        <div style={{ ...S.inner, display: "flex", alignItems: "center", gap: 11, padding: "11px 13px" }}>
+          <span style={{ width: 7, height: 7, borderRadius: "50%", background: T.red, flex: "none" }} />
+          <span style={{ fontSize: 10.5, color: T.faint, flex: 1 }}>{loadErr}</span>
+          <button onClick={() => { setLoadErr(null); setRows(null); refresh(); }} style={{ ...S.ghostBtn, flex: "none", padding: "5px 10px", fontSize: 9.5, borderRadius: 7 }}>Retry</button>
+        </div>
+      ) : sorted.length === 0 && !form ? (
+        <div style={{ ...S.inner, padding: "22px 16px", textAlign: "center" }}>
+          <div style={{ fontSize: 12.5, fontWeight: 700, fontFamily: syne, marginBottom: 5 }}>Nothing in the rotation yet</div>
+          <div style={{ fontSize: 11, color: T.faint, lineHeight: 1.6, marginBottom: 12 }}>Oil change, apartment AC filter, toothbrush heads — add the things you always remember two weeks late.</div>
+          <button onClick={openNew} style={{ ...S.brassBtn, padding: "9px 18px", fontSize: 11 }}>Add the first one</button>
+        </div>
+      ) : (
+        <div style={{ display: "flex", flexDirection: "column", gap: 7 }}>
+          {sorted.map(it => {
+            const c = upkeepDueColor(it.meta);
+            const lastLabel = it.last_done ? new Date(it.last_done + "T00:00:00").toLocaleDateString("en-US", { month: "short", day: "numeric" }) : "never";
+            return (
+              <div key={it.id} style={{ ...S.inner, padding: "11px 13px", display: "flex", alignItems: "center", gap: 11 }}>
+                <span style={{ width: 7, height: 7, flex: "none", transform: "rotate(45deg)", borderRadius: 1.5, background: c, boxShadow: `0 0 8px ${tint(c, 45)}` }} />
+                <span onClick={() => openEdit(it)} style={{ flex: 1, minWidth: 0, cursor: "pointer" }}>
+                  <span style={{ display: "block", fontSize: 12.5, fontWeight: 600, color: T.ink, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{it.name}</span>
+                  <span style={{ display: "block", fontSize: 9.5, color: T.faint, marginTop: 2 }}>{upkeepIntervalLabel(it.interval_days)} · last {lastLabel}{it.notes ? ` · ${it.notes}` : ""}</span>
+                </span>
+                <span style={{ fontSize: 9, fontWeight: 700, color: c, fontFamily: mono, letterSpacing: "0.05em", flex: "none" }}>{upkeepDueText(it.meta)}</span>
+                <button onClick={() => markDone(it)} title="Log it done today"
+                  style={{ ...(doneFlash === it.id ? { background: T.green, color: "var(--chip-ink)", border: "none" } : S.ghostBtn), flex: "none", padding: "7px 11px", fontSize: 10, borderRadius: 8, fontWeight: 700 }}>
+                  {doneFlash === it.id ? "Logged ✓" : "Done"}
+                </button>
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
 
 function BirthdaysPanel({ isMobile }) {
   const card = isMobile ? S.cardM : S.card;
@@ -3443,6 +3788,7 @@ const SUMMON_PLACES = [
   { label: "Notes", page: "personal", sub: "notes", hint: "personal" },
   { label: "Calendar", page: "personal", sub: "calendar", hint: "personal" },
   { label: "Workout", page: "personal", sub: "workout", hint: "training" },
+  { label: "Upkeep", page: "personal", sub: "upkeep", hint: "oil · filters · renewals" },
   { label: "Birthdays", page: "personal", sub: "birthdays", hint: "personal" },
   { label: "Movies", page: "personal", sub: "movies", hint: "watchlist" },
   { label: "Food", page: "personal", sub: "food", hint: "meals" },
@@ -4892,7 +5238,9 @@ export default function App() {
   if (isMobile) {
     const activeIdx = Math.max(0, NAV.findIndex(n => n.key === page));
     return (
-      <div style={{ height: "100dvh", display: "flex", flexDirection: "column", color: T.ink, position: "relative", overflow: "hidden" }}>
+      // position:fixed inset:0 — not 100dvh, which under-measures in iOS
+      // standalone mode and left a dead band under the dock.
+      <div style={{ position: "fixed", inset: 0, display: "flex", flexDirection: "column", color: T.ink, overflow: "hidden" }}>
         <div className="shell-header">
           <div style={{ display: "flex", alignItems: "center", gap: 9, minWidth: 0 }}>
             <span style={{ width: 13, height: 13, transform: "rotate(45deg)", borderRadius: 2.5, background: T.brass, flex: "none" }} />
@@ -4906,7 +5254,7 @@ export default function App() {
         </div>
 
         <div id="page-scroll" style={{ flex: 1, minHeight: 0, overflowY: "auto", display: "flex", flexDirection: "column" }}>
-          <div key={page} className="pagefade" style={{ display: "flex", flexDirection: "column", flex: 1, paddingBottom: "calc(86px + env(safe-area-inset-bottom))" }}>
+          <div key={page} className="pagefade" style={{ display: "flex", flexDirection: "column", flex: 1, paddingBottom: "calc(74px + env(safe-area-inset-bottom))" }}>
             {renderPage(page)}
           </div>
         </div>

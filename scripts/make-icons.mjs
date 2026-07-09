@@ -56,8 +56,8 @@ function writePng(path, size, rgba) {
 // ── scene ────────────────────────────────────────────────────────────────────
 const hex = (h) => [parseInt(h.slice(1, 3), 16), parseInt(h.slice(3, 5), 16), parseInt(h.slice(5, 7), 16)];
 const mix = (a, b, t) => a.map((v, i) => v + (b[i] - v) * t);
-const OBSIDIAN_TOP = hex("#221C11");
-const OBSIDIAN_BOT = hex("#0F0C07");
+const OBSIDIAN_TOP = hex("#211E19");
+const OBSIDIAN_BOT = hex("#0B0A09");
 const BRASS_HI = hex("#EED9A0");
 const BRASS_LO = hex("#A8842F");
 const GLOW = hex("#D2AC58");
