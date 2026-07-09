@@ -1032,7 +1032,135 @@ function DocketCard({ isMobile, birthdays, macroEvents, settings, refreshSignal,
   );
 }
 
-function MorningBriefPage({ btc, isMobile, settings, updateSetting, onOpenCalendar, refreshSignal }) {
+// ─── Notes tile — the Docket's quiet companion on the Brief ──────────────────
+// Same personal_notes table the Notes tab owns: scroll recent notes, capture
+// a thought inline, tap any note to edit it in place, or jump to the full tab.
+function NotesTile({ isMobile, refreshSignal, onOpenNotes }) {
+  const [notes, setNotes] = useState(null); // null = loading
+  const [err, setErr] = useState(null);
+  const [quick, setQuick] = useState("");
+  const [savingQuick, setSavingQuick] = useState(false);
+  const [editing, setEditing] = useState(null); // { id, title, body }
+  const [savingEdit, setSavingEdit] = useState(false);
+
+  const refresh = () => {
+    db.loadNotes().then(({ rows }) => { setNotes(rows); setErr(null); })
+      .catch(e => setErr(e.message || "Couldn't load notes."));
+  };
+  useEffect(() => { refresh(); }, [refreshSignal]);
+
+  const sorted = (notes || []).slice().sort((a, b) =>
+    (b.pinned === true) - (a.pinned === true) || new Date(b.updated_at) - new Date(a.updated_at));
+
+  const addQuick = async () => {
+    const text = quick.trim();
+    if (!text || savingQuick) return;
+    setSavingQuick(true);
+    try {
+      const saved = await db.saveNote({ id: crypto.randomUUID(), title: "", body: text });
+      setQuick("");
+      setNotes(prev => [saved, ...(prev || [])]);
+    } catch (e) { setErr(e.message || "Couldn't save that."); }
+    setSavingQuick(false);
+  };
+  const saveEdit = async () => {
+    if (savingEdit || !editing) return;
+    setSavingEdit(true);
+    try {
+      const saved = await db.saveNote({ id: editing.id, title: editing.title, body: editing.body });
+      setNotes(prev => (prev || []).map(n => (n.id === saved.id ? saved : n)));
+      setEditing(null);
+    } catch (e) { setErr(e.message || "Couldn't save that."); }
+    setSavingEdit(false);
+  };
+
+  const relTime = (iso) => {
+    const m = Math.round((Date.now() - new Date(iso).getTime()) / 60000);
+    if (m < 1) return "now";
+    if (m < 60) return `${m}m`;
+    if (m < 60 * 24) return `${Math.round(m / 60)}h`;
+    if (m < 60 * 24 * 7) return `${Math.round(m / 1440)}d`;
+    return new Date(iso).toLocaleDateString("en-US", { month: "short", day: "numeric" });
+  };
+  const headline = (n) => (n.title || "").trim() || (n.body || "").trim().split("\n")[0] || "Untitled";
+  const snippet = (n) => {
+    const body = (n.body || "").trim();
+    if (!(n.title || "").trim()) return body.split("\n").slice(1).join(" ");
+    return body.split("\n")[0];
+  };
+
+  return (
+    <div style={{
+      ...(isMobile ? S.cardM : S.card), display: "flex", flexDirection: "column",
+      height: isMobile ? undefined : "100%", minHeight: 0,
+    }}>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 10 }}>
+        <span style={S.title}>Notes</span>
+        <span onClick={() => onOpenNotes?.()} style={{ ...S.microLabel, color: T.brass, cursor: "pointer" }}>ALL ›</span>
+      </div>
+
+      {/* quick capture — one line, Enter files it */}
+      <div style={{ display: "flex", gap: 7, marginBottom: 10 }}>
+        <input value={quick} onChange={e => setQuick(e.target.value)} onKeyDown={e => { if (e.key === "Enter") addQuick(); }}
+          placeholder="Capture a thought…"
+          style={{ ...S.input, flex: 1, minWidth: 0, padding: "9px 12px", fontSize: 12.5 }} />
+        <button onClick={addQuick} disabled={!quick.trim() || savingQuick} aria-label="Save note"
+          style={{ ...(quick.trim() ? S.brassBtn : { ...S.ghostBtn, color: T.faint }), flex: "none", width: 38, padding: 0, fontSize: 15, borderRadius: 9, opacity: savingQuick ? 0.6 : 1 }}>
+          {savingQuick ? "…" : "◆"}
+        </button>
+      </div>
+
+      <div style={{ flex: isMobile ? undefined : 1, minHeight: 0, maxHeight: isMobile ? 264 : undefined, overflowY: "auto", display: "flex", flexDirection: "column" }}>
+        {notes === null && !err ? (
+          <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+            <div className="sk" style={{ height: 40, borderRadius: 9 }} />
+            <div className="sk" style={{ height: 40, borderRadius: 9 }} />
+            <div className="sk" style={{ height: 40, borderRadius: 9 }} />
+          </div>
+        ) : err ? (
+          <div style={{ ...S.inner, display: "flex", alignItems: "center", gap: 11, padding: "11px 13px" }}>
+            <span style={{ width: 7, height: 7, borderRadius: "50%", background: T.red, flex: "none" }} />
+            <span style={{ fontSize: 10.5, color: T.faint, flex: 1 }}>{err}</span>
+            <button onClick={() => { setErr(null); setNotes(null); refresh(); }} style={{ ...S.ghostBtn, flex: "none", padding: "5px 10px", fontSize: 9.5, borderRadius: 7 }}>Retry</button>
+          </div>
+        ) : sorted.length === 0 ? (
+          <div style={{ padding: "18px 6px", textAlign: "center" }}>
+            <div style={{ fontSize: 12, fontWeight: 700, fontFamily: syne, marginBottom: 4 }}>A blank ledger</div>
+            <div style={{ fontSize: 10.5, color: T.faint, lineHeight: 1.6 }}>Whatever's circling your head — file it above and clear the desk.</div>
+          </div>
+        ) : (
+          sorted.map((n, i) => editing?.id === n.id ? (
+            <div key={n.id} style={{ ...S.inner, padding: "12px 13px", margin: "4px 0", display: "flex", flexDirection: "column", gap: 8 }}>
+              <input value={editing.title} onChange={e => setEditing(ed => ({ ...ed, title: e.target.value }))} placeholder="Title (optional)"
+                style={{ ...S.input, width: "100%", padding: "8px 11px", fontSize: 12.5, fontWeight: 600 }} />
+              <textarea value={editing.body} onChange={e => setEditing(ed => ({ ...ed, body: e.target.value }))} autoFocus rows={4}
+                style={{ ...S.input, width: "100%", padding: "9px 11px", fontSize: 12.5, lineHeight: 1.6, resize: "vertical", fontFamily: "inherit" }} />
+              <div style={{ display: "flex", gap: 7 }}>
+                <button onClick={saveEdit} disabled={savingEdit} style={{ ...S.brassBtn, flex: 1, padding: "9px 0", fontSize: 11, opacity: savingEdit ? 0.6 : 1 }}>{savingEdit ? "Saving…" : "Save"}</button>
+                <button onClick={() => setEditing(null)} style={{ ...S.ghostBtn, padding: "9px 13px", fontSize: 10.5 }}>Cancel</button>
+                <button onClick={() => onOpenNotes?.(n.id)} style={{ ...S.ghostBtn, padding: "9px 13px", fontSize: 10.5, color: T.brass, borderColor: "var(--brass-a32)" }}>Open ›</button>
+              </div>
+            </div>
+          ) : (
+            <div key={n.id} onClick={() => setEditing({ id: n.id, title: n.title || "", body: n.body || "" })}
+              className="press"
+              style={{ display: "flex", alignItems: "baseline", gap: 10, padding: "9px 2px", borderTop: i === 0 ? "none" : "1px solid var(--ink-a04)", cursor: "pointer" }}>
+              <span style={{ width: 6, height: 6, flex: "none", transform: "rotate(45deg) translateY(-1px)", borderRadius: 1.5, background: sealColor(n.color) || "var(--ink-a18)" }} />
+              <span style={{ flex: 1, minWidth: 0 }}>
+                <span style={{ display: "block", fontSize: 12, fontWeight: 600, color: T.ink, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{headline(n)}</span>
+                {snippet(n) && <span style={{ display: "block", fontSize: 10, color: T.faint, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", marginTop: 1 }}>{snippet(n)}</span>}
+              </span>
+              {n.pinned && <span style={{ fontSize: 8, color: T.brass, flex: "none" }} title="Pinned">◆</span>}
+              <span style={{ fontSize: 9, color: T.faint, fontFamily: mono, flex: "none" }}>{relTime(n.updated_at)}</span>
+            </div>
+          ))
+        )}
+      </div>
+    </div>
+  );
+}
+
+function MorningBriefPage({ btc, isMobile, settings, updateSetting, onOpenCalendar, onOpenNotes, refreshSignal }) {
   const sportsCfg = settings?.sports || { followedTeams: [], watchLeagues: [], watchGames: [], excludedGames: [] };
   const [sportsGames, setSportsGames] = useState([]);
   const [sportsStatus, setSportsStatus] = useState({ state: "loading" });
@@ -1637,10 +1765,12 @@ function MorningBriefPage({ btc, isMobile, settings, updateSetting, onOpenCalend
         </div>
       );
       const card_docket = <DocketCard isMobile={isMobile} birthdays={birthdays} macroEvents={eventsStatus.state === "live" ? events : []} settings={settings} refreshSignal={refreshSignal} onOpenCalendar={onOpenCalendar} />;
+      const card_notes = <NotesTile isMobile={isMobile} refreshSignal={refreshSignal} onOpenNotes={onOpenNotes} />;
       return isMobile ? (
       <div style={grid}>
         <div className="stagger" style={col}>
           {card_docket}
+          {card_notes}
           {sectionHeader("Market")}
           {card_bitcoin}{card_stocks}{card_watch}{card_wire}
           {sectionHeader("Ops")}
@@ -1650,8 +1780,10 @@ function MorningBriefPage({ btc, isMobile, settings, updateSetting, onOpenCalend
       </div>
       ) : (
       <div style={grid}>
-        <div className="stagger" style={{ gridColumn: "1 / -1" }}>
+        {/* the top section: Docket and Notes as two equal plates */}
+        <div className="stagger" style={{ gridColumn: "1 / -1", display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14, alignItems: "stretch" }}>
           {card_docket}
+          {card_notes}
         </div>
         <div className="stagger" style={col}>
           {sectionHeader("Market")}
@@ -5306,7 +5438,7 @@ export default function App() {
 
   const renderPage = (key) => {
     switch (key) {
-      case "brief": return <MorningBriefPage btc={btc} isMobile={isMobile} settings={settings} updateSetting={updateSetting} onOpenCalendar={goToCalendar} refreshSignal={briefRefreshSignal} />;
+      case "brief": return <MorningBriefPage btc={btc} isMobile={isMobile} settings={settings} updateSetting={updateSetting} onOpenCalendar={goToCalendar} onOpenNotes={(noteId) => summonGo({ page: "personal", sub: "notes", noteId })} refreshSignal={briefRefreshSignal} />;
       case "boardroom": return <BoardRoomPage messages={messages} thinking={thinking} loadingData={loadingData} input={input} setInput={setInput} onSend={send} onClearChat={clearChat} endRef={endRef} seatNotes={seatNotes} onEditSeat={setEditSeat} settings={settings} updateSetting={updateSetting} session={session} onWorkerRun={refreshData} onSkillsChanged={refreshSkills} jump={jump} isMobile={isMobile} />;
       case "personal": return <PersonalPage isMobile={isMobile} jumpSignal={personalJumpTo} jump={jump} settings={settings} updateSetting={updateSetting} />;
       case "assets": return <PropertiesPage isMobile={isMobile} settings={settings} updateSetting={updateSetting} session={session} />;
