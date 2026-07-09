@@ -499,21 +499,37 @@ function useThemeController() {
 const IS_STANDALONE = typeof window !== "undefined" &&
   (window.matchMedia?.("(display-mode: standalone)")?.matches || window.navigator.standalone === true);
 
+// Measured env(safe-area-inset-top): >0 means the window sits UNDER the
+// status bar (top-anchored). The broken letterboxed window has envTop 59;
+// a healthy below-status-bar window has envTop 0 — the discriminator for
+// whether the reported bottom inset corresponds to paintable space.
+function measureEnvTop() {
+  const el = document.createElement("div");
+  el.style.cssText = "position:fixed;left:-9999px;top:0;width:1px;height:env(safe-area-inset-top);";
+  document.body.appendChild(el);
+  const h = el.getBoundingClientRect().height;
+  el.remove();
+  return Math.round(h);
+}
+
 function useVisualViewport() {
-  const get = () => (typeof window !== "undefined" && window.visualViewport ? Math.round(window.visualViewport.height) : null);
-  const [vvh, setVvh] = useState(get);
+  const get = () => ({
+    vvh: typeof window !== "undefined" && window.visualViewport ? Math.round(window.visualViewport.height) : null,
+    envTop: typeof document !== "undefined" && document.body ? measureEnvTop() : 0,
+  });
+  const [vp, setVp] = useState(get);
   useEffect(() => {
     const vv = window.visualViewport;
     if (!vv) return;
     let raf = 0;
-    const on = () => { cancelAnimationFrame(raf); raf = requestAnimationFrame(() => setVvh(Math.round(vv.height))); };
+    const on = () => { cancelAnimationFrame(raf); raf = requestAnimationFrame(() => setVp(get())); };
     on();
     vv.addEventListener("resize", on);
     vv.addEventListener("scroll", on);
     window.addEventListener("orientationchange", on);
     return () => { cancelAnimationFrame(raf); vv.removeEventListener("resize", on); vv.removeEventListener("scroll", on); window.removeEventListener("orientationchange", on); };
   }, []);
-  return vvh;
+  return vp;
 }
 
 // Tap the page title 5 times to open this — every number the device is
@@ -5213,7 +5229,7 @@ const NAV_ICONS = {
 export default function App() {
   const theme = useThemeController();
   const isMobile = useIsMobile();
-  const vvh = useVisualViewport();
+  const { vvh, envTop } = useVisualViewport();
   const diagTaps = useRef({ n: 0, t: 0 });
   const [diagOpen, setDiagOpen] = useState(false);
   const btc = useBitcoinPrice();
@@ -5481,11 +5497,13 @@ export default function App() {
     // canvas): 100vh/100lvh report the full screen, but iOS standalone clips
     // everything below vvh — content sized past it gets cut, never shown.
     const shellHeight = vvh == null ? "100%" : `${vvh}px`;
-    // Letterboxed standalone window (renderable height falls short of the
-    // screen): the OS strip already clears the home indicator, so the
-    // env(safe-area-inset-bottom) it still reports is dead space — collapse
-    // the tab bar to its tight browser-mode geometry instead.
-    const letterboxed = IS_STANDALONE && vvh != null && window.screen?.height ? window.screen.height - vvh >= 20 : false;
+    // Letterboxed standalone window: renderable height falls short of the
+    // screen WHILE the window is top-anchored under the status bar
+    // (envTop > 0). There the OS strip already clears the home indicator and
+    // the reported env(bottom) is dead space — collapse the tab bar to its
+    // tight browser-mode geometry. A healthy below-status-bar window
+    // (envTop 0) keeps the native inset even though vvh < screen.height.
+    const letterboxed = IS_STANDALONE && vvh != null && window.screen?.height ? (window.screen.height - vvh >= 20 && envTop > 0) : false;
     return (
       <div className={letterboxed ? "lbx" : undefined} style={{ position: "fixed", top: 0, left: 0, right: 0, height: shellHeight, display: "flex", flexDirection: "column", color: T.ink, overflow: "hidden" }}>
         <div className="shell-header">
