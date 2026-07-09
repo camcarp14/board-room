@@ -498,7 +498,6 @@ function useThemeController() {
 // diagnostics overlay so any remaining device quirk shows its numbers.
 const IS_STANDALONE = typeof window !== "undefined" &&
   (window.matchMedia?.("(display-mode: standalone)")?.matches || window.navigator.standalone === true);
-const SUPPORTS_LVH = typeof CSS !== "undefined" && !!CSS.supports?.("height", "100lvh");
 
 function useVisualViewport() {
   const get = () => (typeof window !== "undefined" && window.visualViewport ? Math.round(window.visualViewport.height) : null);
@@ -5477,12 +5476,11 @@ export default function App() {
     // When the keyboard eats most of the viewport, slide the dock away
     // instead of letting it hover mid-screen.
     const keyboardOpen = vvh != null && window.screen?.height ? vvh < window.screen.height * 0.72 : false;
-    // Installed app: trust whichever is tallest — 100lvh (full screen incl.
-    // safe areas; no dynamic chrome exists in standalone) or visualViewport.
-    // In a browser tab lvh overshoots the visible area, so vvh only there.
-    const shellHeight = vvh == null ? "100%"
-      : IS_STANDALONE && SUPPORTS_LVH ? `max(100lvh, ${vvh}px)`
-      : `${vvh}px`;
+    // visualViewport is the ONLY height this window can actually render.
+    // Field-proven on device (day-theme letterbox showed WHITE under a beige
+    // canvas): 100vh/100lvh report the full screen, but iOS standalone clips
+    // everything below vvh — content sized past it gets cut, never shown.
+    const shellHeight = vvh == null ? "100%" : `${vvh}px`;
     return (
       <div style={{ position: "fixed", top: 0, left: 0, right: 0, height: shellHeight, display: "flex", flexDirection: "column", color: T.ink, overflow: "hidden" }}>
         <div className="shell-header">
