@@ -200,6 +200,10 @@ textarea:focus, input:focus { outline: none; }
 /* numbers behave like instruments — nothing jiggles on update */
 .mono, .num, table td, kbd { font-variant-numeric: tabular-nums; }
 
+/* one long unbreakable line (a URL in a note) must never stretch the page —
+   grids also use minmax(0,1fr) tracks, this is the last line of defense */
+#page-scroll { overflow-x: hidden; }
+
 /* theme cross-fade happens via a one-shot veil overlay (see applyTheme in
    theme.js) — never via per-element color transitions (see note above). */
 

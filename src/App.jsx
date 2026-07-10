@@ -1061,6 +1061,39 @@ function DocketCard({ isMobile, birthdays, macroEvents, settings, refreshSignal,
   );
 }
 
+// ─── Plain-text list ergonomics for note bodies ──────────────────────────────
+// "- " starts a bullet line. Enter continues the list on the next line;
+// Enter on an empty "- " ends it. apply(next, caret) sets state and restores
+// the caret once React has re-rendered the textarea.
+function continueListOnEnter(e, value, apply) {
+  if (e.key !== "Enter" || e.shiftKey || e.metaKey || e.ctrlKey) return false;
+  const ta = e.target;
+  const s = ta.selectionStart, en = ta.selectionEnd;
+  if (s == null || s !== en) return false;
+  const lineStart = value.lastIndexOf("\n", s - 1) + 1;
+  const m = value.slice(lineStart, s).match(/^(\s*)- (.*)$/);
+  if (!m) return false;
+  e.preventDefault();
+  if (!m[2].trim()) {
+    apply(value.slice(0, lineStart) + value.slice(s), lineStart);
+  } else {
+    const ins = "\n" + m[1] + "- ";
+    apply(value.slice(0, s) + ins + value.slice(en), s + ins.length);
+  }
+  return true;
+}
+// The "• list" button: toggle a "- " bullet on the caret's line.
+function toggleBulletAtCaret(ta, value, apply) {
+  const s = ta && ta.selectionStart != null ? ta.selectionStart : value.length;
+  const lineStart = value.lastIndexOf("\n", s - 1) + 1;
+  const rest = value.slice(lineStart);
+  if (/^\s*- /.test(rest)) {
+    apply(value.slice(0, lineStart) + rest.replace(/^(\s*)- /, "$1"), Math.max(lineStart, s - 2));
+  } else {
+    apply(value.slice(0, lineStart) + "- " + value.slice(lineStart), s + 2);
+  }
+}
+
 // ─── Notes tile — the Docket's quiet companion on the Brief ──────────────────
 // Same personal_notes table the Notes tab owns: scroll recent notes, capture
 // a thought inline, tap any note to edit it in place, or jump to the full tab.
@@ -1071,6 +1104,11 @@ function NotesTile({ isMobile, refreshSignal, onOpenNotes }) {
   const [savingQuick, setSavingQuick] = useState(false);
   const [editing, setEditing] = useState(null); // { id, title, body }
   const [savingEdit, setSavingEdit] = useState(false);
+  const editBodyRef = useRef(null);
+  const applyEditBody = (next, caret) => {
+    setEditing(ed => ({ ...ed, body: next }));
+    requestAnimationFrame(() => { try { editBodyRef.current?.setSelectionRange(caret, caret); } catch {} });
+  };
 
   const refresh = () => {
     db.loadNotes().then(({ rows }) => { setNotes(rows); setErr(null); })
@@ -1121,7 +1159,7 @@ function NotesTile({ isMobile, refreshSignal, onOpenNotes }) {
   return (
     <div style={{
       ...(isMobile ? S.cardM : S.card), display: "flex", flexDirection: "column",
-      height: isMobile ? undefined : "100%", minHeight: 0,
+      height: isMobile ? undefined : "100%", minHeight: 0, minWidth: 0, overflow: "hidden",
     }}>
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 10 }}>
         <span style={S.title}>Notes</span>
@@ -1162,9 +1200,12 @@ function NotesTile({ isMobile, refreshSignal, onOpenNotes }) {
             <div key={n.id} style={{ ...S.inner, padding: "12px 13px", margin: "4px 0", display: "flex", flexDirection: "column", gap: 8 }}>
               <input value={editing.title} onChange={e => setEditing(ed => ({ ...ed, title: e.target.value }))} placeholder="Title (optional)"
                 style={{ ...S.input, width: "100%", padding: "8px 11px", fontSize: 12.5, fontWeight: 600 }} />
-              <textarea value={editing.body} onChange={e => setEditing(ed => ({ ...ed, body: e.target.value }))} autoFocus rows={4}
+              <textarea ref={editBodyRef} value={editing.body} onChange={e => setEditing(ed => ({ ...ed, body: e.target.value }))} autoFocus rows={4}
+                onKeyDown={e => continueListOnEnter(e, editing.body, applyEditBody)}
                 style={{ ...S.input, width: "100%", padding: "9px 11px", fontSize: 12.5, lineHeight: 1.6, resize: "vertical", fontFamily: "inherit" }} />
               <div style={{ display: "flex", gap: 7 }}>
+                <button onClick={() => { toggleBulletAtCaret(editBodyRef.current, editing.body, applyEditBody); editBodyRef.current?.focus(); }} title="Bullet list"
+                  style={{ ...S.ghostBtn, flex: "none", padding: "9px 12px", fontSize: 11 }}>• list</button>
                 <button onClick={saveEdit} disabled={savingEdit} style={{ ...S.brassBtn, flex: 1, padding: "9px 0", fontSize: 11, opacity: savingEdit ? 0.6 : 1 }}>{savingEdit ? "Saving…" : "Save"}</button>
                 <button onClick={() => setEditing(null)} style={{ ...S.ghostBtn, padding: "9px 13px", fontSize: 10.5 }}>Cancel</button>
                 <button onClick={() => onOpenNotes?.(n.id)} style={{ ...S.ghostBtn, padding: "9px 13px", fontSize: 10.5, color: T.brass, borderColor: "var(--brass-a32)" }}>Open ›</button>
@@ -1400,8 +1441,10 @@ function MorningBriefPage({ btc, isMobile, settings, updateSetting, onOpenCalend
     })();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [hasRange, settings == null, btc.fetchedAt]);
-  const grid = { maxWidth: 1020, margin: "0 auto", display: "grid", gridTemplateColumns: isMobile ? "1fr" : "1fr 1fr", gap: isMobile ? 12 : 14, alignItems: "start" };
-  const col = { display: "flex", flexDirection: "column", gap: isMobile ? 12 : 14 };
+  // minmax(0,1fr) + minWidth 0: a plain 1fr track grows to fit an unbreakable
+  // line (a URL in a note), stretching the whole page sideways on mobile.
+  const grid = { maxWidth: 1020, width: "100%", margin: "0 auto", display: "grid", gridTemplateColumns: isMobile ? "minmax(0, 1fr)" : "minmax(0, 1fr) minmax(0, 1fr)", gap: isMobile ? 12 : 14, alignItems: "start" };
+  const col = { display: "flex", flexDirection: "column", gap: isMobile ? 12 : 14, minWidth: 0 };
   const card = isMobile ? S.cardM : S.card;
   const FeedFallbackRow = ({ status }) => status.state === "loading" ? (
     // skeleton matches the row it resolves into — pages develop, not arrive
@@ -1810,7 +1853,7 @@ function MorningBriefPage({ btc, isMobile, settings, updateSetting, onOpenCalend
       ) : (
       <div style={grid}>
         {/* the top section: Docket and Notes as two equal plates */}
-        <div className="stagger" style={{ gridColumn: "1 / -1", display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14, alignItems: "stretch" }}>
+        <div className="stagger" style={{ gridColumn: "1 / -1", display: "grid", gridTemplateColumns: "minmax(0, 1fr) minmax(0, 1fr)", gap: 14, alignItems: "stretch" }}>
           {card_docket}
           {card_notes}
         </div>
@@ -2050,6 +2093,11 @@ function NotesPanel({ isMobile, openSignal }) {
   const saveTimer = useRef(null);
   const undoTimer = useRef(null);
   const skipNextAutosave = useRef(false);
+  const editorBodyRef = useRef(null);
+  const applyEditorBody = (next, caret) => {
+    setDraft(d => ({ ...d, body: next }));
+    requestAnimationFrame(() => { try { editorBodyRef.current?.setSelectionRange(caret, caret); } catch {} });
+  };
   const quickRef = useRef(null);
 
   const refresh = () => {
@@ -2252,6 +2300,8 @@ function NotesPanel({ isMobile, openSignal }) {
               <span style={{ width: 1, height: 14, background: T.line }} />
             </>
           )}
+          <button onClick={() => { toggleBulletAtCaret(editorBodyRef.current, draft.body, applyEditorBody); editorBodyRef.current?.focus(); }} title="Bullet list — or just start a line with “- ”"
+            style={{ background: "none", border: "none", cursor: "pointer", padding: 2, fontSize: 10, fontFamily: mono, color: T.faint, letterSpacing: "0.08em" }}>• LIST</button>
           <button onClick={() => { navigator.clipboard?.writeText(draft.title.trim() ? `${draft.title.trim()}\n\n${draft.body}` : draft.body); setCopied(true); setTimeout(() => setCopied(false), 1800); }}
             style={{ background: "none", border: "none", cursor: "pointer", padding: 2, fontSize: 10, fontFamily: mono, color: copied ? T.green : T.faint, letterSpacing: "0.08em" }}>{copied ? "COPIED ✓" : "COPY"}</button>
           <button onClick={() => deleteOne(activeNote || { id: activeId, title: draft.title, body: draft.body })}
@@ -2269,9 +2319,11 @@ function NotesPanel({ isMobile, openSignal }) {
           style={{ ...S.input, width: "100%", boxSizing: "border-box", padding: "10px 12px", fontSize: 15, fontWeight: 700, fontFamily: syne, marginBottom: 8, borderLeft: draft.color ? `3px solid ${sealColor(draft.color)}` : undefined }}
         />
         <textarea
+          ref={editorBodyRef}
           value={draft.body}
           onChange={e => setDraft(d => ({ ...d, body: e.target.value }))}
-          placeholder="Start typing — this saves automatically."
+          onKeyDown={e => continueListOnEnter(e, draft.body, applyEditorBody)}
+          placeholder="Start typing — this saves automatically. Start a line with “- ” for a list."
           rows={isMobile ? 14 : 18}
           autoFocus
           style={{ ...S.input, width: "100%", boxSizing: "border-box", padding: "10px 12px", fontSize: 13.5, lineHeight: 1.6, resize: "vertical" }}
@@ -5406,6 +5458,27 @@ export default function App() {
       document.removeEventListener("pointerup", onUp);
       document.removeEventListener("pointercancel", onCancel);
     };
+  }, [isMobile]);
+
+  // Keyboard focus correction (mobile): iOS auto-scrolls the focused field
+  // into view at the same moment the keyboard shrinks the shell — the two
+  // fight and the page lands in a weird spot. Once both settle, re-center
+  // the field ourselves.
+  useEffect(() => {
+    if (!isMobile) return;
+    let t = 0;
+    const onFocusIn = (e) => {
+      const el = e.target;
+      if (!el || (el.tagName !== "INPUT" && el.tagName !== "TEXTAREA")) return;
+      const root = document.getElementById("page-scroll");
+      if (!root || !root.contains(el)) return;
+      window.clearTimeout(t);
+      t = window.setTimeout(() => {
+        if (document.activeElement === el) el.scrollIntoView({ block: "center", behavior: "smooth" });
+      }, 400);
+    };
+    document.addEventListener("focusin", onFocusIn);
+    return () => { window.clearTimeout(t); document.removeEventListener("focusin", onFocusIn); };
   }, [isMobile]);
   const [personalJumpTo, setPersonalJumpTo] = useState(null); // tells PersonalPage which sub-tab to open on arrival
 
