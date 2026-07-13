@@ -1170,9 +1170,12 @@ function NotesTile({ isMobile, refreshSignal, onOpenNotes }) {
   };
   const headline = (n) => (n.title || "").trim() || (n.body || "").trim().split("\n")[0] || "Untitled";
   const snippet = (n) => {
-    const body = (n.body || "").trim();
-    if (!(n.title || "").trim()) return body.split("\n").slice(1).join(" ");
-    return body.split("\n")[0];
+    const body = n.body || "";
+    if ((n.title || "").trim()) return body.trim();
+    // No title → the first non-empty line is the headline; keep the rest with newlines intact.
+    const lines = body.split("\n");
+    const firstIdx = lines.findIndex(l => l.trim());
+    return firstIdx === -1 ? "" : lines.slice(firstIdx + 1).join("\n").trim();
   };
 
   return (
@@ -1235,10 +1238,10 @@ function NotesTile({ isMobile, refreshSignal, onOpenNotes }) {
               className="press"
               style={{ display: "flex", alignItems: "baseline", gap: 10, padding: "9px 2px", borderTop: i === 0 ? "none" : "1px solid var(--ink-a04)", cursor: "pointer" }}>
               <span style={{ width: 6, height: 6, flex: "none", transform: "rotate(45deg) translateY(-1px)", borderRadius: 1.5, background: sealColor(n.color) || "var(--ink-a18)" }} />
-              <span style={{ flex: 1, minWidth: 0 }}>
+              <div style={{ flex: 1, minWidth: 0 }}>
                 <span style={{ display: "block", fontSize: 12, fontWeight: 600, color: T.ink, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{headline(n)}</span>
-                {snippet(n) && <span style={{ display: "block", fontSize: 10, color: T.faint, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", marginTop: 1 }}>{snippet(n)}</span>}
-              </span>
+                {snippet(n) && <NoteCardPreview text={snippet(n)} fontSize={10} color={T.faint} lineHeight={1.5} maxHeight={46} fadePx={14} style={{ marginTop: 1 }} />}
+              </div>
               {n.pinned && <span style={{ fontSize: 8, color: T.brass, flex: "none" }} title="Pinned">◆</span>}
               <span style={{ fontSize: 9, color: T.faint, fontFamily: mono, flex: "none" }}>{relTime(n.updated_at)}</span>
             </div>
@@ -2291,34 +2294,36 @@ const NOTE_SEALS = [
 const sealColor = (key) => NOTE_SEALS.find(s => s.key === key)?.c || null;
 
 // A note card's body preview: stored newlines render as real lines and the card
-// grows to fit the note. Past ~8 lines it caps with a soft gradient fade (not a
-// hard ellipsis) so the list stays scannable — and the fade only appears when the
-// text truly overflows, so short notes render crisp with no dimmed last line.
-function NoteCardPreview({ text }) {
-  const MAX = 140; // ≈ 8 lines at 11px / 1.55 line-height
+// grows to fit the note, up to `maxHeight` (defaults to ~8 lines). Past that it
+// caps with a soft gradient fade (not a hard ellipsis) so lists stay scannable —
+// and the fade only appears when the text truly overflows, so short notes render
+// crisp with no dimmed last line. Callers can tune size/cap (e.g. the Brief tile
+// uses a tighter 3-line cap).
+function NoteCardPreview({ text, fontSize = 11, color = T.sub, lineHeight = 1.55, maxHeight = 140, fadePx = 30, style }) {
   const ref = useRef(null);
   const [clipped, setClipped] = useState(false);
   useLayoutEffect(() => {
     const el = ref.current;
     if (!el) return;
-    const measure = () => setClipped(el.scrollHeight > MAX + 1);
+    const measure = () => setClipped(el.scrollHeight > maxHeight + 1);
     measure();
     let ro;
     if (typeof ResizeObserver !== "undefined") { ro = new ResizeObserver(measure); ro.observe(el); }
     return () => ro?.disconnect();
-  }, [text]);
-  const fade = "linear-gradient(to bottom, #000 calc(100% - 30px), transparent)";
+  }, [text, maxHeight]);
+  const fade = `linear-gradient(to bottom, #000 calc(100% - ${fadePx}px), transparent)`;
   return (
     <div
       ref={ref}
       style={{
-        fontSize: 11,
-        color: T.sub,
-        lineHeight: 1.55,
+        fontSize,
+        color,
+        lineHeight,
         whiteSpace: "pre-wrap",
         overflowWrap: "break-word",
         transition: "max-height 220ms ease",
-        ...(clipped ? { maxHeight: MAX, overflow: "hidden", WebkitMaskImage: fade, maskImage: fade } : null),
+        ...style,
+        ...(clipped ? { maxHeight, overflow: "hidden", WebkitMaskImage: fade, maskImage: fade } : null),
       }}
     >
       {text}
