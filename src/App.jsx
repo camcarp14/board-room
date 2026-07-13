@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useCallback, useMemo } from "react";
+import { useState, useEffect, useLayoutEffect, useRef, useCallback, useMemo } from "react";
 import { createClient } from "@supabase/supabase-js";
 import { T, syne, mono, getThemePref, setThemePref, resolveTheme, applyTheme } from "./theme.js";
 import GscLineChart from "./GscLineChart.jsx";
@@ -2290,6 +2290,42 @@ const NOTE_SEALS = [
 ];
 const sealColor = (key) => NOTE_SEALS.find(s => s.key === key)?.c || null;
 
+// A note card's body preview: stored newlines render as real lines and the card
+// grows to fit the note. Past ~8 lines it caps with a soft gradient fade (not a
+// hard ellipsis) so the list stays scannable — and the fade only appears when the
+// text truly overflows, so short notes render crisp with no dimmed last line.
+function NoteCardPreview({ text }) {
+  const MAX = 140; // ≈ 8 lines at 11px / 1.55 line-height
+  const ref = useRef(null);
+  const [clipped, setClipped] = useState(false);
+  useLayoutEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    const measure = () => setClipped(el.scrollHeight > MAX + 1);
+    measure();
+    let ro;
+    if (typeof ResizeObserver !== "undefined") { ro = new ResizeObserver(measure); ro.observe(el); }
+    return () => ro?.disconnect();
+  }, [text]);
+  const fade = "linear-gradient(to bottom, #000 calc(100% - 30px), transparent)";
+  return (
+    <div
+      ref={ref}
+      style={{
+        fontSize: 11,
+        color: T.sub,
+        lineHeight: 1.55,
+        whiteSpace: "pre-wrap",
+        overflowWrap: "break-word",
+        transition: "max-height 220ms ease",
+        ...(clipped ? { maxHeight: MAX, overflow: "hidden", WebkitMaskImage: fade, maskImage: fade } : null),
+      }}
+    >
+      {text}
+    </div>
+  );
+}
+
 // Notes — quick capture, search, pins, color seals, and a select mode for
 // bulk pin/seal/merge/delete. Deletes and merges are undoable for a few
 // seconds (the toast re-upserts the cached rows). Works on the pre-upgrade
@@ -2343,9 +2379,13 @@ function NotesPanel({ isMobile, openSignal }) {
   const firstLine = (body) => (body || "").split("\n").map(l => l.trim()).find(Boolean) || "";
   const displayTitle = (n) => n.title?.trim() || firstLine(n.body).slice(0, 64) || "Untitled note";
   const snippet = (n) => {
-    const body = (n.body || "").replace(/\s+/g, " ").trim();
-    if (n.title?.trim()) return body.slice(0, 90);
-    return body.slice(firstLine(n.body).length).replace(/^\s+/, "").slice(0, 90); // don't repeat the derived title
+    const body = n.body || "";
+    if (n.title?.trim()) return body.trim();
+    // No explicit title → the first non-empty line becomes the title; drop just that line
+    // so it isn't repeated, and keep every other newline intact for the preview.
+    const lines = body.split("\n");
+    const firstIdx = lines.findIndex(l => l.trim());
+    return firstIdx === -1 ? "" : lines.slice(firstIdx + 1).join("\n").trim();
   };
   const fmtWhen = (iso) => {
     const d = new Date(iso);
@@ -2641,9 +2681,7 @@ function NotesPanel({ isMobile, openSignal }) {
                   <div style={{ fontSize: 12.5, fontWeight: 700, fontFamily: syne, color: T.ink, marginBottom: 2, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
                     {n.pinned && <span style={{ color: T.brass, marginRight: 5, fontSize: 10 }}>◆</span>}{displayTitle(n)}
                   </div>
-                  <div style={{ fontSize: 11, color: T.sub, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
-                    {snippet(n) || "No additional text"}
-                  </div>
+                  <NoteCardPreview text={snippet(n) || "No additional text"} />
                 </div>
                 <div style={{ display: "flex", alignItems: "center", gap: 10, flex: "none" }}>
                   <span style={{ ...S.microLabel }}>{fmtWhen(n.updated_at)}</span>
