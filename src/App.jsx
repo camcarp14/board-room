@@ -11,6 +11,7 @@ import { callFn, callFnFull } from "./lib/functions.js";
 import { db, isMissingTable } from "./data/db.js";
 import { queryClient } from "./lib/queryClient.js";
 import { useEvents, useSaveEvent, useDeleteEvent } from "./data/calendar.js";
+import { useNotes } from "./data/notes.js";
 import { S, tint } from "./ui/styles.js";
 import { callClaude, convene, BOARD, MODEL_META, DEFAULT_MODELS } from "./lib/claude.js";
 import { updateSnapshot, formatSnapshotForChat } from "./lib/snapshot.js";
@@ -390,8 +391,11 @@ function toggleBulletAtCaret(ta, value, apply) {
 // Same personal_notes table the Notes tab owns: scroll recent notes, capture
 // a thought inline, tap any note to edit it in place, or jump to the full tab.
 function NotesTile({ isMobile, refreshSignal, onOpenNotes }) {
-  const [notes, setNotes] = useState(null); // null = loading
-  const [err, setErr] = useState(null);
+  const { data: notesData, error: notesErr } = useNotes();
+  const notes = notesData?.rows ?? null; // null = loading
+  const setNotes = (u) => queryClient.setQueryData(["notes"], (old) => ({ rows: (typeof u === "function" ? u(old?.rows ?? null) : u) ?? [], legacy: old?.legacy ?? false }));
+  const [err, setErr] = useState(null); // save errors; load errors come from the query
+  const loadErr = notesErr ? (notesErr.message || "Couldn't load notes.") : null;
   const [quick, setQuick] = useState("");
   const [savingQuick, setSavingQuick] = useState(false);
   const [editing, setEditing] = useState(null); // { id, title, body }
@@ -401,12 +405,6 @@ function NotesTile({ isMobile, refreshSignal, onOpenNotes }) {
     setEditing(ed => ({ ...ed, body: next }));
     requestAnimationFrame(() => { try { editBodyRef.current?.setSelectionRange(caret, caret); } catch {} });
   };
-
-  const refresh = () => {
-    db.loadNotes().then(({ rows }) => { setNotes(rows); setErr(null); })
-      .catch(e => setErr(e.message || "Couldn't load notes."));
-  };
-  useEffect(() => { refresh(); }, [refreshSignal]);
 
   const sorted = (notes || []).slice().sort((a, b) =>
     (b.pinned === true) - (a.pinned === true) || new Date(b.updated_at) - new Date(a.updated_at));
@@ -473,17 +471,17 @@ function NotesTile({ isMobile, refreshSignal, onOpenNotes }) {
       </div>
 
       <div style={{ flex: isMobile ? undefined : 1, minHeight: 0, maxHeight: isMobile ? 264 : undefined, overflowY: "auto", display: "flex", flexDirection: "column" }}>
-        {notes === null && !err ? (
+        {notes === null && !err && !loadErr ? (
           <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
             <div className="sk" style={{ height: 40, borderRadius: 9 }} />
             <div className="sk" style={{ height: 40, borderRadius: 9 }} />
             <div className="sk" style={{ height: 40, borderRadius: 9 }} />
           </div>
-        ) : err ? (
+        ) : (err || loadErr) ? (
           <div style={{ ...S.inner, display: "flex", alignItems: "center", gap: 11, padding: "11px 13px" }}>
             <span style={{ width: 7, height: 7, borderRadius: "50%", background: T.red, flex: "none" }} />
-            <span style={{ fontSize: 10.5, color: T.faint, flex: 1 }}>{err}</span>
-            <button onClick={() => { setErr(null); setNotes(null); refresh(); }} style={{ ...S.ghostBtn, flex: "none", padding: "5px 10px", fontSize: 9.5, borderRadius: 7 }}>Retry</button>
+            <span style={{ fontSize: 10.5, color: T.faint, flex: 1 }}>{err || loadErr}</span>
+            <button onClick={() => { setErr(null); queryClient.invalidateQueries({ queryKey: ["notes"] }); }} style={{ ...S.ghostBtn, flex: "none", padding: "5px 10px", fontSize: 9.5, borderRadius: 7 }}>Retry</button>
           </div>
         ) : sorted.length === 0 ? (
           <div style={{ padding: "18px 6px", textAlign: "center" }}>
@@ -1397,9 +1395,11 @@ function NoteCardPreview({ text, fontSize = 11, color = T.sub, lineHeight = 1.55
 // schema too: pins/seals hide behind a one-line SQL banner until added.
 function NotesPanel({ isMobile, openSignal }) {
   const card = isMobile ? S.cardM : S.card;
-  const [notes, setNotes] = useState(null); // null = loading
-  const [legacy, setLegacy] = useState(false); // true until pinned/color columns exist
-  const [loadErr, setLoadErr] = useState(null);
+  const { data: notesData, error: notesErr } = useNotes();
+  const notes = notesData?.rows ?? null; // null = loading
+  const legacy = notesData?.legacy ?? false; // true until pinned/color columns exist
+  const setNotes = (u) => queryClient.setQueryData(["notes"], (old) => ({ rows: (typeof u === "function" ? u(old?.rows ?? null) : u) ?? [], legacy: old?.legacy ?? false }));
+  const loadErr = notesErr ? (notesErr.message || "Couldn't load notes.") : null;
   const [activeId, setActiveId] = useState(null);
   const [draft, setDraft] = useState({ title: "", body: "", pinned: false, color: null });
   const [saveState, setSaveState] = useState("idle"); // idle | saving | saved | error
@@ -1421,12 +1421,7 @@ function NotesPanel({ isMobile, openSignal }) {
   };
   const quickRef = useRef(null);
 
-  const refresh = () => {
-    db.loadNotes()
-      .then(({ rows, legacy: leg }) => { setNotes(rows); setLegacy(leg); })
-      .catch(e => setLoadErr(e.message || "Couldn't load notes."));
-  };
-  useEffect(() => { refresh(); }, []);
+  const refresh = () => queryClient.invalidateQueries({ queryKey: ["notes"] });
   useEffect(() => () => { clearTimeout(saveTimer.current); clearTimeout(undoTimer.current); }, []);
 
   // Summon jump → open the named note as soon as it's in hand (consume once)
