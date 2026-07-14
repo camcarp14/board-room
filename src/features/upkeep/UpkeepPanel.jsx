@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { T, syne, mono } from "../../theme.js";
-import { S } from "../../ui/styles.js";
+import { S, tint } from "../../ui/styles.js";
 import { Chips } from "../../ui/primitives.jsx";
 import { isMissingTable } from "../../data/db.js";
 import { upkeepDue } from "../../lib/upkeep.js";
