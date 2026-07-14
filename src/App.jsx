@@ -12,6 +12,7 @@ import { db, isMissingTable } from "./data/db.js";
 import { queryClient } from "./lib/queryClient.js";
 import { useEvents, useSaveEvent, useDeleteEvent } from "./data/calendar.js";
 import { useNotes } from "./data/notes.js";
+import { useUpkeep } from "./data/upkeep.js";
 import { S, tint } from "./ui/styles.js";
 import { callClaude, convene, BOARD, MODEL_META, DEFAULT_MODELS } from "./lib/claude.js";
 import { updateSnapshot, formatSnapshotForChat } from "./lib/snapshot.js";
@@ -255,29 +256,23 @@ function StatusTag({ status }) {
 // on approach, upkeep that's come due, the next macro event, and what's queued
 // for Mini Me. Pure aggregation of data the app already owns — nothing here
 // ever spends a model call.
-function DocketCard({ isMobile, birthdays, macroEvents, settings, refreshSignal, onOpenCalendar }) {
-  const [todayEvents, setTodayEvents] = useState(null); // null = loading
-  const [upkeepDueItems, setUpkeepDueItems] = useState(null);
-  useEffect(() => {
-    let alive = true;
-    const now = new Date();
-    const sameDay = (iso) => {
-      const x = new Date(iso);
-      return x.getFullYear() === now.getFullYear() && x.getMonth() === now.getMonth() && x.getDate() === now.getDate();
-    };
-    db.loadEvents()
-      .then(evs => { if (alive) setTodayEvents((evs || []).filter(e => e.start_time && sameDay(e.start_time))); })
-      .catch(() => { if (alive) setTodayEvents([]); });
-    db.loadUpkeep()
-      .then(items => {
-        if (!alive) return;
-        setUpkeepDueItems((items || []).map(it => ({ ...it, meta: upkeepDue(it) }))
-          .filter(x => x.meta.never || x.meta.dueIn <= 3)
-          .sort((a, b) => (a.meta.never ? -9999 : a.meta.dueIn) - (b.meta.never ? -9999 : b.meta.dueIn)));
-      })
-      .catch(() => { if (alive) setUpkeepDueItems([]); }); // table missing → section just stays quiet
-    return () => { alive = false; };
-  }, [refreshSignal]);
+function DocketCard({ isMobile, birthdays, macroEvents, settings, onOpenCalendar }) {
+  // Shares the same cached events/upkeep the Calendar and Upkeep tabs read, so
+  // the Docket refetches with the header Refresh and never double-fetches. On
+  // error each section just stays quiet (empty), as before.
+  const { data: allEvents, error: eventsErr } = useEvents();
+  const { data: allUpkeep, error: upkeepErr } = useUpkeep();
+  const now = new Date();
+  const sameDay = (iso) => {
+    const x = new Date(iso);
+    return x.getFullYear() === now.getFullYear() && x.getMonth() === now.getMonth() && x.getDate() === now.getDate();
+  };
+  const todayEvents = allEvents ? allEvents.filter(e => e.start_time && sameDay(e.start_time)) : (eventsErr ? [] : null);
+  const upkeepDueItems = allUpkeep
+    ? allUpkeep.map(it => ({ ...it, meta: upkeepDue(it) }))
+        .filter(x => x.meta.never || x.meta.dueIn <= 3)
+        .sort((a, b) => (a.meta.never ? -9999 : a.meta.dueIn) - (b.meta.never ? -9999 : b.meta.dueIn))
+    : (upkeepErr ? [] : null);
 
   const h = new Date().getHours();
   const greeting = h >= 5 && h < 12 ? "Good morning" : h >= 12 && h < 17 ? "Good afternoon" : h >= 17 && h < 22 ? "Good evening" : "Burning the midnight oil";
@@ -1129,7 +1124,7 @@ function MorningBriefPage({ btc, isMobile, settings, updateSetting, onOpenCalend
           <span style={{ flex: 1, height: 1, background: "var(--ink-a10)" }} />
         </div>
       );
-      const card_docket = <DocketCard isMobile={isMobile} birthdays={birthdays} macroEvents={eventsStatus.state === "live" ? events : []} settings={settings} refreshSignal={refreshSignal} onOpenCalendar={onOpenCalendar} />;
+      const card_docket = <DocketCard isMobile={isMobile} birthdays={birthdays} macroEvents={eventsStatus.state === "live" ? events : []} settings={settings} onOpenCalendar={onOpenCalendar} />;
       const card_notes = <NotesTile isMobile={isMobile} refreshSignal={refreshSignal} onOpenNotes={onOpenNotes} />;
       return isMobile ? (
       <div style={grid}>
