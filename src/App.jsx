@@ -3149,6 +3149,14 @@ Only extract entries you can read with real confidence — skip anything blurry,
 }
 
 // ─── Page: Properties ────────────────────────────────────────────────────────
+// The four ventures — used by the Assets page and the auditor.
+const PROPERTIES = [
+  { name: "Zero To Secure", desc: "Premium seed phrase backup", url: "https://zerotosecure.com", appUrl: "https://zts-command-center.netlify.app", color: "var(--green)", repo: "camcarp14/zts-command-center", site: "zero-to-secure" },
+  { name: "Clarify Paid Search", desc: "Boutique Google Ads agency", url: "https://clarifypaidsearch.com", appUrl: "https://clarify-outreach.netlify.app/", color: "var(--brass)", repo: "camcarp14/clarify-outreach", site: "clarify-paid-search" },
+  { name: "Clarify SaaS", desc: "Google Ads auditing tool", url: null, appUrl: "https://clarify-saas.netlify.app/", color: "var(--brass)", repo: "camcarp14/clarify-saas", site: "clarify-saas" },
+  { name: "Macro Command Center", desc: "Markets, portfolio, thesis", url: null, appUrl: "https://macro-command-center.netlify.app/", color: "var(--blue)", repo: "camcarp14/macro-command-center", site: "macro-command-center" },
+];
+
 function PropertiesPage({ isMobile, settings, updateSetting, session }) {
   const [status, setStatus] = useState({});
   useEffect(() => {

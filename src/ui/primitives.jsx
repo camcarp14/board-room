@@ -1,6 +1,7 @@
 import { T, syne, mono } from "../theme.js";
 import { S } from "./styles.js";
 import { useTween } from "../hooks/index.js";
+import { MODEL_META } from "../lib/claude.js";
 
 export function NumTween({ v, f = (x) => x.toLocaleString() }) {
   const shown = useTween(typeof v === "number" ? v : null);
