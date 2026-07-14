@@ -17,3 +17,6 @@ export const S = {
   ghostBtn: { background: "transparent", border: `1px solid ${T.lineStrong}`, borderRadius: 9, color: T.sub, fontWeight: 600, fontFamily: "inherit", cursor: "pointer" },
   input: { background: T.surface2, border: `1px solid ${T.lineStrong}`, borderRadius: 9, color: T.ink },
 };
+
+// Tint any color — literal or var() — without string math on hex codes.
+export const tint = (color, pct) => `color-mix(in srgb, ${color} ${pct}%, transparent)`;
