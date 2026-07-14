@@ -267,3 +267,11 @@ export const db = {
     try { await supabase.from("personal_birthdays").delete().eq("id", id); } catch {}
   },
 };
+
+// Postgres says 42P01 ("relation does not exist"); PostgREST/supabase-js says
+// PGRST205 ("Could not find the table ... in the schema cache"). Both mean
+// the one-time SQL hasn't been run yet — show the setup card, not a raw error.
+export const isMissingTable = (e, name) =>
+  /42P01|PGRST205/.test(e?.code || "") ||
+  new RegExp(`relation .*${name}.* does not exist`, "i").test(e?.message || "") ||
+  (/schema cache|could not find the table/i.test(e?.message || "") && (e?.message || "").includes(name));
