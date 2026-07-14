@@ -1,13 +1,14 @@
-import { useState, useEffect } from "react";
+import { useState } from "react";
 import { T, syne, mono } from "../../theme.js";
 import { S } from "../../ui/styles.js";
-import { db } from "../../data/db.js";
 import { callFnFull } from "../../lib/functions.js";
+import { useMovies, useSaveMovie, useDeleteMovie } from "../../data/movies.js";
 
 export function MoviesPanel({ isMobile }) {
   const card = isMobile ? S.cardM : S.card;
-  const [movies, setMovies] = useState(null);
-  const [loadErr, setLoadErr] = useState(null);
+  const { data: movies, error: loadErr, isLoading } = useMovies();
+  const saveMut = useSaveMovie();
+  const delMut = useDeleteMovie();
   const [editingId, setEditingId] = useState(null); // null = adding new, otherwise editing this movie
   const [title, setTitle] = useState("");
   const [year, setYear] = useState("");
@@ -17,11 +18,7 @@ export function MoviesPanel({ isMobile }) {
   const [note, setNote] = useState("");
   const [searching, setSearching] = useState(false);
   const [searchResults, setSearchResults] = useState(null);
-  const [saving, setSaving] = useState(false);
   const [saveErr, setSaveErr] = useState(null);
-
-  const refresh = () => { db.loadMovies().then(setMovies).catch(e => setLoadErr(e.message || "Couldn't load movies.")); };
-  useEffect(() => { refresh(); }, []);
 
   // Purely optional — just fills in a poster + confirms the year/title
   // spelling. Your two scores are always typed by you; this never sets them.
@@ -43,13 +40,14 @@ export function MoviesPanel({ isMobile }) {
   };
   const saveMovie = () => {
     if (!title.trim()) return;
-    setSaving(true); setSaveErr(null);
+    setSaveErr(null);
     const payload = { title: title.trim(), year: year ? Number(year) : null, poster_url: posterUrl, true_quality_score: trueScore === "" ? null : Number(trueScore), cameron_score: cameronScore === "" ? null : Number(cameronScore), note };
-    const op = editingId ? db.updateMovie(editingId, payload) : db.saveMovie(payload);
-    op.then(() => { setSaving(false); resetForm(); refresh(); })
-      .catch(e => { setSaving(false); setSaveErr(e.message || "Couldn't save."); });
+    saveMut.mutate({ id: editingId, payload }, {
+      onSuccess: () => resetForm(),
+      onError: (e) => setSaveErr(e.message || "Couldn't save."),
+    });
   };
-  const removeMovie = (id, e) => { e.stopPropagation(); if (!window.confirm("Delete this movie?")) return; db.deleteMovie(id).then(refresh); };
+  const removeMovie = (id, e) => { e.stopPropagation(); if (!window.confirm("Delete this movie?")) return; delMut.mutate(id); };
   const scoreColor = (s) => s == null ? T.faint : s >= 70 ? T.green : s >= 40 ? T.amber : T.red;
   const hasBothScores = trueScore !== "" && cameronScore !== "";
   const saveLabel = editingId ? "Save changes" : hasBothScores ? "Log it" : "Add to watchlist";
@@ -120,13 +118,13 @@ export function MoviesPanel({ isMobile }) {
         <input value={note} onChange={e => setNote(e.target.value)} placeholder="Quick note (optional)" style={{ ...S.input, padding: "8px 10px", fontSize: 12 }} />
         {saveErr && <div style={{ fontSize: 10.5, color: T.red }}>{saveErr}</div>}
         <div style={{ display: "flex", gap: 8 }}>
-          <button onClick={saveMovie} disabled={saving || !title.trim()} style={{ ...S.brassBtn, padding: "8px 16px", fontSize: 11.5, opacity: title.trim() ? 1 : 0.5 }}>{saving ? "Saving…" : saveLabel}</button>
+          <button onClick={saveMovie} disabled={saveMut.isPending || !title.trim()} style={{ ...S.brassBtn, padding: "8px 16px", fontSize: 11.5, opacity: title.trim() ? 1 : 0.5 }}>{saveMut.isPending ? "Saving…" : saveLabel}</button>
           {(title || editingId) && <button onClick={resetForm} style={{ ...S.ghostBtn, padding: "8px 16px", fontSize: 11.5 }}>{editingId ? "Cancel" : "Clear"}</button>}
         </div>
       </div>
 
-      {loadErr ? <div style={{ fontSize: 11, color: T.faint }}>{loadErr}</div>
-        : movies === null ? <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>{[0, 1].map(i => <div key={i} className="sk sk-line w60" style={{ margin: 0, height: 26, borderRadius: 8 }} />)}</div>
+      {loadErr ? <div style={{ fontSize: 11, color: T.faint }}>{loadErr.message || "Couldn't load movies."}</div>
+        : isLoading ? <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>{[0, 1].map(i => <div key={i} className="sk sk-line w60" style={{ margin: 0, height: 26, borderRadius: 8 }} />)}</div>
         : (
           <>
             {watchlist.length > 0 && (

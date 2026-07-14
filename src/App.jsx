@@ -9,6 +9,7 @@ import { sm, obs } from "./lib/storage.js";
 import { logUsage } from "./lib/telemetry.js";
 import { callFn, callFnFull } from "./lib/functions.js";
 import { db, isMissingTable } from "./data/db.js";
+import { queryClient } from "./lib/queryClient.js";
 import { S, tint } from "./ui/styles.js";
 import { callClaude, convene, BOARD, MODEL_META, DEFAULT_MODELS } from "./lib/claude.js";
 import { updateSnapshot, formatSnapshotForChat } from "./lib/snapshot.js";
@@ -3965,7 +3966,8 @@ export default function App() {
     if (refreshing || !supabase || !session?.user) return;
     setRefreshing(true);
     btc.refresh();
-    setBriefRefreshSignal(Date.now()); // the header button previously only touched chat/notes/settings/btc — gsc/clarify/zts/wire/shopify/calendar never actually refreshed when tapped despite implying they would
+    queryClient.invalidateQueries(); // one call refetches every cached query (Movies today; more as features migrate)
+    setBriefRefreshSignal(Date.now()); // legacy per-page signal — retired as each card moves onto the query cache
     try {
       const [chat, notes, sets] = await Promise.all([db.loadChat(), db.loadSeatNotes(), db.loadSettings()]);
       setMessages(chat); setSeatNotes(notes); setSettings(sets);
