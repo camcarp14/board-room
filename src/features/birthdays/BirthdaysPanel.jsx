@@ -1,14 +1,17 @@
-import { useState, useEffect } from "react";
+import { useState } from "react";
 import { T, syne, mono } from "../../theme.js";
 import { S } from "../../ui/styles.js";
-import { db } from "../../data/db.js";
 import { callClaude } from "../../lib/claude.js";
 import { nextBirthdayOccurrence, MONTH_NAMES } from "../../lib/dates.js";
+import { useBirthdays, useSaveBirthday, useDeleteBirthday, useSaveBirthdaysBulk } from "../../data/birthdays.js";
 
 export function BirthdaysPanel({ isMobile }) {
   const card = isMobile ? S.cardM : S.card;
-  const [rows, setRows] = useState(null); // null = loading
-  const [loadErr, setLoadErr] = useState(null);
+  const { data: rows = null, error } = useBirthdays();
+  const loadErr = error ? (error.message || "Couldn't load birthdays.") : null;
+  const saveMut = useSaveBirthday();
+  const delMut = useDeleteBirthday();
+  const bulkMut = useSaveBirthdaysBulk();
   const [form, setForm] = useState(null); // single add/edit
   const [saving, setSaving] = useState(false);
   const [saveErr, setSaveErr] = useState(null);
@@ -19,11 +22,6 @@ export function BirthdaysPanel({ isMobile }) {
   const [bulkErr, setBulkErr] = useState(null);
   const [bulkPreview, setBulkPreview] = useState(null); // array of parsed rows awaiting confirmation
   const [bulkSaving, setBulkSaving] = useState(false);
-
-  const refresh = () => {
-    db.loadBirthdays().then(setRows).catch(e => setLoadErr(e.message || "Couldn't load birthdays."));
-  };
-  useEffect(() => { refresh(); }, []);
 
   // ─── Single add/edit ───
   const openNew = () => {
@@ -44,14 +42,15 @@ export function BirthdaysPanel({ isMobile }) {
     if (!form.date) { setSaveErr("Pick a date."); return; }
     const [y, m, d] = form.date.split("-").map(Number);
     setSaving(true); setSaveErr(null);
-    db.saveBirthday({ id: form.id, name: form.name.trim(), month: m, day: d, year: form.unknownYear ? null : y, notes: form.notes })
-      .then(() => { setSaving(false); closeForm(); refresh(); })
-      .catch(e => { setSaving(false); setSaveErr(e.message || "Couldn't save."); });
+    saveMut.mutate({ id: form.id, name: form.name.trim(), month: m, day: d, year: form.unknownYear ? null : y, notes: form.notes }, {
+      onSuccess: () => { setSaving(false); closeForm(); },
+      onError: (e) => { setSaving(false); setSaveErr(e.message || "Couldn't save."); },
+    });
   };
   const removeBirthday = (id, e) => {
     e.stopPropagation();
     if (!window.confirm("Delete this birthday?")) return;
-    db.deleteBirthday(id).then(() => { if (form?.id === id) closeForm(); refresh(); });
+    delMut.mutate(id, { onSuccess: () => { if (form?.id === id) closeForm(); } });
   };
 
   // ─── Bulk parse via Claude ───
@@ -77,9 +76,10 @@ export function BirthdaysPanel({ isMobile }) {
   const confirmBulk = () => {
     if (!bulkPreview?.length) return;
     setBulkSaving(true);
-    db.saveBirthdaysBulk(bulkPreview.map(r => ({ id: crypto.randomUUID(), name: r.name, month: r.month, day: r.day, year: r.year })))
-      .then(() => { setBulkSaving(false); setBulkPreview(null); setBulkText(""); setBulkOpen(false); refresh(); })
-      .catch(e => { setBulkSaving(false); setBulkErr(e.message || "Couldn't save the batch."); });
+    bulkMut.mutate(bulkPreview.map(r => ({ id: crypto.randomUUID(), name: r.name, month: r.month, day: r.day, year: r.year })), {
+      onSuccess: () => { setBulkSaving(false); setBulkPreview(null); setBulkText(""); setBulkOpen(false); },
+      onError: (e) => { setBulkSaving(false); setBulkErr(e.message || "Couldn't save the batch."); },
+    });
   };
 
   // ─── Form view ───

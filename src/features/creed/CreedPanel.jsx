@@ -1,7 +1,8 @@
-import { useState, useEffect } from "react";
+import { useState } from "react";
 import { T, syne } from "../../theme.js";
 import { S } from "../../ui/styles.js";
-import { db, isMissingTable } from "../../data/db.js";
+import { isMissingTable } from "../../data/db.js";
+import { useAffirmations, useSaveAffirmation, useDeleteAffirmation } from "../../data/creed.js";
 
 // ─── Creed — the room where Cameron grounds himself ──────────────────────────
 // One statement at a time, engraved large, a breathing seal above it. Two
@@ -38,22 +39,16 @@ const roman = (n) => {
 
 export function CreedPanel({ isMobile }) {
   const card = isMobile ? S.cardM : S.card;
-  const [rows, setRows] = useState(null); // null = loading
-  const [loadErr, setLoadErr] = useState(null);
-  const [needsSetup, setNeedsSetup] = useState(false);
+  const { data: rows = null, error, refetch } = useAffirmations();
+  const needsSetup = !!error && isMissingTable(error, "affirmations");
+  const loadErr = error && !needsSetup ? (error.message || "Couldn't load the creed.") : null;
+  const saveMut = useSaveAffirmation();
+  const delMut = useDeleteAffirmation();
   const [copied, setCopied] = useState(false);
   const [idx, setIdx] = useState(0);
   const [form, setForm] = useState(null); // { id, text, kind, isNew }
   const [saving, setSaving] = useState(false);
   const [saveErr, setSaveErr] = useState(null);
-
-  const refresh = () => {
-    db.loadAffirmations().then(r => { setRows(r); setLoadErr(null); }).catch(e => {
-      if (isMissingTable(e, "affirmations")) setNeedsSetup(true);
-      else setLoadErr(e.message || "Couldn't load the creed.");
-    });
-  };
-  useEffect(() => { refresh(); }, []);
 
   const list = rows || [];
   const current = list.length ? list[idx % list.length] : null;
@@ -64,17 +59,20 @@ export function CreedPanel({ isMobile }) {
   const save = () => {
     if (!form.text.trim()) { setSaveErr("Say it first."); return; }
     setSaving(true); setSaveErr(null);
-    db.saveAffirmation({ id: form.id, text: form.text.trim(), kind: form.kind })
-      .then(() => { setSaving(false); setForm(null); refresh(); })
-      .catch(e => { setSaving(false); setSaveErr(e.message || "Couldn't save."); });
+    saveMut.mutate({ id: form.id, text: form.text.trim(), kind: form.kind }, {
+      onSuccess: () => { setSaving(false); setForm(null); },
+      onError: (e) => { setSaving(false); setSaveErr(e.message || "Couldn't save."); },
+    });
   };
   const remove = () => {
     setSaving(true);
-    db.deleteAffirmation(form.id).then(() => { setSaving(false); setForm(null); setIdx(0); refresh(); })
-      .catch(e => { setSaving(false); setSaveErr(e.message || "Couldn't delete."); });
+    delMut.mutate(form.id, {
+      onSuccess: () => { setSaving(false); setForm(null); setIdx(0); },
+      onError: (e) => { setSaving(false); setSaveErr(e.message || "Couldn't delete."); },
+    });
   };
   const addStarter = (seed) => {
-    db.saveAffirmation({ id: crypto.randomUUID(), text: seed.text, kind: seed.kind }).then(refresh).catch(e => setSaveErr(e.message || "Couldn't save."));
+    saveMut.mutate({ id: crypto.randomUUID(), text: seed.text, kind: seed.kind }, { onError: (e) => setSaveErr(e.message || "Couldn't save.") });
   };
 
   if (needsSetup) return (
@@ -88,7 +86,7 @@ export function CreedPanel({ isMobile }) {
       <pre style={{ ...S.inner, margin: 0, padding: "12px 14px", fontSize: 10, fontFamily: mono, color: T.sub, lineHeight: 1.6, overflowX: "auto", whiteSpace: "pre" }}>{CREED_SETUP_SQL}</pre>
       <div style={{ display: "flex", gap: 8, marginTop: 12 }}>
         <button onClick={() => { navigator.clipboard?.writeText(CREED_SETUP_SQL).then(() => { setCopied(true); setTimeout(() => setCopied(false), 1800); }).catch(() => {}); }} style={{ ...S.brassBtn, padding: "9px 16px", fontSize: 11 }}>{copied ? "Copied ✓" : "Copy SQL"}</button>
-        <button onClick={() => { setNeedsSetup(false); setRows(null); refresh(); }} style={{ ...S.ghostBtn, padding: "9px 16px", fontSize: 11 }}>I ran it — retry</button>
+        <button onClick={() => refetch()} style={{ ...S.ghostBtn, padding: "9px 16px", fontSize: 11 }}>I ran it — retry</button>
       </div>
     </div>
   );
@@ -115,7 +113,7 @@ export function CreedPanel({ isMobile }) {
         ) : loadErr ? (
           <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 10 }}>
             <span style={{ fontSize: 11, color: T.faint }}>{loadErr}</span>
-            <button onClick={(e) => { e.stopPropagation(); setLoadErr(null); setRows(null); refresh(); }} style={{ ...S.ghostBtn, padding: "7px 14px", fontSize: 10.5 }}>Retry</button>
+            <button onClick={(e) => { e.stopPropagation(); refetch(); }} style={{ ...S.ghostBtn, padding: "7px 14px", fontSize: 10.5 }}>Retry</button>
           </div>
         ) : !current ? (
           <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 8, maxWidth: 420 }}>

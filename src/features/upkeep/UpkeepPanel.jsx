@@ -1,9 +1,10 @@
-import { useState, useEffect } from "react";
+import { useState } from "react";
 import { T, syne, mono } from "../../theme.js";
 import { S } from "../../ui/styles.js";
 import { Chips } from "../../ui/primitives.jsx";
-import { db, isMissingTable } from "../../data/db.js";
+import { isMissingTable } from "../../data/db.js";
 import { upkeepDue } from "../../lib/upkeep.js";
+import { useUpkeep, useSaveUpkeepItem, useDeleteUpkeepItem, useMarkUpkeepDone } from "../../data/upkeep.js";
 
 // ─── Upkeep — recurring maintenance with a memory ─────────────────────────────
 // Oil change, AC filter, anything on a cadence. One tap logs a completion and
@@ -47,22 +48,17 @@ const upkeepDueColor = (meta) =>
 
 export function UpkeepPanel({ isMobile }) {
   const card = isMobile ? S.cardM : S.card;
-  const [rows, setRows] = useState(null); // null = loading
-  const [loadErr, setLoadErr] = useState(null);
-  const [needsSetup, setNeedsSetup] = useState(false);
+  const { data: rows = null, error, refetch } = useUpkeep();
+  const needsSetup = !!error && isMissingTable(error, "upkeep_items");
+  const loadErr = error && !needsSetup ? (error.message || "Couldn't load upkeep items.") : null;
+  const saveMut = useSaveUpkeepItem();
+  const delMut = useDeleteUpkeepItem();
+  const markDoneMut = useMarkUpkeepDone();
   const [copied, setCopied] = useState(false);
   const [form, setForm] = useState(null);
   const [saving, setSaving] = useState(false);
   const [saveErr, setSaveErr] = useState(null);
   const [doneFlash, setDoneFlash] = useState(null); // id that just got logged
-
-  const refresh = () => {
-    db.loadUpkeep().then(r => { setRows(r); setLoadErr(null); }).catch(e => {
-      if (isMissingTable(e, "upkeep_items")) setNeedsSetup(true);
-      else setLoadErr(e.message || "Couldn't load upkeep items.");
-    });
-  };
-  useEffect(() => { refresh(); }, []);
 
   const openNew = () => {
     setSaveErr(null);
@@ -78,21 +74,23 @@ export function UpkeepPanel({ isMobile }) {
     if (!form.name.trim()) { setSaveErr("Name the task."); return; }
     if (!days || days < 1) { setSaveErr("Give it a real cadence."); return; }
     setSaving(true); setSaveErr(null);
-    db.saveUpkeepItem({ id: form.id, name: form.name.trim(), interval_days: days, last_done: form.last_done || null, notes: form.notes.trim() })
-      .then(() => { setSaving(false); setForm(null); refresh(); })
-      .catch(e => { setSaving(false); setSaveErr(e.message || "Couldn't save."); });
+    saveMut.mutate({ id: form.id, name: form.name.trim(), interval_days: days, last_done: form.last_done || null, notes: form.notes.trim() }, {
+      onSuccess: () => { setSaving(false); setForm(null); },
+      onError: (e) => { setSaving(false); setSaveErr(e.message || "Couldn't save."); },
+    });
   };
   const remove = () => {
     setSaving(true);
-    db.deleteUpkeepItem(form.id).then(() => { setSaving(false); setForm(null); refresh(); })
-      .catch(e => { setSaving(false); setSaveErr(e.message || "Couldn't delete."); });
+    delMut.mutate(form.id, {
+      onSuccess: () => { setSaving(false); setForm(null); },
+      onError: (e) => { setSaving(false); setSaveErr(e.message || "Couldn't delete."); },
+    });
   };
   const markDone = (it) => {
     const today = new Date().toISOString().slice(0, 10);
-    setRows(prev => (prev || []).map(r => r.id === it.id ? { ...r, last_done: today } : r)); // optimistic
     setDoneFlash(it.id);
     setTimeout(() => setDoneFlash(null), 1600);
-    db.saveUpkeepItem({ ...it, last_done: today }).catch(() => refresh());
+    markDoneMut.mutate({ item: it, today }); // optimistic cache update lives in the hook
   };
 
   if (needsSetup) return (
@@ -106,7 +104,7 @@ export function UpkeepPanel({ isMobile }) {
       <pre style={{ ...S.inner, margin: 0, padding: "12px 14px", fontSize: 10, fontFamily: mono, color: T.sub, lineHeight: 1.6, overflowX: "auto", whiteSpace: "pre" }}>{UPKEEP_SETUP_SQL}</pre>
       <div style={{ display: "flex", gap: 8, marginTop: 12 }}>
         <button onClick={() => { navigator.clipboard?.writeText(UPKEEP_SETUP_SQL).then(() => { setCopied(true); setTimeout(() => setCopied(false), 1800); }).catch(() => {}); }} style={{ ...S.brassBtn, padding: "9px 16px", fontSize: 11 }}>{copied ? "Copied ✓" : "Copy SQL"}</button>
-        <button onClick={() => { setNeedsSetup(false); setRows(null); refresh(); }} style={{ ...S.ghostBtn, padding: "9px 16px", fontSize: 11 }}>I ran it — retry</button>
+        <button onClick={() => refetch()} style={{ ...S.ghostBtn, padding: "9px 16px", fontSize: 11 }}>I ran it — retry</button>
       </div>
     </div>
   );
@@ -164,7 +162,7 @@ export function UpkeepPanel({ isMobile }) {
         <div style={{ ...S.inner, display: "flex", alignItems: "center", gap: 11, padding: "11px 13px" }}>
           <span style={{ width: 7, height: 7, borderRadius: "50%", background: T.red, flex: "none" }} />
           <span style={{ fontSize: 10.5, color: T.faint, flex: 1 }}>{loadErr}</span>
-          <button onClick={() => { setLoadErr(null); setRows(null); refresh(); }} style={{ ...S.ghostBtn, flex: "none", padding: "5px 10px", fontSize: 9.5, borderRadius: 7 }}>Retry</button>
+          <button onClick={() => refetch()} style={{ ...S.ghostBtn, flex: "none", padding: "5px 10px", fontSize: 9.5, borderRadius: 7 }}>Retry</button>
         </div>
       ) : sorted.length === 0 && !form ? (
         <div style={{ ...S.inner, padding: "22px 16px", textAlign: "center" }}>

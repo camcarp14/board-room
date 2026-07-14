@@ -1,34 +1,36 @@
-import { useState, useEffect } from "react";
+import { useState } from "react";
 import { T } from "../../theme.js";
 import { S, tint } from "../../ui/styles.js";
-import { db } from "../../data/db.js";
 import { callClaude } from "../../lib/claude.js";
+import { useGroceries, useSavedRecipes, useAddGrocery, useToggleGrocery, useDeleteGrocery, useClearCheckedGroceries, useSaveRecipe, useDeleteRecipe } from "../../data/food.js";
 
 export function FoodPanel({ isMobile, settings, updateSetting }) {
   const card = isMobile ? S.cardM : S.card;
   const prefs = settings?.food_preferences || { likes: [], dislikes: [] };
   const [newLike, setNewLike] = useState("");
   const [newDislike, setNewDislike] = useState("");
-  const [groceries, setGroceries] = useState(null);
+  const { data: groceries = null } = useGroceries();
+  const { data: savedRecipes = null } = useSavedRecipes();
+  const addGroceryMut = useAddGrocery();
+  const toggleMut = useToggleGrocery();
+  const delGroceryMut = useDeleteGrocery();
+  const clearMut = useClearCheckedGroceries();
+  const saveRecipeMut = useSaveRecipe();
+  const delRecipeMut = useDeleteRecipe();
   const [newItem, setNewItem] = useState("");
-  const [savedRecipes, setSavedRecipes] = useState(null);
   const [generating, setGenerating] = useState(false);
   const [idea, setIdea] = useState(null);
   const [ideaErr, setIdeaErr] = useState(null);
-
-  const refreshGroceries = () => db.loadGroceryItems().then(setGroceries).catch(() => setGroceries([]));
-  const refreshRecipes = () => db.loadSavedRecipes().then(setSavedRecipes).catch(() => setSavedRecipes([]));
-  useEffect(() => { refreshGroceries(); refreshRecipes(); }, []);
 
   const addLike = () => { if (!newLike.trim()) return; updateSetting("food_preferences", { ...prefs, likes: [...prefs.likes, newLike.trim()] }); setNewLike(""); };
   const addDislike = () => { if (!newDislike.trim()) return; updateSetting("food_preferences", { ...prefs, dislikes: [...prefs.dislikes, newDislike.trim()] }); setNewDislike(""); };
   const removeLike = (i) => updateSetting("food_preferences", { ...prefs, likes: prefs.likes.filter((_, idx) => idx !== i) });
   const removeDislike = (i) => updateSetting("food_preferences", { ...prefs, dislikes: prefs.dislikes.filter((_, idx) => idx !== i) });
 
-  const addGroceryItem = () => { if (!newItem.trim()) return; db.addGroceryItem(newItem.trim()).then(() => { setNewItem(""); refreshGroceries(); }); };
-  const toggleItem = (it) => { db.toggleGroceryItem(it.id, !it.checked).then(refreshGroceries); };
-  const removeItem = (id) => db.deleteGroceryItem(id).then(refreshGroceries);
-  const clearChecked = () => { (groceries || []).filter(g => g.checked).forEach(g => db.deleteGroceryItem(g.id)); setTimeout(refreshGroceries, 300); };
+  const addGroceryItem = () => { if (!newItem.trim()) return; addGroceryMut.mutate(newItem.trim(), { onSuccess: () => setNewItem("") }); };
+  const toggleItem = (it) => { toggleMut.mutate({ id: it.id, checked: !it.checked }); };
+  const removeItem = (id) => delGroceryMut.mutate(id);
+  const clearChecked = () => { clearMut.mutate((groceries || []).filter(g => g.checked)); };
 
   const generateIdea = async () => {
     setGenerating(true); setIdeaErr(null); setIdea(null);
@@ -41,14 +43,14 @@ export function FoodPanel({ isMobile, settings, updateSetting }) {
   const saveIdea = () => {
     if (!idea) return;
     const title = idea.split("\n")[0].replace(/^#+\s*/, "").slice(0, 80);
-    db.saveRecipe(title, idea).then(() => { setIdea(null); refreshRecipes(); });
+    saveRecipeMut.mutate({ title, body: idea }, { onSuccess: () => setIdea(null) });
   };
   const notForMe = () => {
     const key = window.prompt("What didn't work about it? (adds to your dislikes so future ideas avoid it — leave blank to skip)");
     if (key && key.trim()) updateSetting("food_preferences", { ...prefs, dislikes: [...prefs.dislikes, key.trim()] });
     setIdea(null);
   };
-  const removeRecipe = (id) => { if (!window.confirm("Delete this saved recipe?")) return; db.deleteRecipe(id).then(refreshRecipes); };
+  const removeRecipe = (id) => { if (!window.confirm("Delete this saved recipe?")) return; delRecipeMut.mutate(id); };
 
   const tag = (text, onRemove, color) => (
     <span onClick={onRemove} style={{ fontSize: 10.5, color, border: `1px solid ${tint(color, 25)}`, background: tint(color, 8), borderRadius: 999, padding: "4px 10px", cursor: "pointer" }}>{text} ×</span>
