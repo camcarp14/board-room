@@ -10,6 +10,7 @@ import { logUsage } from "./lib/telemetry.js";
 import { callFn, callFnFull } from "./lib/functions.js";
 import { db, isMissingTable } from "./data/db.js";
 import { queryClient } from "./lib/queryClient.js";
+import { useEvents, useSaveEvent, useDeleteEvent } from "./data/calendar.js";
 import { S, tint } from "./ui/styles.js";
 import { callClaude, convene, BOARD, MODEL_META, DEFAULT_MODELS } from "./lib/claude.js";
 import { updateSnapshot, formatSnapshotForChat } from "./lib/snapshot.js";
@@ -1813,8 +1814,10 @@ const EVENT_CATEGORIES = [
 
 function CalendarPanel({ isMobile }) {
   const card = isMobile ? S.cardM : S.card;
-  const [events, setEvents] = useState(null); // null = loading
-  const [loadErr, setLoadErr] = useState(null);
+  const { data: events = null, error } = useEvents();
+  const loadErr = error ? (error.message || "Couldn't load your calendar.") : null;
+  const saveMut = useSaveEvent();
+  const delMut = useDeleteEvent();
   const [form, setForm] = useState(null); // null = closed; object = open (new or editing)
   const [saving, setSaving] = useState(false);
   const [saveErr, setSaveErr] = useState(null);
@@ -1828,13 +1831,6 @@ function CalendarPanel({ isMobile }) {
   const [bulkErr, setBulkErr] = useState(null);
   const [bulkPreview, setBulkPreview] = useState(null); // parsed rows awaiting review
   const [bulkSaving, setBulkSaving] = useState(false);
-
-  const refresh = () => {
-    db.loadEvents()
-      .then(rows => setEvents(rows))
-      .catch(e => setLoadErr(e.message || "Couldn't load your calendar."));
-  };
-  useEffect(() => { refresh(); }, []);
 
   // ─── Bulk import from calendar screenshots ───
   const normName = (s) => (s || "").toLowerCase().replace(/'s birthday|birthday|bday|born/gi, "").replace(/[^a-z0-9]/g, "").trim();
@@ -1939,7 +1935,9 @@ Only extract entries you can read with real confidence — skip anything blurry,
       toCalendar.length ? db.saveEventsBulk(toCalendar) : Promise.resolve(),
       toBirthdays.length ? db.saveBirthdaysBulk(toBirthdays) : Promise.resolve(),
     ]).then(() => {
-      setBulkSaving(false); setBulkPreview(null); setBulkImages([]); setBulkOpen(false); refresh();
+      setBulkSaving(false); setBulkPreview(null); setBulkImages([]); setBulkOpen(false);
+      queryClient.invalidateQueries({ queryKey: ["events"] });
+      queryClient.invalidateQueries({ queryKey: ["birthdays"] });
     }).catch(e => { setBulkSaving(false); setBulkErr(e.message || "Couldn't save the batch."); });
   };
 
@@ -1974,15 +1972,16 @@ Only extract entries you can read with real confidence — skip anything blurry,
     const end_time = (!form.allDay && form.endTime) ? new Date(`${form.date}T${form.endTime}:00`).toISOString() : null;
     setSaving(true);
     setSaveErr(null);
-    db.saveEvent({ id: form.id, title: form.title.trim(), notes: form.notes, start_time, end_time, all_day: form.allDay, location: form.location, category: form.category })
-      .then(() => { setSaving(false); closeForm(); refresh(); })
-      .catch(e => { setSaving(false); setSaveErr(e.message || "Couldn't save."); });
+    saveMut.mutate({ id: form.id, title: form.title.trim(), notes: form.notes, start_time, end_time, all_day: form.allDay, location: form.location, category: form.category }, {
+      onSuccess: () => { setSaving(false); closeForm(); },
+      onError: (e) => { setSaving(false); setSaveErr(e.message || "Couldn't save."); },
+    });
   };
 
   const removeEvent = (id, e) => {
     e.stopPropagation();
     if (!window.confirm("Delete this event?")) return;
-    db.deleteEvent(id).then(() => { if (form?.id === id) closeForm(); refresh(); });
+    delMut.mutate(id, { onSuccess: () => { if (form?.id === id) closeForm(); } });
   };
 
   const dayLabel = (iso) => {
