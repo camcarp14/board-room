@@ -519,7 +519,7 @@ function NotesTile({ isMobile, refreshSignal, onOpenNotes }) {
   );
 }
 
-function MorningBriefPage({ btc, isMobile, settings, updateSetting, onOpenCalendar, onOpenNotes, refreshSignal }) {
+function MorningBriefPage({ btc, isMobile, settings, updateSetting, onOpenCalendar, onOpenNotes, onJump, refreshSignal }) {
   const sportsCfg = settings?.sports || { followedTeams: [], watchLeagues: [], watchGames: [], excludedGames: [] };
   const [sportsGames, setSportsGames] = useState([]);
   const [sportsStatus, setSportsStatus] = useState({ state: "loading" });
@@ -1127,7 +1127,7 @@ function MorningBriefPage({ btc, isMobile, settings, updateSetting, onOpenCalend
       );
       const card_docket = <DocketCard isMobile={isMobile} birthdays={birthdays} macroEvents={eventsStatus.state === "live" ? events : []} settings={settings} onOpenCalendar={onOpenCalendar} />;
       const card_notes = <NotesTile isMobile={isMobile} refreshSignal={refreshSignal} onOpenNotes={onOpenNotes} />;
-      const card_word = <ChiefsWord isMobile={isMobile} settings={settings} updateSetting={updateSetting} />;
+      const card_word = <ChiefsWord isMobile={isMobile} settings={settings} updateSetting={updateSetting} onJump={onJump} />;
       return isMobile ? (
       <div style={grid}>
         <div className="stagger" style={col}>
@@ -2762,7 +2762,28 @@ function Summon({ onClose, onGo, onJot, onQueueTask, onAsk, isMobile }) {
   const hit = (s) => (s || "").toLowerCase().includes(needle);
   const noteTitle = (n) => n.title?.trim() || (n.body || "").split("\n").map(l => l.trim()).find(Boolean)?.slice(0, 60) || "Untitled note";
 
+  // Quick-file grammar: "n: milk" files a note on Enter, "t:" queues Mini Me,
+  // "a:" convenes the board — thought to filed in one line, no menu hop.
+  const fileCmd = async (kind, text) => {
+    try {
+      if (kind === "jot") { await onJot(text); setFlash("Filed to Notes ◆"); }
+      else { await onQueueTask(text); setFlash("Queued for Mini Me ◆"); }
+      setQ("");
+      closeTimer.current = setTimeout(onClose, 650);
+    } catch (e) { setFlash(e.message || "Couldn't save — try again."); }
+  };
+
   const rows = useMemo(() => {
+    const noteCmd = q.match(/^(?:n|note|jot)\s*:\s*(\S[\s\S]*)$/i);
+    const taskCmd = q.match(/^(?:t|task|mini)\s*:\s*(\S[\s\S]*)$/i);
+    const askCmd = q.match(/^(?:a|ask)\s*:\s*(\S[\s\S]*)$/i);
+    if (noteCmd || taskCmd || askCmd) {
+      const cmds = [];
+      if (noteCmd) cmds.push({ kind: "cmd", label: `Jot to Notes — “${noteCmd[1].trim()}”`, hint: "↵ files it", run: () => fileCmd("jot", noteCmd[1].trim()) });
+      if (taskCmd) cmds.push({ kind: "cmd", label: `Queue for Mini Me — “${taskCmd[1].trim()}”`, hint: "↵ queues it", run: () => fileCmd("task", taskCmd[1].trim()) });
+      if (askCmd) cmds.push({ kind: "cmd", label: `Ask the board — “${askCmd[1].trim()}”`, hint: "convene ↵", run: () => onAsk?.(askCmd[1].trim()) });
+      return cmds;
+    }
     const actions = [
       { kind: "act", label: "Jot a note", hint: "saved straight to Notes", run: () => { setMode("jot"); setQ(""); } },
       { kind: "act", label: "Queue a task for Mini Me", hint: "lands in the queue", run: () => { setMode("task"); setQ(""); } },
@@ -2782,7 +2803,7 @@ function Summon({ onClose, onGo, onJot, onQueueTask, onAsk, isMobile }) {
       ? [{ kind: "ask", label: `Ask the board — "${q.trim()}"`, hint: "convene ↵", run: () => onAsk(q.trim()) }]
       : [];
     return [...actions, ...places, ...noteRows, ...skillRows, ...askRows];
-  }, [needle, notes, skills]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [q, needle, notes, skills]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => { setIdx(0); }, [needle]);
   useEffect(() => {
@@ -2814,7 +2835,7 @@ function Summon({ onClose, onGo, onJot, onQueueTask, onAsk, isMobile }) {
     else if (e.key === "Enter") { e.preventDefault(); choose(rows[idx]); }
   };
 
-  const sectionOf = (r) => r.kind === "act" ? "Actions" : r.kind === "go" ? "Go to" : r.kind === "note" ? "Notes" : r.kind === "ask" ? "Or just ask" : "Skills";
+  const sectionOf = (r) => r.kind === "act" ? "Actions" : r.kind === "go" ? "Go to" : r.kind === "note" ? "Notes" : r.kind === "ask" ? "Or just ask" : r.kind === "cmd" ? "Quick file" : "Skills";
 
   return (
     <div onClick={onClose} style={{ position: "fixed", inset: 0, background: "var(--scrim)", backdropFilter: "blur(3px)", zIndex: 120, display: "flex", alignItems: "flex-start", justifyContent: "center", padding: isMobile ? "12vh 14px 0" : "16vh 20px 0", animation: "fadein 0.14s ease" }}>
@@ -2826,7 +2847,7 @@ function Summon({ onClose, onGo, onJot, onQueueTask, onAsk, isMobile }) {
           <span style={{ width: 6, height: 6, transform: "rotate(45deg)", background: T.brass, borderRadius: 1 }} />
           <span style={{ ...S.microLabel, color: T.sub }}>{mode === "jot" ? "Jot a note" : mode === "task" ? "Queue a task" : "Summon"}</span>
           <span style={{ flex: 1 }} />
-          <span style={{ ...S.microLabel }}>{mode ? "↵ save · esc back" : "↑↓ · ↵ · esc"}</span>
+          <span style={{ ...S.microLabel }}>{mode ? "↵ save · esc back" : "n: t: a: · ↑↓ · ↵"}</span>
         </div>
 
         {mode ? (
@@ -2842,6 +2863,7 @@ function Summon({ onClose, onGo, onJot, onQueueTask, onAsk, isMobile }) {
             <input ref={inputRef} value={q} onChange={e => setQ(e.target.value)}
               placeholder="Jump, jot, search — or just ask the board…"
               style={{ border: "none", outline: "none", background: "transparent", padding: "15px 18px", fontSize: 15, color: T.ink, fontFamily: "inherit", flex: "none" }} />
+            {flash && <div style={{ padding: "0 18px 10px", fontSize: 11.5, fontFamily: mono, color: flash.includes("◆") ? T.green : T.red, flex: "none" }}>{flash}</div>}
             <div ref={listRef} style={{ overflowY: "auto", padding: "0 8px 10px" }}>
               {rows.length === 0 && <div style={{ padding: "22px 12px", fontSize: 12, color: T.faint, textAlign: "center" }}>Nothing matches "{q}".</div>}
               {rows.map((r, i) => {
@@ -4155,12 +4177,18 @@ export default function App() {
     return () => window.removeEventListener("keydown", onKey);
   }, []);
   useEffect(() => { if (!session) setSummon(false); }, [session]);
-  const summonGo = (target) => { setSummon(false); goToPage(target.page); setJump({ t: Date.now(), ...target }); };
+  // One deep-link primitive: page + optional sub-tab/entity, used by Summon and
+  // by anything on a page that wants to point somewhere (e.g. the Word's chips).
+  const jumpTo = (target) => { goToPage(target.page); setJump({ t: Date.now(), ...target }); };
+  const summonGo = (target) => { setSummon(false); jumpTo(target); };
   // Free text in Summon → the question lands in the Room already sent — the
   // board convenes while the page slides over. (send is defined below; it only
   // runs on click, well after initialization.)
-  const summonAsk = (q) => { setSummon(false); goToPage("boardroom"); setJump({ t: Date.now(), page: "boardroom", sub: "chat" }); send(q); };
-  const summonJot = async (text) => { await db.saveNote({ id: crypto.randomUUID(), title: "", body: text }); };
+  const summonAsk = (q) => { setSummon(false); jumpTo({ page: "boardroom", sub: "chat" }); send(q); };
+  const summonJot = async (text) => {
+    await db.saveNote({ id: crypto.randomUUID(), title: "", body: text });
+    queryClient.invalidateQueries({ queryKey: ["notes"] }); // jots show up in Notes surfaces immediately, not after the cache goes stale
+  };
   const summonQueueTask = async (text) => {
     const t = { id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`, text, status: "queued", queued_at: Date.now() };
     updateSetting("mini_tasks", [t, ...(settings?.mini_tasks || [])]);
@@ -4257,7 +4285,7 @@ export default function App() {
 
   const renderPage = (key) => {
     switch (key) {
-      case "brief": return <MorningBriefPage btc={btc} isMobile={isMobile} settings={settings} updateSetting={updateSetting} onOpenCalendar={goToCalendar} onOpenNotes={(noteId) => summonGo({ page: "personal", sub: "notes", noteId })} refreshSignal={briefRefreshSignal} />;
+      case "brief": return <MorningBriefPage btc={btc} isMobile={isMobile} settings={settings} updateSetting={updateSetting} onOpenCalendar={goToCalendar} onOpenNotes={(noteId) => summonGo({ page: "personal", sub: "notes", noteId })} onJump={jumpTo} refreshSignal={briefRefreshSignal} />;
       case "boardroom": return <BoardRoomPage messages={messages} thinking={thinking} loadingData={loadingData} input={input} setInput={setInput} onSend={send} onClearChat={clearChat} endRef={endRef} seatNotes={seatNotes} onEditSeat={setEditSeat} settings={settings} updateSetting={updateSetting} session={session} onWorkerRun={refreshData} onSkillsChanged={refreshSkills} jump={jump} isMobile={isMobile} />;
       case "personal": return <PersonalPage isMobile={isMobile} jumpSignal={personalJumpTo} jump={jump} settings={settings} updateSetting={updateSetting} />;
       case "assets": return <PropertiesPage isMobile={isMobile} settings={settings} updateSetting={updateSetting} session={session} />;
