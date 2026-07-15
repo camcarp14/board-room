@@ -930,16 +930,11 @@ function MorningBriefPage({ btc, isMobile, settings, updateSetting, onOpenCalend
                         return (
                           <div key={day} style={{ display: "flex", flexDirection: "column", alignItems: "stretch", gap: 2, textAlign: "left", minWidth: 0, height: isMobile ? 34 : 38, overflow: "hidden", padding: "2px 2px", borderRadius: 5, border: isToday ? `1.5px solid ${T.brass}` : "1px solid transparent", background: isToday ? "var(--brass-a08)" : "transparent" }}>
                             <span style={{ fontSize: 9, fontWeight: isToday ? 800 : 500, color: isToday ? T.brass : T.ink, fontFamily: mono, paddingLeft: 1 }}>{day}</span>
-                            {dayEvents.length > 0 && (isMobile ? (
-                              // phone cells are too narrow for words — a colored mark per event reads cleaner
-                              <span style={{ display: "flex", gap: 2, paddingLeft: 1 }}>
-                                {dayEvents.slice(0, 3).map((ev, j) => (
-                                  <span key={j} style={{ width: 4, height: 4, borderRadius: "50%", background: miniCatColor(ev.category), flex: "none" }} />
-                                ))}
-                              </span>
-                            ) : (
-                              <span style={{ fontSize: 6.5, fontWeight: 700, color: "var(--chip-ink)", background: miniCatColor(dayEvents[0].category), borderRadius: 3, padding: "1px 3px", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", lineHeight: 1.5, minWidth: 0, maxWidth: "100%" }}>{dayEvents[0].title}</span>
-                            ))}
+                            {dayEvents.length > 0 && (
+                              // a real (truncated) title pill, not a dot — minWidth:0 + overflow
+                              // let it clip inside the narrow cell instead of stretching it
+                              <span style={{ fontSize: 6.5, fontWeight: 700, color: "var(--chip-ink)", background: miniCatColor(dayEvents[0].category), borderRadius: 3, padding: "1px 3px", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", lineHeight: 1.45, minWidth: 0, maxWidth: "100%", display: "block" }}>{dayEvents.length > 1 ? `${dayEvents[0].title} +${dayEvents.length - 1}` : dayEvents[0].title}</span>
+                            )}
                           </div>
                         );
                       })}
@@ -2195,12 +2190,15 @@ Only extract entries you can read with real confidence — skip anything blurry,
             <span style={{ fontSize: 13, fontWeight: 700, fontFamily: syne, color: T.ink }}>{monthLabel}</span>
             <button onClick={() => changeMonth(1)} aria-label="Next month" style={{ background: "none", border: `1px solid ${T.line}`, borderRadius: 8, width: 30, height: 30, color: T.sub, cursor: "pointer", fontSize: 14 }}>›</button>
           </div>
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(7, 1fr)", gap: 3, marginBottom: 4 }}>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(7, minmax(0, 1fr))", gap: 3, marginBottom: 4 }}>
             {["S", "M", "T", "W", "T", "F", "S"].map((d, i) => (
               <div key={i} style={{ textAlign: "center", fontSize: 9.5, fontWeight: 700, color: T.faint, fontFamily: mono, padding: "2px 0" }}>{d}</div>
             ))}
           </div>
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(7, 1fr)", gap: 3 }}>
+          {/* minmax(0,1fr) + minWidth:0 on each cell: a nowrap event pill can never
+              force its column wider than 1/7th — pills truncate instead of the whole
+              month grid overflowing the card's right edge on a phone */}
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(7, minmax(0, 1fr))", gap: 3 }}>
             {cells.map((day, i) => {
               if (day === null) return <div key={`b${i}`} />;
               const key = dateKey(day);
@@ -2210,14 +2208,14 @@ Only extract entries you can read with real confidence — skip anything blurry,
                 <div key={key} onClick={() => openNew(key)}
                   style={{
                     display: "flex", flexDirection: "column", alignItems: "stretch", gap: 2, textAlign: "left",
-                    borderRadius: 8, cursor: "pointer", padding: "4px 3px", minHeight: 56,
+                    borderRadius: 8, cursor: "pointer", padding: "4px 3px", minHeight: 56, minWidth: 0, overflow: "hidden",
                     border: todayFlag ? `1.5px solid ${T.brass}` : "1px solid transparent",
                     background: todayFlag ? "var(--brass-a08)" : "transparent",
                   }}>
                   <span style={{ fontSize: 10.5, fontWeight: todayFlag ? 800 : 500, color: todayFlag ? T.brass : T.ink, fontFamily: mono, paddingLeft: 2, marginBottom: 1 }}>{day}</span>
                   {dayEvents.slice(0, 2).map((ev, j) => (
                     <span key={j} onClick={(e) => { e.stopPropagation(); openEdit(ev); }}
-                      style={{ fontSize: 8, fontWeight: 700, color: "var(--chip-ink)", background: catColor(ev.category), borderRadius: 4, padding: "1.5px 4px", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", lineHeight: 1.5, marginBottom: 1, cursor: "pointer" }}>{ev.title}</span>
+                      style={{ fontSize: 8, fontWeight: 700, color: "var(--chip-ink)", background: catColor(ev.category), borderRadius: 4, padding: "1.5px 4px", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", lineHeight: 1.5, marginBottom: 1, cursor: "pointer", display: "block", minWidth: 0, maxWidth: "100%" }}>{ev.title}</span>
                   ))}
                   {dayEvents.length > 2 && (
                     <span onClick={(e) => { e.stopPropagation(); setSelectedDay(key); }}
