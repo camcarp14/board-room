@@ -347,7 +347,7 @@ Only extract entries you can read with real confidence — skip anything blurry,
                       </div>
                     </div>
                     <select className="field" value={r.action} onChange={e => updateRowAction(r.tempId, e.target.value)}
-                      style={{ width: "auto", flex: "none", fontSize: 13, minHeight: 40, padding: "6px 10px" }}>
+                      style={{ width: "auto", flex: "none", fontSize: 13, minHeight: 44, padding: "6px 10px" }}>
                       <option value="calendar">Add to Calendar</option>
                       <option value="birthday">Add to Birthdays</option>
                       <option value="skip">Skip</option>
@@ -497,7 +497,7 @@ Only extract entries you can read with real confidence — skip anything blurry,
             </div>
             <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", minHeight: 44 }}>
               <span className="t-body">All-day</span>
-              <Switch on={form.allDay} onToggle={() => setForm(f => ({ ...f, allDay: !f.allDay }))} />
+              <Switch on={form.allDay} onToggle={() => setForm(f => ({ ...f, allDay: !f.allDay }))} aria-label="All-day event" />
             </div>
             <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
               <label style={{ flex: "1 1 130px", display: "flex", flexDirection: "column", gap: 4 }}>

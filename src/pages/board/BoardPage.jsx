@@ -113,7 +113,7 @@ function BoardSeatsRail({ seatNotes, onEditSeat }) {
 
 /* ── sub-navigation ─────────────────────────────────────────────────────────── */
 // Keys are wired to jump.sub deep links (Summon, Brief) — never rename them.
-const BOARDROOM_SUBTABS = [{ key: "mini", label: "Mini Me" }, { key: "learn", label: "Learn" }, { key: "chat", label: "Chat" }, { key: "seats", label: "Seats" }];
+const BOARDROOM_SUBTABS = [{ key: "chat", label: "Chat" }, { key: "mini", label: "Mini Me" }, { key: "learn", label: "Learn" }, { key: "seats", label: "Seats" }];
 const SPLIT_SUBTABS = BOARDROOM_SUBTABS.filter(t => t.key !== "seats"); // seats live in the rail
 
 // The split view needs ~1160px of window for a usable chat column beside the
@@ -132,7 +132,7 @@ function useSplitLayout() {
 }
 
 export function BoardRoomPage({ messages, thinking, loadingData, input, setInput, onSend, onClearChat, endRef, seatNotes, onEditSeat, settings, updateSetting, session, onWorkerRun, onSkillsChanged, jump, isMobile }) {
-  const [sub, setSub] = useState("mini"); // Mini Me first — it's the "what did my background worker do" check, the natural first stop
+  const [sub, setSub] = useState("chat"); // chat IS the room — the board convenes here; Mini Me and Learn are one tap away
   const wide = useSplitLayout();
   const split = !isMobile && wide;
   useEffect(() => {

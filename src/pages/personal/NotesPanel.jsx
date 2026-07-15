@@ -10,7 +10,7 @@ import { queryClient } from "../../lib/queryClient.js";
 import { useNotes } from "../../data/notes.js";
 import { NOTE_SEALS, sealColor, NoteCardPreview, continueListOnEnter, toggleBulletAtCaret } from "../../ui/shared.jsx";
 import { Card, SectionHeader, Button, Cell, Sheet, useConfirm, EmptyState, Dot } from "../../ui/kit.jsx";
-import { IcPin, IcTrash, IcCheck, IcNote, IcChevronLeft, IcSend, IcSeal } from "../../ui/icons.jsx";
+import { IcPin, IcTrash, IcCheck, IcNote, IcChevronLeft, IcSend, IcSeal, IcPlus } from "../../ui/icons.jsx";
 
 // Copy-pasted by the user into Supabase → SQL Editor — exact text matters.
 export const NOTES_UPGRADE_SQL = `-- Notes upgrade — pins + color seals (safe to re-run)
@@ -359,7 +359,7 @@ export function NotesPanel({ isMobile, openSignal }) {
                 {selectMode ? "Done" : "Select"}
               </button>
             )}
-            <button className="sec-link" style={{ color: "var(--sub)", padding: "10px 8px", margin: "-10px -4px" }} onClick={newNote}>New note</button>
+            <button className="sec-link" style={{ padding: "10px 8px", margin: "-10px -4px" }} onClick={newNote}>New note</button>
           </span>
         }
       />
@@ -387,9 +387,9 @@ export function NotesPanel({ isMobile, openSignal }) {
             placeholder={isMobile ? "Jot something — Enter saves it" : "Jot something — Enter saves it, ⇧Enter opens the editor"}
             style={{ flex: 1, minWidth: 0, fontSize: 16 }}
           />
-          <Button kind="primary" size="md" disabled={!quick.trim()} onClick={() => quickAdd(false)}
+          <Button kind={quick.trim() ? "primary" : "quiet"} size="md" disabled={!quick.trim()} onClick={() => quickAdd(false)}
             aria-label="Save note" style={{ padding: "0 14px", flex: "none" }}>
-            <IcSend size={18} />
+            <IcPlus size={19} />
           </Button>
         </div>
         {notes?.length > 4 && (
@@ -414,9 +414,10 @@ export function NotesPanel({ isMobile, openSignal }) {
         <Card pad="md"><EmptyState icon={<IcNote size={26} />} title="Couldn't load notes" sub={loadErr} /></Card>
       )}
       {!loadErr && notes === null && (
-        <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-          {[0, 1, 2].map(i => (
-            <Card pad="md" key={i}>
+        // mirror the loaded layout: 2-col masonry on tablet, single column on phone
+        <div style={isMobile ? { display: "flex", flexDirection: "column", gap: 10 } : { columns: 2, columnGap: 12 }}>
+          {[0, 1, 2, 3].map(i => (
+            <Card pad="md" key={i} style={isMobile ? undefined : { breakInside: "avoid", marginBottom: 12 }}>
               <div className="sk sk-line w40" style={{ margin: "0 0 9px" }} />
               <div className="sk sk-line w80" style={{ margin: 0 }} />
             </Card>

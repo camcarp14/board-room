@@ -84,7 +84,7 @@ function ChatThread({ messages, thinking, loadingData, setInput, endRef, isMobil
 function Composer({ input, setInput, onSend, thinking, isMobile }) {
   const canSend = !!input.trim() && !thinking;
   return (
-    <div style={{ display: "flex", alignItems: "flex-end", gap: 8, background: "var(--surface)", borderRadius: 16, boxShadow: "var(--shadow-float)", padding: "5px 5px 5px 16px" }}>
+    <div style={{ display: "flex", alignItems: "flex-end", gap: 8, background: "var(--glass-raised)", WebkitBackdropFilter: "blur(20px) saturate(1.8)", backdropFilter: "blur(20px) saturate(1.8)", boxShadow: "var(--shadow-float), 0 0 0 0.5px var(--line)", borderRadius: 16, padding: "5px 5px 5px 16px" }}>
       <textarea
         value={input}
         onChange={(e) => setInput(e.target.value)}

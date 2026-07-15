@@ -55,7 +55,7 @@ export function ToggleRow({ title, sub, on, onToggle, size }) {
         <span style={{ fontSize: 15, fontWeight: 500, color: T.ink, letterSpacing: "-0.008em" }}>{title}</span>
         {sub && <span style={{ fontSize: 12.5, color: T.sub }}>{sub}</span>}
       </span>
-      <Toggle on={on} onToggle={onToggle} size={size} />
+      <Switch on={on} onToggle={onToggle} small={size != null && size < 20} aria-label={typeof title === "string" ? title : undefined} />
     </div>
   );
 }
@@ -72,6 +72,17 @@ export function Segmented({ value, onChange }) {
 }
 
 export function Chips({ options, value, onChange, fmt = (v) => v }) {
+  // "pick one of N": ≤4 fixed options take the Segmented grammar; larger sets
+  // stay pills (true-filter grammar).
+  if (options.length <= 4) {
+    return (
+      <KitSegmented
+        options={options.map(o => ({ key: o, label: fmt(o) }))}
+        value={value}
+        onChange={onChange}
+      />
+    );
+  }
   return (
     <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
       {options.map(o => (

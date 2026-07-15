@@ -48,14 +48,18 @@ export function SidebarShell({ page, theme, onNavigate, onSummon, btc, session, 
           <div className="card pad-md" style={{ borderRadius: 14 }}>
             <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 7 }}>
               <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                <span style={{ width: 16, height: 16, borderRadius: "50%", background: "var(--btc)", display: "inline-flex", alignItems: "center", justifyContent: "center", fontSize: 9, fontWeight: 700, color: "#1A0F00" }}>₿</span>
+                <span style={{ width: 18, height: 18, borderRadius: "50%", background: "var(--btc)", display: "inline-flex", alignItems: "center", justifyContent: "center", fontSize: 10.5, fontWeight: 700, color: "#1A0F00", flex: "none" }}>₿</span>
                 <span className="t-num" style={{ fontSize: 14, color: "var(--ink)" }}>
                   {btc.loading ? "…" : btc.error ? "—" : <NumTween v={btc.price} f={n => "$" + n.toLocaleString(undefined, { maximumFractionDigits: 0 })} />}
                 </span>
               </div>
               {!btc.loading && !btc.error && <Delta pct={btc.changePct || 0} />}
             </div>
-            <Sparkline points={btc.points} color={(btc.changePct || 0) >= 0 ? "var(--green)" : "var(--red)"} height={30} />
+            {btc.error || (!btc.loading && !(btc.points || []).length) ? (
+              <div className="t-cap" style={{ color: "var(--faint)", padding: "4px 0 2px" }}>Live price unavailable</div>
+            ) : (
+              <Sparkline points={btc.points} color={(btc.changePct || 0) >= 0 ? "var(--green)" : "var(--red)"} height={30} />
+            )}
           </div>
 
           {calUrl && !editingCal ? (
@@ -92,7 +96,7 @@ export function SidebarShell({ page, theme, onNavigate, onSummon, btc, session, 
 
       <div style={{ display: "flex", flexDirection: "column", height: "100vh", minWidth: 0 }}>
         <div className="content-head">
-          <div style={{ minWidth: 0 }}>
+          <div className="head-title">
             <h1 className="t-title1" style={{ margin: 0 }}>{head.title}</h1>
             <div className="t-foot" style={{ marginTop: 2 }}>{head.sub(new Date(now))}</div>
           </div>
@@ -101,7 +105,7 @@ export function SidebarShell({ page, theme, onNavigate, onSummon, btc, session, 
               style={{ display: "inline-flex", alignItems: "center", gap: 8, height: 36, padding: "0 12px", background: "var(--ink-a05)", border: "none", borderRadius: 10, color: "var(--sub)", fontSize: 13, cursor: "pointer" }}>
               <IcSearch size={15} /> Summon <kbd>⌘K</kbd>
             </button>
-            <span className="t-cap" style={{ color: "var(--faint)" }} title="Model spend this session">
+            <span className="t-cap head-spend" style={{ color: "var(--faint)" }} title="Model spend this session">
               ${totalSpend.toFixed(3)} · {callCount} calls
             </span>
             <TopStatus now={now} dataStamp={dataStamp} refreshing={refreshing} onRefresh={onRefresh} />

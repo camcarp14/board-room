@@ -6,13 +6,13 @@ import { useState, useRef, useLayoutEffect } from "react";
 import { T } from "../theme.js";
 import { Status } from "./kit.jsx";
 
-/* Stance pill (BTC outlook): quiet tinted capsule, readable size. */
+/* Stance (BTC outlook): dot + quiet text — same anatomy as the kit's Status. */
 export function StancePill({ text, color }) {
   return (
-    <span style={{
-      fontSize: 11, fontWeight: 600, color, background: `color-mix(in srgb, ${color} 10%, transparent)`,
-      padding: "5px 11px", borderRadius: 999, letterSpacing: "0.02em", whiteSpace: "nowrap", flex: "none",
-    }}>{text}</span>
+    <span style={{ display: "inline-flex", alignItems: "center", gap: 6, flex: "none" }}>
+      <span className="dotstatus" style={{ background: color, width: 6, height: 6 }} />
+      <span className="t-cap" style={{ color, fontWeight: 600, whiteSpace: "nowrap" }}>{text}</span>
+    </span>
   );
 }
 

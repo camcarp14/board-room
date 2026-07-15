@@ -46,7 +46,7 @@ export function DocketCard({ isMobile, birthdays, macroEvents, settings, onOpenC
   const rows = [];
   if (!loading) {
     bdays.filter(b => b.daysUntil === 0).forEach(b => rows.push({ c: T.pink, tag: "Today", text: `${b.name}'s birthday — don't let it slide` }));
-    (todayEvents || []).forEach(e => rows.push({ c: T.brass, tag: fmtEvTime(e), text: e.title + (e.location ? ` · ${e.location}` : ""), onClick: onOpenCalendar }));
+    (todayEvents || []).forEach(e => rows.push({ c: T.blue, tag: fmtEvTime(e), text: e.title + (e.location ? ` · ${e.location}` : ""), onClick: onOpenCalendar }));
     if (nextMacro) rows.push({ c: T.blue, tag: nextMacro.time, text: nextMacro.text });
     (upkeepDueItems || []).forEach(it => rows.push({
       c: it.meta.never || it.meta.dueIn <= 0 ? T.red : T.amber,
@@ -71,7 +71,7 @@ export function DocketCard({ isMobile, birthdays, macroEvents, settings, onOpenC
   return (
     <Card pad={isMobile ? "md" : "lg"} style={{ minWidth: 0 }}>
       <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", gap: 10 }}>
-        <span className="t-cap" style={{ fontWeight: 600 }}>The docket</span>
+        <span className="t-head">The docket</span>
         <span className="t-cap t-num" style={{ color: "var(--faint)", flex: "none" }}>{dateLabel}</span>
       </div>
       <div className="t-title2" style={{ marginTop: 8 }}>{greeting}, Cameron.</div>

@@ -6,7 +6,7 @@
 import { useState, useEffect, useRef } from "react";
 import {
   Card, SectionHeader, CellGroup, Cell, StatTile, Button, Pill, PillRow,
-  Segmented, Field, Dot, Grid,
+  Segmented, Field, Dot, Grid, EmptyState,
 } from "../../ui/kit.jsx";
 import { Segmented as ModelPicker } from "../../ui/primitives.jsx"; // the MODEL_META picker
 import { IcCheck } from "../../ui/icons.jsx";
@@ -30,6 +30,7 @@ function UsageCard({ isMobile }) {
   const [recentRows, setRecentRows] = useState(null); // separate, smaller fetch — only for the raw log detail view below
   const [err, setErr] = useState(null);
   const [windowIdx, setWindowIdx] = useState(1);
+  const [retryNonce, setRetryNonce] = useState(0);
   const [showLog, setShowLog] = useState(false);
   const [logShown, setLogShown] = useState(LOG_STEP);
 
@@ -51,7 +52,7 @@ function UsageCard({ isMobile }) {
     supabase.from("usage_log").select("fn,kind,model,in_tokens,out_tokens,cost_usd,ms,ok,detail,created_at").gte("created_at", since).order("created_at", { ascending: false }).limit(300)
       .then(({ data }) => setRecentRows(data || []));
   };
-  useEffect(() => { load(); }, [windowIdx]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { load(); }, [windowIdx, retryNonce]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Postgres aggregates come back as strings — coerce before summing.
   const totalCalls = summary?.reduce((s, r) => s + Number(r.calls), 0) || 0;
@@ -78,14 +79,21 @@ function UsageCard({ isMobile }) {
   return (
     <Card pad="md">
       <div className="t-head" style={{ marginBottom: 8 }}>Usage</div>
-      <PillRow
+      <Segmented
         options={USAGE_WINDOWS.map(([label]) => ({ key: label, label }))}
         value={USAGE_WINDOWS[windowIdx][0]}
         onChange={k => setWindowIdx(Math.max(0, USAGE_WINDOWS.findIndex(([l]) => l === k)))}
-        style={{ padding: "0 0 12px", margin: 0 }}
+        style={{ marginBottom: 12 }}
       />
 
-      {err && <div className="t-foot" style={{ color: "var(--amber)", padding: "6px 0" }}>{err}</div>}
+      {err && (
+        <EmptyState
+          title="Usage log unreachable"
+          sub={/failed to fetch/i.test(err) ? "The usage_log table didn't answer — check the connection and try again." : err}
+          action={<Button kind="tinted" size="sm" onClick={() => setRetryNonce(n => n + 1)}>Retry</Button>}
+          style={{ padding: "20px 12px" }}
+        />
+      )}
 
       {!err && (
         <>
@@ -407,7 +415,7 @@ export function SystemsPage({ settings, updateSetting, session, btc, isMobile })
   const deployables = PROPERTIES.filter(p => !p.assetsOnly); // Runway/FFSR excluded on purpose
 
   return (
-    <div style={{ flex: 1, display: "flex", flexDirection: "column", padding: isMobile ? "4px 16px 24px" : "6px 24px 40px" }}>
+    <div style={{ flex: 1, display: "flex", flexDirection: "column", padding: isMobile ? "4px 16px 24px" : "6px 0 40px" }}>
       <div style={{ width: "100%", maxWidth: 1020, margin: "0 auto", display: "flex", flexDirection: "column", minWidth: 0 }}>
         <Segmented options={SYSTEMS_SUBTABS} value={sub} onChange={setSub} style={{ marginBottom: 14, maxWidth: isMobile ? undefined : 480 }} />
 
@@ -415,7 +423,7 @@ export function SystemsPage({ settings, updateSetting, session, btc, isMobile })
         <div key={sub} className="pagefade" style={{ display: "flex", flexDirection: "column", minWidth: 0 }}>
 
           {sub === "usage" && (
-            <Grid min={isMobile ? 320 : 420} gap={12}>
+            <Grid min={isMobile ? 320 : 380} gap={12}>
               <div>
                 <SectionHeader title="Model control" trailing="Tokens" />
                 <Card pad="md">
@@ -487,7 +495,7 @@ export function SystemsPage({ settings, updateSetting, session, btc, isMobile })
           )}
 
           {sub === "deploy" && (
-            <Grid min={isMobile ? 320 : 420} gap={12}>
+            <Grid min={isMobile ? 320 : 380} gap={12}>
               <div>
                 <SectionHeader title="Deployments" trailing="Netlify" />
                 <CellGroup>

@@ -226,7 +226,7 @@ function SkillCard({ skill, isMobile, onToggle, onSave, onDelete, spotlight, fir
         <span className="cell-chevron" aria-hidden style={{ transform: open ? "rotate(180deg)" : "none", transition: "transform var(--dur-2) var(--ease-out)", marginRight: 0 }}>
           <IcChevronDown size={13} />
         </span>
-        <Switch on={skill.enabled} onToggle={() => onToggle(skill)} />
+        <Switch on={skill.enabled} onToggle={() => onToggle(skill)} aria-label={`Toggle skill: ${skill.title}`} />
       </div>
 
       <div className={`expand${open ? " open" : ""}`}>

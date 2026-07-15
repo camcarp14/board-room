@@ -90,12 +90,14 @@ button:active:not(:disabled) { transform: scale(0.97); }
   pointer-events: none; white-space: nowrap;
 }
 .nav-bar.scrolled .nav-bar-title { opacity: 1; transform: translateX(-50%) translateY(0); }
-.nav-actions { display: flex; align-items: center; gap: 2px; }
+.nav-actions { display: flex; align-items: center; gap: 6px; }
 .icon-btn {
   width: 38px; height: 38px; display: inline-flex; align-items: center; justify-content: center;
   background: transparent; border: none; border-radius: 12px; color: var(--sub);
-  cursor: pointer; padding: 0; flex: none;
+  cursor: pointer; padding: 0; flex: none; position: relative;
 }
+/* the visual box stays 38px; the touch target reaches 44pt */
+.icon-btn::after { content: ''; position: absolute; inset: -4px; }
 @media (hover: hover) { .icon-btn:hover { background: var(--ink-a05); } }
 
 /* Large-title block — the first thing on every page. */
@@ -157,6 +159,9 @@ button:active:not(:disabled) { transform: scale(0.97); }
   flex: none; display: flex; align-items: flex-end; justify-content: space-between; gap: 16px;
   padding: 22px 28px 14px; position: relative; z-index: 20;
 }
+.content-head .head-title { flex: 1; min-width: 0; }
+.content-head .head-title .t-foot { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+@media (max-width: 1023px) { .head-spend { display: none; } }
 .content-scroll { flex: 1; min-height: 0; overflow-y: auto; display: flex; flex-direction: column; }
 .content-max { width: 100%; max-width: 1120px; margin: 0 auto; padding: 4px 28px 40px; }
 
@@ -208,7 +213,11 @@ button:active:not(:disabled) { transform: scale(0.97); }
 .stattile.tappable:active { transform: scale(0.97); }
 .stattile.selected { box-shadow: inset 0 0 0 1.5px var(--accent); }
 .stattile-value { font-family: var(--font-mono); font-variant-numeric: tabular-nums; font-size: 19px; font-weight: 600; letter-spacing: -0.01em; color: var(--ink); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.stattile-label { font-size: 10.5px; font-weight: 600; letter-spacing: 0.04em; text-transform: uppercase; color: var(--faint); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.stattile-label {
+  font-size: 11px; font-weight: 500; letter-spacing: 0.01em; color: var(--sub);
+  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
+  line-height: 1.25;
+}
 .stattile-delta { font-family: var(--font-mono); font-size: 11px; font-variant-numeric: tabular-nums; }
 
 /* buttons */
@@ -299,6 +308,7 @@ button:active:not(:disabled) { transform: scale(0.97); }
   border-radius: 22px 22px 0 0;
   box-shadow: var(--shadow-deep);
   max-height: calc(100% - env(safe-area-inset-top) - 24px);
+  padding-bottom: env(safe-area-inset-bottom); /* footer-less sheets still clear the home indicator */
   animation: sheetin var(--dur-3) var(--ease-spring) both;
   overscroll-behavior: contain;
 }
@@ -365,7 +375,7 @@ button:active:not(:disabled) { transform: scale(0.97); }
 }
 @keyframes sealdia { from { opacity: 0; transform: rotate(45deg) scale(0.4); } to { opacity: 1; transform: rotate(45deg) scale(1); } }
 .boot-title { font-size: 17px; font-weight: 600; letter-spacing: -0.01em; color: var(--ink); animation: fadein var(--dur-4) ease 0.9s both; }
-.boot-sub { font-family: var(--font-mono); font-size: 11px; letter-spacing: 0.14em; text-transform: lowercase; color: var(--faint); animation: fadein var(--dur-4) ease 1.4s both; }
+.boot-sub { font-family: var(--font-mono); font-size: 11.5px; letter-spacing: 0.06em; text-transform: lowercase; color: var(--faint); animation: fadein var(--dur-4) ease 1.4s both; }
 
 .entrance { min-height: 100dvh; display: flex; align-items: center; justify-content: center; padding: 20px; flex-direction: column; gap: 26px; }
 .entrance-card {

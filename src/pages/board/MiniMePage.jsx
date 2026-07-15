@@ -186,6 +186,7 @@ Decide which of the two his message actually addresses — often just one. Outpu
         {/* header row is tappable only when there's output to read; the remove
             button stops propagation so removal never toggles the panel */}
         <div onClick={() => expandable && setOpenTask(open ? null : t.id)}
+          {...(expandable ? { role: "button", tabIndex: 0, "aria-expanded": open, onKeyDown: (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); setOpenTask(open ? null : t.id); } } } : {})}
           style={{ display: "flex", alignItems: "center", gap: 10, minHeight: 46, padding: "5px 8px 5px 16px", cursor: expandable ? "pointer" : "default" }}>
           <Dot tone={c} size={7} />
           <span className="t-call" style={{ flex: 1, minWidth: 0, lineHeight: 1.45, overflowWrap: "break-word" }}>{t.text}</span>
@@ -223,10 +224,10 @@ Decide which of the two his message actually addresses — often just one. Outpu
           <Card pad="md">
             <div style={{ display: "flex", alignItems: "flex-start", gap: 14, marginBottom: 12 }}>
               <span style={{ display: "flex", flexDirection: "column", gap: 4, flex: 1, minWidth: 0 }}>
-                <span style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
-                  <span className="t-title2">Mini Me</span>
-                  <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
-                    <Dot tone={statusTone} pulse={statusPulse} size={7} />
+                <span style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10 }}>
+                  <span className="t-head">Mini Me</span>
+                  <span style={{ display: "inline-flex", alignItems: "center", gap: 6, flex: "none" }}>
+                    <Dot tone={statusTone} pulse={statusPulse} size={6} />
                     <span className="t-cap" style={{ color: statusTone, fontWeight: 600 }}>{statusLabel}</span>
                   </span>
                 </span>
@@ -243,7 +244,7 @@ Decide which of the two his message actually addresses — often just one. Outpu
                 )}
               </span>
               <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 4, flex: "none" }}>
-                <Switch on={mini.enabled !== false} onToggle={() => setMini({ enabled: mini.enabled === false })} />
+                <Switch on={mini.enabled !== false} onToggle={() => setMini({ enabled: mini.enabled === false })} aria-label="Mini Me enabled" />
                 <span className="t-cap" style={{ fontWeight: 600, color: mini.enabled === false ? "var(--faint)" : "var(--green)" }}>{mini.enabled === false ? "Off" : "On"}</span>
               </div>
             </div>
@@ -261,7 +262,7 @@ Decide which of the two his message actually addresses — often just one. Outpu
                 {mini.directive ? (
                   <div className="t-call" style={{ background: "var(--surface-2)", borderRadius: 12, padding: "11px 13px", lineHeight: 1.5, fontStyle: "italic" }}>"{mini.directive}"</div>
                 ) : (
-                  <div className="t-foot" style={{ borderRadius: 12, padding: "11px 13px", color: "var(--faint)", lineHeight: 1.45, border: "1px dashed var(--ink-a14)" }}>No directive yet — the mission that shapes every task.</div>
+                  <div className="t-foot" style={{ background: "var(--surface-2)", borderRadius: 12, padding: "11px 13px", color: "var(--faint)", lineHeight: 1.45 }}>No directive yet — the mission that shapes every task.</div>
                 )}
               </div>
               <div>
@@ -269,7 +270,7 @@ Decide which of the two his message actually addresses — often just one. Outpu
                 {mini.role ? (
                   <div className="t-call" style={{ background: "var(--surface-2)", borderRadius: 12, padding: "11px 13px", lineHeight: 1.5 }}>{mini.role}</div>
                 ) : (
-                  <div className="t-foot" style={{ borderRadius: 12, padding: "11px 13px", color: "var(--faint)", lineHeight: 1.45, border: "1px dashed var(--ink-a14)" }}>No role yet — the identity it works from.</div>
+                  <div className="t-foot" style={{ background: "var(--surface-2)", borderRadius: 12, padding: "11px 13px", color: "var(--faint)", lineHeight: 1.45 }}>No role yet — the identity it works from.</div>
                 )}
               </div>
             </div>

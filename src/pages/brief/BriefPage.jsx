@@ -316,9 +316,14 @@ export function MorningBriefPage({ btc, isMobile, settings, updateSetting, onOpe
           <StatTile value={invalidation} label="Invalidation" valueTone={T.red} />
         </div>
       </div>
-      <div onClick={hasMore ? () => setBtcNarrativeExpanded(e => !e) : undefined} style={{ cursor: hasMore ? "pointer" : "default", marginTop: 12 }}>
+      <div style={{ marginTop: 12 }}>
         <div className="t-call" style={{ color: "var(--sub)", lineHeight: 1.55 }}>{btcNarrativeExpanded ? fullNarrative : shortNarrative}</div>
-        {hasMore && <div className="t-cap" style={{ marginTop: 3, fontWeight: 600 }}>{btcNarrativeExpanded ? "Show less" : "Tap for more"}</div>}
+        {hasMore && (
+          <button onClick={() => setBtcNarrativeExpanded(e => !e)} aria-expanded={btcNarrativeExpanded}
+            style={{ display: "inline-flex", alignItems: "center", minHeight: 40, margin: "-6px 0 -8px", padding: 0, background: "none", border: "none", cursor: "pointer" }}>
+            <span className="t-cap" style={{ fontWeight: 600 }}>{btcNarrativeExpanded ? "Show less" : "Tap for more"}</span>
+          </button>
+        )}
       </div>
       <div style={{ marginTop: 4, display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 }}>
         <span className="t-cap t-num" style={{ color: "var(--faint)", minWidth: 0 }}>{btcStamp}</span>
@@ -617,7 +622,9 @@ export function MorningBriefPage({ btc, isMobile, settings, updateSetting, onOpe
               const iconColor = g.state === "in" ? T.red : g.isPast ? T.green : T.faint;
               return (
                 <div key={g.id} style={{ background: "var(--surface-2)", borderRadius: 12, padding: "0 4px 0 12px" }}>
-                  <div onClick={() => toggleGame(g)} style={{ display: "flex", alignItems: "center", gap: 9, cursor: "pointer", minHeight: 46 }}>
+                  <div onClick={() => toggleGame(g)} role="button" tabIndex={0} aria-expanded={!!expandedGames[g.id]}
+                    onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); toggleGame(g); } }}
+                    style={{ display: "flex", alignItems: "center", gap: 9, cursor: "pointer", minHeight: 46 }}>
                     <Icon width={16} height={16} style={{ flex: "none", color: iconColor, animation: g.state === "in" ? "pulse 1.4s infinite" : "none" }} />
                     <span className="t-call" style={{ flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
                       {g.away?.abbr} {g.away?.score ?? ""} @ {g.home?.abbr} {g.home?.score ?? ""}

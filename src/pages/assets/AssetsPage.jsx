@@ -17,8 +17,8 @@ import { db } from "../../data/db.js";
 // (name/desc/url/appUrl/color/repo/site/assetsOnly/cta) is load-bearing.
 export const PROPERTIES = [
   { name: "Zero To Secure", desc: "Premium seed phrase backup", url: "https://zerotosecure.com", appUrl: "https://zts-command-center.netlify.app", color: "var(--green)", repo: "camcarp14/zts-command-center", site: "zero-to-secure" },
-  { name: "Clarify Paid Search", desc: "Boutique Google Ads agency", url: "https://clarifypaidsearch.com", appUrl: "https://clarify-outreach.netlify.app/", color: "var(--brass)", repo: "camcarp14/clarify-outreach", site: "clarify-paid-search" },
-  { name: "Clarify SaaS", desc: "Google Ads auditing tool", url: null, appUrl: "https://clarify-saas.netlify.app/", color: "var(--brass)", repo: "camcarp14/clarify-saas", site: "clarify-saas" },
+  { name: "Clarify Paid Search", desc: "Boutique Google Ads agency", url: "https://clarifypaidsearch.com", appUrl: "https://clarify-outreach.netlify.app/", color: "var(--amber)", repo: "camcarp14/clarify-outreach", site: "clarify-paid-search" },
+  { name: "Clarify SaaS", desc: "Google Ads auditing tool", url: null, appUrl: "https://clarify-saas.netlify.app/", color: "var(--pink)", repo: "camcarp14/clarify-saas", site: "clarify-saas" },
   { name: "Macro Command Center", desc: "Markets, portfolio, thesis", url: null, appUrl: "https://macro-command-center.netlify.app/", color: "var(--blue)", repo: "camcarp14/macro-command-center", site: "macro-command-center" },
   // assetsOnly: shown as reference cards on Assets (link + live status) but kept
   // out of the Systems deploy/replace controls, since their Netlify slugs and
@@ -43,17 +43,17 @@ function SiteStatus({ s, failed }) {
     const tone = s.up ? "var(--green)" : "var(--red)";
     const text = s.up ? (s.status || "Live") : (s.status || "unreachable");
     return (
-      <span style={{ display: "inline-flex", alignItems: "center", gap: 7, flex: "none" }}>
-        <span className="t-num" style={{ fontSize: 11.5, color: s.up ? "var(--faint)" : "var(--red)" }}>{text}</span>
-        <Dot tone={tone} size={7} />
+      <span style={{ display: "inline-flex", alignItems: "center", gap: 6, flex: "none" }}>
+        <Dot tone={tone} size={6} />
+        <span className="t-cap" style={{ color: tone, fontWeight: 600 }}>{text}</span>
       </span>
     );
   }
   if (failed) {
     return (
-      <span style={{ display: "inline-flex", alignItems: "center", gap: 7, flex: "none" }}>
-        <span className="t-cap" style={{ color: "var(--amber)" }}>Check failed</span>
-        <Dot tone="var(--amber)" size={7} />
+      <span style={{ display: "inline-flex", alignItems: "center", gap: 6, flex: "none" }}>
+        <Dot tone="var(--amber)" size={6} />
+        <span className="t-cap" style={{ color: "var(--amber)", fontWeight: 600 }}>Check failed</span>
       </span>
     );
   }
@@ -92,7 +92,7 @@ export function PropertiesPage({ isMobile, settings, updateSetting, session }) {
   };
 
   return (
-    <div style={{ flex: 1, display: "flex", flexDirection: "column", padding: isMobile ? "4px 16px 24px" : "6px 24px 40px" }}>
+    <div style={{ flex: 1, display: "flex", flexDirection: "column", padding: isMobile ? "4px 16px 24px" : "6px 0 40px" }}>
       <div className="stagger" style={{ width: "100%", maxWidth: 960, margin: "0 auto", display: "flex", flexDirection: "column", minWidth: 0 }}>
         <Grid min={340} gap={12}>
           <div>
@@ -241,7 +241,7 @@ function AuditorCard({ settings, updateSetting, session, isMobile }) {
       <Card pad="md">
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, marginBottom: 4 }}>
           <span className="t-head">Site auditor</span>
-          <Switch on={enabled} onToggle={() => updateSetting("auditor_enabled", !enabled)} />
+          <Switch on={enabled} onToggle={() => updateSetting("auditor_enabled", !enabled)} aria-label="Auditor enabled" />
         </div>
         <div className="t-foot" style={{ color: "var(--faint)", marginBottom: 12 }}>Auto-audits every 6 hours while enabled.</div>
 

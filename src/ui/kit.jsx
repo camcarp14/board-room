@@ -7,6 +7,7 @@
 // window.confirm.
 
 import { useState, useRef, useEffect, useCallback, forwardRef } from "react";
+import { createPortal } from "react-dom";
 import { IcChevronRight, IcClose, IcCheck } from "./icons.jsx";
 
 /* ── surfaces ──────────────────────────────────────────────────────────────── */
@@ -149,7 +150,7 @@ export function Segmented({ options, value, onChange, style }) {
           <button key={k} className={`seg-opt${active ? " active" : ""}`} onClick={() => onChange(k)} aria-pressed={active}>
             <span style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 1, minWidth: 0 }}>
               <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", maxWidth: "100%" }}>{o.label ?? k}</span>
-              {o.sub && <span className="t-num" style={{ fontSize: 10, color: active ? "var(--sub)" : "var(--faint)" }}>{o.sub}</span>}
+              {o.sub && <span className="t-num" style={{ fontSize: 10.5, color: "var(--sub)" }}>{o.sub}</span>}
             </span>
           </button>
         );
@@ -169,7 +170,7 @@ export function Switch({ on, onToggle, small, disabled, "aria-label": ariaLabel 
 
 export function SwitchRow({ title, sub, on, onToggle, small }) {
   return (
-    <Cell title={title} sub={sub} trailing={<Switch on={on} onToggle={onToggle} small={small} />} />
+    <Cell title={title} sub={sub} trailing={<Switch on={on} onToggle={onToggle} small={small} aria-label={typeof title === "string" ? title : undefined} />} />
   );
 }
 
@@ -204,7 +205,11 @@ export function Sheet({ onClose, title, headTrailing, footer, children, z = 300,
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, [onClose, dismissible]);
-  return (
+  // Portaled to <body>: page wrappers animate with transform, which makes
+  // them the containing block for position:fixed — a sheet rendered in place
+  // could sit above a live tab bar with a clipped scrim. At body level no
+  // ancestor can interfere.
+  return createPortal(
     <>
       <div className="sheet-scrim" style={{ zIndex: z }} onClick={dismissible ? onClose : undefined} />
       <div className="sheet" style={{ zIndex: z + 1 }} role="dialog" aria-modal="true" aria-label={typeof title === "string" ? title : undefined}>
@@ -221,7 +226,8 @@ export function Sheet({ onClose, title, headTrailing, footer, children, z = 300,
         <div className="sheet-body" style={bodyStyle}>{children}</div>
         {footer && <div className="sheet-foot">{footer}</div>}
       </div>
-    </>
+    </>,
+    document.body
   );
 }
 

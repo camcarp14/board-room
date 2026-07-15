@@ -47,7 +47,7 @@ export async function callClaude({ system, messages, modelKey = "haiku", maxToke
 
 // ─── The Board ────────────────────────────────────────────────────────────────
 export const BOARD = [
-  { key: "clarify", name: "Clarify Lead", emoji: "🎯", color: "var(--brass)",
+  { key: "clarify", name: "Clarify Lead", emoji: "🎯", color: "var(--amber)",
     charter: "You run Clarify Paid Search — a boutique Google Ads agency targeting high-value local service verticals (legal, med spa, dental, home services). You own the outreach pipeline, client delivery, and agency growth. You think in pipeline value, reply rates, and retainer economics. You are direct about what will and won't move revenue.",
     blurb: "Owns the outreach pipeline, client delivery, and agency growth. Thinks in pipeline value, reply rates, retainer economics.",
     domains: "agency, outreach, paid search, Google Ads, clients, prospecting, Clarify" },

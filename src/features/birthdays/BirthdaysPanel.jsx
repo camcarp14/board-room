@@ -98,7 +98,7 @@ export function BirthdaysPanel({ isMobile }) {
           <Field type="date" value={form.date} onChange={e => setForm(f => ({ ...f, date: e.target.value }))} className="t-num" style={{ colorScheme: "inherit" }} />
           <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, minHeight: 44 }}>
             <span className="t-call">Don't track birth year <span style={{ color: "var(--faint)" }}>(just month + day)</span></span>
-            <Switch on={form.unknownYear} onToggle={() => setForm(f => ({ ...f, unknownYear: !f.unknownYear }))} />
+            <Switch on={form.unknownYear} onToggle={() => setForm(f => ({ ...f, unknownYear: !f.unknownYear }))} aria-label="Year unknown" />
           </div>
           <TextArea value={form.notes} onChange={e => setForm(f => ({ ...f, notes: e.target.value }))} placeholder="Notes (optional)" rows={3} style={{ lineHeight: 1.6, resize: "vertical" }} />
           {saveErr && <div className="t-foot" style={{ color: "var(--red)" }}>{saveErr}</div>}
