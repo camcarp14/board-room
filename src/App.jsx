@@ -13,6 +13,7 @@ import { queryClient } from "./lib/queryClient.js";
 import { useEvents, useSaveEvent, useDeleteEvent } from "./data/calendar.js";
 import { useNotes } from "./data/notes.js";
 import { useUpkeep } from "./data/upkeep.js";
+import { ChiefsWord } from "./features/brief/ChiefsWord.jsx";
 import { S, tint } from "./ui/styles.js";
 import { callClaude, convene, BOARD, MODEL_META, DEFAULT_MODELS } from "./lib/claude.js";
 import { updateSnapshot, formatSnapshotForChat } from "./lib/snapshot.js";
@@ -1126,9 +1127,11 @@ function MorningBriefPage({ btc, isMobile, settings, updateSetting, onOpenCalend
       );
       const card_docket = <DocketCard isMobile={isMobile} birthdays={birthdays} macroEvents={eventsStatus.state === "live" ? events : []} settings={settings} onOpenCalendar={onOpenCalendar} />;
       const card_notes = <NotesTile isMobile={isMobile} refreshSignal={refreshSignal} onOpenNotes={onOpenNotes} />;
+      const card_word = <ChiefsWord isMobile={isMobile} settings={settings} updateSetting={updateSetting} />;
       return isMobile ? (
       <div style={grid}>
         <div className="stagger" style={col}>
+          {card_word}
           {card_docket}
           {card_notes}
           {sectionHeader("Market")}
@@ -1140,6 +1143,10 @@ function MorningBriefPage({ btc, isMobile, settings, updateSetting, onOpenCalend
       </div>
       ) : (
       <div style={grid}>
+        {/* the masthead: the Chief's read on the day, full width */}
+        <div className="stagger" style={{ gridColumn: "1 / -1" }}>
+          {card_word}
+        </div>
         {/* the top section: Docket and Notes as two equal plates */}
         <div className="stagger" style={{ gridColumn: "1 / -1", display: "grid", gridTemplateColumns: "minmax(0, 1fr) minmax(0, 1fr)", gap: 14, alignItems: "stretch" }}>
           {card_docket}
@@ -2732,7 +2739,7 @@ const SUMMON_PLACES = [
   { label: "Systems", page: "systems", hint: "usage · status · deploy" },
 ];
 
-function Summon({ onClose, onGo, onJot, onQueueTask, isMobile }) {
+function Summon({ onClose, onGo, onJot, onQueueTask, onAsk, isMobile }) {
   const [q, setQ] = useState("");
   const [idx, setIdx] = useState(0);
   const [mode, setMode] = useState(null); // null | "jot" | "task"
@@ -2768,8 +2775,14 @@ function Summon({ onClose, onGo, onJot, onQueueTask, isMobile }) {
       .slice(0, 5).map(n => ({ kind: "note", label: noteTitle(n), hint: "note", go: { page: "personal", sub: "notes", noteId: n.id } }));
     const skillRows = (needle ? skills.filter(s => hit(s.title) || hit(s.description) || hit(s.content)) : [])
       .slice(0, 5).map(s => ({ kind: "skill", label: s.title, hint: "skill", go: { page: "boardroom", sub: "learn", skillId: s.id } }));
-    return [...actions, ...places, ...noteRows, ...skillRows];
-  }, [needle, notes, skills]);
+    // Anything typed can simply be asked — the question lands in the Room
+    // already sent. Kept last so jump-to muscle memory ("cal" ↵) still wins;
+    // when nothing else matches, asking IS the Enter action.
+    const askRows = needle.length >= 3 && onAsk
+      ? [{ kind: "ask", label: `Ask the board — "${q.trim()}"`, hint: "convene ↵", run: () => onAsk(q.trim()) }]
+      : [];
+    return [...actions, ...places, ...noteRows, ...skillRows, ...askRows];
+  }, [needle, notes, skills]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => { setIdx(0); }, [needle]);
   useEffect(() => {
@@ -2801,7 +2814,7 @@ function Summon({ onClose, onGo, onJot, onQueueTask, isMobile }) {
     else if (e.key === "Enter") { e.preventDefault(); choose(rows[idx]); }
   };
 
-  const sectionOf = (r) => r.kind === "act" ? "Actions" : r.kind === "go" ? "Go to" : r.kind === "note" ? "Notes" : "Skills";
+  const sectionOf = (r) => r.kind === "act" ? "Actions" : r.kind === "go" ? "Go to" : r.kind === "note" ? "Notes" : r.kind === "ask" ? "Or just ask" : "Skills";
 
   return (
     <div onClick={onClose} style={{ position: "fixed", inset: 0, background: "var(--scrim)", backdropFilter: "blur(3px)", zIndex: 120, display: "flex", alignItems: "flex-start", justifyContent: "center", padding: isMobile ? "12vh 14px 0" : "16vh 20px 0", animation: "fadein 0.14s ease" }}>
@@ -2827,7 +2840,7 @@ function Summon({ onClose, onGo, onJot, onQueueTask, isMobile }) {
         ) : (
           <>
             <input ref={inputRef} value={q} onChange={e => setQ(e.target.value)}
-              placeholder="Search everything…"
+              placeholder="Jump, jot, search — or just ask the board…"
               style={{ border: "none", outline: "none", background: "transparent", padding: "15px 18px", fontSize: 15, color: T.ink, fontFamily: "inherit", flex: "none" }} />
             <div ref={listRef} style={{ overflowY: "auto", padding: "0 8px 10px" }}>
               {rows.length === 0 && <div style={{ padding: "22px 12px", fontSize: 12, color: T.faint, textAlign: "center" }}>Nothing matches "{q}".</div>}
@@ -4143,12 +4156,16 @@ export default function App() {
   }, []);
   useEffect(() => { if (!session) setSummon(false); }, [session]);
   const summonGo = (target) => { setSummon(false); goToPage(target.page); setJump({ t: Date.now(), ...target }); };
+  // Free text in Summon → the question lands in the Room already sent — the
+  // board convenes while the page slides over. (send is defined below; it only
+  // runs on click, well after initialization.)
+  const summonAsk = (q) => { setSummon(false); goToPage("boardroom"); setJump({ t: Date.now(), page: "boardroom", sub: "chat" }); send(q); };
   const summonJot = async (text) => { await db.saveNote({ id: crypto.randomUUID(), title: "", body: text }); };
   const summonQueueTask = async (text) => {
     const t = { id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`, text, status: "queued", queued_at: Date.now() };
     updateSetting("mini_tasks", [t, ...(settings?.mini_tasks || [])]);
   };
-  const summonEl = summon ? <Summon onClose={() => setSummon(false)} onGo={summonGo} onJot={summonJot} onQueueTask={summonQueueTask} isMobile={isMobile} /> : null;
+  const summonEl = summon ? <Summon onClose={() => setSummon(false)} onGo={summonGo} onJot={summonJot} onQueueTask={summonQueueTask} onAsk={summonAsk} isMobile={isMobile} /> : null;
   const summonBtn = (compact) => (
     <button onClick={() => setSummon(true)} aria-label="Summon — search everything"
       style={{ display: "inline-flex", alignItems: "center", gap: 6, padding: compact ? "9px 10px" : "5px 11px", background: "transparent", border: `1px solid ${T.lineStrong}`, borderRadius: 9, color: T.sub, fontSize: 9.5, fontFamily: mono, letterSpacing: "0.08em", cursor: "pointer" }}>
@@ -4157,8 +4174,9 @@ export default function App() {
   );
   const goToCalendar = () => { setPersonalJumpTo(Date.now()); goToPage("personal"); }; // timestamp so re-tapping still re-triggers even if already on Personal
 
-  const send = async () => {
-    const q = input.trim();
+  const send = async (textOverride) => {
+    // Composer passes a click/key event here — only a real string overrides the box.
+    const q = (typeof textOverride === "string" ? textOverride : input).trim();
     if (!q || thinking) return;
     setInput("");
     const userMsg = { role: "user", content: q, ts: Date.now() };
