@@ -2258,8 +2258,9 @@ const PROPERTIES = [
   // out of the Systems deploy/replace controls, since their Netlify slugs and
   // repos aren't wired up here and FFSR's two views share one site.
   { name: "Runway", desc: "Runway command center", url: null, appUrl: "https://runway-command-center.netlify.app/", color: "var(--purple)", repo: null, site: null, assetsOnly: true },
-  { name: "FFSR", desc: "FFSR — main site", url: null, appUrl: "https://ffsr.netlify.app/#/", color: "var(--pink)", repo: null, site: null, assetsOnly: true, cta: "Open site ›" },
-  { name: "Management Center", desc: "FFSR — team management", url: null, appUrl: "https://ffsr.netlify.app/#/team", color: "var(--amber)", repo: null, site: null, assetsOnly: true, cta: "Open ›" },
+  // FFSR: one card, two links — main site + the /team management view, the same
+  // Site ›/Command Center › two-button layout Zero To Secure uses.
+  { name: "FFSR", desc: "Main site & team management", url: "https://ffsr.netlify.app/#/", appUrl: "https://ffsr.netlify.app/#/team", color: "var(--pink)", repo: null, site: null, assetsOnly: true, cta: "Management Center ›" },
 ];
 
 function PropertiesPage({ isMobile, settings, updateSetting, session }) {
