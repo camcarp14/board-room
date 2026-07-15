@@ -412,26 +412,38 @@ Only extract entries you can read with real confidence — skip anything blurry,
                 // a day with events opens its agenda; an empty day starts a new
                 // event pre-dated to it
                 <button key={key} onClick={() => (dayEvents.length ? setSelectedDay(key) : openNew(key))}
-                  aria-label={`${monthLabel} ${day}${dayEvents.length ? `, ${dayEvents.length} event${dayEvents.length > 1 ? "s" : ""}` : ""}`}
+                  aria-label={`${monthLabel} ${day}${dayEvents.length ? `, ${dayEvents.length} event${dayEvents.length > 1 ? "s" : ""}: ${dayEvents.map(e => e.title).join(", ")}` : ""}`}
                   style={{
-                    display: "flex", flexDirection: "column", alignItems: "center", gap: 3,
-                    padding: "4px 0 5px", minHeight: 48, minWidth: 0, overflow: "hidden",
+                    display: "flex", flexDirection: "column", alignItems: "center", gap: 2,
+                    padding: "4px 2px 5px", minHeight: 62, minWidth: 0, overflow: "hidden",
                     background: "none", border: "none", borderRadius: 10, cursor: "pointer",
                   }}>
                   <span className="t-num" style={{
-                    width: 26, height: 26, borderRadius: "50%", display: "inline-flex", alignItems: "center", justifyContent: "center",
+                    width: 24, height: 24, borderRadius: "50%", display: "inline-flex", alignItems: "center", justifyContent: "center", flex: "none",
                     fontSize: 13, fontWeight: todayFlag ? 600 : 500,
                     background: todayFlag ? "var(--accent)" : "transparent",
                     color: todayFlag ? "var(--on-accent)" : "var(--ink)",
                   }}>{day}</span>
-                  <span style={{ display: "inline-flex", gap: 3, alignItems: "center", height: 8, minWidth: 0 }}>
-                    {dayEvents.slice(0, 3).map((ev, j) => (
-                      <span key={j} style={{ width: 6, height: 6, borderRadius: "50%", background: catColor(ev.category), flex: "none" }} />
-                    ))}
-                    {dayEvents.length > 3 && (
-                      <span className="t-num" style={{ fontSize: 10.5, lineHeight: 1, color: "var(--faint)" }}>+{dayEvents.length - 3}</span>
-                    )}
-                  </span>
+                  {/* Event titles, truncated to the column: a low-tint chip in the
+                      category color with the title (or its start). Up to two, then
+                      a +N overflow. Tap the day for the full agenda. */}
+                  {dayEvents.length > 0 && (
+                    <span style={{ display: "flex", flexDirection: "column", gap: 2, width: "100%", minWidth: 0 }}>
+                      {dayEvents.slice(0, 2).map((ev, j) => (
+                        <span key={j} title={ev.title} style={{
+                          display: "block", width: "100%", minWidth: 0, textAlign: "left",
+                          fontSize: 10.5, lineHeight: 1.3, fontWeight: 600,
+                          padding: "0 3px", borderRadius: 4,
+                          background: `color-mix(in srgb, ${catColor(ev.category)} 14%, transparent)`,
+                          color: catColor(ev.category),
+                          overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
+                        }}>{ev.title}</span>
+                      ))}
+                      {dayEvents.length > 2 && (
+                        <span className="t-num" style={{ fontSize: 10, lineHeight: 1.2, color: "var(--faint)", textAlign: "left", paddingLeft: 3 }}>+{dayEvents.length - 2}</span>
+                      )}
+                    </span>
+                  )}
                 </button>
               );
             })}
