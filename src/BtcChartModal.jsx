@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { createChart, CandlestickSeries, ColorType } from "lightweight-charts";
 import { T, cssVar } from "./theme.js";
 
@@ -65,7 +66,11 @@ export default function BtcChartModal({ isMobile, onClose, callFnFull }) {
     return () => { window.removeEventListener("resize", onResize); chart.remove(); };
   }, [candles, interval, isMobile]);
 
-  return (
+  // Portal to <body>: the Brief's entrance animations leave transforms on
+  // ancestor plates, and a transformed ancestor traps position:fixed — the
+  // overlay was centering inside the tall page column instead of the viewport
+  // (hence scrolling to find the chart). From <body> it opens where you are.
+  return createPortal(
     <div onClick={onClose} style={{ position: "fixed", inset: 0, background: "var(--scrim)", zIndex: 500, display: "flex", alignItems: "center", justifyContent: "center", padding: isMobile ? 16 : 0, animation: "fadein 0.15s ease both" }}>
       <div onClick={e => e.stopPropagation()} style={{
         background: "linear-gradient(180deg, var(--surface-2), var(--surface))", borderRadius: 18,
@@ -114,6 +119,7 @@ export default function BtcChartModal({ isMobile, onClose, callFnFull }) {
         )}
         {!candleErr && candles && <div ref={containerRef} style={{ width: "100%" }} />}
       </div>
-    </div>
+    </div>,
+    document.body
   );
 }

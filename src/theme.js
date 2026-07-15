@@ -7,7 +7,6 @@
 
 export const syne = "var(--font-display)"; // historical name — carries Cinzel
 export const mono = "var(--font-mono)";
-export const serif = "var(--font-serif)"; // the letter voice — the Chief's prose only
 
 export const T = {
   bg: "var(--bg)",

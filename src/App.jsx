@@ -13,7 +13,6 @@ import { queryClient } from "./lib/queryClient.js";
 import { useEvents, useSaveEvent, useDeleteEvent } from "./data/calendar.js";
 import { useNotes } from "./data/notes.js";
 import { useUpkeep } from "./data/upkeep.js";
-import { ChiefsWord } from "./features/brief/ChiefsWord.jsx";
 import { S, tint } from "./ui/styles.js";
 import { callClaude, convene, BOARD, MODEL_META, DEFAULT_MODELS } from "./lib/claude.js";
 import { updateSnapshot, formatSnapshotForChat } from "./lib/snapshot.js";
@@ -519,7 +518,7 @@ function NotesTile({ isMobile, refreshSignal, onOpenNotes }) {
   );
 }
 
-function MorningBriefPage({ btc, isMobile, settings, updateSetting, onOpenCalendar, onOpenNotes, onJump, refreshSignal }) {
+function MorningBriefPage({ btc, isMobile, settings, updateSetting, onOpenCalendar, onOpenNotes, refreshSignal }) {
   const sportsCfg = settings?.sports || { followedTeams: [], watchLeagues: [], watchGames: [], excludedGames: [] };
   const [sportsGames, setSportsGames] = useState([]);
   const [sportsStatus, setSportsStatus] = useState({ state: "loading" });
@@ -883,19 +882,11 @@ function MorningBriefPage({ btc, isMobile, settings, updateSetting, onOpenCalend
                       <span style={S.title}>Stocks · Day Outlook</span>
                       <StatusTag status={stocksStatus} />
                     </div>
-                    <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 7, marginBottom: 13 }}>
+                    <div style={{ display: "grid", gridTemplateColumns: "repeat(2, minmax(0, 1fr))", gap: 7, marginBottom: 13 }}>
                       {[["S&P FUT", stocks.spx], ["NASDAQ FUT", stocks.ndq], ["10Y YIELD", stocks.tnx], ["DXY", stocks.dxy]].map(([l, s], i) => {
                         // level + day move; a stale payload without `delta` falls back to the old single-value row
                         const lvl = s.price && s.price !== "—" ? s.price : s.value;
-                        return (
-                          <div key={i} style={{ ...S.inner, padding: "9px 12px 8px", borderRadius: 10, display: "flex", flexDirection: "column", gap: 3 }}>
-                            <span style={{ fontSize: 9, color: T.faint, letterSpacing: "0.06em" }}>{l}</span>
-                            <span style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", gap: 6 }}>
-                              <span style={{ fontSize: 13.5, fontWeight: 600, color: lvl === "—" ? T.faint : T.ink, fontFamily: mono, fontVariantNumeric: "tabular-nums" }}>{lvl}</span>
-                              {s.delta && <span style={{ fontSize: 10, fontWeight: 700, color: s.up ? T.green : T.red, fontFamily: mono }}>{s.delta}</span>}
-                            </span>
-                          </div>
-                        );
+                        return <StatBox key={i} value={lvl} label={l} delta={s.delta} deltaColor={s.up ? T.green : T.red} valueColor={lvl === "—" ? T.faint : T.ink} />;
                       })}
                     </div>
                     <div style={{ fontSize: 11.5, color: T.sub, lineHeight: 1.65 }}>{stocksOutlook}</div>
@@ -924,22 +915,31 @@ function MorningBriefPage({ btc, isMobile, settings, updateSetting, onOpenCalend
                       <span style={S.title}>{miniNow.toLocaleDateString("en-US", { month: "long", year: "numeric" })}</span>
                       <span style={{ ...S.microLabel }}>THIS MONTH</span>
                     </div>
-                    <div style={{ display: "grid", gridTemplateColumns: "repeat(7, 1fr)", gap: 2, marginBottom: 3 }}>
+                    {/* minmax(0,1fr) columns + minWidth 0 cells: a long event title can never
+                        widen its column — the pill truncates inside a fixed, even grid */}
+                    <div style={{ display: "grid", gridTemplateColumns: "repeat(7, minmax(0, 1fr))", gap: 2, marginBottom: 3 }}>
                       {["S", "M", "T", "W", "T", "F", "S"].map((d, i) => (
                         <div key={i} style={{ textAlign: "center", fontSize: 8.5, fontWeight: 700, color: T.faint, fontFamily: mono }}>{d}</div>
                       ))}
                     </div>
-                    <div style={{ display: "grid", gridTemplateColumns: "repeat(7, 1fr)", gap: 2 }}>
+                    <div style={{ display: "grid", gridTemplateColumns: "repeat(7, minmax(0, 1fr))", gap: 2 }}>
                       {miniCells.map((day, i) => {
                         if (day === null) return <div key={`b${i}`} />;
                         const dayEvents = miniEventsByDay[miniDateKey(day)] || [];
                         const isToday = day === todayDate;
                         return (
-                          <div key={day} style={{ display: "flex", flexDirection: "column", alignItems: "stretch", gap: 1, textAlign: "left", minHeight: 34, padding: "2px 2px", borderRadius: 5, border: isToday ? `1.5px solid ${T.brass}` : "1px solid transparent", background: isToday ? "var(--brass-a08)" : "transparent" }}>
+                          <div key={day} style={{ display: "flex", flexDirection: "column", alignItems: "stretch", gap: 2, textAlign: "left", minWidth: 0, height: isMobile ? 34 : 38, overflow: "hidden", padding: "2px 2px", borderRadius: 5, border: isToday ? `1.5px solid ${T.brass}` : "1px solid transparent", background: isToday ? "var(--brass-a08)" : "transparent" }}>
                             <span style={{ fontSize: 9, fontWeight: isToday ? 800 : 500, color: isToday ? T.brass : T.ink, fontFamily: mono, paddingLeft: 1 }}>{day}</span>
-                            {dayEvents.length > 0 && (
-                              <span style={{ fontSize: 6.5, fontWeight: 700, color: "var(--chip-ink)", background: miniCatColor(dayEvents[0].category), borderRadius: 3, padding: "1px 2px", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", lineHeight: 1.4 }}>{dayEvents[0].title}</span>
-                            )}
+                            {dayEvents.length > 0 && (isMobile ? (
+                              // phone cells are too narrow for words — a colored mark per event reads cleaner
+                              <span style={{ display: "flex", gap: 2, paddingLeft: 1 }}>
+                                {dayEvents.slice(0, 3).map((ev, j) => (
+                                  <span key={j} style={{ width: 4, height: 4, borderRadius: "50%", background: miniCatColor(ev.category), flex: "none" }} />
+                                ))}
+                              </span>
+                            ) : (
+                              <span style={{ fontSize: 6.5, fontWeight: 700, color: "var(--chip-ink)", background: miniCatColor(dayEvents[0].category), borderRadius: 3, padding: "1px 3px", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", lineHeight: 1.5, minWidth: 0, maxWidth: "100%" }}>{dayEvents[0].title}</span>
+                            ))}
                           </div>
                         );
                       })}
@@ -1127,11 +1127,9 @@ function MorningBriefPage({ btc, isMobile, settings, updateSetting, onOpenCalend
       );
       const card_docket = <DocketCard isMobile={isMobile} birthdays={birthdays} macroEvents={eventsStatus.state === "live" ? events : []} settings={settings} onOpenCalendar={onOpenCalendar} />;
       const card_notes = <NotesTile isMobile={isMobile} refreshSignal={refreshSignal} onOpenNotes={onOpenNotes} />;
-      const card_word = <ChiefsWord isMobile={isMobile} settings={settings} updateSetting={updateSetting} onJump={onJump} />;
       return isMobile ? (
       <div style={grid}>
         <div className="stagger" style={col}>
-          {card_word}
           {card_docket}
           {card_notes}
           {sectionHeader("Market")}
@@ -1143,10 +1141,6 @@ function MorningBriefPage({ btc, isMobile, settings, updateSetting, onOpenCalend
       </div>
       ) : (
       <div style={grid}>
-        {/* the masthead: the Chief's read on the day, full width */}
-        <div className="stagger" style={{ gridColumn: "1 / -1" }}>
-          {card_word}
-        </div>
         {/* the top section: Docket and Notes as two equal plates */}
         <div className="stagger" style={{ gridColumn: "1 / -1", display: "grid", gridTemplateColumns: "minmax(0, 1fr) minmax(0, 1fr)", gap: 14, alignItems: "stretch" }}>
           {card_docket}
@@ -4285,7 +4279,7 @@ export default function App() {
 
   const renderPage = (key) => {
     switch (key) {
-      case "brief": return <MorningBriefPage btc={btc} isMobile={isMobile} settings={settings} updateSetting={updateSetting} onOpenCalendar={goToCalendar} onOpenNotes={(noteId) => summonGo({ page: "personal", sub: "notes", noteId })} onJump={jumpTo} refreshSignal={briefRefreshSignal} />;
+      case "brief": return <MorningBriefPage btc={btc} isMobile={isMobile} settings={settings} updateSetting={updateSetting} onOpenCalendar={goToCalendar} onOpenNotes={(noteId) => summonGo({ page: "personal", sub: "notes", noteId })} refreshSignal={briefRefreshSignal} />;
       case "boardroom": return <BoardRoomPage messages={messages} thinking={thinking} loadingData={loadingData} input={input} setInput={setInput} onSend={send} onClearChat={clearChat} endRef={endRef} seatNotes={seatNotes} onEditSeat={setEditSeat} settings={settings} updateSetting={updateSetting} session={session} onWorkerRun={refreshData} onSkillsChanged={refreshSkills} jump={jump} isMobile={isMobile} />;
       case "personal": return <PersonalPage isMobile={isMobile} jumpSignal={personalJumpTo} jump={jump} settings={settings} updateSetting={updateSetting} />;
       case "assets": return <PropertiesPage isMobile={isMobile} settings={settings} updateSetting={updateSetting} session={session} />;
@@ -4393,10 +4387,7 @@ export default function App() {
                 onKeyDown={e => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); goToPage(n.key); } }}
                 style={{ display: "flex", alignItems: "center", gap: 12, padding: "12px 13px", borderRadius: 12, cursor: "pointer", background: active ? "var(--brass-a08)" : "transparent", border: `1px solid ${active ? "var(--brass-a16)" : "transparent"}` }}>
                 <span style={{ width: 7, height: 7, transform: "rotate(45deg)", background: active ? n.mark : "var(--ink-a18)", flex: "none", borderRadius: 1.5 }} />
-                <span style={{ display: "flex", flexDirection: "column", gap: 2, minWidth: 0 }}>
-                  <span style={{ fontSize: 12.5, fontWeight: 700, fontFamily: syne, color: active ? T.ink : T.sub, letterSpacing: "0.02em" }}>{n.label}</span>
-                  <span style={{ fontSize: 9.5, color: T.faint, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{n.sub}</span>
-                </span>
+                <span style={{ fontSize: 12.5, fontWeight: 700, fontFamily: syne, color: active ? T.ink : T.sub, letterSpacing: "0.02em", minWidth: 0, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{n.label}</span>
               </div>
             );
           })}
