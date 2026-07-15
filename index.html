@@ -25,8 +25,9 @@
         var t = "day";
         try {
           var p = localStorage.getItem("br_theme") || "auto";
-          var h = new Date().getHours();
-          t = p === "day" || p === "night" ? p : (h >= 19 || h < 7 ? "night" : "day");
+          if (p === "day" || p === "night") t = p;
+          else if (window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches) t = "night";
+          else { var h = new Date().getHours(); t = (h >= 19 || h < 7) ? "night" : "day"; }
         } catch (e) {}
         document.documentElement.setAttribute("data-theme", t);
         var m = document.querySelector('meta[name="theme-color"]');

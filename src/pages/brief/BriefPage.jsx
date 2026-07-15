@@ -3,7 +3,7 @@
 // No fabricated fallback numbers anywhere on this page. Each card is either
 // live (real data), not connected (with exact setup instructions), or error
 // (with the actual failure). Empty dashes beat plausible-looking fake data.
-import { useState, useEffect, useRef, useCallback } from "react";
+import { useState, useEffect, useCallback } from "react";
 import { T } from "../../theme.js";
 import { Card, SectionHeader, StatTile, Button, Dot, Delta, Grid } from "../../ui/kit.jsx";
 import { IcChevronRight } from "../../ui/icons.jsx";
@@ -13,7 +13,7 @@ import GscLineChart from "../../GscLineChart.jsx";
 import BtcChartModal from "../../BtcChartModal.jsx";
 import { callFnFull } from "../../lib/functions.js";
 import { callClaude } from "../../lib/claude.js";
-import { updateSnapshot, formatSnapshotForChat } from "../../lib/snapshot.js";
+import { updateSnapshot } from "../../lib/snapshot.js";
 import { db } from "../../data/db.js";
 import { nextBirthdayOccurrence, MONTH_NAMES } from "../../lib/dates.js";
 import { DocketCard } from "./DocketCard.jsx";
@@ -76,9 +76,6 @@ export function MorningBriefPage({ btc, isMobile, settings, updateSetting, onOpe
   const [miniEvents, setMiniEvents] = useState([]); // for the mini calendar card — same personal_events table CalendarPanel uses
   const [eventAnalysis, setEventAnalysis] = useState({}); // idx -> one-sentence take | "loading" | "error"
   const [btcChartOpen, setBtcChartOpen] = useState(false);
-  const [aiBtcNarrative, setAiBtcNarrative] = useState(null);
-  const [btcNarrativeExpanded, setBtcNarrativeExpanded] = useState(false);
-  const aiBtcNarrativeKey = useRef(null); // dedupe so a re-render doesn't refire the same call
   const [wireAll, setWireAll] = useState(false);
   const [meetingsAll, setMeetingsAll] = useState(false);
   const [birthdaysAll, setBirthdaysAll] = useState(false);
@@ -199,46 +196,10 @@ export function MorningBriefPage({ btc, isMobile, settings, updateSetting, onOpe
   const hasChange = !btc.loading && !btc.error && btc.changePct !== null && btc.changePct !== undefined;
   const up = (btc.changePct || 0) >= 0;
   const hasRange = !btc.loading && !btc.error && btc.high24 != null && btc.low24 != null;
-  const fmtK = (n) => "$" + (n / 1000).toFixed(1) + "K";
-  let dayTarget = "—", support = "—", invalidation = "—", stance = "Neutral", stanceColor = T.sub, narrative = "Waiting on live price data to compute today's range and levels.";
-  if (hasRange) {
-    const range = Math.max(btc.high24 - btc.low24, btc.high24 * 0.001);
-    const target = Math.max(btc.high24, btc.price + range * 0.5);
-    const invalid = btc.low24 - range * 0.15;
-    dayTarget = fmtK(target); support = fmtK(btc.low24); invalidation = fmtK(invalid);
-    const posInRange = (btc.price - btc.low24) / range;
-    stance = up ? "Constructive" : "Cautious"; stanceColor = up ? T.green : T.amber;
-    const pos = posInRange > 0.7 ? "near the top of" : posInRange < 0.3 ? "near the bottom of" : "mid";
-    narrative = `24h range ${fmtK(btc.low24)}–${fmtK(btc.high24)}, currently trading ${pos === "mid" ? "in the middle of" : pos} that range and ${up ? "up" : "down"} ${Math.abs(btc.changePct || 0).toFixed(1)}% on the day. Support sits at the 24h low (${fmtK(btc.low24)}); a break below ${invalidation} would put price outside the recent range.`;
-  }
-  // AI take on the setup — cached in app_settings (cross-device) with a 4h
-  // TTL: it regenerates at most every ~4 hours, lazily, while the app is
-  // open — not on every open, and never on the poll cadence. Strictly market
-  // analysis: no references to personal positions or holdings.
-  const OUTLOOK_TTL = 4 * 60 * 60 * 1000;
-  const outlookAt = settings?.btc_outlook?.at || 0;
-  useEffect(() => {
-    if (!hasRange || settings == null) return;
-    const cached = settings.btc_outlook;
-    if (cached?.text && Date.now() - (cached.at || 0) < OUTLOOK_TTL) {
-      setAiBtcNarrative(cached.text);
-      return;
-    }
-    // stale or absent — generate once; the ref throttles retries so a failed
-    // call doesn't re-fire on every price poll
-    if (Date.now() - (aiBtcNarrativeKey.current || 0) < 10 * 60 * 1000) return;
-    aiBtcNarrativeKey.current = Date.now();
-    (async () => {
-      const system = `You write one tight, genuinely informative take (2-3 sentences, no more) on Bitcoin's current setup for a sharp market watcher. Don't just restate the numbers you're given — say what they actually mean, and weave in today's broader market tape only if it's genuinely relevant (correlated risk-on/risk-off moves, a notable macro headline) — cut it if it doesn't add something real. Market analysis only: never reference the reader's personal positions, holdings, or leverage. No preamble, no markdown, no hedging filler.`;
-      const context = `Price: $${Math.round(btc.price).toLocaleString()}, ${up ? "+" : ""}${(btc.changePct || 0).toFixed(1)}% 24h. 24h range: ${fmtK(btc.low24)}–${fmtK(btc.high24)}. Day target: ${dayTarget}. Support: ${support}. Invalidation: ${invalidation}.${formatSnapshotForChat()}`;
-      const raw = await callClaude({ system, messages: [{ role: "user", content: context }], modelKey: "haiku", maxTokens: 130, fn: "btc_narrative" });
-      if (raw && raw.trim()) {
-        setAiBtcNarrative(raw.trim());
-        updateSetting("btc_outlook", { text: raw.trim(), at: Date.now() });
-      }
-    })();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [hasRange, settings == null, btc.fetchedAt]);
+  // A one-word read on the day's tape — the only interpretive thing the card
+  // still shows now that the levels + AI explanation are gone.
+  let stance = "Neutral", stanceColor = T.sub;
+  if (hasRange) { stance = up ? "Constructive" : "Cautious"; stanceColor = up ? T.green : T.amber; }
 
   const pad = isMobile ? "md" : "lg";
 
@@ -258,21 +219,18 @@ export function MorningBriefPage({ btc, isMobile, settings, updateSetting, onOpe
     </div>
   );
 
-  /* ── Bitcoin · day outlook ─────────────────────────────────────────────── */
-  const fullNarrative = aiBtcNarrative || narrative;
-  const firstSentenceEnd = fullNarrative.indexOf(". ");
-  const shortNarrative = firstSentenceEnd > 0 ? fullNarrative.slice(0, firstSentenceEnd + 1) : fullNarrative;
-  const hasMore = shortNarrative.length < fullNarrative.length;
-  const btcStamp = `${freshnessLabel(btc.fetchedAt)}${aiBtcNarrative && outlookAt && Date.now() - outlookAt > 45 * 60 * 1000 ? ` · take ${Math.round((Date.now() - outlookAt) / 3600000)}h ago` : ""}`;
-  const card_bitcoin = (
+  /* ── Markets — Bitcoin (tap for the chart) + gold and the watchlist ────── */
+  const card_markets = (
     <Card pad={pad} style={{ minWidth: 0 }}>
       <CardHead
         leading={<span aria-hidden style={{ width: 20, height: 20, borderRadius: "50%", background: "var(--btc)", color: "#1A0F00", display: "inline-flex", alignItems: "center", justifyContent: "center", fontSize: 11, fontWeight: 700, flex: "none" }}>₿</span>}
-        title="Bitcoin · day outlook"
+        title="Markets"
         trailing={<StancePill text={stance} color={stanceColor} />}
       />
+      {/* Bitcoin hero — price, day move, and a sparkline that taps to the chart */}
       <div onClick={() => setBtcChartOpen(true)} style={{ cursor: "pointer" }} title="Tap for the full chart">
-        <div style={{ display: "flex", alignItems: "baseline", gap: 10, marginBottom: 12 }}>
+        <div style={{ display: "flex", alignItems: "baseline", gap: 8, marginBottom: !btc.loading && !btc.error ? 10 : 4 }}>
+          <span className="t-cap" style={{ color: "var(--faint)", flex: "none" }}>Bitcoin</span>
           <span className="t-title1 t-num">{btc.price != null && !btc.error ? <NumTween v={btc.price} f={n => "$" + n.toLocaleString(undefined, { maximumFractionDigits: 0 })} /> : price}</span>
           {hasChange && <Delta pct={btc.changePct} />}
         </div>
@@ -281,42 +239,21 @@ export function MorningBriefPage({ btc, isMobile, settings, updateSetting, onOpe
             <Sparkline points={btc.points} color={up ? T.green : T.red} height={36} />
           </div>
         )}
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(3, minmax(0, 1fr))", gap: 8 }}>
-          <StatTile value={dayTarget} label="Day target" />
-          <StatTile value={support} label="Support (24h low)" valueTone={T.green} />
-          <StatTile value={invalidation} label="Invalidation" valueTone={T.red} />
-        </div>
       </div>
-      <div style={{ marginTop: 12 }}>
-        <div className="t-call" style={{ color: "var(--sub)", lineHeight: 1.55 }}>{btcNarrativeExpanded ? fullNarrative : shortNarrative}</div>
-        {hasMore && (
-          <button onClick={() => setBtcNarrativeExpanded(e => !e)} aria-expanded={btcNarrativeExpanded}
-            style={{ display: "inline-flex", alignItems: "center", minHeight: 40, margin: "-6px 0 -8px", padding: 0, background: "none", border: "none", cursor: "pointer" }}>
-            <span className="t-cap" style={{ fontWeight: 600 }}>{btcNarrativeExpanded ? "Show less" : "Tap for more"}</span>
-          </button>
-        )}
-      </div>
-      <div style={{ marginTop: 4, display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 }}>
-        <span className="t-cap t-num" style={{ color: "var(--faint)", minWidth: 0 }}>{btcStamp}</span>
-        <Button kind="plain" size="sm" onClick={() => setBtcChartOpen(true)}
-          style={{ height: 44, margin: "-6px -10px -8px 0", padding: "0 10px", flex: "none" }}>
-          Chart <IcChevronRight size={12} />
-        </Button>
-      </div>
-    </Card>
-  );
-
-  /* ── Markets — gold + the names worth watching ─────────────────────────── */
-  const card_markets = (
-    <Card pad={pad} style={{ minWidth: 0 }}>
-      <CardHead title="Markets" trailing={<StatusTag status={stocksStatus} />} />
+      {/* the watchlist: gold + the names worth watching */}
       <div style={{ display: "grid", gridTemplateColumns: isMobile ? "repeat(2, minmax(0, 1fr))" : "repeat(4, minmax(0, 1fr))", gap: 8 }}>
         {[["Gold", stocks.gold], ["NVDA", stocks.nvda], ["MSTR", stocks.mstr], ["STRC", stocks.strc]].map(([l, s], i) => {
           const lvl = s?.price && s.price !== "—" ? s.price : (s?.value || "—");
           return <StatTile key={i} value={lvl} label={l} delta={s?.delta} deltaTone={s?.up ? T.green : T.red} valueTone={lvl === "—" ? T.faint : undefined} />;
         })}
       </div>
-      <Fresh>{freshnessLabel(briefRefreshedAt)}</Fresh>
+      <div style={{ marginTop: 8, display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 }}>
+        <span className="t-cap t-num" style={{ color: "var(--faint)", minWidth: 0 }}>{freshnessLabel(briefRefreshedAt)}</span>
+        <Button kind="plain" size="sm" onClick={() => setBtcChartOpen(true)}
+          style={{ height: 44, margin: "-6px -10px -8px 0", padding: "0 10px", flex: "none" }}>
+          Chart <IcChevronRight size={12} />
+        </Button>
+      </div>
     </Card>
   );
 
@@ -330,14 +267,19 @@ export function MorningBriefPage({ btc, isMobile, settings, updateSetting, onOpe
           events.length ? events.map((e, i) => {
             const analysis = eventAnalysis[i];
             return (
-              <div key={i} style={{ background: e.isPast ? "var(--green-a06)" : "var(--surface-2)", borderRadius: 12, padding: "10px 13px", display: "flex", flexDirection: "column", gap: 4 }}>
-                <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+              // Stacked, not squeezed: the time + Result badge share the top
+              // line; the event title gets the full width below it (aligned
+              // under the time), then the one-line take. Reads cleanly on a
+              // phone instead of wrapping the title into a narrow middle column.
+              <div key={i} style={{ background: e.isPast ? "var(--green-a06)" : "var(--surface-2)", borderRadius: 12, padding: "11px 13px", display: "flex", flexDirection: "column", gap: 5 }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
                   <Dot tone={e.color} />
-                  <span className="t-cap t-num" style={{ color: "var(--faint)", flex: "none", whiteSpace: "nowrap" }}>{e.time}</span>
-                  <span className="t-call" style={{ flex: 1, minWidth: 0, lineHeight: 1.45 }}>{e.text}</span>
+                  <span className="t-cap t-num" style={{ color: "var(--faint)", whiteSpace: "nowrap" }}>{e.time}</span>
+                  <span style={{ flex: 1 }} />
                   {e.isPast && <span className="t-cap" style={{ color: "var(--green)", fontWeight: 600, flex: "none" }}>Result</span>}
                 </div>
-                <div className="t-foot" style={{ color: "var(--faint)", paddingLeft: 17, lineHeight: 1.45 }}>
+                <div className="t-call" style={{ lineHeight: 1.4, paddingLeft: 17 }}>{e.text}</div>
+                <div className="t-foot" style={{ color: "var(--faint)", paddingLeft: 17, lineHeight: 1.5 }}>
                   {analysis === "loading" || !analysis ? <span style={{ animation: "pulse 1.4s infinite" }}>{e.isPast ? "Reading the actual impact…" : "Reading the likely impact…"}</span>
                     : analysis === "error" ? "Couldn't get a read on this one."
                     : analysis}
@@ -574,7 +516,7 @@ export function MorningBriefPage({ btc, isMobile, settings, updateSetting, onOpe
         </Grid>
         <SectionHeader title="Market" style={{ marginTop: 8 }} />
         <Grid min={gmin} gap={10}>
-          {card_bitcoin}{card_wire}{card_markets}{card_watch}
+          {card_markets}{card_wire}{card_watch}
         </Grid>
         <SectionHeader title="Signals" style={{ marginTop: 8 }} />
         <Grid min={gmin} gap={10}>

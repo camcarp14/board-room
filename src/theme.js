@@ -66,6 +66,15 @@ export function setThemePref(pref) {
 
 export function resolveTheme(pref = getThemePref(), d = new Date()) {
   if (pref === "day" || pref === "night") return pref;
+  // auto → match the device's own light/dark setting. This also keeps the
+  // iOS status bar (which follows system appearance on an installed web app)
+  // in agreement with the app instead of clashing. Fall back to the sun
+  // (Graphite 19:00–07:00) only if the media query isn't available.
+  try {
+    if (typeof window !== "undefined" && window.matchMedia) {
+      return window.matchMedia("(prefers-color-scheme: dark)").matches ? "night" : "day";
+    }
+  } catch {}
   const h = d.getHours();
   return h >= 19 || h < 7 ? "night" : "day";
 }

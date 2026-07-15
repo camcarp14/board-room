@@ -12,14 +12,17 @@ export function useThemeController() {
     applyTheme(resolveTheme(pref));
     setResolved(resolveTheme(pref));
     if (pref !== "auto") return;
-    const iv = setInterval(() => {
+    // auto follows the device appearance — react the instant it flips, and
+    // keep a slow tick as a fallback for the sun-based path (older browsers
+    // with no prefers-color-scheme support).
+    const reresolve = () => {
       const r = resolveTheme("auto");
-      setResolved(prev => {
-        if (prev !== r) applyTheme(r, { animate: true });
-        return r;
-      });
-    }, 60 * 1000);
-    return () => clearInterval(iv);
+      setResolved(prev => { if (prev !== r) applyTheme(r, { animate: true }); return r; });
+    };
+    const mq = window.matchMedia ? window.matchMedia("(prefers-color-scheme: dark)") : null;
+    mq?.addEventListener?.("change", reresolve);
+    const iv = setInterval(reresolve, 60 * 1000);
+    return () => { mq?.removeEventListener?.("change", reresolve); clearInterval(iv); };
   }, [pref]);
   const setPref = (p) => {
     setThemePref(p);

@@ -30,7 +30,7 @@ export function BootScreen() {
 // Cycle auto → day → night → auto. Auto is the house default: the room
 // follows the sun (Graphite 19:00–07:00).
 const THEME_CYCLE = { auto: "day", day: "night", night: "auto" };
-const THEME_LABEL = { auto: "Auto — follows the sun", day: "Porcelain", night: "Graphite" };
+const THEME_LABEL = { auto: "Auto — matches your device", day: "Porcelain", night: "Graphite" };
 export function ThemeToggle({ theme }) {
   const icon = theme.pref === "auto" ? <IcAutoTheme size={19} /> : theme.pref === "day" ? <IcSun size={19} /> : <IcMoon size={19} />;
   return (
