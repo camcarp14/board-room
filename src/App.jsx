@@ -11,6 +11,7 @@ import { MobileShell } from "./shell/MobileShell.jsx";
 import { SidebarShell } from "./shell/SidebarShell.jsx";
 import { Summon } from "./shell/Summon.jsx";
 import { BootScreen, LoginScreen, SetupNotice } from "./shell/Boot.jsx";
+import { ErrorBoundary } from "./shell/ErrorBoundary.jsx";
 import { Sheet, Button, useConfirm } from "./ui/kit.jsx";
 import { MorningBriefPage } from "./pages/brief/BriefPage.jsx";
 import { PersonalPage } from "./pages/personal/PersonalPage.jsx";
@@ -378,7 +379,7 @@ export default function App() {
   const calUrl = settings?.calendar_url || "";
   const totalSpend = obs.all().reduce((s, l) => s + (l.cost || 0), 0);
 
-  const renderPage = (key) => {
+  const renderPageInner = (key) => {
     switch (key) {
       case "brief": return <MorningBriefPage btc={btc} isMobile={isMobile} settings={settings} updateSetting={updateSetting} onOpenCalendar={goToCalendar} onOpenNotes={(noteId) => summonGo({ page: "personal", sub: "notes", noteId })} refreshSignal={briefRefreshSignal} />;
       case "boardroom": return <BoardRoomPage messages={messages} thinking={thinking} loadingData={loadingData} input={input} setInput={setInput} onSend={send} onClearChat={clearChat} endRef={endRef} seatNotes={seatNotes} onEditSeat={setEditSeat} settings={settings} updateSetting={updateSetting} session={session} onWorkerRun={refreshData} onSkillsChanged={refreshSkills} jump={jump} isMobile={isMobile} />;
@@ -388,6 +389,13 @@ export default function App() {
       default: return null;
     }
   };
+  // A crashing panel shows an error card; the shell + nav stay alive so the
+  // other tabs are still reachable. key={key} resets the boundary on nav.
+  const renderPage = (key) => (
+    <ErrorBoundary key={key} label={NAV.find(n => n.key === key)?.label || key}>
+      {renderPageInner(key)}
+    </ErrorBoundary>
+  );
 
   // ═══ SHELLS ═══
   // One nav state, two chromes: MobileShell (glass nav bar + tab bar, all the

@@ -622,7 +622,7 @@ export function MorningBriefPage({ btc, isMobile, settings, updateSetting, onOpe
               const iconColor = g.state === "in" ? T.red : g.isPast ? T.green : T.faint;
               return (
                 <div key={g.id} style={{ background: "var(--surface-2)", borderRadius: 12, padding: "0 4px 0 12px" }}>
-                  <div onClick={() => toggleGame(g)} role="button" tabIndex={0} aria-expanded={!!expandedGames[g.id]}
+                  <div onClick={() => toggleGame(g)} role="button" tabIndex={0} aria-expanded={open}
                     onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); toggleGame(g); } }}
                     style={{ display: "flex", alignItems: "center", gap: 9, cursor: "pointer", minHeight: 46 }}>
                     <Icon width={16} height={16} style={{ flex: "none", color: iconColor, animation: g.state === "in" ? "pulse 1.4s infinite" : "none" }} />
