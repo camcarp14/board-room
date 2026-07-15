@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from "react";
-import { T, syne, mono } from "../../theme.js";
+import { T, syne, mono, serif } from "../../theme.js";
 import { S } from "../../ui/styles.js";
 import { Toggle } from "../../ui/primitives.jsx";
 import { callClaude } from "../../lib/claude.js";
@@ -117,7 +117,7 @@ export function ChiefsWord({ isMobile, settings, updateSetting, onJump }) {
   const parts = shown ? splitWord(shown.text) : null;
 
   return (
-    <div style={{ ...card, background: "var(--brass-a06)", border: "1px solid var(--brass-a20)", boxShadow: "inset 0 1px 0 var(--white-edge)" }}>
+    <div style={{ ...card, ...(isMobile ? {} : { padding: "24px 28px" }), background: "var(--brass-a06)", border: "1px solid var(--brass-a20)", boxShadow: "inset 0 1px 0 var(--white-edge)" }}>
       <div style={{ display: "flex", alignItems: "center", gap: 9, marginBottom: 10, flexWrap: "wrap" }}>
         {/* solid diamond at dawn, hollow at dusk */}
         <span style={{ width: 7, height: 7, transform: "rotate(45deg)", borderRadius: 1.5, flex: "none", ...(mode === "evening" ? { background: "transparent", border: `1.5px solid ${T.brass}` } : { background: T.brass, boxShadow: "0 0 10px var(--brass-a40)" }) }} />
@@ -135,18 +135,19 @@ export function ChiefsWord({ isMobile, settings, updateSetting, onJump }) {
         </div>
       ) : shown ? (
         <>
-          <div style={{ fontSize: isMobile ? 13 : 13.5, lineHeight: 1.78, color: T.ink, whiteSpace: "pre-wrap", overflowWrap: "break-word" }}>{parts.body}</div>
+          {/* the letter — the one surface in the app set in the serif voice */}
+          <div className="pagefade" style={{ fontFamily: serif, fontSize: isMobile ? 15 : 16, lineHeight: 1.8, color: T.ink, whiteSpace: "pre-wrap", overflowWrap: "break-word", maxWidth: 720, textWrap: "pretty", WebkitHyphens: "auto", hyphens: "auto" }}>{parts.body}</div>
           {parts.move && (
-            <div style={{ display: "flex", alignItems: "baseline", gap: 9, marginTop: 11, paddingTop: 11, borderTop: "1px solid var(--brass-a20)" }}>
+            <div style={{ display: "flex", alignItems: "baseline", gap: 10, marginTop: 12, paddingTop: 12, borderTop: "1px solid var(--brass-a20)", maxWidth: 720 }}>
               <span style={{ fontSize: 9, fontWeight: 700, fontFamily: mono, letterSpacing: "0.14em", color: T.brass, flex: "none" }}>{savedMode === "evening" ? "TOMORROW'S FIRST MOVE" : "FIRST MOVE"}</span>
-              <span style={{ fontSize: isMobile ? 12.5 : 13, fontWeight: 600, fontFamily: syne, color: T.ink, lineHeight: 1.6 }}>{parts.move}</span>
+              <span style={{ fontSize: isMobile ? 13 : 13.5, fontWeight: 600, fontFamily: syne, color: T.ink, lineHeight: 1.6 }}>{parts.move}</span>
             </div>
           )}
         </>
       ) : err ? (
         <div style={{ fontSize: 11.5, color: T.faint, lineHeight: 1.6 }}>{err}</div>
       ) : (
-        <div style={{ fontSize: 11.5, color: T.sub, lineHeight: 1.65 }}>
+        <div style={{ fontFamily: serif, fontStyle: "italic", fontSize: isMobile ? 13.5 : 14, color: T.sub, lineHeight: 1.7, maxWidth: 640 }}>
           {mode === "morning"
             ? "One tap and the Chief reads the room — calendar, upkeep, birthdays, markets — and hands you the day in a few sentences, with one clear first move."
             : "One tap and the Chief closes the books — what moved today, what's still open — and sets tomorrow's opening action."}
@@ -156,8 +157,7 @@ export function ChiefsWord({ isMobile, settings, updateSetting, onJump }) {
       {chips.length > 0 && (
         <div style={{ display: "flex", gap: 7, marginTop: 12, flexWrap: "wrap" }}>
           {chips.map(c => (
-            <button key={c.label} onClick={() => onJump?.(c.go)}
-              style={{ display: "inline-flex", alignItems: "center", gap: 7, padding: "5px 12px", background: "transparent", border: "1px solid var(--brass-a20)", borderRadius: 999, color: T.sub, fontSize: 9.5, fontFamily: mono, letterSpacing: "0.06em", cursor: "pointer" }}>
+            <button key={c.label} className="chip" onClick={() => onJump?.(c.go)}>
               <span style={{ width: 4, height: 4, transform: "rotate(45deg)", background: T.brass, borderRadius: 1, flex: "none" }} />
               {c.label.toUpperCase()}
             </button>

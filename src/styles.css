@@ -20,6 +20,8 @@
   --font-display: 'Cinzel', 'Times New Roman', serif;
   --font-body: 'Inter', system-ui, sans-serif;
   --font-mono: 'DM Mono', 'SF Mono', Menlo, monospace;
+  /* the letter voice — reserved for prose the Chief writes, nothing else */
+  --font-serif: 'Newsreader', Georgia, 'Times New Roman', serif;
 }
 
 /* ── DAYLIGHT — marble surfaces, bronze accents, inscription capitals ──────── */
@@ -212,6 +214,17 @@ button:active:not(:disabled) { transform: scale(0.97); }
 .press:active { transform: scale(0.97); }
 .lift { transition: transform var(--dur-2) var(--ease-out), box-shadow var(--dur-2) var(--ease-out); }
 .lift:hover { transform: translateY(-1px); box-shadow: var(--shadow-card); }
+
+/* ── chips — small tappable facts (the Word's context row) ─────────────────── */
+.chip {
+  display: inline-flex; align-items: center; gap: 7px;
+  padding: 5px 12px; border-radius: 999px; cursor: pointer;
+  background: transparent; border: 1px solid var(--brass-a20);
+  color: var(--sub); font-family: var(--font-mono);
+  font-size: 9.5px; letter-spacing: 0.06em;
+  transition: border-color var(--dur-1) ease, color var(--dur-1) ease, background var(--dur-1) ease;
+}
+.chip:hover { border-color: var(--brass-a40); color: var(--ink); background: var(--brass-a06); }
 
 /* ── page + tab transitions — nothing hard-cuts ────────────────────────────── */
 .pagefade { animation: pagein var(--dur-3) var(--ease-out) both; }
