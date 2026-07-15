@@ -257,14 +257,14 @@ export function useConfirm() {
 }
 
 /* ── large-title page block ────────────────────────────────────────────────── */
-export function LargeTitle({ title, sub, trailing }) {
+export function LargeTitle({ title, sub, trailing, onTitleTap }) {
   return (
-    <div className="lt-block">
-      <div style={{ minWidth: 0 }}>
-        <h1 className="t-ltitle" style={{ margin: 0 }} data-lt-sentinel>{title}</h1>
+    <div className="lt-block" style={{ alignItems: "flex-start" }}>
+      <div style={{ minWidth: 0, flex: 1 }}>
+        <h1 className="t-ltitle" style={{ margin: 0, cursor: onTitleTap ? "default" : undefined, WebkitUserSelect: "none", userSelect: "none" }} data-lt-sentinel onClick={onTitleTap}>{title}</h1>
         {sub && <div className="lt-sub">{sub}</div>}
       </div>
-      {trailing && <div style={{ flex: "none", paddingBottom: 4 }}>{trailing}</div>}
+      {trailing && <div style={{ flex: "none", display: "flex", alignItems: "center", marginTop: -2 }}>{trailing}</div>}
     </div>
   );
 }

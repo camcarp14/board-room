@@ -14,7 +14,7 @@ export function formatSnapshotForChat() {
   const b = siteSnapshot.btc;
   if (b && b.price) parts.push(`Bitcoin: $${Math.round(b.price).toLocaleString()}, ${b.changePct >= 0 ? "+" : ""}${(b.changePct || 0).toFixed(1)}% 24h`);
   const s = siteSnapshot.stocks;
-  if (s && s.spx?.value !== "—") parts.push(`Stocks: S&P FUT ${s.spx.value}, NASDAQ FUT ${s.ndq.value}, 10Y ${s.tnx.value}, DXY ${s.dxy.value}`);
+  if (s && (s.gold?.value ?? "—") !== "—") parts.push(`Markets: Gold ${s.gold.value}, NVDA ${s.nvda?.value}, MSTR ${s.mstr?.value}, STRC ${s.strc?.value}`);
   const w = siteSnapshot.wire;
   if (w && w.length) parts.push(`Recent wire headlines: ${w.slice(0, 3).map(x => x.text).join(" / ")}`);
   const ev = siteSnapshot.todayEvents;

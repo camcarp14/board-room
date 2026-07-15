@@ -1,8 +1,10 @@
 // ─── The phone shell ──────────────────────────────────────────────────────────
-// Glass nav bar (compact title fades in as the page's large title scrolls
-// away), page scroller, and a native-grammar tab bar. The geometry engineering
-// below is field-proven on iOS standalone — treat every comment as load-bearing.
-import { useState, useRef, useEffect } from "react";
+// A thin safe-area cap (the notch, nothing more), a page scroller whose large
+// title carries the theme/search/refresh controls inline, and a native-grammar
+// tab bar. No pinned header bar — the controls scroll away with the title so
+// they never own a full row of the screen. The geometry engineering below is
+// field-proven on iOS standalone — treat every comment as load-bearing.
+import { useState, useRef } from "react";
 import { NAV, HEADERS } from "./nav.js";
 import { TopStatus } from "./TopStatus.jsx";
 import { ThemeToggle } from "./Boot.jsx";
@@ -13,12 +15,10 @@ import { IS_STANDALONE, useVisualViewport } from "../hooks/index.js";
 
 export function MobileShell({ page, navDir, theme, onNavigate, onSummon, now, dataStamp, refreshing, onRefresh, children }) {
   const { vvh, envTop } = useVisualViewport();
-  const [scrolled, setScrolled] = useState(false);
   const diagTaps = useRef({ n: 0, t: 0 });
   const [diagOpen, setDiagOpen] = useState(false);
-  const scrollerRef = useRef(null);
 
-  // Five quick taps on the nav bar open the viewport diagnostics.
+  // Five quick taps on the page title open the viewport diagnostics.
   const onBarTap = () => {
     const t = Date.now();
     const d = diagTaps.current;
@@ -26,21 +26,6 @@ export function MobileShell({ page, navDir, theme, onNavigate, onSummon, now, da
     d.t = t;
     if (d.n >= 5) { d.n = 0; setDiagOpen(true); }
   };
-
-  // The compact bar title appears only once the large title has scrolled away.
-  useEffect(() => {
-    const el = scrollerRef.current;
-    if (!el) return;
-    let raf = 0;
-    const onScroll = () => {
-      cancelAnimationFrame(raf);
-      raf = requestAnimationFrame(() => setScrolled(el.scrollTop > 44));
-    };
-    onScroll();
-    el.addEventListener("scroll", onScroll, { passive: true });
-    return () => { cancelAnimationFrame(raf); el.removeEventListener("scroll", onScroll); };
-  }, []);
-  useEffect(() => { setScrolled((scrollerRef.current?.scrollTop || 0) > 44); }, [page]);
 
   // When the keyboard eats most of the viewport, slide the tab bar away
   // instead of letting it hover mid-screen.
@@ -61,23 +46,25 @@ export function MobileShell({ page, navDir, theme, onNavigate, onSummon, now, da
   const head = HEADERS[page];
   const sub = head.sub(new Date(now));
 
+  const controls = (
+    <div className="nav-actions">
+      <ThemeToggle theme={theme} />
+      <button className="icon-btn" onClick={onSummon} aria-label="Summon — search everything" title="Summon">
+        <IcSearch size={19} />
+      </button>
+      <TopStatus now={now} dataStamp={dataStamp} refreshing={refreshing} onRefresh={onRefresh} compact />
+    </div>
+  );
+
   return (
     <div className={letterboxed ? "lbx" : undefined} style={{ position: "fixed", top: 0, left: 0, right: 0, height: shellHeight, display: "flex", flexDirection: "column", color: "var(--ink)", overflow: "hidden" }}>
-      <div className={`nav-bar${scrolled ? " scrolled" : ""}`} onClick={onBarTap}>
-        <span className="nav-bar-title">{head.title}</span>
-        <span /* left spacer keeps the actions right-aligned */ />
-        <div className="nav-actions" onClick={e => e.stopPropagation()}>
-          <ThemeToggle theme={theme} />
-          <button className="icon-btn" onClick={onSummon} aria-label="Summon — search everything" title="Summon">
-            <IcSearch size={19} />
-          </button>
-          <TopStatus now={now} dataStamp={dataStamp} refreshing={refreshing} onRefresh={onRefresh} compact />
-        </div>
-      </div>
+      {/* Notch reservation ONLY — the status-bar zone, no header bar. Content
+          starts right below it; the title + controls live in the scroller. */}
+      <div style={{ flex: "none", height: "env(safe-area-inset-top)", background: "var(--bg)" }} />
 
-      <div id="page-scroll" ref={scrollerRef} style={{ flex: 1, minHeight: 0, overflowY: "auto", display: "flex", flexDirection: "column", touchAction: "pan-y" }}>
+      <div id="page-scroll" style={{ flex: 1, minHeight: 0, overflowY: "auto", display: "flex", flexDirection: "column", touchAction: "pan-y" }}>
         <div key={page} className={navDir === "l" ? "pageslide-l" : navDir === "r" ? "pageslide-r" : "pagefade"} style={{ display: "flex", flexDirection: "column", flex: 1, paddingBottom: 20 }}>
-          <LargeTitle title={head.title} sub={sub} />
+          <LargeTitle title={head.title} sub={sub} trailing={controls} onTitleTap={onBarTap} />
           {children}
         </div>
       </div>

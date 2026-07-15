@@ -5,8 +5,8 @@
 // (with the actual failure). Empty dashes beat plausible-looking fake data.
 import { useState, useEffect, useRef, useCallback } from "react";
 import { T } from "../../theme.js";
-import { Card, SectionHeader, StatTile, Button, Dot, Delta, EmptyState, Grid } from "../../ui/kit.jsx";
-import { IcChevronRight, IcClose, IcWrench, SPORT_ICONS } from "../../ui/icons.jsx";
+import { Card, SectionHeader, StatTile, Button, Dot, Delta, Grid } from "../../ui/kit.jsx";
+import { IcChevronRight } from "../../ui/icons.jsx";
 import { StancePill, StatusTag, CARD_STATES } from "../../ui/shared.jsx";
 import { NumTween, Sparkline } from "../../ui/primitives.jsx";
 import GscLineChart from "../../GscLineChart.jsx";
@@ -18,11 +18,10 @@ import { db } from "../../data/db.js";
 import { nextBirthdayOccurrence, MONTH_NAMES } from "../../lib/dates.js";
 import { DocketCard } from "./DocketCard.jsx";
 import { NotesTile } from "./NotesTile.jsx";
-import { SportsSettingsModal } from "../board/SportsSettingsModal.jsx";
 import { EVENT_CATEGORIES } from "../personal/CalendarPanel.jsx"; // canonical category → color map (mini-calendar pills)
 
 const GSC_EMPTY = { impressions: "—", impressionsD: "", clicks: "—", clicksD: "", pos: "—", posD: "", series: Array(14).fill(0), daily: [], note: "" };
-const STOCKS_EMPTY = { spx: { value: "—", price: "—", up: true }, ndq: { value: "—", price: "—", up: true }, tnx: { value: "—", price: "—", up: true }, dxy: { value: "—", price: "—", up: true } };
+const STOCKS_EMPTY = { gold: { value: "—", price: "—", up: true }, nvda: { value: "—", price: "—", up: true }, mstr: { value: "—", price: "—", up: true }, strc: { value: "—", price: "—", up: true } };
 
 const ROW_CAP = 5; // list cards show the first N in-page; the rest behind "Show all"
 
@@ -55,27 +54,6 @@ function ShowMore({ open, count, onToggle }) {
 }
 
 export function MorningBriefPage({ btc, isMobile, settings, updateSetting, onOpenCalendar, onOpenNotes, refreshSignal }) {
-  const sportsCfg = settings?.sports || { followedTeams: [], watchLeagues: [], watchGames: [], excludedGames: [] };
-  const [sportsGames, setSportsGames] = useState([]);
-  const [sportsStatus, setSportsStatus] = useState({ state: "loading" });
-  const [sportsDetail, setSportsDetail] = useState({}); // eventId -> detail | "loading" | "error"
-  const [openGameId, setOpenGameId] = useState(null);
-  const [sportsSettingsOpen, setSportsSettingsOpen] = useState(false);
-
-  const toggleGame = async (g) => {
-    if (openGameId === g.id) { setOpenGameId(null); return; }
-    setOpenGameId(g.id);
-    if (sportsDetail[g.id]) return; // already fetched — no need to hit the network again
-    setSportsDetail(prev => ({ ...prev, [g.id]: "loading" }));
-    const res = await callFnFull("sports-detail", { sport: g.sport, league: g.league, eventId: g.id });
-    if (res.ok && res.data?.success) setSportsDetail(prev => ({ ...prev, [g.id]: res.data }));
-    else setSportsDetail(prev => ({ ...prev, [g.id]: "error" }));
-  };
-  const excludeGame = (id) => {
-    const next = { ...sportsCfg, excludedGames: [...(sportsCfg.excludedGames || []), id] };
-    updateSetting("sports", next);
-    setSportsGames(prev => prev.filter(g => g.id !== id)); // instant — don't wait on the next poll
-  };
   const [gsc, setGsc] = useState(GSC_EMPTY);
   const [gscStatus, setGscStatus] = useState({ state: "loading" });
   const [gscMetric, setGscMetric] = useState("impressions");
@@ -104,7 +82,6 @@ export function MorningBriefPage({ btc, isMobile, settings, updateSetting, onOpe
   const [wireAll, setWireAll] = useState(false);
   const [meetingsAll, setMeetingsAll] = useState(false);
   const [birthdaysAll, setBirthdaysAll] = useState(false);
-  const [sportsAll, setSportsAll] = useState(false);
 
   // Auto-generates a single, tidy one-sentence take (Bitcoin + stocks
   // together, not separate lines) for every Watch This Week event as soon
@@ -180,12 +157,6 @@ export function MorningBriefPage({ btc, isMobile, settings, updateSetting, onOpe
       }).catch(() => { if (alive) setMiniEvents([]); }),
       loadOpen("calendar", (d) => setEvents(d.events || []), setEventsStatus),
       (async () => {
-        const res = await callFnFull("sports", { followedTeams: sportsCfg.followedTeams, watchLeagues: sportsCfg.watchLeagues, watchGames: sportsCfg.watchGames, excludedGames: sportsCfg.excludedGames });
-        if (!alive) return;
-        if (res.ok && res.data?.success) { setSportsGames(res.data.games || []); setSportsStatus({ state: "live" }); }
-        else setSportsStatus({ state: "error", detail: res.data?.error || "unreachable" });
-      })(),
-      (async () => {
         if (!settings?.calendar_url) { if (alive) setMeetingsStatus({ state: "notconfigured", detail: "Link a calendar (iCal / .ics URL) in the sidebar to see meetings here." }); return; }
         const res = await callFnFull("calendar-events", { url: settings.calendar_url });
         if (!alive) return;
@@ -196,7 +167,7 @@ export function MorningBriefPage({ btc, isMobile, settings, updateSetting, onOpe
     if (alive) setBriefRefreshedAt(Date.now());
     return () => { alive = false; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [settings?.calendar_url, JSON.stringify(settings?.sports)]);
+  }, [settings?.calendar_url]);
 
   useEffect(() => { refreshBrief(); }, [refreshBrief]);
 
@@ -335,25 +306,16 @@ export function MorningBriefPage({ btc, isMobile, settings, updateSetting, onOpe
     </Card>
   );
 
-  /* ── Stocks · day outlook ──────────────────────────────────────────────── */
-  const spxUp = stocks.spx.up, ndqUp = stocks.ndq.up, tnxUp = stocks.tnx.up, dxyUp = stocks.dxy.up;
-  const eqTone = spxUp && ndqUp ? "risk-on, with S&P and Nasdaq futures both pushing higher"
-    : !spxUp && !ndqUp ? "risk-off, with S&P and Nasdaq futures both pulling back"
-    : "mixed, with S&P and Nasdaq futures pointed in different directions";
-  const stocksOutlook = stocksStatus.state === "live"
-    ? `Futures are ${eqTone}, alongside ${tnxUp ? "rising" : "falling"} yields and a ${dxyUp ? "firmer" : "softer"} dollar.`
-    : stocksStatus.state === "loading" ? "Loading live data…" : stocksStatus.detail;
-  const card_stocks = (
+  /* ── Markets — gold + the names worth watching ─────────────────────────── */
+  const card_markets = (
     <Card pad={pad} style={{ minWidth: 0 }}>
-      <CardHead title="Stocks · day outlook" trailing={<StatusTag status={stocksStatus} />} />
-      <div style={{ display: "grid", gridTemplateColumns: isMobile ? "repeat(2, minmax(0, 1fr))" : "repeat(4, minmax(0, 1fr))", gap: 8, marginBottom: 12 }}>
-        {[["S&P fut", stocks.spx], ["Nasdaq fut", stocks.ndq], ["10Y yield", stocks.tnx], ["DXY", stocks.dxy]].map(([l, s], i) => {
-          // level + day move; a stale payload without `delta` falls back to the old single-value row
-          const lvl = s.price && s.price !== "—" ? s.price : s.value;
-          return <StatTile key={i} value={lvl} label={l} delta={s.delta} deltaTone={s.up ? T.green : T.red} valueTone={lvl === "—" ? T.faint : undefined} />;
+      <CardHead title="Markets" trailing={<StatusTag status={stocksStatus} />} />
+      <div style={{ display: "grid", gridTemplateColumns: isMobile ? "repeat(2, minmax(0, 1fr))" : "repeat(4, minmax(0, 1fr))", gap: 8 }}>
+        {[["Gold", stocks.gold], ["NVDA", stocks.nvda], ["MSTR", stocks.mstr], ["STRC", stocks.strc]].map(([l, s], i) => {
+          const lvl = s?.price && s.price !== "—" ? s.price : (s?.value || "—");
+          return <StatTile key={i} value={lvl} label={l} delta={s?.delta} deltaTone={s?.up ? T.green : T.red} valueTone={lvl === "—" ? T.faint : undefined} />;
         })}
       </div>
-      <div className="t-call" style={{ color: "var(--sub)", lineHeight: 1.55 }}>{stocksOutlook}</div>
       <Fresh>{freshnessLabel(briefRefreshedAt)}</Fresh>
     </Card>
   );
@@ -394,9 +356,9 @@ export function MorningBriefPage({ btc, isMobile, settings, updateSetting, onOpe
     <Card pad={pad} style={{ minWidth: 0 }}>
       <CardHead title="Zero To Secure · Search Console" trailing={<StatusTag status={gscStatus} />} />
       <div style={{ display: "grid", gridTemplateColumns: "repeat(3, minmax(0, 1fr))", gap: 8, marginBottom: 12 }}>
-        <StatTile value={gsc.impressions} label="Impressions" delta={gsc.impressionsD} onClick={() => setGscMetric("impressions")} selected={gscMetric === "impressions"} />
-        <StatTile value={gsc.clicks} label="Clicks" delta={gsc.clicksD} onClick={() => setGscMetric("clicks")} selected={gscMetric === "clicks"} />
-        <StatTile value={gsc.pos} label="Avg position" delta={gsc.posD} onClick={() => setGscMetric("position")} selected={gscMetric === "position"} />
+        <StatTile value={gsc.impressions} label="Impressions" onClick={() => setGscMetric("impressions")} selected={gscMetric === "impressions"} />
+        <StatTile value={gsc.clicks} label="Clicks" onClick={() => setGscMetric("clicks")} selected={gscMetric === "clicks"} />
+        <StatTile value={gsc.pos} label="Avg position" onClick={() => setGscMetric("position")} selected={gscMetric === "position"} />
       </div>
       <GscLineChart rows={gsc.daily} metric={gscMetric} />
       <div className="t-foot" style={{ marginTop: 8, color: gscStatus.state === "live" ? "var(--sub)" : "var(--faint)", lineHeight: 1.5 }}>
@@ -450,14 +412,11 @@ export function MorningBriefPage({ btc, isMobile, settings, updateSetting, onOpe
       <CardHead title="Zero To Secure · store" trailing={<StatusTag status={shopifyStatus} />} />
       {shopifyStatus.state === "live" ? (
         <>
-          <div style={{ display: "grid", gridTemplateColumns: isMobile ? "repeat(2, minmax(0, 1fr))" : "repeat(4, minmax(0, 1fr))", gap: 8, marginBottom: 11 }}>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(2, minmax(0, 1fr))", gap: 8, marginBottom: 11 }}>
             <StatTile value={String(shopify.orders)} label="Orders" delta={shopify.ordersD} />
             <StatTile value={shopify.visits} label="Visits" delta={shopify.visitsD} />
-            <StatTile value={shopify.conv} label="Conv." />
-            <StatTile value={shopify.convD || "—"} label="Conv. Δ" />
           </div>
           {shopify.series && <Sparkline points={shopify.series} color={T.green} height={40} />}
-          <div className="t-call" style={{ color: "var(--sub)", lineHeight: 1.55, marginTop: 8 }}>{shopify.note}</div>
           <Fresh>{freshnessLabel(briefRefreshedAt)}</Fresh>
         </>
       ) : <FeedFallbackRow status={shopifyStatus} />}
@@ -595,78 +554,7 @@ export function MorningBriefPage({ btc, isMobile, settings, updateSetting, onOpe
     </Card>
   );
 
-  /* ── Sports — followed teams, watch list, live scores ──────────────────── */
-  const visibleGames = sportsAll ? sportsGames : sportsGames.slice(0, ROW_CAP);
-  const card_sports = (
-    <Card pad={pad} style={{ minWidth: 0 }}>
-      <CardHead tight title="Sports"
-        trailing={<>
-          <Button kind="plain" size="sm" title="Manage teams & leagues" aria-label="Manage teams & leagues"
-            onClick={() => setSportsSettingsOpen(true)}
-            style={{ width: 44, height: 44, padding: 0, margin: "-10px -4px -10px 0", color: "var(--sub)" }}>
-            <IcWrench size={17} />
-          </Button>
-          <StatusTag status={sportsStatus} />
-        </>} />
-      {sportsStatus.state === "live" ? (
-        !sportsCfg.followedTeams.length && !sportsCfg.watchLeagues.length && !sportsCfg.watchGames.length ? (
-          <EmptyState style={{ padding: "18px 12px" }} title="No teams or leagues yet"
-            sub="Follow teams, leagues, or single games and they'll show up here with live scores."
-            action={<Button kind="tinted" size="sm" style={{ height: 44 }} onClick={() => setSportsSettingsOpen(true)}>Set up sports</Button>} />
-        ) : sportsGames.length ? (
-          <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-            {visibleGames.map((g) => {
-              const open = openGameId === g.id;
-              const detail = sportsDetail[g.id];
-              const Icon = SPORT_ICONS[g.sport] || SPORT_ICONS.baseball;
-              const iconColor = g.state === "in" ? T.red : g.isPast ? T.green : T.faint;
-              return (
-                <div key={g.id} style={{ background: "var(--surface-2)", borderRadius: 12, padding: "0 4px 0 12px" }}>
-                  <div onClick={() => toggleGame(g)} role="button" tabIndex={0} aria-expanded={open}
-                    onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); toggleGame(g); } }}
-                    style={{ display: "flex", alignItems: "center", gap: 9, cursor: "pointer", minHeight: 46 }}>
-                    <Icon width={16} height={16} style={{ flex: "none", color: iconColor, animation: g.state === "in" ? "pulse 1.4s infinite" : "none" }} />
-                    <span className="t-call" style={{ flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                      {g.away?.abbr} {g.away?.score ?? ""} @ {g.home?.abbr} {g.home?.score ?? ""}
-                    </span>
-                    {g.significance && <span className="t-cap" style={{ color: "var(--sub)", fontWeight: 600, flex: "none" }}>{g.significance}</span>}
-                    <span className="t-cap t-num" style={{ color: "var(--faint)", flex: "none" }}>{g.statusDetail}</span>
-                    <button onClick={(e) => { e.stopPropagation(); excludeGame(g.id); }} title="Hide this game" aria-label="Hide this game"
-                      style={{ width: 40, height: 46, display: "inline-flex", alignItems: "center", justifyContent: "center", background: "none", border: "none", color: "var(--faint)", cursor: "pointer", flex: "none", padding: 0 }}>
-                      <IcClose size={14} />
-                    </button>
-                  </div>
-                  {open && (
-                    <div className="t-foot" style={{ margin: "0 8px 0 0", padding: "8px 0 10px", borderTop: "0.5px solid var(--line)", color: "var(--sub)", lineHeight: 1.6 }}>
-                      {detail === "loading" || !detail ? <span style={{ animation: "pulse 1.4s infinite" }}>Loading…</span>
-                        : detail === "error" ? "Couldn't load details for this one."
-                        : (
-                          <div style={{ display: "flex", flexDirection: "column", gap: 3 }}>
-                            {detail.venue && <div>{detail.venue}{detail.broadcast ? ` · ${detail.broadcast}` : ""}</div>}
-                            {detail.home?.record && <div>{detail.away?.name} ({detail.away?.record}) at {detail.home?.name} ({detail.home?.record})</div>}
-                            {detail.linescores?.some(l => l.periods?.length) && (
-                              <div className="t-num" style={{ fontSize: 11.5 }}>
-                                {detail.linescores.map((l, i) => <div key={i}>{l.abbr}: {l.periods.join(" · ")}</div>)}
-                              </div>
-                            )}
-                            {detail.leaders?.map((l, i) => <div key={i}>{l.team} — {l.category}: {l.athlete} ({l.value})</div>)}
-                            {detail.preview && <div>{detail.preview}</div>}
-                          </div>
-                        )}
-                    </div>
-                  )}
-                </div>
-              );
-            })}
-            {sportsGames.length > ROW_CAP && <ShowMore open={sportsAll} count={sportsGames.length} onToggle={() => setSportsAll(v => !v)} />}
-          </div>
-        ) : <div className="t-foot" style={{ color: "var(--faint)", padding: "6px 0", lineHeight: 1.5 }}>Nothing on right now — followed teams, significant games, or your watch list will show up here.</div>
-      ) : <FeedFallbackRow status={sportsStatus} />}
-      {sportsSettingsOpen && <SportsSettingsModal cfg={sportsCfg} onSave={(next) => { updateSetting("sports", next); setSportsSettingsOpen(false); }} onClose={() => setSportsSettingsOpen(false)} isMobile={isMobile} />}
-    </Card>
-  );
-
-  const card_docket = <DocketCard isMobile={isMobile} birthdays={birthdays} macroEvents={eventsStatus.state === "live" ? events : []} settings={settings} onOpenCalendar={onOpenCalendar} />;
+  const card_docket =<DocketCard isMobile={isMobile} birthdays={birthdays} macroEvents={eventsStatus.state === "live" ? events : []} settings={settings} onOpenCalendar={onOpenCalendar} />;
   const card_notes = <NotesTile isMobile={isMobile} refreshSignal={refreshSignal} onOpenNotes={onOpenNotes} />;
 
   // One flow for both platforms: a single calm column on the phone (min=9999
@@ -678,19 +566,19 @@ export function MorningBriefPage({ btc, isMobile, settings, updateSetting, onOpe
   // and the desktop gutters — this page never nests its own scroll region.
   const gmin = isMobile ? 9999 : 320;
   return (
-    <div style={{ flex: 1, padding: isMobile ? "4px 16px 24px" : "8px 0 0", minWidth: 0 }}>
-      <div className="stagger" style={{ maxWidth: 960, width: "100%", margin: "0 auto", display: "flex", flexDirection: "column", gap: 12, minWidth: 0 }}>
-        <Grid min={gmin} style={{ alignItems: "stretch" }}>
+    <div style={{ flex: 1, padding: isMobile ? "2px 16px 24px" : "6px 0 0", minWidth: 0 }}>
+      <div className="stagger" style={{ maxWidth: 960, width: "100%", margin: "0 auto", display: "flex", flexDirection: "column", gap: 10, minWidth: 0 }}>
+        <Grid min={gmin} gap={10} style={{ alignItems: "stretch" }}>
           {card_docket}
           {card_notes}
         </Grid>
-        <SectionHeader title="Market" style={{ marginTop: 14 }} />
-        <Grid min={gmin}>
-          {card_bitcoin}{card_stocks}{card_watch}
+        <SectionHeader title="Market" style={{ marginTop: 8 }} />
+        <Grid min={gmin} gap={10}>
+          {card_bitcoin}{card_wire}{card_markets}{card_watch}
         </Grid>
-        <SectionHeader title="Signals" style={{ marginTop: 14 }} />
-        <Grid min={gmin}>
-          {card_gsc}{card_clarify}{card_zts}{card_sports}{card_wire}{card_shopify}{card_meetings}{card_minicalendar}{card_birthdays}
+        <SectionHeader title="Signals" style={{ marginTop: 8 }} />
+        <Grid min={gmin} gap={10}>
+          {card_gsc}{card_clarify}{card_zts}{card_shopify}{card_meetings}{card_minicalendar}{card_birthdays}
         </Grid>
       </div>
       {btcChartOpen && <BtcChartModal isMobile={isMobile} onClose={() => setBtcChartOpen(false)} callFnFull={callFnFull} />}
