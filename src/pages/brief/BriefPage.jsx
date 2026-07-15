@@ -15,7 +15,7 @@ import { callFnFull } from "../../lib/functions.js";
 import { callClaude } from "../../lib/claude.js";
 import { updateSnapshot } from "../../lib/snapshot.js";
 import { db } from "../../data/db.js";
-import { nextBirthdayOccurrence, MONTH_NAMES } from "../../lib/dates.js";
+import { nextBirthdayOccurrence } from "../../lib/dates.js";
 import { DocketCard } from "./DocketCard.jsx";
 import { NotesTile } from "./NotesTile.jsx";
 import { EVENT_CATEGORIES } from "../personal/CalendarPanel.jsx"; // canonical category → color map (mini-calendar pills)
@@ -78,7 +78,6 @@ export function MorningBriefPage({ btc, isMobile, settings, updateSetting, onOpe
   const [btcChartOpen, setBtcChartOpen] = useState(false);
   const [wireAll, setWireAll] = useState(false);
   const [meetingsAll, setMeetingsAll] = useState(false);
-  const [birthdaysAll, setBirthdaysAll] = useState(false);
 
   // Auto-generates a single, tidy one-sentence take (Bitcoin + stocks
   // together, not separate lines) for every Watch This Week event as soon
@@ -407,37 +406,8 @@ export function MorningBriefPage({ btc, isMobile, settings, updateSetting, onOpe
     </Card>
   );
 
-  /* ── Birthdays (next 30 days) ──────────────────────────────────────────── */
-  const upcomingBirthdays = (birthdays || [])
-    .map(b => ({ ...b, ...nextBirthdayOccurrence(b.month, b.day) }))
-    .filter(b => b.daysUntil <= 30)
-    .sort((a, b) => a.daysUntil - b.daysUntil);
-  const visibleBirthdays = birthdaysAll ? upcomingBirthdays : upcomingBirthdays.slice(0, ROW_CAP);
-  const card_birthdays = (
-    <Card pad={pad} style={{ minWidth: 0 }}>
-      <CardHead tight title="Upcoming birthdays" trailing={<span className="t-cap" style={{ color: "var(--faint)" }}>Next 30d</span>} />
-      <div style={{ display: "flex", flexDirection: "column" }}>
-        {birthdaysErr ? (
-          <div className="t-foot" style={{ color: "var(--faint)", padding: "6px 0" }}>{birthdaysErr}</div>
-        ) : birthdays === null ? (
-          <div style={{ padding: "6px 0" }}><div className="sk sk-line w80" style={{ margin: 0 }} /></div>
-        ) : upcomingBirthdays.length ? (
-          <>
-            {visibleBirthdays.map((b, i) => (
-              <div key={b.id} style={{ display: "flex", alignItems: "center", gap: 10, minHeight: 44, padding: "5px 0", borderTop: i === 0 ? "none" : "0.5px solid var(--line)" }}>
-                <Dot tone={T.purple} />
-                <span style={{ display: "flex", flexDirection: "column", gap: 1, flex: 1, minWidth: 0 }}>
-                  <span className="t-call" style={{ lineHeight: 1.4 }}>{b.name}{b.year ? ` — turns ${b.next.getFullYear() - b.year}` : ""}</span>
-                  <span className="t-cap t-num" style={{ color: "var(--faint)" }}>{MONTH_NAMES[b.month - 1]} {b.day} · {b.daysUntil === 0 ? "Today!" : b.daysUntil === 1 ? "Tomorrow" : `in ${b.daysUntil}d`}</span>
-                </span>
-              </div>
-            ))}
-            {upcomingBirthdays.length > ROW_CAP && <ShowMore open={birthdaysAll} count={upcomingBirthdays.length} onToggle={() => setBirthdaysAll(v => !v)} />}
-          </>
-        ) : <div className="t-foot" style={{ color: "var(--faint)", padding: "6px 0" }}>Nothing in the next 30 days.</div>}
-      </div>
-    </Card>
-  );
+  // Birthdays live on the Docket (and Personal) now — no separate Brief card.
+  // The `birthdays` state is still loaded above so the Docket can read it.
 
   /* ── Business meetings (external iCal) ─────────────────────────────────── */
   const visibleMeetings = meetingsAll ? meetings : meetings.slice(0, ROW_CAP);
@@ -514,13 +484,14 @@ export function MorningBriefPage({ btc, isMobile, settings, updateSetting, onOpe
           {card_docket}
           {card_notes}
         </Grid>
+        {card_minicalendar}
         <SectionHeader title="Market" style={{ marginTop: 8 }} />
         <Grid min={gmin} gap={10}>
           {card_markets}{card_wire}{card_watch}
         </Grid>
         <SectionHeader title="Signals" style={{ marginTop: 8 }} />
         <Grid min={gmin} gap={10}>
-          {card_gsc}{card_clarify}{card_zts}{card_shopify}{card_meetings}{card_minicalendar}{card_birthdays}
+          {card_gsc}{card_clarify}{card_zts}{card_shopify}{card_meetings}
         </Grid>
       </div>
       {btcChartOpen && <BtcChartModal isMobile={isMobile} onClose={() => setBtcChartOpen(false)} callFnFull={callFnFull} />}
