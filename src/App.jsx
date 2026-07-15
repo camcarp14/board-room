@@ -2254,6 +2254,12 @@ const PROPERTIES = [
   { name: "Clarify Paid Search", desc: "Boutique Google Ads agency", url: "https://clarifypaidsearch.com", appUrl: "https://clarify-outreach.netlify.app/", color: "var(--brass)", repo: "camcarp14/clarify-outreach", site: "clarify-paid-search" },
   { name: "Clarify SaaS", desc: "Google Ads auditing tool", url: null, appUrl: "https://clarify-saas.netlify.app/", color: "var(--brass)", repo: "camcarp14/clarify-saas", site: "clarify-saas" },
   { name: "Macro Command Center", desc: "Markets, portfolio, thesis", url: null, appUrl: "https://macro-command-center.netlify.app/", color: "var(--blue)", repo: "camcarp14/macro-command-center", site: "macro-command-center" },
+  // assetsOnly: shown as reference cards on Assets (link + live status) but kept
+  // out of the Systems deploy/replace controls, since their Netlify slugs and
+  // repos aren't wired up here and FFSR's two views share one site.
+  { name: "Runway", desc: "Runway command center", url: null, appUrl: "https://runway-command-center.netlify.app/", color: "var(--purple)", repo: null, site: null, assetsOnly: true },
+  { name: "FFSR", desc: "FFSR — main site", url: null, appUrl: "https://ffsr.netlify.app/#/", color: "var(--pink)", repo: null, site: null, assetsOnly: true, cta: "Open site ›" },
+  { name: "Management Center", desc: "FFSR — team management", url: null, appUrl: "https://ffsr.netlify.app/#/team", color: "var(--amber)", repo: null, site: null, assetsOnly: true, cta: "Open ›" },
 ];
 
 function PropertiesPage({ isMobile, settings, updateSetting, session }) {
@@ -2290,7 +2296,7 @@ function PropertiesPage({ isMobile, settings, updateSetting, session }) {
             </div>
             <div style={{ display: "flex", gap: 8 }}>
               {p.url && <a href={p.url} target="_blank" rel="noopener" style={{ flex: 1, padding: 10, textAlign: "center", background: "var(--ink-a05)", border: `1px solid var(--ink-a10)`, borderRadius: 10, color: p.color, fontSize: 11, fontWeight: 700, textDecoration: "none" }}>Site ›</a>}
-              <a href={p.appUrl} target="_blank" rel="noopener" style={{ flex: 1, padding: 10, textAlign: "center", background: "var(--ink-a05)", border: `1px solid var(--ink-a10)`, borderRadius: 10, color: T.sub, fontSize: 11, fontWeight: 600, textDecoration: "none" }}>Command Center ›</a>
+              <a href={p.appUrl} target="_blank" rel="noopener" style={{ flex: 1, padding: 10, textAlign: "center", background: "var(--ink-a05)", border: `1px solid var(--ink-a10)`, borderRadius: 10, color: T.sub, fontSize: 11, fontWeight: 600, textDecoration: "none" }}>{p.cta || "Command Center ›"}</a>
             </div>
           </div>
           );
@@ -3036,7 +3042,7 @@ function SystemsPage({ settings, updateSetting, session, btc, isMobile }) {
               <CardHeader title="Deployments" tag="NETLIFY" />
               <div style={{ fontSize: 10.5, color: T.faint, lineHeight: 1.5, margin: "2px 0 13px" }}>Each redeploy triggers a fresh Netlify build from the site's connected repo. Live/down state lives under the Status tab.</div>
               <div style={{ display: "flex", flexDirection: "column", gap: 6, marginTop: 6 }}>
-                {PROPERTIES.map(p => {
+                {PROPERTIES.filter(p => !p.assetsOnly).map(p => {
                   const d = deploys[p.name] || {};
                   return (
                     <div key={p.name} style={{ ...S.inner, display: "flex", alignItems: "center", gap: 11, padding: "11px 13px" }}>
@@ -3069,7 +3075,7 @@ function SystemsPage({ settings, updateSetting, session, btc, isMobile }) {
                   </div>
                   <div style={{ fontSize: 9.5, color: T.faint, marginBottom: 6 }}>Replace on:</div>
                   <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginBottom: 12 }}>
-                    {PROPERTIES.map(p => {
+                    {PROPERTIES.filter(p => !p.assetsOnly).map(p => {
                       const sel = replaceTargets.includes(p.name);
                       return (
                         <button key={p.name} onClick={() => toggleTarget(p.name)} style={{ padding: "7px 12px", background: sel ? "var(--brass-a16)" : "var(--ink-a03)", border: `1px solid ${sel ? "var(--brass-a40)" : "var(--line)"}`, borderRadius: 12, color: sel ? T.brass : T.sub, fontSize: 10, fontWeight: 700, cursor: "pointer", fontFamily: syne }}>{sel ? "✓ " : ""}{p.name}</button>
