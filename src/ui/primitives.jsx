@@ -1,13 +1,19 @@
-import { T, syne, mono } from "../theme.js";
-import { S } from "./styles.js";
+import { T } from "../theme.js";
 import { useTween } from "../hooks/index.js";
 import { MODEL_META } from "../lib/claude.js";
+import { Switch, Segmented as KitSegmented, StatTile, Pill } from "./kit.jsx";
+
+// ─── Legacy primitives, re-voiced ─────────────────────────────────────────────
+// Same export surface as before the redesign (call sites untouched); each now
+// renders through the SESSION kit or follows its mark specs. New code should
+// import from ui/kit.jsx directly.
 
 export function NumTween({ v, f = (x) => x.toLocaleString() }) {
   const shown = useTween(typeof v === "number" ? v : null);
   return shown == null ? <>—</> : <>{f(shown)}</>;
 }
 
+// Mark spec: 2px line, rounded joins, 9% area wash, no grid.
 export function Sparkline({ points, color, height = 44 }) {
   if (!points || points.length < 2) return <div style={{ height }} />;
   const min = Math.min(...points), max = Math.max(...points);
@@ -18,97 +24,77 @@ export function Sparkline({ points, color, height = 44 }) {
   const areaPath = `${path} L ${w} ${height} L 0 ${height} Z`;
   return (
     <svg viewBox={`0 0 ${w} ${height}`} width="100%" height={height} preserveAspectRatio="none">
-      <path d={areaPath} fill={color} opacity="0.12" />
-      <path d={path} fill="none" stroke={color} strokeWidth="1.6" strokeLinejoin="round" strokeLinecap="round" />
+      <path d={areaPath} fill={color} opacity="0.09" />
+      <path d={path} fill="none" stroke={color} strokeWidth="2" strokeLinejoin="round" strokeLinecap="round" vectorEffect="non-scaling-stroke" />
     </svg>
   );
 }
 
+// Bars: flat single-tone marks (identity does no work here — magnitude does),
+// 2px top radius, current period at full strength, history quieter.
 export function Bars({ data, from, to, height = 54 }) {
   const max = Math.max(...data, 1);
   return (
     <div style={{ display: "flex", alignItems: "flex-end", gap: 3, height, padding: "0 2px" }}>
       {data.map((v, i) => (
-        <div key={i} style={{ flex: 1, height: `${Math.max(4, (v / max) * 100)}%`, background: `linear-gradient(180deg, ${from}, ${to})`, borderRadius: "2px 2px 0 0", opacity: i >= data.length - 2 ? 1 : 0.72 }} />
+        <div key={i} style={{ flex: 1, height: `${Math.max(4, (v / max) * 100)}%`, background: from, borderRadius: "3px 3px 0 0", opacity: i >= data.length - 2 ? 1 : 0.45 }} />
       ))}
     </div>
   );
 }
 
-// ─── Reusable premium controls ────────────────────────────────────────────────
-export function Toggle({ on, onToggle, size = 20 }) {
-  const w = size * 1.7, knob = size - 4;
-  return (
-    <span onClick={onToggle} style={{ width: w, height: size, borderRadius: size / 2 + 1, background: on ? T.green : "var(--line-strong)", position: "relative", cursor: "pointer", display: "inline-block", flex: "none", boxShadow: "inset 0 1px 2px rgba(0,0,0,0.14)" }}>
-      <span style={{ position: "absolute", top: 2, left: on ? w - knob - 2 : 2, width: knob, height: knob, borderRadius: "50%", background: "#FFFFFF", transition: "left 0.15s", boxShadow: "0 1px 3px rgba(0,0,0,0.22)" }} />
-    </span>
-  );
+// ─── Control shims — old names, new anatomy ───────────────────────────────────
+export function Toggle({ on, onToggle, size }) {
+  return <Switch on={on} onToggle={onToggle} small={size != null && size < 20} />;
 }
 
 export function ToggleRow({ title, sub, on, onToggle, size }) {
   return (
-    <div style={{ ...S.inner, display: "flex", alignItems: "center", justifyContent: "space-between", padding: "11px 13px" }}>
-      <span style={{ display: "flex", flexDirection: "column", gap: 2 }}>
-        <span style={{ fontSize: 11.5, fontWeight: 700, fontFamily: syne, color: T.ink }}>{title}</span>
-        <span style={{ fontSize: 9, color: T.faint }}>{sub}</span>
+    <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, padding: "11px 2px", minHeight: 44 }}>
+      <span style={{ display: "flex", flexDirection: "column", gap: 2, minWidth: 0 }}>
+        <span style={{ fontSize: 15, fontWeight: 500, color: T.ink, letterSpacing: "-0.008em" }}>{title}</span>
+        {sub && <span style={{ fontSize: 12.5, color: T.sub }}>{sub}</span>}
       </span>
       <Toggle on={on} onToggle={onToggle} size={size} />
     </div>
   );
 }
 
+// Model picker — the one Segmented old code reaches for.
 export function Segmented({ value, onChange }) {
   return (
-    <div style={{ display: "flex", gap: 4, background: "var(--ink-a05)", border: "1px solid var(--ink-a06)", borderRadius: 11, padding: 3 }}>
-      {MODEL_META.map(m => {
-        const active = value === m.key;
-        return (
-          <button key={m.key} onClick={() => onChange(m.key)} style={{ flex: 1, padding: "7px 0 6px", background: active ? T.brass : "transparent", border: "none", borderRadius: 8, cursor: "pointer", display: "flex", flexDirection: "column", alignItems: "center", gap: 1, boxShadow: active ? "inset 0 1px 0 var(--white-inset), 0 2px 8px var(--brass-a32)" : "none" }}>
-            <span style={{ fontSize: 10, fontWeight: 700, fontFamily: syne, color: active ? T.bg : T.sub }}>{m.label}</span>
-            <span style={{ fontSize: 7.5, fontFamily: mono, color: active ? "var(--on-brass)" : T.faint }}>{m.price}</span>
-          </button>
-        );
-      })}
-    </div>
+    <KitSegmented
+      value={value}
+      onChange={onChange}
+      options={MODEL_META.map(m => ({ key: m.key, label: m.label, sub: m.price }))}
+    />
   );
 }
 
 export function Chips({ options, value, onChange, fmt = (v) => v }) {
   return (
-    <div style={{ display: "flex", gap: 6 }}>
-      {options.map(o => {
-        const active = value === o;
-        return (
-          <button key={o} onClick={() => onChange(o)} style={{ flex: 1, padding: "9px 0", background: active ? "var(--brass-a16)" : "var(--ink-a04)", border: `1px solid ${active ? "var(--brass-a40)" : "var(--ink-a06)"}`, borderRadius: 10, color: active ? T.brass : T.sub, fontSize: 11, fontWeight: 700, cursor: "pointer", fontFamily: mono }}>{fmt(o)}</button>
-        );
-      })}
+    <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+      {options.map(o => (
+        <Pill key={o} active={value === o} onClick={() => onChange(o)} style={{ flex: 1, justifyContent: "center" }}>{fmt(o)}</Pill>
+      ))}
     </div>
   );
 }
 
 export function CardHeader({ title, tag, tagColor = T.faint }) {
   return (
-    <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 4 }}>
-      <span style={S.title}>{title}</span>
-      <span style={{ ...S.microLabel, color: tagColor }}>{tag}</span>
+    <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, marginBottom: 10 }}>
+      <span style={{ fontSize: 17, fontWeight: 600, letterSpacing: "-0.01em", color: T.ink }}>{title}</span>
+      {tag != null && <span style={{ fontSize: 11.5, fontWeight: 500, color: tagColor }}>{tag}</span>}
     </div>
   );
 }
 
-export function StatBox({ value, label, delta, deltaColor = T.green, valueColor = T.ink, onClick, selected }) {
+export function StatBox({ value, label, delta, deltaColor = T.green, valueColor, onClick, selected }) {
   return (
-    <div
-      onClick={onClick}
-      className={onClick ? "press" : undefined}
-      style={{
-        ...S.inner, padding: "10px 8px", textAlign: "center", borderRadius: 10,
-        ...(onClick ? { cursor: "pointer", transition: "transform var(--dur-1) var(--ease-out)" } : {}),
-        ...(selected ? { border: "1px solid var(--brass)", boxShadow: "0 0 0 1px var(--brass-a25)" } : {}),
-      }}
-    >
-      <div style={{ fontSize: 14, fontWeight: 700, fontFamily: mono, color: valueColor, fontVariantNumeric: "tabular-nums" }}>{value}</div>
-      <div style={{ fontSize: 8, color: selected ? "var(--brass)" : T.faint, letterSpacing: "0.08em", textTransform: "uppercase", marginTop: 2 }}>{label}</div>
-      {delta && <div style={{ fontSize: 9, color: deltaColor, fontFamily: mono, marginTop: 2 }}>{delta}</div>}
-    </div>
+    <StatTile
+      value={value} label={label} delta={delta} deltaTone={deltaColor}
+      valueTone={valueColor} onClick={onClick} selected={selected}
+    />
   );
 }

@@ -1,11 +1,11 @@
-// ─── Board Room design tokens — the bridge between styles.css and JSX ────────
-// Every value here is a CSS custom property defined (twice) in styles.css:
-// once for Daylight, once for Nocturne. Inline styles that reference T.*
+// ─── SESSION design tokens — the bridge between design/tokens.css and JSX ────
+// Every value here is a CSS custom property defined (twice) in tokens.css:
+// once for Porcelain, once for Graphite. Inline styles that reference T.*
 // re-resolve automatically when [data-theme] flips — no re-render needed.
 // Anything that draws to a real canvas (lightweight-charts) can't use var()
 // and should resolve literals through cssVar() at draw time instead.
 
-export const syne = "var(--font-display)"; // historical name — carries Cinzel
+export const syne = "var(--font-display)"; // historical name — now the system stack
 export const mono = "var(--font-mono)";
 
 export const T = {
@@ -15,10 +15,14 @@ export const T = {
   ink: "var(--ink)",
   sub: "var(--sub)",
   faint: "var(--faint)",
-  brass: "var(--brass)",
-  brassHi: "var(--brass-hi)",
-  brassDeep: "var(--brass-deep)",
-  onBrass: "var(--on-brass)",
+  accent: "var(--accent)",
+  accentHi: "var(--accent-hi)",
+  accentDeep: "var(--accent-deep)",
+  onAccent: "var(--on-accent)",
+  brass: "var(--accent)",
+  brassHi: "var(--accent-hi)",
+  brassDeep: "var(--accent-deep)",
+  onBrass: "var(--on-accent)",
   line: "var(--line)",
   lineStrong: "var(--line-strong)",
   green: "var(--green)",
@@ -50,7 +54,7 @@ export function cssVar(name) {
 // index.html runs the same logic inline pre-paint; these keep it live after.
 
 const THEME_KEY = "br_theme";
-export const THEME_COLORS = { day: "#F4F2ED", night: "#0D1120" };
+export const THEME_COLORS = { day: "#F2F1EB", night: "#000000" };
 
 export function getThemePref() {
   try { return localStorage.getItem(THEME_KEY) || "auto"; } catch { return "auto"; }

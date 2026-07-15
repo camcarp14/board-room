@@ -4,7 +4,7 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
     <title>The Board Room</title>
-    <meta name="theme-color" content="#F4F2ED" />
+    <meta name="theme-color" content="#F2F1EB" />
     <meta name="description" content="Your command center — markets, ventures, board of advisors, and the day's brief." />
     <link rel="manifest" href="/manifest.webmanifest" />
     <link rel="icon" type="image/png" sizes="192x192" href="/icons/icon-192.png" />
@@ -30,15 +30,11 @@
         } catch (e) {}
         document.documentElement.setAttribute("data-theme", t);
         var m = document.querySelector('meta[name="theme-color"]');
-        if (m) m.setAttribute("content", t === "night" ? "#0D1120" : "#F4F2ED");
+        if (m) m.setAttribute("content", t === "night" ? "#000000" : "#F2F1EB");
       })();
     </script>
-    <link rel="preconnect" href="https://fonts.googleapis.com" />
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-    <link
-      rel="stylesheet"
-      href="https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=Inter:wght@400;500;600;700&family=Cinzel:wght@500;600;700;800&display=swap"
-    />
+    <!-- SESSION uses the platform's own type (San Francisco on iOS/iPadOS) —
+         no webfonts, nothing to download before first paint. -->
   </head>
   <body>
     <div id="root"></div>

@@ -1,5 +1,6 @@
 // Board Room app icons — generated, no image deps.
-// A brass seal: diamond mark inside an engraved ring, on candlelit obsidian.
+// The SESSION seal: a fine gold ring and a small gold square (rotated 45°)
+// on true graphite — the mark the boot screen draws, frozen as the app icon.
 // Pure node: hand-built PNG chunks (zlib deflate + CRC32) over a supersampled
 // SDF rasterizer. Run: node scripts/make-icons.mjs
 import { deflateSync } from "node:zlib";
@@ -56,11 +57,11 @@ function writePng(path, size, rgba) {
 // ── scene ────────────────────────────────────────────────────────────────────
 const hex = (h) => [parseInt(h.slice(1, 3), 16), parseInt(h.slice(3, 5), 16), parseInt(h.slice(5, 7), 16)];
 const mix = (a, b, t) => a.map((v, i) => v + (b[i] - v) * t);
-const OBSIDIAN_TOP = hex("#1D2440");
-const OBSIDIAN_BOT = hex("#080B16");
-const BRASS_HI = hex("#F0D797");
-const BRASS_LO = hex("#B08C3B");
-const GLOW = hex("#D6B160");
+const OBSIDIAN_TOP = hex("#1B1B1D");
+const OBSIDIAN_BOT = hex("#000000");
+const BRASS_HI = hex("#EACC80");
+const BRASS_LO = hex("#C29A45");
+const GLOW = hex("#D9B45C");
 
 // scale: motif fits within `fit` fraction of the canvas (maskable wants ~0.62)
 function render(size, fit) {
@@ -68,8 +69,8 @@ function render(size, fit) {
   const SS = 3; // 3x3 supersampling
   const c = size / 2;
   const ringR = size * 0.335 * fit / 0.78;   // ring radius
-  const ringW = size * 0.022 * fit / 0.78;   // ring stroke
-  const diaR = size * 0.155 * fit / 0.78;    // diamond half-diagonal
+  const ringW = size * 0.018 * fit / 0.78;   // ring stroke
+  const diaR = size * 0.135 * fit / 0.78;    // diamond half-diagonal
   for (let y = 0; y < size; y++) {
     for (let x = 0; x < size; x++) {
       let r = 0, g = 0, b = 0;
@@ -82,7 +83,7 @@ function render(size, fit) {
           let col = mix(OBSIDIAN_TOP, OBSIDIAN_BOT, ty);
           const dGlow = Math.hypot(X - c, Y - c * 1.05);
           const glowT = Math.max(0, 1 - dGlow / (size * 0.62));
-          col = mix(col, GLOW, glowT * glowT * 0.10);
+          col = mix(col, GLOW, glowT * glowT * 0.07);
           // brass vertical sheen shared by ring + diamond
           const brass = mix(BRASS_HI, BRASS_LO, Math.min(1, Math.max(0, (Y - (c - ringR)) / (2 * ringR))));
           // engraved ring

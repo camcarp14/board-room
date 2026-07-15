@@ -3,7 +3,7 @@
 // · navigations + everything else same-origin: network-first, cache fallback
 // · /.netlify/functions/* and cross-origin: never touched
 // Bump VERSION to invalidate old caches on deploy of this file.
-const VERSION = "br-v1";
+const VERSION = "br-v2"; // SESSION redesign — invalidate every pre-redesign cache
 const ASSET_CACHE = `${VERSION}-assets`;
 const PAGE_CACHE = `${VERSION}-pages`;
 

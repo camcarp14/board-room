@@ -1,0 +1,167 @@
+/* ═══════════════════════════════════════════════════════════════════════════
+   SESSION — design tokens. Two rooms, one architecture:
+   Porcelain (warm paper, daylight) and Graphite (true-black, after hours).
+   Every color in the app resolves through these variables. Legacy names
+   (--brass*, ladders, washes) are kept as aliases so any surface not yet
+   migrated still renders coherently on the new palette.
+   Data palette validated (six-checks, adjacency order green→blue→red→purple→
+   amber→pink) against #FFFFFF and #1C1C1E on 2026-07-15.
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+:root {
+  /* motion — the only physics in the building */
+  --dur-1: 140ms;
+  --dur-2: 240ms;
+  --dur-3: 420ms;
+  --dur-4: 700ms;
+  --ease-out: cubic-bezier(0.22, 1, 0.36, 1);
+  --ease-spring: cubic-bezier(0.34, 1.4, 0.44, 1);
+  --ease-inout: cubic-bezier(0.65, 0, 0.35, 1);
+
+  /* type — the platform's own hand; no webfonts */
+  --font-body: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  --font-display: var(--font-body);
+  --font-mono: ui-monospace, "SF Mono", "Cascadia Mono", Menlo, Consolas, monospace;
+
+  /* shape */
+  --r-card: 18px;
+  --r-well: 12px;
+  --r-ctl: 10px;
+}
+
+/* ── PORCELAIN — warm paper, borderless white cards, bronze spent sparingly ── */
+:root, [data-theme="day"] {
+  color-scheme: light;
+  --bg: #F2F1EB;
+  --surface: #FFFFFF;
+  --surface-2: #F6F5F0;
+  --ink: #1D1C18;
+  --sub: #716E64;
+  --faint: #A3A099;
+  --line: rgba(29, 28, 24, 0.08);
+  --line-strong: rgba(29, 28, 24, 0.16);
+
+  --accent: #8A6A1E;
+  --accent-hi: #A5822A;
+  --accent-deep: #6E541A;
+  --on-accent: #FFFFFF;
+
+  --green: #278A4C;
+  --red: #C93B32;
+  --amber: #B36514;
+  --blue: #3568D4;
+  --purple: #6B41C4;
+  --pink: #C7447E;
+  --btc: #F7931A;
+
+  --seg-bg: rgba(29, 28, 24, 0.055);
+  --seg-thumb: #FFFFFF;
+  --chip-ink: #FFFFFF;
+  --scrim: rgba(22, 20, 14, 0.42);
+  --glass: rgba(242, 241, 235, 0.82);
+  --glass-raised: rgba(255, 255, 255, 0.88);
+
+  --shadow-card: 0 1px 1px rgba(26, 22, 14, 0.03), 0 6px 24px rgba(26, 22, 14, 0.05);
+  --shadow-float: 0 12px 40px rgba(26, 22, 14, 0.16);
+  --shadow-deep: 0 24px 70px rgba(26, 22, 14, 0.26);
+  --shadow-bar: 0 -6px 24px rgba(26, 22, 14, 0.05);
+}
+
+/* ── GRAPHITE — true black, elevated graphite cards, soft gold ─────────────── */
+[data-theme="night"] {
+  color-scheme: dark;
+  --bg: #000000;
+  --surface: #1C1C1E;
+  --surface-2: #2A2A2D;
+  --ink: #F3F2EE;
+  --sub: #A8A69F;
+  --faint: #6E6C66;
+  --line: rgba(243, 242, 238, 0.09);
+  --line-strong: rgba(243, 242, 238, 0.18);
+
+  --accent: #D9B45C;
+  --accent-hi: #EACC80;
+  --accent-deep: #B08F3E;
+  --on-accent: #1A1403;
+
+  --green: #34A56E;
+  --red: #E05548;
+  --amber: #BC7F24;
+  --blue: #4C82E8;
+  --purple: #9673E6;
+  --pink: #D95C93;
+  --btc: #F7931A;
+
+  --seg-bg: rgba(243, 242, 238, 0.08);
+  --seg-thumb: #3A3A3D;
+  --chip-ink: #101010;
+  --scrim: rgba(0, 0, 0, 0.6);
+  --glass: rgba(12, 12, 13, 0.76);
+  --glass-raised: rgba(28, 28, 30, 0.92);
+
+  --shadow-card: 0 1px 1px rgba(0, 0, 0, 0.3), 0 6px 24px rgba(0, 0, 0, 0.35);
+  --shadow-float: 0 12px 40px rgba(0, 0, 0, 0.55);
+  --shadow-deep: 0 24px 70px rgba(0, 0, 0, 0.7);
+  --shadow-bar: 0 -8px 28px rgba(0, 0, 0, 0.5);
+}
+
+/* ── derived ladders — one definition serves both rooms ─────────────────────
+   Use the ladder, never ad-hoc rgba. (color-mix is already a hard dependency
+   of this codebase — ui/styles.js tint() — so this is safe on target iOS.) */
+:root, [data-theme="day"], [data-theme="night"] {
+  --ink-a02: color-mix(in srgb, var(--ink) 2%, transparent);
+  --ink-a03: color-mix(in srgb, var(--ink) 3%, transparent);
+  --ink-a04: color-mix(in srgb, var(--ink) 4%, transparent);
+  --ink-a05: color-mix(in srgb, var(--ink) 5%, transparent);
+  --ink-a06: color-mix(in srgb, var(--ink) 6%, transparent);
+  --ink-a08: color-mix(in srgb, var(--ink) 8%, transparent);
+  --ink-a10: color-mix(in srgb, var(--ink) 10%, transparent);
+  --ink-a12: color-mix(in srgb, var(--ink) 12%, transparent);
+  --ink-a14: color-mix(in srgb, var(--ink) 14%, transparent);
+  --ink-a18: color-mix(in srgb, var(--ink) 18%, transparent);
+  --ink-a20: color-mix(in srgb, var(--ink) 20%, transparent);
+  --ink-a25: color-mix(in srgb, var(--ink) 25%, transparent);
+
+  --accent-a06: color-mix(in srgb, var(--accent) 6%, transparent);
+  --accent-a08: color-mix(in srgb, var(--accent) 8%, transparent);
+  --accent-a10: color-mix(in srgb, var(--accent) 10%, transparent);
+  --accent-a12: color-mix(in srgb, var(--accent) 12%, transparent);
+  --accent-a16: color-mix(in srgb, var(--accent) 16%, transparent);
+  --accent-a20: color-mix(in srgb, var(--accent) 20%, transparent);
+  --accent-a25: color-mix(in srgb, var(--accent) 25%, transparent);
+  --accent-a32: color-mix(in srgb, var(--accent) 32%, transparent);
+  --accent-a40: color-mix(in srgb, var(--accent) 40%, transparent);
+  --accent-a55: color-mix(in srgb, var(--accent) 55%, transparent);
+  --accent-a85: color-mix(in srgb, var(--accent) 85%, transparent);
+
+  --amber-a08: color-mix(in srgb, var(--amber) 8%, transparent);
+  --amber-a35: color-mix(in srgb, var(--amber) 35%, transparent);
+  --red-a32: color-mix(in srgb, var(--red) 32%, transparent);
+  --green-a06: color-mix(in srgb, var(--green) 6%, transparent);
+  --green-a50: color-mix(in srgb, var(--green) 50%, transparent);
+
+  /* legacy metal aliases — unmigrated surfaces keep resolving */
+  --brass: var(--accent);
+  --brass-hi: var(--accent-hi);
+  --brass-deep: var(--accent-deep);
+  --on-brass: var(--on-accent);
+  --brass-a06: var(--accent-a06);
+  --brass-a08: var(--accent-a08);
+  --brass-a10: var(--accent-a10);
+  --brass-a12: var(--accent-a12);
+  --brass-a16: var(--accent-a16);
+  --brass-a20: var(--accent-a20);
+  --brass-a25: var(--accent-a25);
+  --brass-a32: var(--accent-a32);
+  --brass-a40: var(--accent-a40);
+  --brass-a55: var(--accent-a55);
+  --brass-a85: var(--accent-a85);
+
+  /* retired effects — resolve to nothing so old inline styles go quiet */
+  --white-edge: transparent;
+  --white-inset: transparent;
+  --glow-brass: 0 0 0 rgba(0, 0, 0, 0);
+  --canvas-wash: none;
+
+  --focus-ring: 0 0 0 2px var(--bg), 0 0 0 4px var(--accent-a55);
+}

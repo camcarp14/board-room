@@ -25,6 +25,14 @@ import { CreedPanel } from "./features/creed/CreedPanel.jsx";
 import { UpkeepPanel } from "./features/upkeep/UpkeepPanel.jsx";
 import { BirthdaysPanel } from "./features/birthdays/BirthdaysPanel.jsx";
 import { upkeepDue } from "./lib/upkeep.js";
+import { NAV, HEADERS } from "./shell/nav.js";
+import { MobileShell } from "./shell/MobileShell.jsx";
+import { SidebarShell } from "./shell/SidebarShell.jsx";
+import { Summon } from "./shell/Summon.jsx";
+import { BootScreen, LoginScreen, SetupNotice } from "./shell/Boot.jsx";
+import { SPORT_ICONS } from "./ui/icons.jsx";
+import { StancePill, StatusTag, CARD_STATES, NOTE_SEALS, sealColor, NoteCardPreview, continueListOnEnter, toggleBulletAtCaret } from "./ui/shared.jsx";
+import { Sheet, Button } from "./ui/kit.jsx";
 
 // ════════════════════════════════════════════════════════════════════════════
 // THE BOARD ROOM — modern roman edition.
@@ -40,71 +48,6 @@ import { upkeepDue } from "./lib/upkeep.js";
 // path is stripped from the deployed bundle.
 const PREVIEW = import.meta.env.DEV && import.meta.env.VITE_PREVIEW === "1";
 const previewParam = (k) => (PREVIEW ? new URLSearchParams(window.location.search).get(k) : null);
-
-
-
-// Tap the page title 5 times to open this — every number the device is
-// willing to admit about its viewport, so a geometry quirk can be diagnosed
-// from a single screenshot instead of blind deploys.
-function ViewportDiag({ onClose }) {
-  const [info, setInfo] = useState(null);
-  useEffect(() => {
-    const probe = (css) => {
-      const el = document.createElement("div");
-      el.style.cssText = `position:fixed;left:-9999px;top:0;width:10px;height:${css};`;
-      document.body.appendChild(el);
-      const h = el.getBoundingClientRect().height;
-      el.remove();
-      return Math.round(h);
-    };
-    const vv = window.visualViewport;
-    const dock = document.querySelector(".dock")?.getBoundingClientRect();
-    const shell = document.getElementById("page-scroll")?.parentElement?.getBoundingClientRect();
-    setInfo({
-      build: typeof __BUILD__ !== "undefined" ? __BUILD__ : "dev",
-      standalone: String(IS_STANDALONE),
-      "screen h×w": `${window.screen?.height}×${window.screen?.width}`,
-      innerHeight: window.innerHeight,
-      clientHeight: document.documentElement.clientHeight,
-      "vv.height": vv ? Math.round(vv.height) : "n/a",
-      "vv.offsetTop": vv ? Math.round(vv.offsetTop) : "n/a",
-      "100vh": probe("100vh"),
-      "100dvh": probe("100dvh"),
-      "100svh": probe("100svh"),
-      "100lvh": probe("100lvh"),
-      "env(top)": probe("env(safe-area-inset-top)"),
-      "env(bottom)": probe("env(safe-area-inset-bottom)"),
-      "shell bottom": shell ? Math.round(shell.bottom) : "n/a",
-      "dock bottom": dock ? Math.round(dock.bottom) : "n/a",
-    });
-  }, []);
-  // Physical ruler: absolutely-positioned lines at the client-y of each
-  // reported height. A screenshot shows exactly where each coordinate
-  // system believes the bottom is versus where the glass actually ends.
-  const rulers = info ? [
-    { y: Number(info["vv.height"]) || 0, color: "var(--red)", label: "vv" },
-    { y: Number(info["100lvh"]) || 0, color: "var(--green)", label: "lvh" },
-    { y: Number(info.innerHeight) || 0, color: "var(--blue)", label: "inner" },
-  ] : [];
-  return (
-    <div onClick={onClose} style={{ position: "fixed", inset: 0, zIndex: 5000, background: "var(--scrim)", display: "flex", alignItems: "center", justifyContent: "center", padding: 20 }}>
-      {rulers.map((r, i) => r.y > 0 && (
-        <div key={i} style={{ position: "absolute", left: 0, right: 0, top: r.y - 2, height: 2, background: r.color, opacity: 0.9, pointerEvents: "none" }}>
-          <span style={{ position: "absolute", right: 6, bottom: 3, fontSize: 9, fontFamily: mono, color: r.color }}>{r.label} {r.y}</span>
-        </div>
-      ))}
-      <div style={{ background: T.surface, border: `1px solid ${T.lineStrong}`, borderRadius: 14, padding: "16px 18px", width: "100%", maxWidth: 340, fontFamily: mono, fontSize: 11.5, color: T.ink, lineHeight: 1.9, boxShadow: "var(--shadow-deep)" }}>
-        <div style={{ ...S.title, marginBottom: 8 }}>Viewport Diagnostics</div>
-        {info && Object.entries(info).map(([k, v]) => (
-          <div key={k} style={{ display: "flex", justifyContent: "space-between", gap: 10 }}>
-            <span style={{ color: T.sub }}>{k}</span><span style={{ fontVariantNumeric: "tabular-nums" }}>{String(v)}</span>
-          </div>
-        ))}
-        <div style={{ marginTop: 8, fontSize: 9.5, color: T.faint, fontFamily: "inherit" }}>Tap anywhere to close · screenshot this if the dock sits wrong</div>
-      </div>
-    </div>
-  );
-}
 
 
 // ─── Chat (shared by desktop Room page and mobile sheet) ─────────────────────
@@ -172,35 +115,6 @@ function Composer({ input, setInput, onSend, thinking, compact }) {
   );
 }
 
-// ─── Top bar status: clock · data freshness · manual refresh ────────────────
-function TopStatus({ now, dataStamp, refreshing, onRefresh, compact }) {
-  const d = new Date(now);
-  const date = d.toLocaleDateString(undefined, compact ? { month: "short", day: "numeric" } : { weekday: "short", month: "short", day: "numeric" });
-  const time = d.toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" });
-  const ageMin = dataStamp ? Math.floor((now - dataStamp) / 60000) : null;
-  const fresh = ageMin === null ? "—" : ageMin < 1 ? "LIVE" : ageMin < 60 ? `${ageMin}M OLD` : `${Math.floor(ageMin / 60)}H OLD`;
-  const freshColor = ageMin === null ? T.faint : ageMin < 5 ? T.green : ageMin < 30 ? T.amber : T.red;
-  return (
-    <div style={{ display: "flex", alignItems: "center", gap: compact ? 8 : 12, flex: "none" }}>
-      <span style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 1 }}>
-        <span style={{ fontSize: compact ? 10 : 11, fontWeight: 600, color: T.ink, fontFamily: mono, lineHeight: 1 }}>{time}</span>
-        <span style={{ fontSize: compact ? 8 : 8.5, color: T.faint, fontFamily: mono, letterSpacing: "0.06em", lineHeight: 1.3, textTransform: "uppercase" }}>{date}</span>
-      </span>
-      <span style={{ display: "flex", alignItems: "center", gap: 5, padding: compact ? "4px 8px" : "5px 10px", background: tint(freshColor, 8), border: `1px solid ${tint(freshColor, 21)}`, borderRadius: 11 }}>
-        <span style={{ width: 5, height: 5, borderRadius: "50%", background: freshColor, boxShadow: `0 0 6px ${tint(freshColor, 56)}`, animation: ageMin !== null && ageMin < 1 ? "pulse 2s infinite" : "none" }} />
-        <span style={{ fontSize: 8, fontWeight: 700, color: freshColor, fontFamily: mono, letterSpacing: "0.08em", whiteSpace: "nowrap" }}>{compact ? fresh : `DATA ${fresh}`}</span>
-      </span>
-      <button onClick={onRefresh} disabled={refreshing} title="Refresh data" aria-label="Refresh data"
-        style={{ width: compact ? 34 : 30, height: compact ? 34 : 30, display: "inline-flex", alignItems: "center", justifyContent: "center", background: "var(--brass-a10)", border: "1px solid var(--brass-a32)", borderRadius: 9, cursor: refreshing ? "default" : "pointer", flex: "none", padding: 0 }}>
-        <svg width={compact ? 15 : 14} height={compact ? 15 : 14} viewBox="0 0 24 24" fill="none" stroke={T.brass} strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round"
-          style={{ animation: refreshing ? "spin 0.9s linear infinite" : "none", opacity: refreshing ? 0.7 : 1 }}>
-          <path d="M21 12a9 9 0 1 1-2.64-6.36" />
-          <path d="M21 3v6h-6" />
-        </svg>
-      </button>
-    </div>
-  );
-}
 
 // ─── Page: The Room ─────────────────────────────────────────────────────────
 // A real page now, same on both platforms — replaces the old mobile-only
@@ -236,20 +150,6 @@ function RoomPage({ messages, thinking, loadingData, input, setInput, onSend, on
 const GSC_EMPTY = { impressions: "—", impressionsD: "", clicks: "—", clicksD: "", pos: "—", posD: "", series: Array(14).fill(0), daily: [], note: "" };
 const STOCKS_EMPTY = { spx: { value: "—", price: "—", up: true }, ndq: { value: "—", price: "—", up: true }, tnx: { value: "—", price: "—", up: true }, dxy: { value: "—", price: "—", up: true } };
 
-function StancePill({ text, color }) {
-  return <span style={{ fontSize: 8.5, fontWeight: 700, color, background: tint(color, 10), border: `1px solid ${tint(color, 30)}`, padding: "4px 10px", borderRadius: 12, fontFamily: mono, letterSpacing: "0.08em" }}>{text}</span>;
-}
-const CARD_STATES = {
-  loading: { label: "…", color: T.faint },
-  live: { label: "● LIVE", color: T.green },
-  notconfigured: { label: "NOT CONNECTED", color: T.amber },
-  error: { label: "ERROR", color: T.red },
-  nofn: { label: "NOT DEPLOYED", color: T.red },
-};
-function StatusTag({ status }) {
-  const s = CARD_STATES[status?.state || "loading"];
-  return <span style={{ fontSize: 8, fontWeight: 700, color: s.color, background: tint(s.color, 10), border: `1px solid ${tint(s.color, 25)}`, padding: "3.5px 9px", borderRadius: 10, fontFamily: mono, letterSpacing: "0.06em" }}>{s.label}</span>;
-}
 
 // ─── The Docket — the day, assembled ─────────────────────────────────────────
 // A zero-token overview above the market section: today's calendar, birthdays
@@ -353,34 +253,7 @@ function DocketCard({ isMobile, birthdays, macroEvents, settings, onOpenCalendar
 // "- " starts a bullet line. Enter continues the list on the next line;
 // Enter on an empty "- " ends it. apply(next, caret) sets state and restores
 // the caret once React has re-rendered the textarea.
-function continueListOnEnter(e, value, apply) {
-  if (e.key !== "Enter" || e.shiftKey || e.metaKey || e.ctrlKey) return false;
-  const ta = e.target;
-  const s = ta.selectionStart, en = ta.selectionEnd;
-  if (s == null || s !== en) return false;
-  const lineStart = value.lastIndexOf("\n", s - 1) + 1;
-  const m = value.slice(lineStart, s).match(/^(\s*)- (.*)$/);
-  if (!m) return false;
-  e.preventDefault();
-  if (!m[2].trim()) {
-    apply(value.slice(0, lineStart) + value.slice(s), lineStart);
-  } else {
-    const ins = "\n" + m[1] + "- ";
-    apply(value.slice(0, s) + ins + value.slice(en), s + ins.length);
-  }
-  return true;
-}
 // The "• list" button: toggle a "- " bullet on the caret's line.
-function toggleBulletAtCaret(ta, value, apply) {
-  const s = ta && ta.selectionStart != null ? ta.selectionStart : value.length;
-  const lineStart = value.lastIndexOf("\n", s - 1) + 1;
-  const rest = value.slice(lineStart);
-  if (/^\s*- /.test(rest)) {
-    apply(value.slice(0, lineStart) + rest.replace(/^(\s*)- /, "$1"), Math.max(lineStart, s - 2));
-  } else {
-    apply(value.slice(0, lineStart) + "- " + value.slice(lineStart), s + 2);
-  }
-}
 
 // ─── Notes tile — the Docket's quiet companion on the Brief ──────────────────
 // Same personal_notes table the Notes tab owns: scroll recent notes, capture
@@ -1336,11 +1209,6 @@ const NOTES_UPGRADE_SQL = `-- Notes upgrade — pins + color seals (safe to re-r
 alter table public.personal_notes add column if not exists pinned boolean not null default false;
 alter table public.personal_notes add column if not exists color text;`;
 
-const NOTE_SEALS = [
-  { key: "brass", c: T.brass }, { key: "green", c: T.green },
-  { key: "blue", c: T.blue }, { key: "red", c: T.red },
-];
-const sealColor = (key) => NOTE_SEALS.find(s => s.key === key)?.c || null;
 
 // A note card's body preview: stored newlines render as real lines and the card
 // grows to fit the note, up to `maxHeight` (defaults to ~8 lines). Past that it
@@ -1348,37 +1216,6 @@ const sealColor = (key) => NOTE_SEALS.find(s => s.key === key)?.c || null;
 // and the fade only appears when the text truly overflows, so short notes render
 // crisp with no dimmed last line. Callers can tune size/cap (e.g. the Brief tile
 // uses a tighter 3-line cap).
-function NoteCardPreview({ text, fontSize = 11, color = T.sub, lineHeight = 1.55, maxHeight = 140, fadePx = 30, style }) {
-  const ref = useRef(null);
-  const [clipped, setClipped] = useState(false);
-  useLayoutEffect(() => {
-    const el = ref.current;
-    if (!el) return;
-    const measure = () => setClipped(el.scrollHeight > maxHeight + 1);
-    measure();
-    let ro;
-    if (typeof ResizeObserver !== "undefined") { ro = new ResizeObserver(measure); ro.observe(el); }
-    return () => ro?.disconnect();
-  }, [text, maxHeight]);
-  const fade = `linear-gradient(to bottom, #000 calc(100% - ${fadePx}px), transparent)`;
-  return (
-    <div
-      ref={ref}
-      style={{
-        fontSize,
-        color,
-        lineHeight,
-        whiteSpace: "pre-wrap",
-        overflowWrap: "break-word",
-        transition: "max-height 220ms ease",
-        ...style,
-        ...(clipped ? { maxHeight, overflow: "hidden", WebkitMaskImage: fade, maskImage: fade } : null),
-      }}
-    >
-      {text}
-    </div>
-  );
-}
 
 // Notes — quick capture, search, pins, color seals, and a select mode for
 // bulk pin/seal/merge/delete. Deletes and merges are undoable for a few
@@ -2716,177 +2553,6 @@ function ConnRow({ meta, check }) {
 }
 
 
-// ─── Summon (⌘K) ──────────────────────────────────────────────────────────────
-// One keystroke to anywhere: pages, notes, skills, and quick actions (jot a
-// note, queue a Mini Me task) — without leaving what you're doing. The whole
-// app behind a single search field.
-const SUMMON_PLACES = [
-  { label: "Brief", page: "brief", hint: "markets · wires · stores" },
-  { label: "Notes", page: "personal", sub: "notes", hint: "personal" },
-  { label: "Calendar", page: "personal", sub: "calendar", hint: "personal" },
-  { label: "Workout", page: "personal", sub: "workout", hint: "training" },
-  { label: "Upkeep", page: "personal", sub: "upkeep", hint: "oil · filters · renewals" },
-  { label: "Creed", page: "personal", sub: "creed", hint: "ground yourself" },
-  { label: "Birthdays", page: "personal", sub: "birthdays", hint: "personal" },
-  { label: "Movies", page: "personal", sub: "movies", hint: "watchlist" },
-  { label: "Food", page: "personal", sub: "food", hint: "meals" },
-  { label: "Mini Me", page: "boardroom", sub: "mini", hint: "queue · run" },
-  { label: "Learn", page: "boardroom", sub: "learn", hint: "skills" },
-  { label: "Board chat", page: "boardroom", sub: "chat", hint: "ask the seats" },
-  { label: "Seats", page: "boardroom", sub: "seats", hint: "the five" },
-  { label: "Assets", page: "assets", hint: "properties · auditor" },
-  { label: "Systems", page: "systems", hint: "usage · status · deploy" },
-];
-
-function Summon({ onClose, onGo, onJot, onQueueTask, onAsk, isMobile }) {
-  const [q, setQ] = useState("");
-  const [idx, setIdx] = useState(0);
-  const [mode, setMode] = useState(null); // null | "jot" | "task"
-  const [modeText, setModeText] = useState("");
-  const [flash, setFlash] = useState(null); // confirmation line before close
-  const [notes, setNotes] = useState([]);
-  const [skills, setSkills] = useState([]);
-  const inputRef = useRef(null);
-  const listRef = useRef(null);
-  const closeTimer = useRef(null);
-  useEffect(() => () => clearTimeout(closeTimer.current), []);
-
-  useEffect(() => {
-    db.loadNotes().then(({ rows }) => setNotes(rows || [])).catch(() => {});
-    makeSkillsDb(supabase).load().then(setSkills).catch(() => {});
-  }, []);
-  useEffect(() => { inputRef.current?.focus(); }, [mode]);
-
-  const needle = q.trim().toLowerCase();
-  const hit = (s) => (s || "").toLowerCase().includes(needle);
-  const noteTitle = (n) => n.title?.trim() || (n.body || "").split("\n").map(l => l.trim()).find(Boolean)?.slice(0, 60) || "Untitled note";
-
-  // Quick-file grammar: "n: milk" files a note on Enter, "t:" queues Mini Me,
-  // "a:" convenes the board — thought to filed in one line, no menu hop.
-  const fileCmd = async (kind, text) => {
-    try {
-      if (kind === "jot") { await onJot(text); setFlash("Filed to Notes ◆"); }
-      else { await onQueueTask(text); setFlash("Queued for Mini Me ◆"); }
-      setQ("");
-      closeTimer.current = setTimeout(onClose, 650);
-    } catch (e) { setFlash(e.message || "Couldn't save — try again."); }
-  };
-
-  const rows = useMemo(() => {
-    const noteCmd = q.match(/^(?:n|note|jot)\s*:\s*(\S[\s\S]*)$/i);
-    const taskCmd = q.match(/^(?:t|task|mini)\s*:\s*(\S[\s\S]*)$/i);
-    const askCmd = q.match(/^(?:a|ask)\s*:\s*(\S[\s\S]*)$/i);
-    if (noteCmd || taskCmd || askCmd) {
-      const cmds = [];
-      if (noteCmd) cmds.push({ kind: "cmd", label: `Jot to Notes — “${noteCmd[1].trim()}”`, hint: "↵ files it", run: () => fileCmd("jot", noteCmd[1].trim()) });
-      if (taskCmd) cmds.push({ kind: "cmd", label: `Queue for Mini Me — “${taskCmd[1].trim()}”`, hint: "↵ queues it", run: () => fileCmd("task", taskCmd[1].trim()) });
-      if (askCmd) cmds.push({ kind: "cmd", label: `Ask the board — “${askCmd[1].trim()}”`, hint: "convene ↵", run: () => onAsk?.(askCmd[1].trim()) });
-      return cmds;
-    }
-    const actions = [
-      { kind: "act", label: "Jot a note", hint: "saved straight to Notes", run: () => { setMode("jot"); setQ(""); } },
-      { kind: "act", label: "Queue a task for Mini Me", hint: "lands in the queue", run: () => { setMode("task"); setQ(""); } },
-      { kind: "act", label: "Teach a skill", hint: "/learn", go: { page: "boardroom", sub: "learn" } },
-      { kind: "act", label: "Ask the board", hint: "open the chat", go: { page: "boardroom", sub: "chat" } },
-    ].filter(a => !needle || hit(a.label) || hit(a.hint));
-    const places = SUMMON_PLACES.filter(p => !needle || hit(p.label) || hit(p.hint))
-      .map(p => ({ kind: "go", label: p.label, hint: p.hint, go: p }));
-    const noteRows = (needle ? notes.filter(n => hit(n.title) || hit(n.body)) : notes.slice(0, 3))
-      .slice(0, 5).map(n => ({ kind: "note", label: noteTitle(n), hint: "note", go: { page: "personal", sub: "notes", noteId: n.id } }));
-    const skillRows = (needle ? skills.filter(s => hit(s.title) || hit(s.description) || hit(s.content)) : [])
-      .slice(0, 5).map(s => ({ kind: "skill", label: s.title, hint: "skill", go: { page: "boardroom", sub: "learn", skillId: s.id } }));
-    // Anything typed can simply be asked — the question lands in the Room
-    // already sent. Kept last so jump-to muscle memory ("cal" ↵) still wins;
-    // when nothing else matches, asking IS the Enter action.
-    const askRows = needle.length >= 3 && onAsk
-      ? [{ kind: "ask", label: `Ask the board — "${q.trim()}"`, hint: "convene ↵", run: () => onAsk(q.trim()) }]
-      : [];
-    return [...actions, ...places, ...noteRows, ...skillRows, ...askRows];
-  }, [q, needle, notes, skills]); // eslint-disable-line react-hooks/exhaustive-deps
-
-  useEffect(() => { setIdx(0); }, [needle]);
-  useEffect(() => {
-    listRef.current?.children[idx]?.scrollIntoView({ block: "nearest" });
-  }, [idx]);
-
-  const choose = (r) => {
-    if (!r) return;
-    if (r.run) return r.run();
-    if (r.go) onGo(r.go);
-  };
-
-  const commitMode = async () => {
-    const t = modeText.trim();
-    if (!t) return;
-    try {
-      if (mode === "jot") { await onJot(t); setFlash("Saved to Notes ◆"); }
-      else { await onQueueTask(t); setFlash("Queued for Mini Me ◆"); }
-      setModeText("");
-      closeTimer.current = setTimeout(onClose, 650);
-    } catch (e) { setFlash(e.message || "Couldn't save — try again."); }
-  };
-
-  const onKey = (e) => {
-    if (e.key === "Escape") { e.preventDefault(); mode ? (setMode(null), setFlash(null)) : onClose(); return; }
-    if (mode) { if (e.key === "Enter") { e.preventDefault(); commitMode(); } return; }
-    if (e.key === "ArrowDown") { e.preventDefault(); setIdx(i => Math.min(i + 1, rows.length - 1)); }
-    else if (e.key === "ArrowUp") { e.preventDefault(); setIdx(i => Math.max(i - 1, 0)); }
-    else if (e.key === "Enter") { e.preventDefault(); choose(rows[idx]); }
-  };
-
-  const sectionOf = (r) => r.kind === "act" ? "Actions" : r.kind === "go" ? "Go to" : r.kind === "note" ? "Notes" : r.kind === "ask" ? "Or just ask" : r.kind === "cmd" ? "Quick file" : "Skills";
-
-  return (
-    <div onClick={onClose} style={{ position: "fixed", inset: 0, background: "var(--scrim)", backdropFilter: "blur(3px)", zIndex: 120, display: "flex", alignItems: "flex-start", justifyContent: "center", padding: isMobile ? "12vh 14px 0" : "16vh 20px 0", animation: "fadein 0.14s ease" }}>
-      <div onClick={e => e.stopPropagation()} onKeyDown={onKey}
-        style={{ width: "100%", maxWidth: 560, background: T.surface, border: `1px solid ${T.lineStrong}`, borderRadius: 16, boxShadow: "var(--shadow-deep)", overflow: "hidden", display: "flex", flexDirection: "column", maxHeight: isMobile ? "70dvh" : "62vh" }}>
-
-        {/* the diamond rule */}
-        <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "0 18px", height: 34, borderBottom: `1px solid ${T.line}`, flex: "none" }}>
-          <span style={{ width: 6, height: 6, transform: "rotate(45deg)", background: T.brass, borderRadius: 1 }} />
-          <span style={{ ...S.microLabel, color: T.sub }}>{mode === "jot" ? "Jot a note" : mode === "task" ? "Queue a task" : "Summon"}</span>
-          <span style={{ flex: 1 }} />
-          <span style={{ ...S.microLabel }}>{mode ? "↵ save · esc back" : "n: t: a: · ↑↓ · ↵"}</span>
-        </div>
-
-        {mode ? (
-          <div style={{ padding: 18 }}>
-            <textarea ref={inputRef} value={modeText} onChange={e => setModeText(e.target.value)} rows={3}
-              placeholder={mode === "jot" ? "The thought, as it comes — Enter saves it." : "What should Mini Me take on?"}
-              onKeyDown={e => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); e.stopPropagation(); commitMode(); } }}
-              style={{ ...S.input, width: "100%", boxSizing: "border-box", padding: "12px 13px", fontSize: 13.5, lineHeight: 1.6, resize: "none" }} />
-            {flash && <div style={{ marginTop: 10, fontSize: 11.5, color: flash.includes("◆") ? T.green : T.red, fontFamily: mono }}>{flash}</div>}
-          </div>
-        ) : (
-          <>
-            <input ref={inputRef} value={q} onChange={e => setQ(e.target.value)}
-              placeholder="Jump, jot, search — or just ask the board…"
-              style={{ border: "none", outline: "none", background: "transparent", padding: "15px 18px", fontSize: 15, color: T.ink, fontFamily: "inherit", flex: "none" }} />
-            {flash && <div style={{ padding: "0 18px 10px", fontSize: 11.5, fontFamily: mono, color: flash.includes("◆") ? T.green : T.red, flex: "none" }}>{flash}</div>}
-            <div ref={listRef} style={{ overflowY: "auto", padding: "0 8px 10px" }}>
-              {rows.length === 0 && <div style={{ padding: "22px 12px", fontSize: 12, color: T.faint, textAlign: "center" }}>Nothing matches "{q}".</div>}
-              {rows.map((r, i) => {
-                const showSection = i === 0 || sectionOf(rows[i - 1]) !== sectionOf(r);
-                return (
-                  <div key={`${r.kind}-${r.label}-${i}`}>
-                    {showSection && <div style={{ ...S.microLabel, padding: "12px 12px 5px" }}>{sectionOf(r)}</div>}
-                    <div onClick={() => choose(r)} onMouseEnter={() => setIdx(i)}
-                      style={{ display: "flex", alignItems: "center", gap: 10, padding: "9px 12px", borderRadius: 9, cursor: "pointer", background: i === idx ? "var(--brass-a08)" : "transparent" }}>
-                      <span style={{ width: 5, height: 5, transform: "rotate(45deg)", background: i === idx ? T.brass : "var(--line-strong)", borderRadius: 1, flex: "none" }} />
-                      <span style={{ fontSize: 13, color: T.ink, flex: 1, minWidth: 0, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{r.label}</span>
-                      {r.hint && <span style={{ fontSize: 9.5, color: T.faint, fontFamily: mono, flex: "none" }}>{r.hint}</span>}
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
-          </>
-        )}
-      </div>
-    </div>
-  );
-}
-
 function SubTabs({ options, value, onChange }) {
   return (
     <div style={{ display: "flex", gap: 22, flexWrap: "wrap", borderBottom: `1px solid ${T.line}` }}>
@@ -3698,264 +3364,28 @@ function SeatNotesModal({ seatKey, initial, onSave, onClose, isMobile }) {
 
 function MigrationModal({ counts, onImport, onSkip, importing }) {
   return (
-    <div style={{ position: "fixed", inset: 0, background: "rgba(5,8,16,0.75)", zIndex: 400, display: "flex", alignItems: "center", justifyContent: "center", animation: "fadein 0.15s ease both" }}>
-      <div style={{ background: T.surface, borderRadius: 18, padding: "26px 28px", width: 440, maxWidth: "94vw", border: `1px solid var(--ink-a10)`, boxShadow: "var(--shadow-deep)", color: T.ink }}>
-        <div style={{ fontSize: 16, fontWeight: 700, fontFamily: syne, marginBottom: 8 }}>Import your existing memory?</div>
-        <div style={{ fontSize: 12.5, color: T.sub, lineHeight: 1.7, marginBottom: 18 }}>
-          This browser has data from before your account existed:{" "}
-          <strong style={{ color: T.ink }}>{counts.chat} chat message{counts.chat !== 1 ? "s" : ""}</strong> and{" "}
-          <strong style={{ color: T.ink }}>{counts.notes} seat note{counts.notes !== 1 ? "s" : ""}</strong>.
-          Import them into your account so they're available on every device? Nothing is deleted either way.
-        </div>
-        <div style={{ display: "flex", gap: 8 }}>
-          <button onClick={onImport} disabled={importing} style={{ ...S.brassBtn, flex: 1, padding: 12, fontSize: 12, opacity: importing ? 0.5 : 1 }}>{importing ? "Importing…" : "Import"}</button>
-          <button onClick={onSkip} disabled={importing} style={{ padding: "12px 18px", background: "transparent", border: `1px solid var(--ink-a10)`, borderRadius: 10, color: T.sub, fontSize: 12, fontWeight: 600, cursor: "pointer" }}>Skip</button>
-        </div>
+    <Sheet title="Import your existing memory?" onClose={onSkip} dismissible={!importing} z={400}
+      footer={
+        <>
+          <Button kind="quiet" size="lg" style={{ flex: 1 }} disabled={importing} onClick={onSkip}>Skip</Button>
+          <Button kind="primary" size="lg" style={{ flex: 2 }} disabled={importing} onClick={onImport}>{importing ? "Importing…" : "Import"}</Button>
+        </>
+      }>
+      <div className="t-body" style={{ color: "var(--sub)", lineHeight: 1.65, paddingBottom: 4 }}>
+        This browser has data from before your account existed:{" "}
+        <strong style={{ color: "var(--ink)", fontWeight: 600 }}>{counts.chat} chat message{counts.chat !== 1 ? "s" : ""}</strong> and{" "}
+        <strong style={{ color: "var(--ink)", fontWeight: 600 }}>{counts.notes} seat note{counts.notes !== 1 ? "s" : ""}</strong>.
+        Import them into your account so they're available on every device? Nothing is deleted either way.
       </div>
-    </div>
+    </Sheet>
   );
 }
 
-// ─── Auth screens ────────────────────────────────────────────────────────────
-// ─── The seal — ring draws itself, the diamond lands. Boot + entrance. ──────
-function Seal({ size = 92 }) {
-  return (
-    <svg width={size} height={size} viewBox="0 0 92 92" aria-hidden="true">
-      <circle className="seal-ring" cx="46" cy="46" r="37" />
-      <rect className="seal-diamond" x="34" y="34" width="24" height="24" rx="2.5" />
-    </svg>
-  );
-}
-
-function BootScreen() {
-  return (
-    <div className="boot">
-      <Seal size={92} />
-      <div className="boot-title">The Board Room</div>
-      <div className="boot-sub">convening</div>
-    </div>
-  );
-}
-
-// Cycle auto → day → night → auto. Auto is the house default: the room
-// follows the sun (Nocturne 19:00–07:00).
-const THEME_CYCLE = { auto: "day", day: "night", night: "auto" };
-const THEME_LABEL = { auto: "Auto — follows the sun", day: "Daylight", night: "Nocturne" };
-function ThemeToggle({ theme, compact }) {
-  const icon = theme.pref === "auto"
-    ? ( // half-lit diamond — auto
-      <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8">
-        <rect x="5.6" y="5.6" width="12.8" height="12.8" rx="2" transform="rotate(45 12 12)" />
-        <path d="M12 3.5 L12 20.5" strokeWidth="1.2" />
-      </svg>
-    ) : theme.pref === "day"
-      ? ( // sun
-        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round">
-          <circle cx="12" cy="12" r="4.2" />
-          <line x1="12" y1="2.5" x2="12" y2="5" /><line x1="12" y1="19" x2="12" y2="21.5" />
-          <line x1="2.5" y1="12" x2="5" y2="12" /><line x1="19" y1="12" x2="21.5" y2="12" />
-          <line x1="5.3" y1="5.3" x2="7" y2="7" /><line x1="17" y1="17" x2="18.7" y2="18.7" />
-          <line x1="5.3" y1="18.7" x2="7" y2="17" /><line x1="17" y1="7" x2="18.7" y2="5.3" />
-        </svg>
-      ) : ( // moon
-        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
-          <path d="M20 13.2A8.2 8.2 0 0 1 10.8 4a8.2 8.2 0 1 0 9.2 9.2z" />
-        </svg>
-      );
-  return (
-    <button onClick={() => theme.setPref(THEME_CYCLE[theme.pref])}
-      aria-label={`Theme: ${THEME_LABEL[theme.pref]} — tap to change`} title={`Theme: ${THEME_LABEL[theme.pref]}`}
-      style={{ display: "inline-flex", alignItems: "center", justifyContent: "center", width: compact ? 34 : 32, height: compact ? 34 : 32, background: "transparent", border: `1px solid ${T.lineStrong}`, borderRadius: 9, color: T.sub, cursor: "pointer", padding: 0 }}>
-      {icon}
-    </button>
-  );
-}
-
-function SetupNotice() {
-  return (
-    <div style={{ minHeight: "100vh", display: "flex", alignItems: "center", justifyContent: "center", color: T.ink, padding: 20 }}>
-      <div style={{ maxWidth: 480, padding: "28px 30px", background: T.surface, border: `1px solid ${T.line}`, borderRadius: 18 }}>
-        <div style={{ fontSize: 16, fontWeight: 700, fontFamily: syne, marginBottom: 10 }}>Supabase not configured</div>
-        <div style={{ fontSize: 13, color: T.sub, lineHeight: 1.7 }}>
-          This build expects two environment variables on the Netlify site:<br />
-          <code style={{ fontFamily: mono, fontSize: 12, color: T.brass }}>VITE_SUPABASE_URL</code> and <code style={{ fontFamily: mono, fontSize: 12, color: T.brass }}>VITE_SUPABASE_ANON_KEY</code>.<br /><br />
-          Add them (Site configuration → Environment variables), trigger a redeploy, and this screen becomes a login.
-        </div>
-      </div>
-    </div>
-  );
-}
-
-function LoginScreen() {
-  const [email, setEmail] = useState("");
-  const [password, setPassword] = useState("");
-  const [mode, setMode] = useState("password");
-  const [busy, setBusy] = useState(false);
-  const [err, setErr] = useState(null);
-  const [sent, setSent] = useState(false);
-
-  const signIn = async () => {
-    setBusy(true); setErr(null);
-    const { error } = await supabase.auth.signInWithPassword({ email: email.trim(), password });
-    if (error) setErr(error.message);
-    setBusy(false);
-  };
-  const sendMagic = async () => {
-    setBusy(true); setErr(null);
-    const { error } = await supabase.auth.signInWithOtp({ email: email.trim(), options: { shouldCreateUser: false, emailRedirectTo: window.location.origin } });
-    if (error) setErr(error.message); else setSent(true);
-    setBusy(false);
-  };
-  const disabled = busy || !email || (mode === "password" && !password);
-
-  return (
-    <div className="entrance" style={{ color: T.ink }}>
-      <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 14 }}>
-        <Seal size={84} />
-        <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 6 }}>
-          <span className="boot-title" style={{ fontSize: 15 }}>The Board Room</span>
-          <span className="boot-sub">one mind · any device</span>
-        </div>
-      </div>
-      <div className="entrance-card">
-        <input value={email} onChange={e => setEmail(e.target.value)} placeholder="email" type="email" autoComplete="email"
-          style={{ ...S.input, width: "100%", padding: "12px 14px", fontSize: 13, marginBottom: 10 }} />
-        {mode === "password" && (
-          <input value={password} onChange={e => setPassword(e.target.value)} onKeyDown={e => { if (e.key === "Enter") signIn(); }} placeholder="password" type="password" autoComplete="current-password"
-            style={{ ...S.input, width: "100%", padding: "12px 14px", fontSize: 13, marginBottom: 10 }} />
-        )}
-        {err && <div style={{ fontSize: 11, color: T.red, marginBottom: 10 }}>{err}</div>}
-        {sent && <div style={{ fontSize: 11, color: T.green, marginBottom: 10 }}>Login link sent — check your email.</div>}
-        <button onClick={mode === "password" ? signIn : sendMagic} disabled={disabled}
-          style={{ ...(disabled ? { background: "var(--ink-a06)", color: T.faint, border: "none", borderRadius: 10, fontFamily: syne, fontWeight: 700 } : S.brassBtn), width: "100%", padding: 13, fontSize: 12, cursor: disabled ? "default" : "pointer" }}>
-          {busy ? (mode === "password" ? "Signing in…" : "Sending…") : (mode === "password" ? "Enter the room" : "Email me a login link")}
-        </button>
-        <div onClick={() => { setMode(mode === "password" ? "magic" : "password"); setErr(null); setSent(false); }}
-          style={{ fontSize: 10, color: T.faint, textAlign: "center", marginTop: 14, cursor: "pointer" }}>
-          {mode === "password" ? "Use a magic link instead" : "Use a password instead"}
-        </div>
-      </div>
-    </div>
-  );
-}
-
-// ─── Navigation config ────────────────────────────────────────────────────────
-// One list drives both platforms — desktop shows label+sub, mobile shows the
-// icon only (label lives in aria-label/title). Same order, same set, same
-// keys: nothing to learn twice.
-const NAV = [
-  { key: "brief", label: "Brief", sub: "BTC · stocks · wires · ZTS", mark: T.amber },
-  { key: "personal", label: "Personal", sub: "notes · calendar · workout", mark: "var(--purple)" },
-  { key: "boardroom", label: "Board Room", sub: "mini me · learn · 5 seats", mark: T.brass },
-  { key: "assets", label: "Assets", sub: "4 live properties · site auditor", mark: T.blue },
-  { key: "systems", label: "Systems", sub: "usage · status · deploy · supabase", mark: "var(--green)" },
-];
-const HEADERS = {
-  brief: ["Brief", "live markets, wires, and your stores"],
-  boardroom: ["Board Room", "mini me · learned skills · 5 seats on call"],
-  personal: ["Personal", "notes, calendar, and training — just for you"],
-  assets: ["Assets", "everything you run, one click away"],
-  systems: ["Systems", "usage, status, deploys, and supabase"],
-};
-// Small sport-type icons for the Sports tile — same line-icon style as
-// NAV_ICONS below, just simplified further since these render tiny (~12px)
-// inside a compact list row. Colored by the caller to double as the
-// live/final/upcoming state indicator, replacing a plain dot.
-const SPORT_ICONS = {
-  baseball: (p) => (
-    <svg {...p} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round">
-      <circle cx="12" cy="12" r="8.5" />
-      <path d="M6.3 6c1.8 2 2.7 3.9 2.7 6s-.9 4-2.7 6" />
-      <path d="M17.7 6c-1.8 2-2.7 3.9-2.7 6s.9 4 2.7 6" />
-    </svg>
-  ),
-  football: (p) => (
-    <svg {...p} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round">
-      <ellipse cx="12" cy="12" rx="8.5" ry="5.5" />
-      <line x1="6" y1="12" x2="18" y2="12" />
-      <line x1="10.5" y1="9.8" x2="10.5" y2="8.4" /><line x1="13.5" y1="9.8" x2="13.5" y2="8.4" />
-      <line x1="10.5" y1="14.2" x2="10.5" y2="15.6" /><line x1="13.5" y1="14.2" x2="13.5" y2="15.6" />
-    </svg>
-  ),
-  basketball: (p) => (
-    <svg {...p} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round">
-      <circle cx="12" cy="12" r="8.5" />
-      <line x1="3.5" y1="12" x2="20.5" y2="12" />
-      <line x1="12" y1="3.5" x2="12" y2="20.5" />
-      <path d="M6 5.8c2.2 2.2 3.3 4.2 3.3 6.2s-1.1 4-3.3 6.2" />
-      <path d="M18 5.8c-2.2 2.2-3.3 4.2-3.3 6.2s1.1 4 3.3 6.2" />
-    </svg>
-  ),
-  hockey: (p) => (
-    <svg {...p} viewBox="0 0 24 24" fill="currentColor" stroke="none">
-      <ellipse cx="12" cy="12" rx="8.5" ry="4" />
-    </svg>
-  ),
-  soccer: (p) => (
-    <svg {...p} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
-      <circle cx="12" cy="12" r="8.5" />
-      <polygon points="12,8 14.6,9.9 13.6,13 10.4,13 9.4,9.9" fill="currentColor" stroke="none" />
-      <line x1="12" y1="3.5" x2="12" y2="8" /><line x1="14.6" y1="9.9" x2="18.7" y2="8.6" />
-      <line x1="13.6" y1="13" x2="15.5" y2="17.2" /><line x1="10.4" y1="13" x2="8.5" y2="17.2" />
-      <line x1="9.4" y1="9.9" x2="5.3" y2="8.6" />
-    </svg>
-  ),
-};
-const NAV_ICONS = {
-  brief: (p) => ( // sunrise — the morning brief
-    <svg {...p} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round">
-      <path d="M6.5 17.5a5.5 5.5 0 0 1 11 0" />
-      <line x1="12" y1="3" x2="12" y2="8.5" />
-      <line x1="5.8" y1="9.3" x2="7.4" y2="10.9" /><line x1="18.2" y1="9.3" x2="16.6" y2="10.9" />
-      <line x1="2.5" y1="17.5" x2="4.7" y2="17.5" /><line x1="19.3" y1="17.5" x2="21.5" y2="17.5" />
-      <line x1="2" y1="21.5" x2="22" y2="21.5" />
-    </svg>
-  ),
-  personal: (p) => ( // calendar page, leading with what's first on mobile now — notes live below it
-    <svg {...p} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round">
-      <rect x="3" y="4.5" width="18" height="16" rx="2.5" />
-      <line x1="3" y1="9.5" x2="21" y2="9.5" />
-      <line x1="8" y1="2.5" x2="8" y2="6.5" /><line x1="16" y1="2.5" x2="16" y2="6.5" />
-      <circle cx="8" cy="14.2" r="1.05" fill="currentColor" stroke="none" /><circle cx="12" cy="14.2" r="1.05" fill="currentColor" stroke="none" />
-    </svg>
-  ),
-  boardroom: (p) => ( // a table with seats around it — the board convening, not a generic chat bubble
-    <svg {...p} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round">
-      <circle cx="12" cy="12" r="6.4" />
-      <circle cx="12" cy="3.8" r="1.3" fill="currentColor" stroke="none" />
-      <circle cx="19.4" cy="8.3" r="1.3" fill="currentColor" stroke="none" />
-      <circle cx="19.4" cy="15.7" r="1.3" fill="currentColor" stroke="none" />
-      <circle cx="12" cy="20.2" r="1.3" fill="currentColor" stroke="none" />
-      <circle cx="4.6" cy="15.7" r="1.3" fill="currentColor" stroke="none" />
-      <circle cx="4.6" cy="8.3" r="1.3" fill="currentColor" stroke="none" />
-    </svg>
-  ),
-  assets: (p) => ( // classical column — on brand with the Roman aesthetic, still reads as "properties"
-    <svg {...p} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round">
-      <line x1="4" y1="21" x2="20" y2="21" /><line x1="4.5" y1="18" x2="19.5" y2="18" />
-      <line x1="5" y1="3" x2="19" y2="3" />
-      <line x1="7" y1="6" x2="7" y2="18" /><line x1="12" y1="6" x2="12" y2="18" /><line x1="17" y1="6" x2="17" y2="18" />
-    </svg>
-  ),
-  systems: (p) => ( // terminal — systems
-    <svg {...p} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round">
-      <rect x="2.5" y="4" width="19" height="16" rx="2" /><polyline points="6.5 9.5 10.5 12 6.5 14.5" /><line x1="12.5" y1="15" x2="17.5" y2="15" />
-    </svg>
-  ),
-  mini: (p) => ( // sparkle — mini me
-    <svg {...p} viewBox="0 0 24 24" fill="currentColor" stroke="none">
-      <path d="M12 2.5c.5 3.4 1.2 5.4 2.4 6.6 1.2 1.2 3.2 1.9 6.6 2.4-3.4.5-5.4 1.2-6.6 2.4-1.2 1.2-1.9 3.2-2.4 6.6-.5-3.4-1.2-5.4-2.4-6.6C8.4 12.7 6.4 12 3 11.5c3.4-.5 5.4-1.2 6.6-2.4 1.2-1.2 1.9-3.2 2.4-6.6z" />
-    </svg>
-  ),
-};
 
 // ─── Main app ────────────────────────────────────────────────────────────────
 export default function App() {
   const theme = useThemeController();
   const isMobile = useIsMobile();
-  const { vvh, envTop } = useVisualViewport();
-  const diagTaps = useRef({ n: 0, t: 0 });
-  const [diagOpen, setDiagOpen] = useState(false);
   const [navDir, setNavDir] = useState(null); // "l" | "r" | null — drives the page slide direction
   const btc = useBitcoinPrice();
 
@@ -4193,12 +3623,6 @@ export default function App() {
     updateSetting("mini_tasks", [t, ...(settings?.mini_tasks || [])]);
   };
   const summonEl = summon ? <Summon onClose={() => setSummon(false)} onGo={summonGo} onJot={summonJot} onQueueTask={summonQueueTask} onAsk={summonAsk} isMobile={isMobile} /> : null;
-  const summonBtn = (compact) => (
-    <button onClick={() => setSummon(true)} aria-label="Summon — search everything"
-      style={{ display: "inline-flex", alignItems: "center", gap: 6, padding: compact ? "9px 10px" : "5px 11px", background: "transparent", border: `1px solid ${T.lineStrong}`, borderRadius: 9, color: T.sub, fontSize: 9.5, fontFamily: mono, letterSpacing: "0.08em", cursor: "pointer" }}>
-      <span style={{ width: 5, height: 5, transform: "rotate(45deg)", background: T.brass, borderRadius: 1 }} />{compact ? "⌘K" : "SUMMON ⌘K"}
-    </button>
-  );
   const goToCalendar = () => { setPersonalJumpTo(Date.now()); goToPage("personal"); }; // timestamp so re-tapping still re-triggers even if already on Personal
 
   const send = async (textOverride) => {
@@ -4293,175 +3717,40 @@ export default function App() {
     }
   };
 
-  // ═══ MOBILE SHELL ═══
-  // Same NAV, same pages, same order as desktop. The chrome: a glass header
-  // that respects the notch, and a floating dock whose brass ember glides to
-  // the active tab. Pages cross-fade; content scrolls under the dock.
+  // ═══ SHELLS ═══
+  // One nav state, two chromes: MobileShell (glass nav bar + tab bar, all the
+  // iOS-standalone geometry) and SidebarShell (iPadOS sidebar + content well).
+  const shellProps = { page, theme, onNavigate: goToPage, onSummon: () => setSummon(true), now, dataStamp, refreshing, onRefresh: refreshData };
+  const overlays = (
+    <>
+      {summonEl}
+      {editSeat && <SeatNotesModal seatKey={editSeat} initial={seatNotes[editSeat]} onSave={saveSeatNote} onClose={() => setEditSeat(null)} isMobile={isMobile} />}
+      {migration && <MigrationModal counts={migration} onImport={runImport} onSkip={skipImport} importing={importing} />}
+    </>
+  );
+
   if (isMobile) {
-    const activeIdx = Math.max(0, NAV.findIndex(n => n.key === page));
-    const onTitleTap = () => {
-      const now = Date.now();
-      const d = diagTaps.current;
-      d.n = now - d.t < 2000 ? d.n + 1 : 1;
-      d.t = now;
-      if (d.n >= 5) { d.n = 0; setDiagOpen(true); }
-    };
-    // When the keyboard eats most of the viewport, slide the dock away
-    // instead of letting it hover mid-screen.
-    const keyboardOpen = vvh != null && window.screen?.height ? vvh < window.screen.height * 0.72 : false;
-    // visualViewport is the ONLY height this window can actually render.
-    // Field-proven on device (day-theme letterbox showed WHITE under a beige
-    // canvas): 100vh/100lvh report the full screen, but iOS standalone clips
-    // everything below vvh — content sized past it gets cut, never shown.
-    const shellHeight = vvh == null ? "100%" : `${vvh}px`;
-    // Letterboxed standalone window: renderable height falls short of the
-    // screen WHILE the window is top-anchored under the status bar
-    // (envTop > 0). There the OS strip already clears the home indicator and
-    // the reported env(bottom) is dead space — collapse the tab bar to its
-    // tight browser-mode geometry. A healthy below-status-bar window
-    // (envTop 0) keeps the native inset even though vvh < screen.height.
-    const letterboxed = IS_STANDALONE && vvh != null && window.screen?.height ? (window.screen.height - vvh >= 20 && envTop > 0) : false;
     return (
-      <div className={letterboxed ? "lbx" : undefined} style={{ position: "fixed", top: 0, left: 0, right: 0, height: shellHeight, display: "flex", flexDirection: "column", color: T.ink, overflow: "hidden" }}>
-        <div className="shell-header">
-          <div style={{ display: "flex", alignItems: "center", gap: 9, minWidth: 0 }}>
-            <span style={{ width: 13, height: 13, transform: "rotate(45deg)", borderRadius: 2.5, background: T.brass, flex: "none" }} />
-            <span key={page} className="page-title" onClick={onTitleTap} style={{ fontSize: 11.5, fontWeight: 700, textTransform: "uppercase", fontFamily: syne }}>{HEADERS[page][0]}</span>
-          </div>
-          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-            <ThemeToggle theme={theme} compact />
-            {summonBtn(true)}
-            <TopStatus now={now} dataStamp={dataStamp} refreshing={refreshing} onRefresh={refreshData} compact />
-          </div>
-        </div>
-
-        <div id="page-scroll" style={{ flex: 1, minHeight: 0, overflowY: "auto", display: "flex", flexDirection: "column", touchAction: "pan-y" }}>
-          <div key={page} className={navDir === "l" ? "pageslide-l" : navDir === "r" ? "pageslide-r" : "pagefade"} style={{ display: "flex", flexDirection: "column", flex: 1, paddingBottom: 18 }}>
-            {renderPage(page)}
-          </div>
-        </div>
-
-        {/* The dock — last flex child, IN FLOW. Every positioned approach
-            (dvh, fixed-inset, visualViewport, lvh) got lied to by some iOS
-            standalone coordinate system; normal flow at the bottom of the
-            flex column cannot be. Hidden entirely while the keyboard is up. */}
-        <div className="dock-wrap" style={{ flex: "none", display: keyboardOpen ? "none" : undefined }}>
-          <nav className="dock" aria-label="Primary">
-            <span className="dock-ember" style={{ left: `${(activeIdx + 0.5) * (100 / NAV.length)}%` }} />
-            {NAV.map(n => {
-              const active = page === n.key;
-              const Icon = NAV_ICONS[n.key];
-              return (
-                <button key={n.key} className="dock-tab" onClick={() => goToPage(n.key)} title={n.label} aria-label={n.label} aria-current={active ? "page" : undefined}>
-                  <span style={{ width: 44, height: 30, borderRadius: 9, display: "inline-flex", alignItems: "center", justifyContent: "center", background: active ? "var(--brass-a12)" : "transparent", flex: "none" }}>
-                    <Icon width={22} height={22} color={active ? T.brass : T.faint} />
-                  </span>
-                  <span className="dock-label" style={{ color: active ? T.brass : T.faint }}>{n.key === "boardroom" ? "Board" : n.label}</span>
-                </button>
-              );
-            })}
-          </nav>
-        </div>
-
-        {summonEl}
-        {editSeat && <SeatNotesModal seatKey={editSeat} initial={seatNotes[editSeat]} onSave={saveSeatNote} onClose={() => setEditSeat(null)} isMobile />}
-        {migration && <MigrationModal counts={migration} onImport={runImport} onSkip={skipImport} importing={importing} />}
-        {diagOpen && <ViewportDiag onClose={() => setDiagOpen(false)} />}
-      </div>
+      <>
+        <MobileShell {...shellProps} navDir={navDir}>{renderPage(page)}</MobileShell>
+        {overlays}
+      </>
     );
   }
-
-  // ═══ DESKTOP SHELL ═══
   return (
-    <div style={{ minHeight: "100vh", display: "grid", gridTemplateColumns: "264px minmax(0,1fr)", color: T.ink }}>
-      {/* Nav rail */}
-      <div style={{ borderRight: `1px solid ${T.line}`, padding: "26px 16px 16px", display: "flex", flexDirection: "column", gap: 20, height: "100vh", position: "sticky", top: 0, overflowY: "auto", background: "transparent" }}>
-        <div style={{ padding: "0 6px" }}>
-          <div style={{ display: "flex", alignItems: "center", gap: 11 }}>
-            <span style={{ width: 15, height: 15, transform: "rotate(45deg)", borderRadius: 3, background: T.brass }} />
-            <span style={{ fontSize: 13, fontWeight: 700, letterSpacing: "0.15em", textTransform: "uppercase", fontFamily: syne }}>Board Room</span>
-          </div>
-          <div style={{ height: 1, background: T.line, marginTop: 16 }} />
-        </div>
-
-        <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
-          {NAV.map(n => {
-            const active = page === n.key;
-            return (
-              <div key={n.key} onClick={() => goToPage(n.key)} className="press lift" role="button" tabIndex={0}
-                onKeyDown={e => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); goToPage(n.key); } }}
-                style={{ display: "flex", alignItems: "center", gap: 12, padding: "12px 13px", borderRadius: 12, cursor: "pointer", background: active ? "var(--brass-a08)" : "transparent", border: `1px solid ${active ? "var(--brass-a16)" : "transparent"}` }}>
-                <span style={{ width: 7, height: 7, transform: "rotate(45deg)", background: active ? n.mark : "var(--ink-a18)", flex: "none", borderRadius: 1.5 }} />
-                <span style={{ fontSize: 12.5, fontWeight: 700, fontFamily: syne, color: active ? T.ink : T.sub, letterSpacing: "0.02em", minWidth: 0, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{n.label}</span>
-              </div>
-            );
-          })}
-        </div>
-
-        {/* Signals cluster */}
-        <div style={{ marginTop: "auto", display: "flex", flexDirection: "column", gap: 10 }}>
-          <div style={{ padding: "13px 14px", background: "var(--ink-a03)", border: `1px solid ${T.line}`, borderRadius: 12, boxShadow: "inset 0 1px 0 var(--white-edge)" }}>
-            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 7 }}>
-              <div style={{ display: "flex", alignItems: "center", gap: 7 }}>
-                <span style={{ width: 15, height: 15, borderRadius: "50%", background: "#F7931A", display: "inline-flex", alignItems: "center", justifyContent: "center", fontSize: 8, fontWeight: 700, color: "#1A0F00" }}>₿</span>
-                <span style={{ fontSize: 13, fontWeight: 500, fontFamily: mono, fontVariantNumeric: "tabular-nums" }}>{btc.loading ? "…" : btc.error ? "—" : <NumTween v={btc.price} f={n => "$" + n.toLocaleString(undefined, { maximumFractionDigits: 0 })} />}</span>
-              </div>
-              {!btc.loading && !btc.error && (
-                <span style={{ fontSize: 10, fontWeight: 700, color: (btc.changePct || 0) >= 0 ? T.green : T.red, fontFamily: mono }}>{(btc.changePct || 0) >= 0 ? "▲" : "▼"} {Math.abs(btc.changePct || 0).toFixed(2)}%</span>
-              )}
-            </div>
-            <Sparkline points={btc.points} color={(btc.changePct || 0) >= 0 ? T.green : T.red} height={30} />
-          </div>
-
-          {calUrl && !editingCal ? (
-            <a href={calUrl} target="_blank" rel="noopener" style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "11px 14px", background: "var(--brass-a08)", border: "1px solid var(--brass-a25)", borderRadius: 12, color: T.brass, fontSize: 11, fontWeight: 700, textDecoration: "none" }}>Open Calendar <span>›</span></a>
-          ) : !editingCal ? (
-            <button onClick={() => { setEditingCal(true); setCalDraft(calUrl); }} style={{ width: "100%", padding: "11px 14px", background: "var(--ink-a02)", border: "1px dashed var(--ink-a14)", borderRadius: 12, color: T.sub, fontSize: 10.5, cursor: "pointer", textAlign: "left" }}>+ Link your calendar</button>
-          ) : (
-            <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-              <input value={calDraft} onChange={e => setCalDraft(e.target.value)} placeholder="calendar share URL" style={{ ...S.input, width: "100%", padding: "9px 11px", fontSize: 11, borderRadius: 9 }} />
-              <div style={{ display: "flex", gap: 6 }}>
-                <button onClick={() => { updateSetting("calendar_url", calDraft.trim()); setEditingCal(false); }} style={{ ...S.brassBtn, flex: 1, padding: 8, fontSize: 10.5, borderRadius: 8 }}>Save</button>
-                <button onClick={() => setEditingCal(false)} style={{ padding: "8px 11px", background: "transparent", border: `1px solid var(--ink-a10)`, borderRadius: 8, color: T.sub, fontSize: 10.5, cursor: "pointer" }}>Cancel</button>
-              </div>
-            </div>
-          )}
-
-          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8, borderTop: `1px solid ${T.line}`, paddingTop: 12 }}>
-            <span style={{ fontSize: 9.5, color: T.faint, fontFamily: mono, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{session?.user?.email}</span>
-            <div style={{ display: "flex", alignItems: "center", gap: 6, flex: "none" }}>
-              <ThemeToggle theme={theme} compact />
-              <button onClick={() => supabase.auth.signOut()} style={{ background: "none", border: `1px solid var(--ink-a10)`, borderRadius: 7, color: T.sub, fontSize: 9, padding: "4px 9px", cursor: "pointer", fontWeight: 600 }}>Sign out</button>
-            </div>
-          </div>
-        </div>
-      </div>
-
-      {/* Main column */}
-      <div style={{ display: "flex", flexDirection: "column", height: "100vh", minWidth: 0 }}>
-        <div style={{ height: 58, flex: "none", borderBottom: `1px solid ${T.line}`, display: "flex", alignItems: "center", justifyContent: "space-between", padding: "0 34px", background: "transparent" }}>
-          <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
-            <span key={page} className="page-title" style={{ fontSize: 13, fontWeight: 700, fontFamily: syne, textTransform: "uppercase" }}>{HEADERS[page][0]}</span>
-            <span style={{ width: 5, height: 5, transform: "rotate(45deg)", background: "var(--brass-a55)", borderRadius: 1, flex: "none" }} />
-            <span style={{ fontSize: 9.5, color: T.faint, fontFamily: mono, letterSpacing: "0.08em" }}>{HEADERS[page][1]}</span>
-          </div>
-          <div style={{ display: "flex", alignItems: "center", gap: 16 }}>
-            {summonBtn(false)}
-            <span style={{ fontSize: 9.5, color: T.faint, fontFamily: mono, letterSpacing: "0.05em" }}>SESSION ${totalSpend.toFixed(3)} · {obs.all().length} CALLS</span>
-            <TopStatus now={now} dataStamp={dataStamp} refreshing={refreshing} onRefresh={refreshData} />
-          </div>
-        </div>
-
-        <div id="page-scroll" style={{ flex: 1, minHeight: 0, overflowY: "auto", display: "flex", flexDirection: "column" }}>
-          <div key={page} className="pagefade" style={{ display: "flex", flexDirection: "column", flex: 1 }}>
-            {renderPage(page)}
-          </div>
-        </div>
-      </div>
-
-      {summonEl}
-      {editSeat && <SeatNotesModal seatKey={editSeat} initial={seatNotes[editSeat]} onSave={saveSeatNote} onClose={() => setEditSeat(null)} />}
-      {migration && <MigrationModal counts={migration} onImport={runImport} onSkip={skipImport} importing={importing} />}
-    </div>
+    <>
+      <SidebarShell
+        {...shellProps}
+        btc={btc}
+        session={session}
+        calUrl={calUrl}
+        onSaveCalUrl={(v) => updateSetting("calendar_url", v)}
+        totalSpend={totalSpend}
+        callCount={obs.all().length}
+      >
+        {renderPage(page)}
+      </SidebarShell>
+      {overlays}
+    </>
   );
 }
