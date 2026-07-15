@@ -6,7 +6,7 @@
 // touch targets ≥44pt; text ≥10.5px; destructive flows use confirmSheet, never
 // window.confirm.
 
-import { useState, useRef, useEffect, useCallback } from "react";
+import { useState, useRef, useEffect, useCallback, forwardRef } from "react";
 import { IcChevronRight, IcClose, IcCheck } from "./icons.jsx";
 
 /* ── surfaces ──────────────────────────────────────────────────────────────── */
@@ -112,8 +112,8 @@ export function Button({ kind = "quiet", size = "md", full, disabled, onClick, c
   );
 }
 
-export function Pill({ active, onClick, children, style }) {
-  return <button className={`pill${active ? " active" : ""}`} onClick={onClick} style={style}>{children}</button>;
+export function Pill({ active, onClick, children, style, ...rest }) {
+  return <button className={`pill${active ? " active" : ""}`} onClick={onClick} style={style} {...rest}>{children}</button>;
 }
 
 export function PillRow({ options, value, onChange, fmt = (o) => o.label ?? String(o), keyOf = (o) => o.key ?? String(o), style }) {
@@ -158,10 +158,10 @@ export function Segmented({ options, value, onChange, style }) {
   );
 }
 
-export function Switch({ on, onToggle, small, disabled }) {
+export function Switch({ on, onToggle, small, disabled, "aria-label": ariaLabel }) {
   return (
     <button className={`switch${on ? " on" : ""}${small ? " small" : ""}`} onClick={onToggle} disabled={disabled}
-      role="switch" aria-checked={!!on} style={disabled ? { opacity: 0.5 } : undefined}>
+      role="switch" aria-checked={!!on} aria-label={ariaLabel} style={disabled ? { opacity: 0.5 } : undefined}>
       <span className="switch-knob" />
     </button>
   );
@@ -173,12 +173,12 @@ export function SwitchRow({ title, sub, on, onToggle, small }) {
   );
 }
 
-export function Field(props) {
-  return <input {...props} className={`field${props.className ? " " + props.className : ""}`} />;
-}
-export function TextArea(props) {
-  return <textarea {...props} className={`field${props.className ? " " + props.className : ""}`} />;
-}
+export const Field = forwardRef(function Field(props, ref) {
+  return <input {...props} ref={ref} className={`field${props.className ? " " + props.className : ""}`} />;
+});
+export const TextArea = forwardRef(function TextArea(props, ref) {
+  return <textarea {...props} ref={ref} className={`field${props.className ? " " + props.className : ""}`} />;
+});
 
 export function Spinner({ size = 18 }) {
   return <span className="spinner" style={{ width: size, height: size }} aria-label="Loading" />;
@@ -236,7 +236,9 @@ export function useConfirm() {
     <Sheet onClose={() => done(false)} title={req.title} z={480}
       footer={
         <>
-          <Button kind="quiet" size="lg" style={{ flex: 1 }} onClick={() => done(false)}>{req.cancelLabel || "Cancel"}</Button>
+          {req.cancelLabel !== false && (
+            <Button kind="quiet" size="lg" style={{ flex: 1 }} onClick={() => done(false)}>{req.cancelLabel || "Cancel"}</Button>
+          )}
           <Button kind={req.destructive ? "danger-solid" : "primary"} size="lg" style={{ flex: 1 }} onClick={() => done(true)}>
             {req.confirmLabel || "Confirm"}
           </Button>

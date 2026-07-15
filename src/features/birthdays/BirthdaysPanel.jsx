@@ -1,13 +1,13 @@
 import { useState } from "react";
-import { T, syne, mono } from "../../theme.js";
-import { S } from "../../ui/styles.js";
 import { callClaude } from "../../lib/claude.js";
 import { nextBirthdayOccurrence, MONTH_NAMES } from "../../lib/dates.js";
 import { useBirthdays, useSaveBirthday, useDeleteBirthday, useSaveBirthdaysBulk } from "../../data/birthdays.js";
+import { Card, SectionHeader, CellGroup, Cell, Button, Field, TextArea, Switch, EmptyState, useConfirm } from "../../ui/kit.jsx";
+import { IcGift, IcClose, IcChevronLeft } from "../../ui/icons.jsx";
 
+// ─── Birthdays — sorted by days-until, with Claude-powered bulk paste ─────────
 export function BirthdaysPanel({ isMobile }) {
-  const card = isMobile ? S.cardM : S.card;
-  const { data: rows = null, error } = useBirthdays();
+  const { data: rows = null, error, refetch } = useBirthdays();
   const loadErr = error ? (error.message || "Couldn't load birthdays.") : null;
   const saveMut = useSaveBirthday();
   const delMut = useDeleteBirthday();
@@ -15,6 +15,7 @@ export function BirthdaysPanel({ isMobile }) {
   const [form, setForm] = useState(null); // single add/edit
   const [saving, setSaving] = useState(false);
   const [saveErr, setSaveErr] = useState(null);
+  const [confirmEl, confirm] = useConfirm();
 
   const [bulkOpen, setBulkOpen] = useState(false);
   const [bulkText, setBulkText] = useState("");
@@ -47,9 +48,8 @@ export function BirthdaysPanel({ isMobile }) {
       onError: (e) => { setSaving(false); setSaveErr(e.message || "Couldn't save."); },
     });
   };
-  const removeBirthday = (id, e) => {
-    e.stopPropagation();
-    if (!window.confirm("Delete this birthday?")) return;
+  const removeBirthday = async (id, name) => {
+    if (!(await confirm({ title: `Delete ${name || "this birthday"}?`, confirmLabel: "Delete", destructive: true }))) return;
     delMut.mutate(id, { onSuccess: () => { if (form?.id === id) closeForm(); } });
   };
 
@@ -82,128 +82,136 @@ export function BirthdaysPanel({ isMobile }) {
     });
   };
 
-  // ─── Form view ───
+  // ─── Form view — replaces the list (page-swap pattern, mobile-friendly) ───
   if (form) {
+    const isEdit = rows?.some(b => b.id === form.id);
     return (
-      <div style={card}>
-        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 12 }}>
-          <button onClick={closeForm} style={{ background: "none", border: "none", color: T.brass, fontFamily: syne, fontWeight: 700, fontSize: 12, cursor: "pointer", padding: 0 }}>‹ Cancel</button>
-          <span style={S.title}>{rows?.some(b => b.id === form.id) ? "Edit birthday" : "New birthday"}</span>
-          <span style={{ width: 50 }} />
-        </div>
-
-        <input value={form.name} onChange={e => setForm(f => ({ ...f, name: e.target.value }))} placeholder="Name"
-          style={{ ...S.input, width: "100%", padding: "10px 12px", fontSize: 14, fontWeight: 700, fontFamily: syne, marginBottom: 10 }} />
-
-        <input type="date" value={form.date} onChange={e => setForm(f => ({ ...f, date: e.target.value }))}
-          style={{ ...S.input, width: "100%", padding: "9px 10px", fontSize: 13, fontFamily: mono, marginBottom: 10 }} />
-
-        <label style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 10, fontSize: 11.5, color: T.sub, cursor: "pointer" }}>
-          <input type="checkbox" checked={form.unknownYear} onChange={e => setForm(f => ({ ...f, unknownYear: e.target.checked }))} />
-          Don't track birth year (just month + day)
-        </label>
-
-        <textarea value={form.notes} onChange={e => setForm(f => ({ ...f, notes: e.target.value }))} placeholder="Notes (optional)" rows={3}
-          style={{ ...S.input, width: "100%", padding: "10px 12px", fontSize: 13, lineHeight: 1.6, resize: "vertical", marginBottom: 10 }} />
-
-        {saveErr && <div style={{ fontSize: 11, color: "var(--red)", marginBottom: 8 }}>{saveErr}</div>}
-
-        <div style={{ display: "flex", gap: 8 }}>
-          <button onClick={save} disabled={saving} style={{ ...S.brassBtn, padding: "9px 18px", fontSize: 12, opacity: saving ? 0.6 : 1 }}>{saving ? "Saving…" : "Save"}</button>
-          {rows?.some(b => b.id === form.id) && (
-            <button onClick={(e) => removeBirthday(form.id, e)} style={{ ...S.ghostBtn, padding: "9px 14px", fontSize: 12 }}>Delete</button>
-          )}
-        </div>
-      </div>
+      <section style={{ display: "flex", flexDirection: "column", gap: 12, minWidth: 0 }}>
+        <Card pad="md" style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 }}>
+            <Button kind="plain" size="sm" onClick={closeForm} style={{ height: 44, paddingLeft: 6, marginLeft: -6 }}><IcChevronLeft size={13} /> Cancel</Button>
+            <span className="t-head">{isEdit ? "Edit birthday" : "New birthday"}</span>
+            <span style={{ width: 86, flex: "none" }} />
+          </div>
+          <Field value={form.name} onChange={e => setForm(f => ({ ...f, name: e.target.value }))} placeholder="Name" autoFocus={!isEdit} style={{ fontWeight: 600 }} />
+          {/* colorScheme: inherit — the native date picker follows the room's theme */}
+          <Field type="date" value={form.date} onChange={e => setForm(f => ({ ...f, date: e.target.value }))} className="t-num" style={{ colorScheme: "inherit" }} />
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, minHeight: 44 }}>
+            <span className="t-call">Don't track birth year <span style={{ color: "var(--faint)" }}>(just month + day)</span></span>
+            <Switch on={form.unknownYear} onToggle={() => setForm(f => ({ ...f, unknownYear: !f.unknownYear }))} />
+          </div>
+          <TextArea value={form.notes} onChange={e => setForm(f => ({ ...f, notes: e.target.value }))} placeholder="Notes (optional)" rows={3} style={{ lineHeight: 1.6, resize: "vertical" }} />
+          {saveErr && <div className="t-foot" style={{ color: "var(--red)" }}>{saveErr}</div>}
+          <div style={{ display: "flex", gap: 10 }}>
+            <Button kind="primary" size="md" disabled={saving} onClick={save} style={{ flex: 1 }}>{saving ? "Saving…" : "Save"}</Button>
+            {isEdit && <Button kind="danger" size="md" onClick={() => removeBirthday(form.id, form.name)}>Delete</Button>}
+          </div>
+        </Card>
+        {confirmEl}
+      </section>
     );
   }
 
-  // ─── List view ───
+  // ─── List view — grouped by the month of the next occurrence ───
   const sorted = (rows || []).map(b => ({ ...b, ...nextBirthdayOccurrence(b.month, b.day) })).sort((a, b) => a.daysUntil - b.daysUntil);
+  const thisYear = new Date().getFullYear();
+  const groups = [];
+  for (const b of sorted) {
+    const label = b.next.toLocaleDateString("en-US", { month: "long" }) + (b.next.getFullYear() !== thisYear ? ` ${b.next.getFullYear()}` : "");
+    const last = groups[groups.length - 1];
+    if (last && last.label === label) last.items.push(b); else groups.push({ label, items: [b] });
+  }
+  const untilLabel = (d) => d === 0 ? "Today!" : d === 1 ? "Tomorrow" : `in ${d}d`;
 
   return (
-    <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
-      <div style={card}>
-        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 12, flexWrap: "wrap", gap: 8 }}>
-          <span style={S.title}>Birthdays</span>
-          <div style={{ display: "flex", gap: 8 }}>
-            <button onClick={() => setBulkOpen(o => !o)} style={{ ...S.ghostBtn, padding: "7px 14px", fontSize: 11.5 }}>{bulkOpen ? "Close bulk add" : "Bulk add"}</button>
-            <button onClick={openNew} style={{ ...S.brassBtn, padding: "7px 14px", fontSize: 11.5 }}>+ Add birthday</button>
-          </div>
-        </div>
+    <section style={{ display: "flex", flexDirection: "column", gap: 12, minWidth: 0 }}>
+      <SectionHeader
+        title="Birthdays"
+        trailing={
+          <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
+            <button className="sec-link" style={{ color: bulkOpen ? "var(--accent)" : "var(--sub)", padding: "10px 8px", margin: "-10px -2px" }}
+              onClick={() => setBulkOpen(o => !o)}>
+              {bulkOpen ? "Close bulk add" : "Bulk add"}
+            </button>
+            <button className="sec-link" style={{ padding: "10px 8px", margin: "-10px -8px" }} onClick={openNew}>Add</button>
+          </span>
+        }
+      />
 
-        {bulkOpen && (
-          <div style={{ ...S.inner, padding: 12, marginBottom: 12 }}>
-            {!bulkPreview ? (
-              <>
-                <div style={{ fontSize: 10.5, color: T.sub, lineHeight: 1.6, marginBottom: 8 }}>
-                  Paste anything — a list, a few sentences, whatever you've got. Claude will pull out names and dates; you'll get a chance to review before anything's saved.
-                </div>
-                <textarea value={bulkText} onChange={e => setBulkText(e.target.value)} rows={6} placeholder={"e.g.\nMom - March 3\nJohn Smith 12/25/1990\nSarah's birthday is June 1st"}
-                  style={{ ...S.input, width: "100%", padding: "10px 12px", fontSize: 13, lineHeight: 1.6, resize: "vertical", marginBottom: 8 }} />
-                {bulkErr && <div style={{ fontSize: 11, color: "var(--red)", marginBottom: 8 }}>{bulkErr}</div>}
-                <button onClick={parseBulk} disabled={bulkParsing || !bulkText.trim()} style={{ ...S.brassBtn, padding: "8px 16px", fontSize: 11.5, opacity: (bulkParsing || !bulkText.trim()) ? 0.55 : 1 }}>
-                  {bulkParsing ? "Parsing…" : "Parse with Claude"}
-                </button>
-              </>
-            ) : (
-              <>
-                <div style={{ fontSize: 10.5, color: T.sub, marginBottom: 8 }}>Found {bulkPreview.length} — review, then add.</div>
-                <div style={{ display: "flex", flexDirection: "column", gap: 5, marginBottom: 10, maxHeight: 240, overflowY: "auto" }}>
-                  {bulkPreview.map(r => (
-                    <div key={r.tempId} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", background: T.surface, border: `1px solid ${T.line}`, borderRadius: 8, padding: "7px 10px" }}>
-                      <span style={{ fontSize: 12, fontFamily: syne, fontWeight: 700, color: T.ink }}>{r.name}</span>
-                      <span style={{ display: "flex", alignItems: "center", gap: 10 }}>
-                        <span style={{ fontSize: 11, color: T.sub, fontFamily: mono }}>{MONTH_NAMES[r.month - 1]} {r.day}{r.year ? `, ${r.year}` : ""}</span>
-                        <button onClick={() => removeFromPreview(r.tempId)} style={{ background: "none", border: "none", color: T.faint, cursor: "pointer", fontSize: 14, padding: 0 }}>×</button>
-                      </span>
-                    </div>
-                  ))}
-                </div>
-                {bulkErr && <div style={{ fontSize: 11, color: "var(--red)", marginBottom: 8 }}>{bulkErr}</div>}
-                <div style={{ display: "flex", gap: 8 }}>
-                  <button onClick={confirmBulk} disabled={bulkSaving || !bulkPreview.length} style={{ ...S.brassBtn, padding: "8px 16px", fontSize: 11.5, opacity: bulkSaving ? 0.6 : 1 }}>
-                    {bulkSaving ? "Adding…" : `Add all (${bulkPreview.length})`}
-                  </button>
-                  <button onClick={() => { setBulkPreview(null); setBulkErr(null); }} style={{ ...S.ghostBtn, padding: "8px 14px", fontSize: 11.5 }}>Start over</button>
-                </div>
-              </>
-            )}
-          </div>
-        )}
-
-        {loadErr && <div style={{ fontSize: 11.5, color: T.faint, padding: "20px 0", textAlign: "center" }}>{loadErr}</div>}
-        {!loadErr && rows === null && (
-          <div style={{ display: "flex", flexDirection: "column", gap: 9, padding: "4px 0" }}>
-            {[0, 1, 2].map(i => <div key={i} className="sk sk-line w60" style={{ margin: 0, height: 30, borderRadius: 9 }} />)}
-          </div>
-        )}
-        {!loadErr && rows && rows.length === 0 && !bulkOpen && (
-          <div style={{ fontSize: 11.5, color: T.faint, padding: "24px 0", textAlign: "center" }}>No birthdays yet — add one, or bulk-add a whole list at once.</div>
-        )}
-        {!loadErr && sorted.length > 0 && (
-          <div style={{ display: "flex", flexDirection: "column", gap: 7 }}>
-            {sorted.map(b => (
-              <div key={b.id} onClick={() => openEdit(b)}
-                style={{ ...S.inner, padding: "10px 12px", cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10 }}>
-                <div style={{ minWidth: 0, flex: 1 }}>
-                  <div style={{ fontSize: 12.5, fontWeight: 700, fontFamily: syne, color: T.ink }}>{b.name}</div>
-                  <div style={{ fontSize: 11, color: T.sub }}>
-                    {MONTH_NAMES[b.month - 1]} {b.day}{b.year ? ` · turns ${b.next.getFullYear() - b.year}` : ""}
+      {bulkOpen && (
+        <Card pad="md" style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+          {!bulkPreview ? (
+            <>
+              <span className="t-foot" style={{ lineHeight: 1.6 }}>
+                Paste anything — a list, a few sentences, whatever you've got. Claude will pull out names and dates; you'll get a chance to review before anything's saved.
+              </span>
+              <TextArea value={bulkText} onChange={e => setBulkText(e.target.value)} rows={6} placeholder={"e.g.\nMom - March 3\nJohn Smith 12/25/1990\nSarah's birthday is June 1st"} style={{ lineHeight: 1.6, resize: "vertical" }} />
+              {bulkErr && <div className="t-foot" style={{ color: "var(--red)" }}>{bulkErr}</div>}
+              <Button kind="primary" size="md" disabled={bulkParsing || !bulkText.trim()} onClick={parseBulk} style={{ alignSelf: "flex-start" }}>
+                {bulkParsing ? "Parsing…" : "Parse with Claude"}
+              </Button>
+            </>
+          ) : (
+            <>
+              <span className="t-foot">Found {bulkPreview.length} — review, then add.</span>
+              <div style={{ display: "flex", flexDirection: "column" }}>
+                {bulkPreview.map((r, i) => (
+                  <div key={r.tempId} style={{ display: "flex", alignItems: "center", gap: 10, minHeight: 46, padding: "3px 0", borderTop: i ? "0.5px solid var(--line)" : "none" }}>
+                    <span className="t-call" style={{ fontWeight: 600, flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{r.name}</span>
+                    <span className="t-num" style={{ fontSize: 12, color: "var(--sub)", flex: "none" }}>{MONTH_NAMES[r.month - 1]} {r.day}{r.year ? `, ${r.year}` : ""}</span>
+                    <button className="icon-btn" aria-label={`Remove ${r.name}`} onClick={() => removeFromPreview(r.tempId)} style={{ marginRight: -8 }}><IcClose size={15} /></button>
                   </div>
-                </div>
-                <div style={{ display: "flex", alignItems: "center", gap: 10, flex: "none" }}>
-                  <span style={{ ...S.microLabel, color: b.daysUntil <= 7 ? T.brass : T.faint }}>
-                    {b.daysUntil === 0 ? "Today!" : b.daysUntil === 1 ? "Tomorrow" : `in ${b.daysUntil}d`}
-                  </span>
-                  <button onClick={(e) => removeBirthday(b.id, e)} aria-label="Delete" style={{ background: "none", border: "none", color: T.faint, cursor: "pointer", fontSize: 14, padding: 2, lineHeight: 1 }}>×</button>
-                </div>
+                ))}
               </div>
+              {bulkErr && <div className="t-foot" style={{ color: "var(--red)" }}>{bulkErr}</div>}
+              <div style={{ display: "flex", gap: 10 }}>
+                <Button kind="primary" size="md" disabled={bulkSaving || !bulkPreview.length} onClick={confirmBulk}>
+                  {bulkSaving ? "Adding…" : `Add all (${bulkPreview.length})`}
+                </Button>
+                <Button kind="quiet" size="md" onClick={() => { setBulkPreview(null); setBulkErr(null); }}>Start over</Button>
+              </div>
+            </>
+          )}
+        </Card>
+      )}
+
+      {loadErr && (
+        <Card pad="md">
+          <EmptyState icon={<IcGift size={24} />} title="Couldn't load birthdays" sub={loadErr}
+            action={<Button kind="quiet" size="md" onClick={() => refetch()}>Retry</Button>} />
+        </Card>
+      )}
+      {!loadErr && rows === null && (
+        <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+          {[0, 1, 2].map(i => <div key={i} className="sk" style={{ height: 52, borderRadius: 18 }} />)}
+        </div>
+      )}
+      {!loadErr && rows && rows.length === 0 && !bulkOpen && (
+        <Card pad="md">
+          <EmptyState icon={<IcGift size={24} />} title="No birthdays yet"
+            sub="Add one, or bulk-add a whole list at once."
+            action={<Button kind="primary" size="md" onClick={openNew}>Add a birthday</Button>} />
+        </Card>
+      )}
+      {!loadErr && groups.map(g => (
+        <div key={g.label}>
+          <SectionHeader title={g.label} />
+          <CellGroup>
+            {g.items.map(b => (
+              <Cell key={b.id} onClick={() => openEdit(b)} chevron
+                title={b.name}
+                sub={`${MONTH_NAMES[b.month - 1]} ${b.day}${b.year ? ` · turns ${b.next.getFullYear() - b.year}` : ""}`}
+                value={
+                  <span className="t-num" style={{ fontSize: 12.5, fontWeight: 600, color: b.daysUntil <= 7 ? "var(--accent)" : "var(--faint)" }}>
+                    {untilLabel(b.daysUntil)}
+                  </span>
+                }
+              />
             ))}
-          </div>
-        )}
-      </div>
-    </div>
+          </CellGroup>
+        </div>
+      ))}
+      {confirmEl}
+    </section>
   );
 }
-

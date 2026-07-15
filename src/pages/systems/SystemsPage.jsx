@@ -11,7 +11,7 @@ import {
 import { Segmented as ModelPicker } from "../../ui/primitives.jsx"; // the MODEL_META picker
 import { IcCheck } from "../../ui/icons.jsx";
 import { supabase, ANTHROPIC_API_KEY } from "../../lib/supabase.js";
-import { callFn } from "../../lib/functions.js";
+import { pingFn, callFn } from "../../lib/functions.js";
 import { callClaude, DEFAULT_MODELS, MODEL_META } from "../../lib/claude.js";
 import { obs } from "../../lib/storage.js";
 import { PROPERTIES } from "../assets/AssetsPage.jsx";
@@ -186,21 +186,8 @@ const CONN_STATUS = {
   checking: { label: "Checking", tone: "var(--sub)" },
 };
 
-// Ping protocol: {ping:true} body; fns answer {configured:false, missing:"…"}
-// for the PARTIAL state. 404 = not deployed. Exported — MiniMePage probes the
-// mini-worker with it too.
-export async function pingFn(name) {
-  const t0 = Date.now();
-  try {
-    const res = await fetch(`/.netlify/functions/${name}`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ ping: true }) });
-    const ms = Date.now() - t0;
-    if (res.status === 404) return { status: "off", detail: "function not deployed", ms };
-    const data = await res.json().catch(() => null);
-    if (!res.ok) return { status: "down", detail: data?.error || `HTTP ${res.status}`, ms };
-    if (data?.configured === false) return { status: "warn", detail: data?.missing ? `deployed — missing ${data.missing}` : "deployed — keys not set", ms };
-    return { status: "ok", detail: "responding", ms };
-  } catch { return { status: "down", detail: "unreachable", ms: Date.now() - t0 }; }
-}
+// Ping protocol lives in lib/functions.js — one copy for every health pill.
+export { pingFn } from "../../lib/functions.js";
 
 function useConnections({ session, btc }) {
   const [checks, setChecks] = useState({});

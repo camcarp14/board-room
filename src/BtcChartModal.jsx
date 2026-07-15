@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { createChart, CandlestickSeries, ColorType } from "lightweight-charts";
-import { T, cssVar } from "./theme.js";
+import { cssVar } from "./theme.js";
+import { Sheet, PillRow, Button, EmptyState } from "./ui/kit.jsx";
 
 const INTERVALS = [
   { key: "1m", label: "1m" },
@@ -12,6 +13,13 @@ const INTERVALS = [
   { key: "1w", label: "1W" },
 ];
 
+// Chart height follows the rendered width (≈0.6 aspect), never under 280px and
+// never past 60% of the viewport — landscape phones stay inside the sheet.
+const chartHeight = (width) =>
+  Math.min(Math.max(280, Math.round(width * 0.6)), Math.round(window.innerHeight * 0.6));
+
+// isMobile is accepted for call-site compat only — one Sheet mount now adapts
+// by breakpoint (bottom sheet on phone, centered modal ≥761px).
 export default function BtcChartModal({ isMobile, onClose, callFnFull }) {
   const [interval, setInterval_] = useState("1m");
   const [candles, setCandles] = useState(null);
@@ -36,23 +44,26 @@ export default function BtcChartModal({ isMobile, onClose, callFnFull }) {
   // Render the candlestick chart
   useEffect(() => {
     if (!containerRef.current || !candles || !candles.length) return;
+    const container = containerRef.current;
     // lightweight-charts draws to canvas — resolve the CSS variables to
     // literals at creation so the chart matches the room's current theme.
-    const C = {
-      sub: cssVar("--sub"), line: cssVar("--line"), brass: cssVar("--brass"),
+    const resolve = () => ({
+      faint: cssVar("--faint"), line: cssVar("--line"), accent: cssVar("--accent"),
       green: cssVar("--green"), red: cssVar("--red"),
-    };
-    const chart = createChart(containerRef.current, {
-      layout: { background: { type: ColorType.Solid, color: "transparent" }, textColor: C.sub, fontFamily: "'DM Mono', monospace", fontSize: 11 },
-      grid: { vertLines: { color: C.line }, horzLines: { color: C.line } },
+    });
+    let C = resolve();
+    const monoStack = cssVar("--font-mono");
+    const chart = createChart(container, {
+      layout: { background: { type: ColorType.Solid, color: "transparent" }, textColor: C.faint, fontFamily: monoStack, fontSize: 11 },
+      grid: { vertLines: { visible: false }, horzLines: { color: C.line } }, // horizontal hairlines only
       rightPriceScale: { borderColor: C.line },
       timeScale: { borderColor: C.line, timeVisible: interval !== "1d" && interval !== "1w" },
       crosshair: {
-        vertLine: { color: C.brass, labelBackgroundColor: C.brass },
-        horzLine: { color: C.brass, labelBackgroundColor: C.brass },
+        vertLine: { color: C.accent, labelBackgroundColor: C.accent },
+        horzLine: { color: C.accent, labelBackgroundColor: C.accent },
       },
-      width: containerRef.current.clientWidth,
-      height: isMobile ? 300 : 400,
+      width: container.clientWidth,
+      height: chartHeight(container.clientWidth),
     });
     const series = chart.addSeries(CandlestickSeries, {
       upColor: C.green, downColor: C.red, borderVisible: false,
@@ -61,9 +72,41 @@ export default function BtcChartModal({ isMobile, onClose, callFnFull }) {
     series.setData(candles);
     chart.timeScale().fitContent();
 
-    const onResize = () => chart.applyOptions({ width: containerRef.current.clientWidth });
-    window.addEventListener("resize", onResize);
-    return () => { window.removeEventListener("resize", onResize); chart.remove(); };
+    // Canvas colors are literals, so they don't follow var() — re-resolve when
+    // [data-theme] flips while the chart is open (user toggle, or the auto
+    // theme crossing 19:00/07:00).
+    const retheme = () => {
+      C = resolve();
+      chart.applyOptions({
+        layout: { textColor: C.faint },
+        grid: { vertLines: { visible: false }, horzLines: { color: C.line } },
+        rightPriceScale: { borderColor: C.line },
+        timeScale: { borderColor: C.line },
+        crosshair: {
+          vertLine: { color: C.accent, labelBackgroundColor: C.accent },
+          horzLine: { color: C.accent, labelBackgroundColor: C.accent },
+        },
+      });
+      series.applyOptions({ upColor: C.green, downColor: C.red, wickUpColor: C.green, wickDownColor: C.red });
+    };
+    const mo = new MutationObserver(retheme);
+    mo.observe(document.documentElement, { attributes: true, attributeFilter: ["data-theme"] });
+
+    // Size from the container, not window resize alone — the sheet's width can
+    // change without a window resize (breakpoint crossing, scrollbars).
+    const applySize = () => {
+      const cw = container.clientWidth;
+      if (cw) chart.applyOptions({ width: cw, height: chartHeight(cw) });
+    };
+    let ro;
+    if (typeof ResizeObserver !== "undefined") { ro = new ResizeObserver(applySize); ro.observe(container); }
+    window.addEventListener("resize", applySize); // catches height-only viewport changes
+    return () => {
+      window.removeEventListener("resize", applySize);
+      ro?.disconnect();
+      mo.disconnect();
+      chart.remove();
+    };
   }, [candles, interval, isMobile]);
 
   // Portal to <body>: the Brief's entrance animations leave transforms on
@@ -71,55 +114,38 @@ export default function BtcChartModal({ isMobile, onClose, callFnFull }) {
   // overlay was centering inside the tall page column instead of the viewport
   // (hence scrolling to find the chart). From <body> it opens where you are.
   return createPortal(
-    <div onClick={onClose} style={{ position: "fixed", inset: 0, background: "var(--scrim)", zIndex: 500, display: "flex", alignItems: "center", justifyContent: "center", padding: isMobile ? 16 : 0, animation: "fadein 0.15s ease both" }}>
-      <div onClick={e => e.stopPropagation()} style={{
-        background: "linear-gradient(180deg, var(--surface-2), var(--surface))", borderRadius: 18,
-        padding: "20px 20px calc(20px + env(safe-area-inset-bottom))", width: isMobile ? "100%" : 720, maxWidth: 720,
-        maxHeight: isMobile ? "88vh" : "86vh", overflowY: "auto",
-        border: "1px solid var(--line)", boxShadow: "var(--shadow-deep)", color: T.ink,
-      }}>
-        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 14 }}>
-          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-            <span style={{ width: 20, height: 20, borderRadius: "50%", background: "linear-gradient(135deg,#F7931A,#C77416)", display: "inline-flex", alignItems: "center", justifyContent: "center", fontSize: 10, fontWeight: 800, color: "#1A0F00" }}>₿</span>
-            <span style={{ fontSize: 15, fontWeight: 700, fontFamily: "'Cinzel', serif" }}>BTC/USDT</span>
-          </div>
-          <button onClick={onClose} aria-label="Close" style={{ background: "transparent", border: "none", color: T.faint, fontSize: 22, cursor: "pointer", lineHeight: 1, padding: 4 }}>×</button>
-        </div>
+    <Sheet
+      onClose={onClose}
+      title="BTC/USDT"
+      // keep the chart clear of the home indicator on iOS standalone
+      bodyStyle={{ paddingBottom: "calc(16px + env(safe-area-inset-bottom))" }}
+    >
+      <PillRow
+        options={INTERVALS}
+        value={interval}
+        onChange={setInterval_}
+        style={{ margin: "0 -16px 4px" }}
+      />
 
-        <div style={{ display: "flex", gap: 8, marginBottom: 14, flexWrap: "wrap" }}>
-          {INTERVALS.map(iv => {
-            const selected = iv.key === interval;
-            return (
-              <button key={iv.key} onClick={() => setInterval_(iv.key)}
-                style={{
-                  fontFamily: "'Cinzel', serif", fontSize: 11, letterSpacing: "0.06em", textTransform: "uppercase",
-                  padding: "6px 14px", borderRadius: 999, cursor: "pointer",
-                  border: selected ? `1px solid ${T.brass}` : `1px solid ${T.line}`,
-                  background: selected ? T.brass : "transparent",
-                  color: selected ? "var(--on-brass)" : T.sub,
-                  transition: "all 120ms ease",
-                }}>
-                {iv.label}
-              </button>
-            );
-          })}
-        </div>
-
-        {candleErr && (
-          <div style={{ padding: "30px 0", textAlign: "center" }}>
-            <div style={{ fontSize: 11.5, color: T.faint, lineHeight: 1.6, marginBottom: 10 }}>{candleErr}</div>
-            <button onClick={() => setRetryNonce(n => n + 1)}
-              style={{ background: "transparent", border: "1px solid var(--line-strong)", borderRadius: 8, color: T.sub, fontWeight: 600, cursor: "pointer", padding: "7px 16px", fontSize: 11 }}>
+      {candleErr && (
+        <EmptyState
+          title="Chart unavailable"
+          sub={candleErr}
+          action={
+            <Button kind="tinted" size="md" onClick={() => setRetryNonce((n) => n + 1)}>
               Retry
-            </button>
-          </div>
-        )}
-        {!candleErr && !candles && (
-          <div className="sk" style={{ width: "100%", height: isMobile ? 300 : 400, borderRadius: 12 }} />
-        )}
-        {!candleErr && candles && <div ref={containerRef} style={{ width: "100%" }} />}
-      </div>
-    </div>,
+            </Button>
+          }
+        />
+      )}
+      {!candleErr && !candles && (
+        <div
+          className="sk"
+          style={{ width: "100%", aspectRatio: "5 / 3", minHeight: 280, maxHeight: "60vh", borderRadius: 12 }}
+        />
+      )}
+      {!candleErr && candles && <div ref={containerRef} style={{ width: "100%" }} />}
+    </Sheet>,
     document.body
   );
 }

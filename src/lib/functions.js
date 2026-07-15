@@ -37,3 +37,19 @@ export async function callFnFull(name, payload) {
     logUsage({ fn: name, kind: "call", ms: Date.now() - t0, ok, detail });
   }
 }
+
+// Ping protocol: {ping:true} body; fns answer {configured:false, missing:"…"}
+// for the PARTIAL state. 404 = not deployed. One copy for every health pill
+// (Systems connections, Mini Me worker probe).
+export async function pingFn(name) {
+  const t0 = Date.now();
+  try {
+    const res = await fetch(`/.netlify/functions/${name}`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ ping: true }) });
+    const ms = Date.now() - t0;
+    if (res.status === 404) return { status: "off", detail: "function not deployed", ms };
+    const data = await res.json().catch(() => null);
+    if (!res.ok) return { status: "down", detail: data?.error || `HTTP ${res.status}`, ms };
+    if (data?.configured === false) return { status: "warn", detail: data?.missing ? `deployed — missing ${data.missing}` : "deployed — keys not set", ms };
+    return { status: "ok", detail: "responding", ms };
+  } catch { return { status: "down", detail: "unreachable", ms: Date.now() - t0 }; }
+}

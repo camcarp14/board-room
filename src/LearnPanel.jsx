@@ -16,20 +16,8 @@
 //                           worker has a mirrored copy (keep in sync).
 //   SKILLS_SETUP_SQL      — one-time table + RLS, shown in-app if missing.
 import { useState, useEffect, useMemo, useRef } from "react";
-import { T, syne, mono } from "./theme.js";
-
-// Palette tokens come from theme.js (CSS variables — Daylight/Nocturne aware).
-// S keeps this panel's plate shapes, pixel-identical to its siblings.
-const S = {
-  card: { background: T.surface, border: `1px solid ${T.line}`, borderRadius: 14, padding: "20px 22px", boxShadow: "none" },
-  cardM: { background: T.surface, border: `1px solid ${T.line}`, borderRadius: 13, padding: "17px 16px", boxShadow: "none" },
-  inner: { background: "transparent", border: `1px solid ${T.line}`, borderRadius: 10 },
-  title: { fontSize: 11, fontWeight: 600, fontFamily: syne, color: T.ink, letterSpacing: "0.18em", textTransform: "uppercase" },
-  microLabel: { fontSize: 9, color: T.faint, fontFamily: mono, letterSpacing: "0.14em", textTransform: "uppercase" },
-  brassBtn: { background: T.brass, color: T.onBrass, border: "none", borderRadius: 9, fontWeight: 700, fontFamily: syne, letterSpacing: "0.04em", cursor: "pointer" },
-  ghostBtn: { background: "transparent", border: `1px solid ${T.lineStrong}`, borderRadius: 9, color: T.sub, fontWeight: 600, cursor: "pointer" },
-  input: { background: T.surface2, border: `1px solid ${T.lineStrong}`, borderRadius: 9, color: T.ink, outline: "none", fontSize: 13, fontFamily: "inherit" },
-};
+import { Card, CellGroup, SectionHeader, Button, Field, TextArea, Switch, Spinner, EmptyState, Dot, useConfirm, IcCheck } from "./ui/kit.jsx";
+import { IcBook, IcExternal, IcChevronDown } from "./ui/icons.jsx";
 
 // ─── one-time setup SQL ───────────────────────────────────────────────────────
 export const SKILLS_SETUP_SQL = `-- Board Room · Learn — one-time setup
@@ -189,31 +177,30 @@ export function buildSkillsBlock(skills, budget = 9000) {
 }
 
 // ─── UI bits ──────────────────────────────────────────────────────────────────
+// Reset that lets a <button> wear the kit's .cell-body anatomy (rows keep a
+// separate Switch, so the whole cell can't be one <button> itself).
+const rowBtn = { background: "none", border: 0, padding: 0, margin: 0, font: "inherit", color: "inherit", textAlign: "left", cursor: "pointer", alignSelf: "stretch", justifyContent: "center" };
+const sqlPre = { background: "var(--surface-2)", borderRadius: 12, padding: "12px 14px", fontSize: 11, fontFamily: "var(--font-mono)", lineHeight: 1.6, overflowX: "auto", whiteSpace: "pre", color: "var(--sub)", margin: 0 };
+
 function SetupCard({ isMobile }) {
   const [copied, setCopied] = useState(false);
   return (
-    <div style={{ ...(isMobile ? S.cardM : S.card) }}>
-      <div style={{ ...S.title, marginBottom: 8 }}>One-time setup</div>
-      <div style={{ fontSize: 12, color: T.sub, lineHeight: 1.65, marginBottom: 12 }}>
+    <Card pad={isMobile ? "md" : "lg"} style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+      <span className="t-head">One-time setup</span>
+      <span className="t-foot" style={{ lineHeight: 1.6 }}>
         The skills table doesn't exist yet. Run this once in Supabase → SQL Editor, then come back — nothing else to configure.
+      </span>
+      <pre style={sqlPre}>{SKILLS_SETUP_SQL}</pre>
+      <div style={{ marginTop: 2 }}>
+        <Button kind="primary" size="md" onClick={() => { navigator.clipboard?.writeText(SKILLS_SETUP_SQL); setCopied(true); setTimeout(() => setCopied(false), 2000); }}>
+          {copied ? <><IcCheck size={15} /> Copied</> : "Copy SQL"}
+        </Button>
       </div>
-      <pre style={{ ...S.inner, padding: "12px 14px", fontSize: 10.5, fontFamily: mono, lineHeight: 1.6, overflowX: "auto", whiteSpace: "pre", color: T.sub, margin: 0 }}>{SKILLS_SETUP_SQL}</pre>
-      <button onClick={() => { navigator.clipboard?.writeText(SKILLS_SETUP_SQL); setCopied(true); setTimeout(() => setCopied(false), 2000); }}
-        style={{ ...S.brassBtn, marginTop: 12, padding: "9px 18px", fontSize: 11.5 }}>{copied ? "Copied ✓" : "Copy SQL"}</button>
-    </div>
+    </Card>
   );
 }
 
-function Toggle({ on, onChange, label }) {
-  return (
-    <button onClick={onChange} aria-label={label}
-      style={{ width: 34, height: 20, borderRadius: 12, border: `1px solid ${on ? T.brass : T.lineStrong}`, background: on ? T.brass : "var(--ink-a06)", position: "relative", cursor: "pointer", flex: "none", padding: 0 }}>
-      <span style={{ position: "absolute", top: 2, left: on ? 16 : 2, width: 14, height: 14, borderRadius: "50%", background: "var(--on-brass)", boxShadow: "0 1px 2px rgba(0,0,0,0.3)", transition: "left 0.15s ease" }} />
-    </button>
-  );
-}
-
-function SkillCard({ skill, isMobile, onToggle, onSave, onDelete, spotlight }) {
+function SkillCard({ skill, isMobile, onToggle, onSave, onDelete, spotlight, first }) {
   const [open, setOpen] = useState(false);
   const cardRef = useRef(null);
   useEffect(() => {
@@ -227,51 +214,59 @@ function SkillCard({ skill, isMobile, onToggle, onSave, onDelete, spotlight }) {
   const commit = () => { onSave({ ...skill, ...draft }); setEditing(false); };
 
   return (
-    <div ref={cardRef} style={{ ...S.inner, padding: "12px 14px", opacity: skill.enabled ? 1 : 0.55, transition: "opacity 0.15s ease", ...(spotlight ? { borderColor: "var(--brass-a40)" } : {}) }}>
-      <div style={{ display: "flex", alignItems: "flex-start", gap: 10 }}>
-        <span style={{ marginTop: 3, width: 8, height: 8, borderRadius: 2, transform: "rotate(45deg)", background: skill.enabled ? T.brass : T.faint, flex: "none" }} />
-        <div style={{ flex: 1, minWidth: 0, cursor: "pointer" }} onClick={() => !editing && setOpen(o => !o)}>
-          <div style={{ fontSize: 12.5, fontWeight: 700, fontFamily: syne, color: T.ink, lineHeight: 1.35 }}>{skill.title}</div>
-          <div style={{ fontSize: 11, color: T.sub, lineHeight: 1.5, marginTop: 2 }}>{skill.description}</div>
-          <div style={{ display: "flex", gap: 10, marginTop: 5, flexWrap: "wrap", alignItems: "center" }}>
-            <span style={{ ...S.microLabel }}>{fmtDate(skill.created_at)} · ~{approxTokens(skill.content)} tok</span>
-            {skill.source_url && <a href={skill.source_url} target="_blank" rel="noreferrer" onClick={e => e.stopPropagation()} style={{ fontSize: 9.5, fontFamily: mono, color: T.blue, textDecoration: "none", letterSpacing: "0.04em" }}>{hostOf(skill.source_url)} ↗</a>}
-            <span style={{ fontSize: 9.5, fontFamily: mono, color: T.faint }}>{open ? "▲" : "▼"}</span>
-          </div>
-        </div>
-        <Toggle on={skill.enabled} onChange={() => onToggle(skill)} label="Toggle skill" />
+    <div ref={cardRef} style={{ opacity: skill.enabled ? 1 : 0.55, transition: "opacity var(--dur-1) ease", boxShadow: spotlight ? "inset 0 0 0 1.5px var(--accent)" : "none" }}>
+      {/* CellGroup separators key off .cell adjacency; the expander breaks it, so rows draw their own */}
+      {!first && <div aria-hidden style={{ height: 0.5, background: "var(--line)", marginLeft: 16 }} />}
+      <div className="cell" style={{ paddingRight: 12, minHeight: 56 }}>
+        <button className="cell-body" onClick={() => !editing && setOpen(o => !o)} aria-expanded={open} style={rowBtn}>
+          <span className="cell-title">{skill.title}</span>
+          {skill.description && <span className="cell-sub">{skill.description}</span>}
+          <span className="t-num" style={{ fontSize: 10.5, color: "var(--faint)", marginTop: 1 }}>{fmtDate(skill.created_at)} · ~{approxTokens(skill.content)} tok</span>
+        </button>
+        <span className="cell-chevron" aria-hidden style={{ transform: open ? "rotate(180deg)" : "none", transition: "transform var(--dur-2) var(--ease-out)", marginRight: 0 }}>
+          <IcChevronDown size={13} />
+        </span>
+        <Switch on={skill.enabled} onToggle={() => onToggle(skill)} />
       </div>
 
-      {open && !editing && (
-        <div style={{ marginTop: 10 }}>
-          <div style={{ background: "var(--ink-a04)", border: "1px solid var(--ink-a05)", borderRadius: 9, padding: "11px 13px", fontSize: 11.5, color: T.sub, lineHeight: 1.7, whiteSpace: "pre-wrap", maxHeight: 300, overflowY: "auto" }}>{skill.content}</div>
-          <div style={{ display: "flex", gap: 8, marginTop: 9 }}>
-            <button onClick={startEdit} style={{ ...S.ghostBtn, padding: "7px 14px", fontSize: 10.5 }}>Edit</button>
-            <button onClick={() => { if (window.confirm(`Forget "${skill.title}"? This can't be undone.`)) onDelete(skill.id); }}
-              style={{ ...S.ghostBtn, padding: "7px 14px", fontSize: 10.5, color: T.red, borderColor: "var(--red-a32)" }}>Forget</button>
+      <div className={`expand${open ? " open" : ""}`}>
+        <div>
+          <div style={{ padding: "0 16px 14px", display: "flex", flexDirection: "column", gap: 10 }}>
+            {!editing ? (
+              <>
+                <div className="t-call" style={{ background: "var(--surface-2)", borderRadius: 12, padding: "12px 14px", color: "var(--sub)", lineHeight: 1.65, whiteSpace: "pre-wrap", overflowWrap: "break-word" }}>{skill.content}</div>
+                <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                  <Button kind="quiet" size="sm" onClick={startEdit} style={{ height: 38 }}>Edit</Button>
+                  {skill.source_url && (
+                    <a href={skill.source_url} target="_blank" rel="noreferrer" onClick={e => e.stopPropagation()}
+                      className="t-cap" style={{ display: "inline-flex", alignItems: "center", gap: 4, color: "var(--blue)", textDecoration: "none", padding: "10px 2px" }}>
+                      {hostOf(skill.source_url)} <IcExternal size={11} />
+                    </a>
+                  )}
+                  <Button kind="danger" size="sm" onClick={() => onDelete(skill)} style={{ height: 38, marginLeft: "auto" }}>Forget</Button>
+                </div>
+              </>
+            ) : draft && (
+              <>
+                <Field value={draft.title} onChange={e => setDraft(d => ({ ...d, title: e.target.value }))} aria-label="Skill title" style={{ fontWeight: 600 }} />
+                <Field value={draft.description} onChange={e => setDraft(d => ({ ...d, description: e.target.value }))} placeholder="Use when…" aria-label="When to use it" />
+                <TextArea value={draft.content} onChange={e => setDraft(d => ({ ...d, content: e.target.value }))} rows={isMobile ? 9 : 12} aria-label="Skill content"
+                  style={{ lineHeight: 1.6, resize: "vertical" }} />
+                <div style={{ display: "flex", gap: 10 }}>
+                  <Button kind="primary" size="md" onClick={commit}>Save</Button>
+                  <Button kind="quiet" size="md" onClick={() => setEditing(false)}>Cancel</Button>
+                </div>
+              </>
+            )}
           </div>
         </div>
-      )}
-
-      {open && editing && draft && (
-        <div style={{ marginTop: 10, display: "flex", flexDirection: "column", gap: 8 }}>
-          <input value={draft.title} onChange={e => setDraft(d => ({ ...d, title: e.target.value }))} style={{ ...S.input, padding: "9px 11px", fontWeight: 700, fontFamily: syne }} />
-          <input value={draft.description} onChange={e => setDraft(d => ({ ...d, description: e.target.value }))} placeholder="Use when…" style={{ ...S.input, padding: "9px 11px", fontSize: 12 }} />
-          <textarea value={draft.content} onChange={e => setDraft(d => ({ ...d, content: e.target.value }))} rows={isMobile ? 9 : 12}
-            style={{ ...S.input, padding: "10px 11px", fontSize: 12, lineHeight: 1.65, resize: "vertical" }} />
-          <div style={{ display: "flex", gap: 8 }}>
-            <button onClick={commit} style={{ ...S.brassBtn, padding: "8px 18px", fontSize: 11 }}>Save</button>
-            <button onClick={() => setEditing(false)} style={{ ...S.ghostBtn, padding: "8px 14px", fontSize: 11 }}>Cancel</button>
-          </div>
-        </div>
-      )}
+      </div>
     </div>
   );
 }
 
 // ─── the tab ──────────────────────────────────────────────────────────────────
 export default function LearnPanel({ isMobile, supabase, callClaude, session, modelKey = "haiku", onSkillsChanged, spotlight }) {
-  const card = isMobile ? S.cardM : S.card;
   const sdb = useMemo(() => makeSdb(supabase), [supabase]);
   const [skills, setSkills] = useState(null); // null = loading
   const [missingTable, setMissingTable] = useState(false);
@@ -280,6 +275,7 @@ export default function LearnPanel({ isMobile, supabase, callClaude, session, mo
   const [phase, setPhase] = useState(null);   // string while learning
   const [notice, setNotice] = useState(null); // { ok, text }
   const [query, setQuery] = useState("");
+  const [confirmEl, confirm] = useConfirm();
 
   const refresh = () => {
     sdb.load().then(rows => { setSkills(rows); setMissingTable(false); onSkillsChanged?.(); })
@@ -308,7 +304,11 @@ export default function LearnPanel({ isMobile, supabase, callClaude, session, mo
     sdb.save(next).then(() => onSkillsChanged?.()).catch(() => refresh());
   };
   const saveSkill = (s) => { sdb.save(s).then(() => refresh()).catch(e => setNotice({ ok: false, text: e.message })); };
-  const deleteSkill = (id) => { sdb.remove(id).then(() => refresh()).catch(e => setNotice({ ok: false, text: e.message })); };
+  const deleteSkill = async (skill) => {
+    if (!(await confirm({ title: `Forget "${skill.title}"?`, message: "This can't be undone.", confirmLabel: "Forget", destructive: true }))) return;
+    sdb.remove(skill.id).then(() => refresh()).catch(e => setNotice({ ok: false, text: e.message }));
+  };
+  const retryLoad = () => { setLoadErr(null); setSkills(null); refresh(); };
 
   const filtered = useMemo(() => {
     if (!skills) return null;
@@ -321,58 +321,81 @@ export default function LearnPanel({ isMobile, supabase, callClaude, session, mo
   if (missingTable) return <div style={{ display: "flex", flexDirection: "column", gap: 14 }}><SetupCard isMobile={isMobile} /></div>;
 
   return (
-    <div style={{ display: "flex", flexDirection: "column", gap: isMobile ? 12 : 14 }}>
+    <div style={{ display: "flex", flexDirection: "column", gap: isMobile ? 12 : 14, minWidth: 0 }}>
 
       {/* teach it */}
-      <div style={{ ...card, background: "var(--brass-a06)", border: "1px solid var(--brass-a20)" }}>
-        <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", gap: 10, marginBottom: 4 }}>
-          <span style={S.title}>Teach Mini Me</span>
-          <span style={S.microLabel}>also works as /learn in chat</span>
+      <Card pad={isMobile ? "md" : "lg"} style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+        <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", gap: 10, flexWrap: "wrap" }}>
+          <span className="t-head">Teach Mini Me</span>
+          <span className="t-cap" style={{ color: "var(--faint)" }}>Also works as /learn in chat</span>
         </div>
-        <div style={{ fontSize: 11.5, color: T.sub, lineHeight: 1.6, marginBottom: 10 }}>
+        <span className="t-foot" style={{ lineHeight: 1.6 }}>
           Drop in a URL, an article, a process, numbers that matter — it gets distilled into a skill and loaded into every chat and queue run.
-        </div>
-        <textarea value={text} onChange={e => setText(e.target.value)}
+        </span>
+        <TextArea value={text} onChange={e => setText(e.target.value)}
           onKeyDown={e => { if ((e.metaKey || e.ctrlKey) && e.key === "Enter") learn(); }}
           placeholder={"https://…  — or paste the thing itself\nAdd a line about what you want learned from it, if it helps."}
           rows={isMobile ? 4 : 3} disabled={!!phase}
-          style={{ ...S.input, width: "100%", boxSizing: "border-box", padding: "11px 13px", fontSize: 12.5, lineHeight: 1.6, resize: "vertical", opacity: phase ? 0.6 : 1 }} />
-        <div style={{ display: "flex", alignItems: "center", gap: 12, marginTop: 10, flexWrap: "wrap" }}>
-          <button onClick={learn} disabled={!!phase || !text.trim()}
-            style={{ ...S.brassBtn, padding: "10px 22px", fontSize: 12, opacity: phase || !text.trim() ? 0.55 : 1 }}>
+          style={{ lineHeight: 1.6, resize: "vertical", opacity: phase ? 0.6 : 1 }} />
+        <div style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
+          <Button kind="primary" size="md" onClick={learn} disabled={!!phase || !text.trim()}>
             {phase ? "Learning…" : "Learn it"}
-          </button>
-          {phase && <span style={{ fontSize: 11, fontFamily: mono, color: T.brass, animation: "pulse 1.4s infinite" }}>{phase}</span>}
-          {!phase && notice && <span style={{ fontSize: 11, color: notice.ok ? T.green : T.red, lineHeight: 1.5 }}>{notice.ok ? "◆ " : ""}{notice.text}</span>}
+          </Button>
+          {phase && (
+            <span style={{ display: "inline-flex", alignItems: "center", gap: 8 }}>
+              <Spinner size={14} />
+              <span className="t-cap" style={{ color: "var(--accent)", animation: "pulse 1.4s infinite" }}>{phase}</span>
+            </span>
+          )}
+          {!phase && notice && (
+            <span style={{ display: "inline-flex", alignItems: "center", gap: 7, minWidth: 0 }}>
+              <Dot tone={notice.ok ? "var(--green)" : "var(--red)"} size={6} />
+              <span className="t-foot" style={{ color: notice.ok ? "var(--green)" : "var(--red)", lineHeight: 1.5 }}>{notice.text}</span>
+            </span>
+          )}
         </div>
-      </div>
+      </Card>
 
       {/* the library — "somewhere I can see the skills built" */}
-      <div style={card}>
-        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, marginBottom: 12, flexWrap: "wrap" }}>
-          <span style={S.title}>Skill library</span>
-          <span style={S.microLabel}>{skills ? `${enabledCount} loaded · ${skills.length} total` : " "}</span>
+      <div>
+        <SectionHeader title="Skill library" trailing={skills ? `${enabledCount} loaded · ${skills.length} total` : undefined} />
+        <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+          {skills && skills.length > 4 && (
+            <Field className="on-well" value={query} onChange={e => setQuery(e.target.value)} placeholder="Search skills…" aria-label="Search skills" />
+          )}
+          {loadErr && (
+            <Card pad="md">
+              <EmptyState icon={<IcBook size={24} />} title="Couldn't load skills" sub={loadErr}
+                action={<Button kind="quiet" size="md" onClick={retryLoad}>Retry</Button>} />
+            </Card>
+          )}
+          {!loadErr && skills === null && (
+            <Card pad="md">
+              <div className="sk sk-line w60" /><div className="sk sk-line w80" style={{ marginBottom: 0 }} />
+            </Card>
+          )}
+          {!loadErr && skills && skills.length === 0 && (
+            <Card pad="md">
+              <EmptyState icon={<IcBook size={24} />} title="Nothing learned yet" sub="Teach it something above — a URL is the fastest start." />
+            </Card>
+          )}
+          {!loadErr && filtered && filtered.length > 0 && (
+            <CellGroup>
+              {filtered.map((s, i) => (
+                <SkillCard key={s.id} skill={s} isMobile={isMobile} first={i === 0}
+                  onToggle={toggleSkill} onSave={saveSkill} onDelete={deleteSkill}
+                  spotlight={spotlight?.id === s.id ? spotlight.t : null} />
+              ))}
+            </CellGroup>
+          )}
+          {!loadErr && skills && skills.length > 0 && filtered && filtered.length === 0 && (
+            <Card pad="md">
+              <EmptyState title="No matches" sub={`No skills match "${query}".`} />
+            </Card>
+          )}
         </div>
-        {skills && skills.length > 4 && (
-          <input value={query} onChange={e => setQuery(e.target.value)} placeholder="Search skills…"
-            style={{ ...S.input, width: "100%", boxSizing: "border-box", padding: "9px 12px", fontSize: 12, marginBottom: 10 }} />
-        )}
-        {loadErr && <div style={{ fontSize: 11.5, color: T.faint, padding: "18px 0", textAlign: "center" }}>{loadErr}</div>}
-        {!loadErr && skills === null && <div style={{ fontSize: 11.5, color: T.faint, padding: "18px 0", textAlign: "center", animation: "pulse 1.4s infinite" }}>Loading skills…</div>}
-        {!loadErr && skills && skills.length === 0 && (
-          <div style={{ fontSize: 11.5, color: T.faint, padding: "22px 0", textAlign: "center", lineHeight: 1.7 }}>
-            Nothing learned yet.<br />Teach it something above — a URL is the fastest start.
-          </div>
-        )}
-        {!loadErr && filtered && filtered.length > 0 && (
-          <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-            {filtered.map(s => <SkillCard key={s.id} skill={s} isMobile={isMobile} onToggle={toggleSkill} onSave={saveSkill} onDelete={deleteSkill} spotlight={spotlight?.id === s.id ? spotlight.t : null} />)}
-          </div>
-        )}
-        {!loadErr && skills && skills.length > 0 && filtered && filtered.length === 0 && (
-          <div style={{ fontSize: 11.5, color: T.faint, padding: "16px 0", textAlign: "center" }}>No skills match "{query}".</div>
-        )}
       </div>
+      {confirmEl}
     </div>
   );
 }

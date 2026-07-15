@@ -1,6 +1,7 @@
 import { useState } from "react";
-import { T, syne, mono } from "../../theme.js";
-import { S, tint } from "../../ui/styles.js";
+import { tint } from "../../ui/styles.js";
+import { Card, SectionHeader, CellGroup, Button, Field, Dot, EmptyState, useConfirm, IcCheck } from "../../ui/kit.jsx";
+import { IcWrench } from "../../ui/icons.jsx";
 import { Chips } from "../../ui/primitives.jsx";
 import { isMissingTable } from "../../data/db.js";
 import { upkeepDue } from "../../lib/upkeep.js";
@@ -39,15 +40,19 @@ const upkeepIntervalLabel = (days) => {
   return `every ${days} days`;
 };
 const upkeepDueText = (meta) =>
-  meta.never ? "NEVER LOGGED"
-  : meta.dueIn < 0 ? `OVERDUE ${Math.abs(meta.dueIn)}D`
-  : meta.dueIn === 0 ? "DUE TODAY"
-  : `DUE IN ${meta.dueIn}D`;
+  meta.never ? "Never logged"
+  : meta.dueIn < 0 ? `Overdue ${Math.abs(meta.dueIn)}d`
+  : meta.dueIn === 0 ? "Due today"
+  : `Due in ${meta.dueIn}d`;
 const upkeepDueColor = (meta) =>
-  meta.never || meta.dueIn <= 0 ? T.red : meta.dueIn <= 14 ? T.amber : T.green;
+  meta.never || meta.dueIn <= 0 ? "var(--red)" : meta.dueIn <= 14 ? "var(--amber)" : "var(--green)";
+
+// Reset that lets a <button> wear the kit's .cell-body anatomy (rows keep a
+// separate Done button, so the whole cell can't be one <button> itself).
+const rowBtn = { background: "none", border: 0, padding: 0, margin: 0, font: "inherit", color: "inherit", textAlign: "left", cursor: "pointer", alignSelf: "stretch", justifyContent: "center" };
+const sqlPre = { background: "var(--surface-2)", borderRadius: 12, padding: "12px 14px", fontSize: 11, fontFamily: "var(--font-mono)", lineHeight: 1.6, overflowX: "auto", whiteSpace: "pre", color: "var(--sub)", margin: 0 };
 
 export function UpkeepPanel({ isMobile }) {
-  const card = isMobile ? S.cardM : S.card;
   const { data: rows = null, error, refetch } = useUpkeep();
   const needsSetup = !!error && isMissingTable(error, "upkeep_items");
   const loadErr = error && !needsSetup ? (error.message || "Couldn't load upkeep items.") : null;
@@ -59,6 +64,7 @@ export function UpkeepPanel({ isMobile }) {
   const [saving, setSaving] = useState(false);
   const [saveErr, setSaveErr] = useState(null);
   const [doneFlash, setDoneFlash] = useState(null); // id that just got logged
+  const [confirmEl, confirm] = useConfirm();
 
   const openNew = () => {
     setSaveErr(null);
@@ -79,7 +85,8 @@ export function UpkeepPanel({ isMobile }) {
       onError: (e) => { setSaving(false); setSaveErr(e.message || "Couldn't save."); },
     });
   };
-  const remove = () => {
+  const remove = async () => {
+    if (!(await confirm({ title: `Delete "${form.name.trim() || "this item"}"?`, message: "It comes off the rotation and the Brief.", confirmLabel: "Delete", destructive: true }))) return;
     setSaving(true);
     delMut.mutate(form.id, {
       onSuccess: () => { setSaving(false); setForm(null); },
@@ -94,105 +101,110 @@ export function UpkeepPanel({ isMobile }) {
   };
 
   if (needsSetup) return (
-    <div style={card}>
-      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 10 }}>
-        <span style={S.title}>Upkeep · One-Time Setup</span>
-      </div>
-      <div style={{ fontSize: 11.5, color: T.sub, lineHeight: 1.65, marginBottom: 12 }}>
+    <Card pad="md" style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+      <span className="t-head">One-time setup</span>
+      <span className="t-foot" style={{ lineHeight: 1.6 }}>
         The upkeep table doesn't exist yet. Paste this into the Supabase SQL editor (safe to re-run), then come back — everything else is already wired.
+      </span>
+      <pre style={sqlPre}>{UPKEEP_SETUP_SQL}</pre>
+      <div style={{ display: "flex", gap: 10, marginTop: 2 }}>
+        <Button kind="primary" size="md" onClick={() => { navigator.clipboard?.writeText(UPKEEP_SETUP_SQL).then(() => { setCopied(true); setTimeout(() => setCopied(false), 1800); }).catch(() => {}); }}>
+          {copied ? <><IcCheck size={15} /> Copied</> : "Copy SQL"}
+        </Button>
+        <Button kind="quiet" size="md" onClick={() => refetch()}>I ran it — retry</Button>
       </div>
-      <pre style={{ ...S.inner, margin: 0, padding: "12px 14px", fontSize: 10, fontFamily: mono, color: T.sub, lineHeight: 1.6, overflowX: "auto", whiteSpace: "pre" }}>{UPKEEP_SETUP_SQL}</pre>
-      <div style={{ display: "flex", gap: 8, marginTop: 12 }}>
-        <button onClick={() => { navigator.clipboard?.writeText(UPKEEP_SETUP_SQL).then(() => { setCopied(true); setTimeout(() => setCopied(false), 1800); }).catch(() => {}); }} style={{ ...S.brassBtn, padding: "9px 16px", fontSize: 11 }}>{copied ? "Copied ✓" : "Copy SQL"}</button>
-        <button onClick={() => refetch()} style={{ ...S.ghostBtn, padding: "9px 16px", fontSize: 11 }}>I ran it — retry</button>
-      </div>
-    </div>
+    </Card>
   );
 
   const sorted = (rows || []).map(it => ({ ...it, meta: upkeepDue(it) }))
     .sort((a, b) => (a.meta.never ? -9999 : a.meta.dueIn) - (b.meta.never ? -9999 : b.meta.dueIn));
 
   return (
-    <div style={card}>
-      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 4 }}>
-        <span style={S.title}>Upkeep</span>
-        {!form && <button onClick={openNew} style={{ ...S.brassBtn, padding: "7px 14px", fontSize: 10.5 }}>+ Add</button>}
-      </div>
-      <div style={{ fontSize: 10.5, color: T.faint, lineHeight: 1.5, marginBottom: 12 }}>
-        The stuff that keeps life running — oil changes, filters, renewals. Log it once, the clock does the rest. Due items surface on your Brief.
+    <section style={{ display: "flex", flexDirection: "column", gap: 12, minWidth: 0 }}>
+      <div>
+        <SectionHeader
+          title="Upkeep"
+          trailing={!form
+            ? <button className="sec-link" style={{ padding: "10px 8px", margin: "-10px -8px" }} onClick={openNew}>Add</button>
+            : undefined}
+        />
+        <div className="t-foot" style={{ padding: "0 4px" }}>
+          The stuff that keeps life running — oil changes, filters, renewals. Log it once, the clock does the rest. Due items surface on your Brief.
+        </div>
       </div>
 
       {form && (
-        <div style={{ ...S.inner, padding: "14px 15px", marginBottom: 12, display: "flex", flexDirection: "column", gap: 10 }}>
-          <input value={form.name} onChange={e => setForm(f => ({ ...f, name: e.target.value }))} placeholder="What needs doing? (oil change, AC filter…)" autoFocus
-            style={{ ...S.input, width: "100%", padding: "10px 12px", fontSize: 13 }} />
+        <Card pad="md" style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+          <span className="t-head">{form.isNew ? "New item" : "Edit item"}</span>
+          <Field value={form.name} onChange={e => setForm(f => ({ ...f, name: e.target.value }))} placeholder="What needs doing? (oil change, AC filter…)" autoFocus />
           <div>
-            <div style={{ ...S.microLabel, marginBottom: 6 }}>How often</div>
+            <div className="t-cap" style={{ color: "var(--sub)", marginBottom: 8 }}>How often</div>
             <Chips options={UPKEEP_INTERVALS.map(i => i.key)} value={form.interval} onChange={(v) => setForm(f => ({ ...f, interval: v }))} fmt={(v) => UPKEEP_INTERVALS.find(i => i.key === v)?.label || v} />
             {form.interval === "custom" && (
-              <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 8 }}>
-                <input value={form.customDays} onChange={e => setForm(f => ({ ...f, customDays: e.target.value.replace(/\D/g, "") }))} placeholder="days" inputMode="numeric"
-                  style={{ ...S.input, width: 90, padding: "8px 10px", fontSize: 13, fontFamily: mono }} />
-                <span style={{ fontSize: 10.5, color: T.faint }}>days between passes</span>
+              <div style={{ display: "flex", alignItems: "center", gap: 10, marginTop: 10 }}>
+                <Field value={form.customDays} onChange={e => setForm(f => ({ ...f, customDays: e.target.value.replace(/\D/g, "") }))} placeholder="days" inputMode="numeric" className="t-num" style={{ width: 96, flex: "none" }} />
+                <span className="t-foot">days between passes</span>
               </div>
             )}
           </div>
           <div>
-            <div style={{ ...S.microLabel, marginBottom: 6 }}>Last done <span style={{ textTransform: "none", letterSpacing: 0 }}>(leave empty if never)</span></div>
-            <input type="date" value={form.last_done} onChange={e => setForm(f => ({ ...f, last_done: e.target.value }))}
-              style={{ ...S.input, padding: "8px 10px", fontSize: 13, fontFamily: mono, colorScheme: "inherit" }} />
+            <div className="t-cap" style={{ color: "var(--sub)", marginBottom: 8 }}>Last done <span style={{ color: "var(--faint)" }}>(leave empty if never)</span></div>
+            {/* colorScheme: inherit — the native date picker follows the room's theme */}
+            <Field type="date" value={form.last_done} onChange={e => setForm(f => ({ ...f, last_done: e.target.value }))} className="t-num" style={{ colorScheme: "inherit" }} />
           </div>
-          <input value={form.notes} onChange={e => setForm(f => ({ ...f, notes: e.target.value }))} placeholder="Notes — filter size, oil type, who to call…"
-            style={{ ...S.input, width: "100%", padding: "10px 12px", fontSize: 12.5 }} />
-          {saveErr && <div style={{ fontSize: 11, color: T.red }}>{saveErr}</div>}
-          <div style={{ display: "flex", gap: 8 }}>
-            <button onClick={save} disabled={saving} style={{ ...S.brassBtn, flex: 1, padding: 10, fontSize: 11.5, opacity: saving ? 0.6 : 1 }}>{saving ? "Saving…" : form.isNew ? "Add to the rotation" : "Save changes"}</button>
-            {!form.isNew && <button onClick={remove} disabled={saving} style={{ ...S.ghostBtn, padding: "10px 14px", fontSize: 11, color: T.red, borderColor: "var(--red-a32)" }}>Delete</button>}
-            <button onClick={() => setForm(null)} style={{ ...S.ghostBtn, padding: "10px 14px", fontSize: 11 }}>Cancel</button>
+          <Field value={form.notes} onChange={e => setForm(f => ({ ...f, notes: e.target.value }))} placeholder="Notes — filter size, oil type, who to call…" />
+          {saveErr && <div className="t-foot" style={{ color: "var(--red)" }}>{saveErr}</div>}
+          <div style={{ display: "flex", gap: 10 }}>
+            <Button kind="primary" size="md" disabled={saving} onClick={save} style={{ flex: 1 }}>{saving ? "Saving…" : form.isNew ? "Add to the rotation" : "Save changes"}</Button>
+            {!form.isNew && <Button kind="danger" size="md" disabled={saving} onClick={remove}>Delete</Button>}
+            <Button kind="quiet" size="md" onClick={() => setForm(null)}>Cancel</Button>
           </div>
-        </div>
+        </Card>
       )}
 
       {rows === null && !loadErr ? (
         <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-          <div className="sk" style={{ height: 52, borderRadius: 10 }} />
-          <div className="sk" style={{ height: 52, borderRadius: 10 }} />
+          <div className="sk" style={{ height: 56, borderRadius: 18 }} />
+          <div className="sk" style={{ height: 56, borderRadius: 18 }} />
         </div>
       ) : loadErr ? (
-        <div style={{ ...S.inner, display: "flex", alignItems: "center", gap: 11, padding: "11px 13px" }}>
-          <span style={{ width: 7, height: 7, borderRadius: "50%", background: T.red, flex: "none" }} />
-          <span style={{ fontSize: 10.5, color: T.faint, flex: 1 }}>{loadErr}</span>
-          <button onClick={() => refetch()} style={{ ...S.ghostBtn, flex: "none", padding: "5px 10px", fontSize: 9.5, borderRadius: 7 }}>Retry</button>
-        </div>
+        <Card pad="md">
+          <EmptyState icon={<IcWrench size={24} />} title="Couldn't load upkeep" sub={loadErr}
+            action={<Button kind="quiet" size="md" onClick={() => refetch()}>Retry</Button>} />
+        </Card>
       ) : sorted.length === 0 && !form ? (
-        <div style={{ ...S.inner, padding: "22px 16px", textAlign: "center" }}>
-          <div style={{ fontSize: 12.5, fontWeight: 700, fontFamily: syne, marginBottom: 5 }}>Nothing in the rotation yet</div>
-          <div style={{ fontSize: 11, color: T.faint, lineHeight: 1.6, marginBottom: 12 }}>Oil change, apartment AC filter, toothbrush heads — add the things you always remember two weeks late.</div>
-          <button onClick={openNew} style={{ ...S.brassBtn, padding: "9px 18px", fontSize: 11 }}>Add the first one</button>
-        </div>
+        <Card pad="md">
+          <EmptyState icon={<IcWrench size={24} />} title="Nothing in the rotation yet"
+            sub="Oil change, apartment AC filter, toothbrush heads — add the things you always remember two weeks late."
+            action={<Button kind="primary" size="md" onClick={openNew}>Add the first one</Button>} />
+        </Card>
       ) : (
-        <div style={{ display: "flex", flexDirection: "column", gap: 7 }}>
+        <CellGroup>
           {sorted.map(it => {
             const c = upkeepDueColor(it.meta);
+            // parse as local midnight — new Date("YYYY-MM-DD") alone is UTC and shifts a day
             const lastLabel = it.last_done ? new Date(it.last_done + "T00:00:00").toLocaleDateString("en-US", { month: "short", day: "numeric" }) : "never";
+            const flashed = doneFlash === it.id;
             return (
-              <div key={it.id} style={{ ...S.inner, padding: "11px 13px", display: "flex", alignItems: "center", gap: 11 }}>
-                <span style={{ width: 7, height: 7, flex: "none", transform: "rotate(45deg)", borderRadius: 1.5, background: c, boxShadow: `0 0 8px ${tint(c, 45)}` }} />
-                <span onClick={() => openEdit(it)} style={{ flex: 1, minWidth: 0, cursor: "pointer" }}>
-                  <span style={{ display: "block", fontSize: 12.5, fontWeight: 600, color: T.ink, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{it.name}</span>
-                  <span style={{ display: "block", fontSize: 9.5, color: T.faint, marginTop: 2 }}>{upkeepIntervalLabel(it.interval_days)} · last {lastLabel}{it.notes ? ` · ${it.notes}` : ""}</span>
-                </span>
-                <span style={{ fontSize: 9, fontWeight: 700, color: c, fontFamily: mono, letterSpacing: "0.05em", flex: "none" }}>{upkeepDueText(it.meta)}</span>
-                <button onClick={() => markDone(it)} title="Log it done today"
-                  style={{ ...(doneFlash === it.id ? { background: T.green, color: "var(--chip-ink)", border: "none" } : S.ghostBtn), flex: "none", padding: "7px 11px", fontSize: 10, borderRadius: 8, fontWeight: 700 }}>
-                  {doneFlash === it.id ? "Logged ✓" : "Done"}
+              <div key={it.id} className="cell" style={{ paddingRight: 10 }}>
+                <button className="cell-body" onClick={() => openEdit(it)} style={rowBtn}>
+                  <span className="cell-title">{it.name}</span>
+                  <span className="cell-sub">{upkeepIntervalLabel(it.interval_days)} · last {lastLabel}{it.notes ? ` · ${it.notes}` : ""}</span>
                 </button>
+                <span style={{ display: "inline-flex", alignItems: "center", gap: 6, flex: "none" }}>
+                  <Dot tone={c} size={6} />
+                  <span className="t-num" style={{ fontSize: 11, fontWeight: 600, color: c, whiteSpace: "nowrap" }}>{upkeepDueText(it.meta)}</span>
+                </span>
+                <Button kind="tinted" size="sm" onClick={() => markDone(it)} title="Log it done today"
+                  style={{ height: 44, minWidth: 76, flex: "none", ...(flashed ? { background: tint("var(--green)", 14), color: "var(--green)" } : null) }}>
+                  {flashed ? <><IcCheck size={14} /> Logged</> : "Done"}
+                </Button>
               </div>
             );
           })}
-        </div>
+        </CellGroup>
       )}
-    </div>
+      {confirmEl}
+    </section>
   );
 }
-

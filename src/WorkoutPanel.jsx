@@ -1,5 +1,11 @@
 import { useState, useEffect, useMemo } from "react";
-import { T, syne, mono } from "./theme.js";
+import {
+  Card, SectionHeader, CellGroup, Cell, StatTile, Button, PillRow, Segmented,
+  Sheet, useConfirm, Field, TextArea, SwitchRow, EmptyState, Dot, Grid,
+} from "./ui/kit.jsx";
+import {
+  IcPlus, IcClose, IcCheck, IcClock, IcChevronLeft, IcChevronRight, IcChevronDown, IcDumbbell,
+} from "./ui/icons.jsx";
 
 // ════════════════════════════════════════════════════════════════════════════
 // WORKOUT — the Personal tab's training room.
@@ -17,19 +23,6 @@ import { T, syne, mono } from "./theme.js";
 // Supabase is the brain (workout_templates + workout_sessions, RLS like every
 // other table); localStorage only checkpoints the in-progress session.
 // ════════════════════════════════════════════════════════════════════════════
-
-// Palette tokens come from theme.js (CSS variables — Daylight/Nocturne aware).
-// S keeps this panel's plate shapes, pixel-identical to its siblings.
-const S = {
-  card: { padding: "19px 21px", background: T.surface, border: `1px solid ${T.line}`, borderRadius: 14, boxShadow: "none" },
-  cardM: { padding: 17, background: T.surface, border: `1px solid ${T.line}`, borderRadius: 13, boxShadow: "none" },
-  inner: { background: "transparent", border: `1px solid ${T.line}`, borderRadius: 10 },
-  title: { fontSize: 11, fontWeight: 600, fontFamily: syne, color: T.ink, letterSpacing: "0.18em", textTransform: "uppercase" },
-  microLabel: { fontSize: 9, color: T.faint, fontFamily: mono, letterSpacing: "0.14em", textTransform: "uppercase" },
-  brassBtn: { background: T.brass, border: "none", borderRadius: 9, color: T.onBrass, fontWeight: 700, fontFamily: syne, letterSpacing: "0.04em", cursor: "pointer", boxShadow: "none" },
-  ghostBtn: { background: "transparent", border: `1px solid ${T.lineStrong}`, borderRadius: 9, color: T.sub, fontWeight: 600, cursor: "pointer" },
-  input: { background: T.surface2, border: `1px solid ${T.lineStrong}`, borderRadius: 9, color: T.ink },
-};
 
 // ─── One-time Supabase setup (shown in-app if the tables don't exist yet) ────
 export const WORKOUT_SETUP_SQL = `-- Board Room · Workout — one-time setup
@@ -117,8 +110,10 @@ const clearActive = () => { try { localStorage.removeItem(ACTIVE_KEY); } catch {
 // ─── helpers ─────────────────────────────────────────────────────────────────
 const uuid = () => crypto.randomUUID();
 const norm = (s) => (s || "").trim().toLowerCase();
+// Roman numbering retired from set rows in the SESSION redesign (tabular
+// arabic reads faster mid-set) — helper kept for compatibility.
 const ROMAN = ["", "I", "II", "III", "IV", "V", "VI", "VII", "VIII", "IX", "X", "XI", "XII"];
-const roman = (n) => ROMAN[n] || String(n);
+const roman = (n) => ROMAN[n] || String(n); // eslint-disable-line no-unused-vars
 const epley = (w, r) => (w > 0 && r > 0 ? w * (1 + r / 30) : 0); // est. 1RM
 const conv = (w, from, to) => (w == null || from === to ? w : from === "lb" ? w / 2.20462 : w * 2.20462);
 const fmtW = (w) => (w == null ? "—" : (Math.round(w * 10) / 10).toString().replace(/\.0$/, ""));
@@ -156,8 +151,8 @@ const LIB = [
 // Main panel
 // ════════════════════════════════════════════════════════════════════════════
 export default function WorkoutPanel({ isMobile, supabase, settings, updateSetting }) {
-  const card = isMobile ? S.cardM : S.card;
   const wdb = useMemo(() => makeWdb(supabase), [supabase]);
+  const [confirmEl, confirm] = useConfirm();
 
   // preferences ride the existing app_settings table under one key
   const ws = (settings && settings.workout) || {};
@@ -226,8 +221,15 @@ export default function WorkoutPanel({ isMobile, supabase, settings, updateSetti
     return { id: uuid(), name, restSec: tpl.restSec ?? defaultRest, sets };
   };
 
-  const startWorkout = (tpl) => {
-    if (active && !window.confirm("A workout is already in progress. Discard it and start fresh?")) { setView("session"); return; }
+  const startWorkout = async (tpl) => {
+    if (active) {
+      const ok = await confirm({
+        title: "Workout in progress",
+        message: "A workout is already in progress. Discard it and start fresh?",
+        confirmLabel: "Discard & start", cancelLabel: "Resume it", destructive: true,
+      });
+      if (!ok) { setView("session"); return; } // declining resumes instead of discarding
+    }
     setActive({
       id: uuid(),
       templateId: tpl?.id || null,
@@ -282,27 +284,34 @@ export default function WorkoutPanel({ isMobile, supabase, settings, updateSetti
   };
 
   // ─── render ─────────────────────────────────────────────────────────────
-  if (setupNeeded) return <SetupCard card={card} onRetry={refreshAll} />;
+  if (setupNeeded) return <SetupCard onRetry={refreshAll} />;
 
   if (view === "session" && active) {
     return (
-      <ActiveSession
-        card={card} isMobile={isMobile} active={active} setActive={setActive}
-        bar={bar} bestByEx={bestByEx} prevByEx={prevByEx} defaultRest={defaultRest}
-        buildSessionExercise={buildSessionExercise}
-        onBack={() => setView("train")} onFinish={finishWorkout} onDiscard={discardWorkout}
-      />
+      <>
+        <ActiveSession
+          isMobile={isMobile} active={active} setActive={setActive}
+          bar={bar} bestByEx={bestByEx} prevByEx={prevByEx} defaultRest={defaultRest}
+          buildSessionExercise={buildSessionExercise}
+          onBack={() => setView("train")} onFinish={finishWorkout} onDiscard={discardWorkout}
+        />
+        {confirmEl}
+      </>
     );
   }
 
   return (
-    <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-      <PillNav value={view} onChange={setView} />
-      {loadErr && <div style={{ ...card, fontSize: 11.5, color: T.red }}>{loadErr}</div>}
+    <div style={{ display: "flex", flexDirection: "column", gap: 12, minWidth: 0 }}>
+      <Segmented
+        options={[{ key: "train", label: "Train" }, { key: "routines", label: "Routines" }, { key: "history", label: "History" }]}
+        value={view} onChange={setView}
+        style={isMobile ? undefined : { maxWidth: 380 }}
+      />
+      {loadErr && <Card pad="md"><span className="t-call" style={{ color: "var(--red)" }}>{loadErr}</span></Card>}
       {view === "train" && (
         <TrainHome
-          card={card} isMobile={isMobile} templates={templates} sessions={sessions}
-          active={active} unit={unit} savedFlash={savedFlash}
+          isMobile={isMobile} templates={templates} sessions={sessions}
+          active={active} unit={unit}
           onResume={() => setView("session")} onStart={startWorkout}
           onQuickStart={() => startWorkout(null)}
           onManage={() => setView("routines")} onHistory={() => setView("history")}
@@ -312,7 +321,7 @@ export default function WorkoutPanel({ isMobile, supabase, settings, updateSetti
       {view === "routines" && (
         editingTpl ? (
           <RoutineEditor
-            card={card} isMobile={isMobile} unit={unit} defaultRest={defaultRest}
+            isMobile={isMobile} unit={unit} defaultRest={defaultRest}
             initial={editingTpl === "new" ? null : editingTpl}
             nextPosition={(templates || []).length}
             onSave={async (tpl) => { await wdb.saveTemplate(tpl); setEditingTpl(null); refreshAll(); }}
@@ -320,32 +329,31 @@ export default function WorkoutPanel({ isMobile, supabase, settings, updateSetti
             onCancel={() => setEditingTpl(null)}
           />
         ) : (
-          <RoutineList card={card} templates={templates} onNew={() => setEditingTpl("new")} onEdit={setEditingTpl} onStart={startWorkout} />
+          <RoutineList templates={templates} onNew={() => setEditingTpl("new")} onEdit={setEditingTpl} onStart={startWorkout} />
         )
       )}
       {view === "history" && (
-        <HistoryView card={card} isMobile={isMobile} sessions={sessions} unit={unit}
+        <HistoryView isMobile={isMobile} sessions={sessions} unit={unit}
           onDelete={async (id) => { await wdb.deleteSession(id); refreshAll(); }} />
       )}
+      {/* Saved confirmation rides the toast layer — fixed, so nothing below it shifts mid-tap */}
+      {savedFlash && (
+        <div className="toasts" aria-live="polite">
+          <div className="toast">
+            <span className="tdot" />
+            <span>Workout saved</span>
+            <span className="t-num" style={{ fontSize: 12, color: "var(--sub)" }}>
+              {fmtDur(savedFlash.durationSec)} · {savedFlash.setCount} sets · {fmtVol(savedFlash.volume)} {savedFlash.unit}{savedFlash.prCount ? ` · ◆ ${savedFlash.prCount} PR${savedFlash.prCount > 1 ? "s" : ""}` : ""}
+            </span>
+          </div>
+        </div>
+      )}
+      {confirmEl}
     </div>
   );
 }
 
 // ─── shared bits ─────────────────────────────────────────────────────────────
-function PillNav({ value, onChange }) {
-  const opts = [{ key: "train", label: "Train" }, { key: "routines", label: "Routines" }, { key: "history", label: "History" }];
-  return (
-    <div style={{ display: "flex", gap: 6 }}>
-      {opts.map((o) => (
-        <button key={o.key} onClick={() => onChange(o.key)}
-          style={{ padding: "7px 13px", background: value === o.key ? "var(--brass-a12)" : "var(--ink-a03)", border: `1px solid ${value === o.key ? "var(--brass-a40)" : "var(--line)"}`, borderRadius: 10, color: value === o.key ? T.brass : T.sub, fontSize: 11, fontWeight: 700, fontFamily: syne, cursor: "pointer" }}>
-          {o.label}
-        </button>
-      ))}
-    </div>
-  );
-}
-
 // Numeric input that doesn't fight the keyboard: while focused it holds raw
 // text (so "187." on the way to 187.5 survives); numbers commit as you type,
 // and the display re-syncs from the real value on blur / external change.
@@ -368,174 +376,173 @@ function useNumText(value, onChange, { decimals = false, min = 0 } = {}) {
   };
 }
 
-function NumField({ value, onChange, width = 52, decimals = false, style }) {
+function NumField({ value, onChange, width = 64, decimals = false, style }) {
   const bind = useNumText(value, onChange, { decimals });
-  return <input {...bind} style={{ ...S.input, width, padding: "8px 0", textAlign: "center", fontFamily: mono, fontSize: 12.5, ...style }} />;
+  return <input {...bind} className="field t-num" style={{ width, height: 44, minHeight: 44, padding: "0 6px", textAlign: "center", fontSize: 15, ...style }} />;
 }
 
-function Stepper({ value, onChange, step, min = 0, inputWidth = 52, decimals = false }) {
-  const btn = { width: 30, height: 42, background: "var(--ink-a04)", border: "1px solid var(--ink-a12)", color: T.sub, fontSize: 16, fontWeight: 700, cursor: "pointer", lineHeight: 1, padding: 0, flex: "none" };
+// The gym stepper: 44×44 − / + targets, editable mono value between them.
+function Stepper({ value, onChange, step, min = 0, decimals = false, style }) {
   const clamp = (n) => Math.max(min, Math.round(n * 10) / 10);
   const bind = useNumText(value, onChange, { decimals, min });
+  const btn = {
+    width: 44, height: 44, flex: "none", display: "inline-flex", alignItems: "center", justifyContent: "center",
+    background: "transparent", border: "none", color: "var(--ink)", fontFamily: "var(--font-mono)",
+    fontSize: 21, fontWeight: 500, lineHeight: 1, padding: 0, cursor: "pointer",
+  };
   return (
-    <div style={{ display: "flex", alignItems: "stretch", flex: "none" }}>
-      <button onClick={() => onChange(clamp((value || 0) - step))} style={{ ...btn, borderRadius: "10px 0 0 10px", borderRight: "none" }} aria-label="decrease">−</button>
-      <input {...bind}
-        style={{ ...S.input, width: inputWidth, borderRadius: 0, textAlign: "center", fontFamily: mono, fontWeight: 600, fontSize: 15, padding: 0, height: 42, borderLeft: "1px solid var(--ink-a12)", borderRight: "1px solid var(--ink-a12)" }}
-      />
-      <button onClick={() => onChange(clamp((value || 0) + step))} style={{ ...btn, borderRadius: "0 10px 10px 0", borderLeft: "none" }} aria-label="increase">+</button>
-    </div>
-  );
-}
-
-function SheetShell({ onClose, children, isMobile }) {
-  return (
-    <div onClick={onClose} style={{ position: "fixed", inset: 0, background: "rgba(4,7,14,0.72)", zIndex: 320, display: "flex", alignItems: isMobile ? "flex-end" : "center", justifyContent: "center", animation: "fadein 0.15s ease both" }}>
-      <div onClick={(e) => e.stopPropagation()} style={{ background: T.surface, borderRadius: isMobile ? "20px 20px 0 0" : 18, padding: "22px 22px calc(22px + env(safe-area-inset-bottom))", width: isMobile ? "100%" : 520, maxWidth: 520, maxHeight: "84dvh", overflowY: "auto", border: "1px solid var(--ink-a10)", boxShadow: "var(--shadow-deep)", animation: "sheetup 0.2s ease both", color: T.ink }}>
-        {children}
-      </div>
+    <div style={{ display: "flex", alignItems: "stretch", background: "var(--surface-2)", borderRadius: 12, overflow: "hidden", ...style }}>
+      <button type="button" onClick={() => onChange(clamp((value || 0) - step))} style={btn} aria-label="decrease">−</button>
+      <input {...bind} style={{
+        flex: 1, minWidth: 0, width: "100%", height: 44, padding: 0, textAlign: "center",
+        background: "transparent", border: "none", borderLeft: "0.5px solid var(--line)", borderRight: "0.5px solid var(--line)",
+        borderRadius: 0, color: "var(--ink)", fontFamily: "var(--font-mono)", fontVariantNumeric: "tabular-nums", fontWeight: 600, fontSize: 16,
+      }} />
+      <button type="button" onClick={() => onChange(clamp((value || 0) + step))} style={btn} aria-label="increase">+</button>
     </div>
   );
 }
 
 // ─── setup card — shown once, before the tables exist ────────────────────────
-function SetupCard({ card, onRetry }) {
+function SetupCard({ onRetry }) {
   const [copied, setCopied] = useState(false);
   const copy = () => { navigator.clipboard?.writeText(WORKOUT_SETUP_SQL).then(() => { setCopied(true); setTimeout(() => setCopied(false), 2000); }); };
   return (
-    <div style={card}>
-      <span style={S.title}>Workout — one-time setup</span>
-      <div style={{ fontSize: 11.5, color: T.sub, lineHeight: 1.6, margin: "10px 0 12px" }}>
+    <Card pad="md" style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+      <span className="t-head">One-time setup</span>
+      <span className="t-foot" style={{ lineHeight: 1.6 }}>
         The two workout tables aren't in Supabase yet. Paste this into the Supabase <b>SQL Editor</b> and run it once — then come back and hit retry. RLS is included, same pattern as every other Board Room table.
+      </span>
+      <pre className="t-num" style={{ background: "var(--surface-2)", borderRadius: 12, padding: "12px 14px", fontSize: 11, lineHeight: 1.55, color: "var(--sub)", overflowX: "auto", whiteSpace: "pre", margin: 0 }}>
+        {WORKOUT_SETUP_SQL}
+      </pre>
+      <div style={{ display: "flex", gap: 10, marginTop: 2 }}>
+        <Button kind="primary" size="md" onClick={copy}>{copied ? <><IcCheck size={15} /> Copied</> : "Copy SQL"}</Button>
+        <Button kind="quiet" size="md" onClick={onRetry}>I've run it — retry</Button>
       </div>
-      <textarea readOnly value={WORKOUT_SETUP_SQL} rows={12} style={{ ...S.input, width: "100%", padding: "10px 12px", fontSize: 10, fontFamily: mono, lineHeight: 1.5, resize: "vertical", color: T.sub }} />
-      <div style={{ display: "flex", gap: 8, marginTop: 10 }}>
-        <button onClick={copy} style={{ ...S.brassBtn, padding: "9px 16px", fontSize: 11.5 }}>{copied ? "Copied" : "Copy SQL"}</button>
-        <button onClick={onRetry} style={{ ...S.ghostBtn, padding: "9px 16px", fontSize: 11.5 }}>I've run it — retry</button>
-      </div>
-    </div>
+    </Card>
   );
 }
 
 // ─── Train home — resume, start, recent, preferences ─────────────────────────
-function TrainHome({ card, isMobile, templates, sessions, active, unit, savedFlash, onResume, onStart, onQuickStart, onManage, onHistory, ws, setWs }) {
+function TrainHome({ isMobile, templates, sessions, active, unit, onResume, onStart, onQuickStart, onManage, onHistory, ws, setWs }) {
   const doneSets = active ? active.exercises.reduce((n, e) => n + e.sets.filter((s) => s.done).length, 0) : 0;
   const mins = active ? Math.max(1, Math.round((Date.now() - active.startedAt) / 60000)) : 0;
   const recent = (sessions || []).slice(0, 3);
 
   return (
     <>
-      {savedFlash && (
-        <div style={{ ...card, borderTop: `2px solid ${T.green}`, display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10 }}>
-          <div>
-            <div style={{ fontSize: 12, fontWeight: 700, fontFamily: syne, color: T.green }}>Workout saved</div>
-            <div style={{ fontSize: 10.5, color: T.sub, marginTop: 2 }}>
-              {fmtDur(savedFlash.durationSec)} · {savedFlash.setCount} sets · {fmtVol(savedFlash.volume)} {savedFlash.unit}{savedFlash.prCount ? ` · ${savedFlash.prCount} PR${savedFlash.prCount > 1 ? "s" : ""}` : ""}
-            </div>
-          </div>
-          <span style={{ fontSize: 18, color: T.green }}>✓</span>
-        </div>
-      )}
-
       {active && (
-        <div style={{ ...card, borderTop: "2px solid var(--brass-a85)", display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12 }}>
+        <Card pad="md" style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12 }}>
           <div style={{ minWidth: 0 }}>
-            <div style={{ ...S.microLabel, color: T.brass }}>IN PROGRESS</div>
-            <div style={{ fontSize: 13, fontWeight: 700, fontFamily: syne, marginTop: 3, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{active.templateName}</div>
-            <div style={{ fontSize: 10.5, color: T.sub, marginTop: 2 }}>{mins}m in · {doneSets} set{doneSets === 1 ? "" : "s"} logged</div>
+            <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
+              <Dot tone="var(--accent)" pulse size={6} />
+              <span className="t-cap" style={{ color: "var(--accent)", fontWeight: 600 }}>In progress</span>
+            </span>
+            <div className="t-head" style={{ marginTop: 2, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{active.templateName}</div>
+            <div className="t-foot" style={{ marginTop: 1 }}>{mins}m in · {doneSets} set{doneSets === 1 ? "" : "s"} logged</div>
           </div>
-          <button onClick={onResume} style={{ ...S.brassBtn, padding: "10px 18px", fontSize: 12, flex: "none", animation: "breathe 2.6s ease-in-out infinite" }}>Resume</button>
-        </div>
+          <Button kind="primary" size="md" onClick={onResume} style={{ flex: "none" }}>Resume</Button>
+        </Card>
       )}
 
-      <div style={card}>
-        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 12 }}>
-          <span style={S.title}>Start training</span>
-          <button onClick={onManage} style={{ background: "none", border: "none", color: T.brass, fontFamily: syne, fontWeight: 700, fontSize: 11, cursor: "pointer", padding: 0 }}>Manage routines ›</button>
-        </div>
-        {templates === null ? (
-          <div style={{ fontSize: 11.5, color: T.faint, padding: "14px 0", textAlign: "center", animation: "pulse 1.4s infinite" }}>Loading…</div>
-        ) : templates.length === 0 ? (
-          <div style={{ ...S.inner, padding: "18px 14px", textAlign: "center" }}>
-            <div style={{ fontSize: 12, fontWeight: 700, fontFamily: syne, marginBottom: 4 }}>No routines yet</div>
-            <div style={{ fontSize: 10.5, color: T.sub, marginBottom: 12 }}>Build one once — every session after is two taps.</div>
-            <button onClick={onManage} style={{ ...S.brassBtn, padding: "9px 16px", fontSize: 11.5 }}>Build your first routine</button>
-          </div>
-        ) : (
-          <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-            {templates.map((t) => {
-              const sets = (t.exercises || []).reduce((n, e) => n + (e.targetSets || 0), 0);
-              return (
-                <div key={t.id} style={{ ...S.inner, padding: "11px 13px", display: "flex", alignItems: "center", gap: 10 }}>
-                  <div style={{ flex: 1, minWidth: 0 }}>
-                    <div style={{ fontSize: 12.5, fontWeight: 700, fontFamily: syne, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{t.name}</div>
-                    <div style={{ fontSize: 10, color: T.faint, marginTop: 2 }}>{(t.exercises || []).length} exercises · {sets} sets</div>
-                  </div>
-                  <button onClick={() => onStart(t)} style={{ ...S.brassBtn, padding: "9px 18px", fontSize: 11.5, flex: "none" }}>Start</button>
-                </div>
-              );
-            })}
-          </div>
-        )}
-        <button onClick={onQuickStart} style={{ ...S.ghostBtn, width: "100%", padding: "10px 0", fontSize: 11.5, marginTop: 10 }}>Quick start — empty workout</button>
-      </div>
+      <Grid min={340} gap={12}>
+        <section style={{ minWidth: 0 }}>
+          <SectionHeader title="Start training" />
+          {templates === null ? (
+            <div className="sk" style={{ height: 140, borderRadius: 18 }} />
+          ) : templates.length === 0 ? (
+            <Card pad="md">
+              <EmptyState icon={<IcDumbbell size={26} />} title="No routines yet"
+                sub="Build one once — every session after is two taps."
+                action={<Button kind={active ? "tinted" : "primary"} size="md" onClick={onManage}>Build your first routine</Button>} />
+            </Card>
+          ) : (
+            <CellGroup>
+              {templates.map((t) => {
+                const sets = (t.exercises || []).reduce((n, e) => n + (e.targetSets || 0), 0);
+                return (
+                  <Cell key={t.id} title={t.name}
+                    sub={`${(t.exercises || []).length} exercise${(t.exercises || []).length === 1 ? "" : "s"} · ${sets} sets`}
+                    trailing={<Button kind="tinted" size="md" onClick={() => onStart(t)} style={{ flex: "none" }}>Start</Button>} />
+                );
+              })}
+              <Cell title="Quick start" sub="Empty workout — add exercises as you go" onClick={onQuickStart}
+                trailing={<span className="cell-chevron" style={{ display: "inline-flex" }}><IcPlus size={16} /></span>} />
+              <Cell title="Manage routines" chevron onClick={onManage} />
+            </CellGroup>
+          )}
+        </section>
 
-      {recent.length > 0 && (
-        <div style={card}>
-          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 10 }}>
-            <span style={S.title}>Recent</span>
-            <button onClick={onHistory} style={{ background: "none", border: "none", color: T.brass, fontFamily: syne, fontWeight: 700, fontSize: 11, cursor: "pointer", padding: 0 }}>All history ›</button>
-          </div>
-          <div style={{ display: "flex", flexDirection: "column", gap: 7 }}>
-            {recent.map((s) => (
-              <div key={s.id} style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", gap: 10, padding: "4px 2px" }}>
-                <span style={{ fontSize: 11.5, color: T.ink, fontWeight: 600, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{s.template_name || "Quick session"}</span>
-                <span style={{ fontSize: 10, color: T.faint, fontFamily: mono, flex: "none" }}>
-                  {fmtDate(s.started_at)} · {fmtVol(s.total_volume || 0)} {s.unit}{s.pr_count ? <span style={{ color: T.brass }}> · ◆{s.pr_count}</span> : null}
-                </span>
-              </div>
-            ))}
-          </div>
-        </div>
-      )}
-
-      <div style={card}>
-        <span style={S.title}>Preferences</span>
-        <div style={{ display: "flex", gap: isMobile ? 10 : 16, marginTop: 12, flexWrap: "wrap", alignItems: "flex-end" }}>
-          <div>
-            <div style={{ ...S.microLabel, marginBottom: 6 }}>UNITS</div>
-            <div style={{ display: "flex" }}>
-              {["lb", "kg"].map((u, i) => (
-                <button key={u} onClick={() => setWs({ unit: u, bar: u === "kg" ? 20 : 45 })}
-                  style={{ padding: "9px 16px", fontSize: 11.5, fontWeight: 700, fontFamily: syne, cursor: "pointer", background: unit === u ? T.brass : "var(--ink-a03)", border: `1px solid ${unit === u ? "var(--brass-a40)" : "var(--ink-a12)"}`, color: unit === u ? T.onBrass : T.sub, borderRadius: i === 0 ? "10px 0 0 10px" : "0 10px 10px 0", borderRight: i === 0 ? "none" : undefined }}>
-                  {u}
-                </button>
+        {recent.length > 0 && (
+          <section style={{ minWidth: 0 }}>
+            <SectionHeader title="Recent" />
+            <CellGroup>
+              {recent.map((s) => (
+                <Cell key={s.id} title={s.template_name || "Quick session"}
+                  sub={
+                    <span className="t-num" style={{ fontSize: 11.5 }}>
+                      {fmtDate(s.started_at)} · {fmtVol(s.total_volume || 0)} {s.unit}
+                      {s.pr_count ? <span style={{ color: "var(--accent)", fontWeight: 600 }}> · ◆{s.pr_count}</span> : null}
+                    </span>
+                  } />
               ))}
-            </div>
-          </div>
-          <div>
-            <div style={{ ...S.microLabel, marginBottom: 6 }}>BAR ({unit.toUpperCase()})</div>
-            <NumField value={ws.bar} decimals width={64} style={{ padding: "9px 0", fontSize: 13 }} onChange={(v) => setWs({ bar: v })} />
-          </div>
-          <div>
-            <div style={{ ...S.microLabel, marginBottom: 6 }}>DEFAULT REST (SEC)</div>
-            <NumField value={ws.defaultRest} width={72} style={{ padding: "9px 0", fontSize: 13 }} onChange={(v) => setWs({ rest: v })} />
-          </div>
-        </div>
-        <div style={{ fontSize: 9.5, color: T.faint, marginTop: 10 }}>Bar weight feeds the per-side plate math. Rest can be tuned per exercise during a session.</div>
-      </div>
+              <Cell title="All history" chevron onClick={onHistory} />
+            </CellGroup>
+          </section>
+        )}
+
+        <section style={{ minWidth: 0 }}>
+          <SectionHeader title="Preferences" />
+          <CellGroup>
+            <Cell title="Units" sub="Switching resets the bar weight"
+              trailing={
+                <Segmented style={{ width: 128, flex: "none" }}
+                  options={[{ key: "lb", label: "lb" }, { key: "kg", label: "kg" }]}
+                  value={unit}
+                  onChange={(u) => setWs({ unit: u, bar: u === "kg" ? 20 : 45 })} />
+              } />
+            <Cell title="Bar weight" sub="Feeds the per-side plate math"
+              trailing={
+                <span style={{ display: "inline-flex", alignItems: "center", gap: 8, flex: "none" }}>
+                  <NumField value={ws.bar} decimals width={76} onChange={(v) => setWs({ bar: v })} />
+                  <span className="t-cap" style={{ color: "var(--faint)", minWidth: 18 }}>{unit}</span>
+                </span>
+              } />
+            <Cell title="Default rest" sub="Tune it per exercise during a session"
+              trailing={
+                <span style={{ display: "inline-flex", alignItems: "center", gap: 8, flex: "none" }}>
+                  <NumField value={ws.defaultRest} width={76} onChange={(v) => setWs({ rest: v })} />
+                  <span className="t-cap" style={{ color: "var(--faint)", minWidth: 18 }}>sec</span>
+                </span>
+              } />
+          </CellGroup>
+        </section>
+      </Grid>
     </>
   );
 }
 
 // ─── Active session — the room where it happens ──────────────────────────────
-function ActiveSession({ card, isMobile, active, setActive, bar, bestByEx, prevByEx, defaultRest, buildSessionExercise, onBack, onFinish, onDiscard }) {
+function ActiveSession({ isMobile, active, setActive, bar, bestByEx, prevByEx, defaultRest, buildSessionExercise, onBack, onFinish, onDiscard }) {
   const [now, setNow] = useState(Date.now());
   const [pickerOpen, setPickerOpen] = useState(false);
   const [finishOpen, setFinishOpen] = useState(false);
   const [saving, setSaving] = useState(false);
   const [saveErr, setSaveErr] = useState(null);
+  const [confirmEl, confirm] = useConfirm();
   useEffect(() => { const t = setInterval(() => setNow(Date.now()), 500); return () => clearInterval(t); }, []);
+
+  // Side-by-side (exercises | summary/timer) only when the left column can
+  // still hold full-width 44pt stepper rows — below that, one honest column.
+  const [wide, setWide] = useState(() => typeof window !== "undefined" && window.matchMedia("(min-width: 1020px)").matches);
+  useEffect(() => {
+    const mq = window.matchMedia("(min-width: 1020px)");
+    const fn = (e) => setWide(e.matches);
+    mq.addEventListener("change", fn);
+    return () => mq.removeEventListener("change", fn);
+  }, []);
+  const twoCol = !isMobile && wide;
 
   const upd = (fn) => setActive((a) => ({ ...a, ...fn(a) }));
   const updEx = (exId, fn) => upd((a) => ({ exercises: a.exercises.map((e) => (e.id === exId ? { ...e, ...fn(e) } : e)) }));
@@ -564,7 +571,11 @@ function ActiveSession({ card, isMobile, active, setActive, bar, bestByEx, prevB
     const last = e.sets[e.sets.length - 1];
     return { sets: [...e.sets, { id: uuid(), weight: last?.weight ?? 0, reps: last?.reps ?? 8, done: false, prev: null }] };
   });
-  const removeSet = (ex, setId) => updEx(ex.id, (e) => ({ sets: e.sets.filter((s) => s.id !== setId) }));
+  const removeSet = async (ex, setId) => {
+    // destructive and near high-frequency controls — a sheet confirm beats trusting sweaty aim
+    if (!(await confirm({ title: "Remove set?", confirmLabel: "Remove", destructive: true }))) return;
+    updEx(ex.id, (e) => ({ sets: e.sets.filter((s) => s.id !== setId) }));
+  };
   const cycleRest = (ex) => updEx(ex.id, (e) => ({ restSec: REST_CYCLE[(REST_CYCLE.indexOf(e.restSec) + 1) % REST_CYCLE.length] ?? defaultRest }));
   const moveEx = (exId, dir) => upd((a) => {
     const i = a.exercises.findIndex((e) => e.id === exId), j = i + dir;
@@ -572,7 +583,11 @@ function ActiveSession({ card, isMobile, active, setActive, bar, bestByEx, prevB
     const arr = [...a.exercises]; [arr[i], arr[j]] = [arr[j], arr[i]];
     return { exercises: arr };
   });
-  const removeEx = (exId) => { if (window.confirm("Remove this exercise from today's session?")) upd((a) => ({ exercises: a.exercises.filter((e) => e.id !== exId) })); };
+  const removeEx = async (exId) => {
+    const name = active.exercises.find((e) => e.id === exId)?.name || "this exercise";
+    if (!(await confirm({ title: "Remove exercise?", message: `${name} comes off today's session. History is untouched.`, confirmLabel: "Remove", destructive: true }))) return;
+    upd((a) => ({ exercises: a.exercises.filter((e) => e.id !== exId) }));
+  };
   const addExercise = (name) => { upd((a) => ({ exercises: [...a.exercises, buildSessionExercise(name)] })); setPickerOpen(false); };
 
   const restRemain = active.rest ? Math.ceil((active.rest.until - now) / 1000) : null;
@@ -585,34 +600,28 @@ function ActiveSession({ card, isMobile, active, setActive, bar, bestByEx, prevB
     catch (e) { setSaving(false); setSaveErr(e.message || "Couldn't save — check your connection."); }
   };
 
-  return (
-    <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-      <div style={card}>
-        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10 }}>
-          <button onClick={onBack} style={{ background: "none", border: "none", color: T.brass, fontFamily: syne, fontWeight: 700, fontSize: 12, cursor: "pointer", padding: 0, flex: "none" }}>‹ Overview</button>
-          <button onClick={() => setFinishOpen(true)} style={{ ...S.brassBtn, padding: "9px 18px", fontSize: 11.5, flex: "none" }}>Finish</button>
-        </div>
-        <div style={{ marginTop: 10 }}>
-          <div style={{ ...S.microLabel, color: T.brass }}>IN SESSION</div>
-          <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", gap: 10, marginTop: 3 }}>
-            <span style={{ fontSize: 16, fontWeight: 700, fontFamily: syne, minWidth: 0, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{active.templateName}</span>
-            <span style={{ fontSize: 15, fontFamily: mono, fontWeight: 600, color: T.ink, flex: "none" }}>{fmtClock(elapsed)}</span>
-          </div>
-          <div style={{ fontSize: 10.5, color: T.sub, marginTop: 4 }}>
-            {doneSets} set{doneSets === 1 ? "" : "s"} · {fmtVol(volume)} {active.unit} volume{prCount ? <span style={{ color: T.brass, fontWeight: 700 }}> · ◆ {prCount} PR{prCount > 1 ? "s" : ""}</span> : null}
-          </div>
-        </div>
-      </div>
+  const liveLabel = (
+    <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
+      <Dot tone="var(--accent)" pulse size={6} />
+      <span className="t-cap" style={{ color: "var(--accent)", fontWeight: 600 }}>In session</span>
+    </span>
+  );
+  const metaLine = (
+    <span>
+      {doneSets} set{doneSets === 1 ? "" : "s"} · {fmtVol(volume)} {active.unit} volume
+      {prCount ? <span className="t-num" style={{ color: "var(--accent)", fontWeight: 600, fontSize: 12 }}> · ◆ {prCount} PR{prCount > 1 ? "s" : ""}</span> : null}
+    </span>
+  );
 
+  const exerciseColumn = (
+    <div style={{ display: "flex", flexDirection: "column", gap: 12, minWidth: 0 }}>
       {active.exercises.length === 0 && (
-        <div style={{ ...card, textAlign: "center", padding: "26px 20px" }}>
-          <div style={{ fontSize: 12.5, fontWeight: 700, fontFamily: syne, marginBottom: 4 }}>Empty session</div>
-          <div style={{ fontSize: 10.5, color: T.sub }}>Add an exercise below to start logging.</div>
-        </div>
+        <Card pad="md">
+          <EmptyState icon={<IcDumbbell size={26} />} title="Empty session" sub="Add an exercise below to start logging." />
+        </Card>
       )}
-
       {active.exercises.map((ex, i) => (
-        <ExerciseCard key={ex.id} card={card} isMobile={isMobile} ex={ex} index={i} count={active.exercises.length}
+        <ExerciseCard key={ex.id} isMobile={isMobile} ex={ex} index={i} count={active.exercises.length}
           unit={active.unit} bar={bar}
           onToggleSet={(s) => toggleSet(ex, s)}
           onSetChange={(setId, patch) => updEx(ex.id, (e) => ({ sets: e.sets.map((s) => (s.id === setId ? { ...s, ...patch } : s)) }))}
@@ -620,213 +629,347 @@ function ActiveSession({ card, isMobile, active, setActive, bar, bestByEx, prevB
           onCycleRest={() => cycleRest(ex)} onMove={(d) => moveEx(ex.id, d)} onRemove={() => removeEx(ex.id)}
         />
       ))}
+      <Button kind="quiet" size="md" full onClick={() => setPickerOpen(true)}><IcPlus size={16} /> Add exercise</Button>
+    </div>
+  );
 
-      <button onClick={() => setPickerOpen(true)} style={{ ...S.ghostBtn, padding: "12px 0", fontSize: 12 }}>+ Add exercise</button>
+  // The rest meridian — starts itself, one tap to skip or extend
+  const restBar = resting ? (
+    <RestBar rest={active.rest} restRemain={restRemain} mobile={!twoCol}
+      onExtend={() => upd((a) => ({ rest: { ...a.rest, until: a.rest.until + 30000, total: a.rest.total + 30 } }))}
+      onClear={() => upd(() => ({ rest: null }))} />
+  ) : null;
 
-      {/* The rest meridian — starts itself, one tap to skip or extend */}
-      {resting && (
-        <div style={{ position: "sticky", bottom: isMobile ? 8 : 12, zIndex: 5, borderRadius: 12, overflow: "hidden", border: "1px solid var(--brass-a40)", background: T.surface, boxShadow: "var(--shadow-float)", animation: restRemain > 0 ? "breathe 2.6s ease-in-out infinite" : "none" }}>
-          <div style={{ position: "absolute", inset: 0, width: `${Math.max(0, Math.min(100, (restRemain / active.rest.total) * 100))}%`, background: "var(--brass-a16)", transition: "width 0.5s linear" }} />
-          <div style={{ position: "relative", display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, padding: "10px 14px" }}>
-            <div style={{ minWidth: 0 }}>
-              <div style={{ ...S.microLabel, color: restRemain > 0 ? T.brass : T.green }}>{restRemain > 0 ? "REST" : "GO"}</div>
-              <div style={{ fontSize: 9.5, color: T.faint, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{active.rest.label}</div>
-            </div>
-            <span style={{ fontSize: 22, fontFamily: mono, fontWeight: 600, color: restRemain > 0 ? T.ink : T.green, flex: "none" }}>{restRemain > 0 ? fmtClock(restRemain) : "0:00"}</span>
-            <div style={{ display: "flex", gap: 6, flex: "none" }}>
-              <button onClick={() => upd((a) => ({ rest: { ...a.rest, until: a.rest.until + 30000, total: a.rest.total + 30 } }))} style={{ ...S.ghostBtn, padding: "8px 11px", fontSize: 11 }}>+30s</button>
-              <button onClick={() => upd(() => ({ rest: null }))} style={{ background: "none", border: `1px solid ${T.line}`, borderRadius: 8, color: T.sub, fontSize: 11, fontWeight: 700, fontFamily: syne, cursor: "pointer", padding: "8px 11px" }}>{restRemain > 0 ? "Skip" : "Clear"}</button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {pickerOpen && <ExercisePicker isMobile={isMobile} onPick={addExercise} onClose={() => setPickerOpen(false)} />}
+  const sheets = (
+    <>
+      {pickerOpen && <ExercisePicker onPick={addExercise} onClose={() => setPickerOpen(false)} />}
       {finishOpen && (
-        <FinishSheet isMobile={isMobile} active={active} doneSets={doneSets} volume={volume} prCount={prCount} elapsed={elapsed}
+        <FinishSheet active={active} doneSets={doneSets} volume={volume} prCount={prCount} elapsed={elapsed}
           saving={saving} saveErr={saveErr}
           onSave={doFinish} onClose={() => setFinishOpen(false)}
-          onDiscard={() => { if (window.confirm("Discard this workout? Nothing will be saved.")) { setFinishOpen(false); onDiscard(); } }}
+          onDiscard={async () => {
+            if (await confirm({ title: "Discard workout?", message: "Nothing will be saved.", confirmLabel: "Discard", destructive: true })) {
+              setFinishOpen(false); onDiscard();
+            }
+          }}
         />
       )}
+      {confirmEl}
+    </>
+  );
+
+  if (!twoCol) {
+    return (
+      <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+        <Card pad="md">
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, margin: "-4px 0 6px -10px" }}>
+            <Button kind="plain" size="md" onClick={onBack} style={{ paddingLeft: 10, paddingRight: 12 }}>
+              <IcChevronLeft size={15} /> Overview
+            </Button>
+            <Button kind="primary" size="md" onClick={() => setFinishOpen(true)}>Finish</Button>
+          </div>
+          {liveLabel}
+          <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", gap: 10, marginTop: 2 }}>
+            <span className="t-title2" style={{ minWidth: 0, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{active.templateName}</span>
+            <span className="t-num" style={{ fontSize: 22, fontWeight: 600, flex: "none" }}>{fmtClock(elapsed)}</span>
+          </div>
+          <div className="t-foot" style={{ marginTop: 3 }}>{metaLine}</div>
+        </Card>
+        {exerciseColumn}
+        {restBar}
+        {sheets}
+      </div>
+    );
+  }
+
+  return (
+    <div style={{ display: "grid", gridTemplateColumns: "minmax(0, 1fr) 300px", gap: 12, alignItems: "start" }}>
+      {exerciseColumn}
+      <div style={{ display: "flex", flexDirection: "column", gap: 12, position: "sticky", top: 12 }}>
+        <Card pad="md">
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8, margin: "-6px -8px 0 0" }}>
+            {liveLabel}
+            <Button kind="plain" size="md" onClick={onBack} style={{ paddingLeft: 12, paddingRight: 12 }}>
+              <IcChevronLeft size={14} /> Overview
+            </Button>
+          </div>
+          <div className="t-title2" style={{ marginTop: 2, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{active.templateName}</div>
+          <div className="t-num" style={{ fontSize: 30, fontWeight: 600, margin: "4px 0 12px" }}>{fmtClock(elapsed)}</div>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 8 }}>
+            <StatTile value={doneSets} label="Sets" />
+            <StatTile value={fmtVol(volume)} label={`Volume (${active.unit})`} />
+            <StatTile value={prCount ? `◆ ${prCount}` : "—"} label="PRs" valueTone={prCount ? "var(--accent)" : "var(--faint)"} />
+          </div>
+          <Button kind="primary" size="lg" full style={{ marginTop: 12 }} onClick={() => setFinishOpen(true)}>Finish</Button>
+        </Card>
+        {restBar}
+      </div>
+      {sheets}
     </div>
   );
 }
 
-function ExerciseCard({ card, isMobile, ex, index, count, unit, bar, onToggleSet, onSetChange, onAddSet, onRemoveSet, onCycleRest, onMove, onRemove }) {
+// Rest countdown. Phone: a glass bar stuck to the bottom of the page scroll —
+// it rides above the in-flow tab bar (which owns env(safe-area-inset-bottom)),
+// so it can never reach the home indicator; when the keyboard hides the dock,
+// the scroll bottom retreats above the keyboard with it. Tablet: a card in the
+// sticky right column.
+function RestBar({ rest, restRemain, onExtend, onClear, mobile }) {
+  const going = restRemain <= 0;
+  const pct = Math.max(0, Math.min(100, (restRemain / rest.total) * 100));
+  const inner = (
+    <>
+      <div style={{ position: "absolute", inset: 0, width: `${pct}%`, background: "var(--accent-a12)", transition: "width 0.5s linear" }} />
+      <div style={{ position: "relative", display: "flex", alignItems: "center", gap: 10, padding: "10px 12px 10px 14px" }}>
+        <div style={{ minWidth: 0, flex: 1 }}>
+          <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
+            <Dot tone={going ? "var(--green)" : "var(--accent)"} pulse={!going} size={6} />
+            <span className="t-cap" style={{ color: going ? "var(--green)" : "var(--accent)", fontWeight: 600 }}>{going ? "Go" : "Rest"}</span>
+          </span>
+          <div className="t-cap" style={{ color: "var(--faint)", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", marginTop: 1 }}>{rest.label}</div>
+        </div>
+        <span className="t-num" style={{ fontSize: 24, fontWeight: 600, color: going ? "var(--green)" : "var(--ink)", flex: "none" }}>
+          {going ? "0:00" : fmtClock(restRemain)}
+        </span>
+        <div style={{ display: "flex", gap: 8, flex: "none" }}>
+          <Button kind="quiet" size="md" onClick={onExtend} style={{ padding: "0 12px" }}><span className="t-num" style={{ fontSize: 13 }}>+30s</span></Button>
+          <Button kind="quiet" size="md" onClick={onClear} style={{ padding: "0 12px" }}>{going ? "Clear" : "Skip"}</Button>
+        </div>
+      </div>
+    </>
+  );
+  if (mobile) {
+    return (
+      <div style={{
+        position: "sticky", bottom: 10, zIndex: 5, borderRadius: 16, overflow: "hidden",
+        background: "var(--glass-raised)",
+        WebkitBackdropFilter: "blur(20px) saturate(1.8)", backdropFilter: "blur(20px) saturate(1.8)",
+        boxShadow: "inset 0 0 0 0.5px var(--line), var(--shadow-float)",
+      }}>
+        {inner}
+      </div>
+    );
+  }
+  return (
+    <div style={{ position: "relative", overflow: "hidden", borderRadius: "var(--r-card)", background: "var(--surface)", boxShadow: "var(--shadow-card)" }}>
+      {inner}
+    </div>
+  );
+}
+
+function ExerciseCard({ isMobile, ex, index, count, unit, bar, onToggleSet, onSetChange, onAddSet, onRemoveSet, onCycleRest, onMove, onRemove }) {
   const [showPlates, setShowPlates] = useState(false);
+  // Plate math uses the next undone set (or last set if all done) as its weight source
   const nextSet = ex.sets.find((s) => !s.done) || ex.sets[ex.sets.length - 1];
   const plates = nextSet ? plateBreakdown(nextSet.weight, unit, bar) : null;
-  const arrow = { background: "none", border: "none", color: T.faint, cursor: "pointer", fontSize: 11, padding: "1px 3px", lineHeight: 1 };
-  const chip = { background: "var(--ink-a04)", border: "1px solid var(--ink-a10)", borderRadius: 999, color: T.sub, fontSize: 9.5, fontWeight: 700, cursor: "pointer", padding: "5px 10px", fontFamily: mono, letterSpacing: "0.03em", flex: "none" };
+  const wFlex = { flex: "1.3 1 0", minWidth: 136, maxWidth: 210 };
+  const rFlex = { flex: "1 1 0", minWidth: 118, maxWidth: 180 };
 
   return (
-    <div style={{ ...card, padding: isMobile ? "14px 13px" : "16px 18px" }}>
-      <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 11 }}>
-        <div style={{ display: "flex", flexDirection: "column", flex: "none" }}>
-          <button onClick={() => onMove(-1)} disabled={index === 0} style={{ ...arrow, opacity: index === 0 ? 0.25 : 1 }} aria-label="move up">▲</button>
-          <button onClick={() => onMove(1)} disabled={index === count - 1} style={{ ...arrow, opacity: index === count - 1 ? 0.25 : 1 }} aria-label="move down">▼</button>
-        </div>
-        <span style={{ fontSize: 13, fontWeight: 700, fontFamily: syne, flex: 1, minWidth: 0, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{ex.name}</span>
-        <button onClick={onCycleRest} style={chip} title="Tap to change rest for this exercise">{ex.restSec > 0 ? `${ex.restSec}s rest` : "no rest"}</button>
-        <button onClick={() => setShowPlates((v) => !v)} style={{ ...chip, color: showPlates ? T.brass : T.sub, borderColor: showPlates ? "var(--brass-a40)" : "var(--ink-a10)" }}>plates</button>
-        <button onClick={onRemove} style={{ background: "none", border: "none", color: T.faint, cursor: "pointer", fontSize: 15, padding: 2, lineHeight: 1, flex: "none" }} aria-label="remove exercise">×</button>
+    <Card pad={isMobile ? "sm" : "md"}>
+      <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+        <span className="t-head" style={{ flex: 1, minWidth: 0, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{ex.name}</span>
+        <button onClick={onRemove} aria-label="remove exercise" style={{
+          width: 44, height: 44, flex: "none", margin: "-8px -10px -8px 0", display: "inline-flex", alignItems: "center",
+          justifyContent: "center", background: "none", border: "none", color: "var(--faint)", cursor: "pointer", padding: 0,
+        }}>
+          <IcClose size={17} />
+        </button>
+      </div>
+
+      <div style={{ display: "flex", alignItems: "center", gap: 8, margin: "6px 0 2px" }}>
+        <Button kind="quiet" size="md" onClick={onCycleRest} title="Tap to change rest for this exercise" style={{ padding: "0 12px", gap: 6 }}>
+          <IcClock size={15} />
+          <span className="t-num" style={{ fontSize: 13 }}>{ex.restSec > 0 ? `${ex.restSec}s rest` : "no rest"}</span>
+        </Button>
+        <Button kind={showPlates ? "tinted" : "quiet"} size="md" onClick={() => setShowPlates((v) => !v)} style={{ padding: "0 12px" }}>Plates</Button>
+        <span style={{ flex: 1 }} />
+        <Button kind="quiet" size="md" onClick={() => onMove(-1)} disabled={index === 0} aria-label="move up" style={{ width: 44, padding: 0 }}>
+          <IcChevronDown size={15} style={{ transform: "rotate(180deg)" }} />
+        </Button>
+        <Button kind="quiet" size="md" onClick={() => onMove(1)} disabled={index === count - 1} aria-label="move down" style={{ width: 44, padding: 0 }}>
+          <IcChevronDown size={15} />
+        </Button>
       </div>
 
       {showPlates && plates && (
-        <div style={{ ...S.inner, padding: "8px 11px", marginBottom: 10, fontSize: 10.5, color: T.sub, fontFamily: mono }}>
-          {fmtW(nextSet.weight)} {unit} → <span style={{ color: T.brass, fontWeight: 700 }}>{plates.text}</span> <span style={{ color: T.faint }}>({fmtW(bar)} bar)</span>
+        <div className="t-num" style={{ background: "var(--surface-2)", borderRadius: 12, padding: "9px 12px", margin: "8px 0 2px", fontSize: 12.5 }}>
+          <span style={{ color: "var(--sub)" }}>{fmtW(nextSet.weight)} {unit} → </span>
+          <span style={{ color: "var(--ink)", fontWeight: 600 }}>{plates.text}</span>
+          <span style={{ color: "var(--faint)", fontSize: 11 }}> ({fmtW(bar)} bar)</span>
         </div>
       )}
 
-      <div style={{ display: "flex", flexDirection: "column", gap: 7 }}>
-        {ex.sets.map((set, i) => (
-          <div key={set.id} style={{ display: "flex", alignItems: "center", gap: 6, opacity: set.done ? 0.92 : 1 }}>
-            <div style={{ width: 42, flex: "none", textAlign: "center" }}>
-              <div style={{ fontSize: 12, fontWeight: 700, fontFamily: syne, color: set.done ? T.brass : T.sub }}>{roman(i + 1)}</div>
-              <div style={{ fontSize: 8, fontFamily: mono, color: set.pr ? T.brass : T.faint, fontWeight: set.pr ? 700 : 400, whiteSpace: "nowrap" }}>
-                {set.pr ? "◆ PR" : set.prev || "new"}
+      {/* column captions so the two steppers never need guessing */}
+      {ex.sets.length > 0 && (
+        <div style={{ display: "flex", gap: 8, alignItems: "center", padding: "10px 0 4px" }}>
+          <span className="t-cap" style={{ ...wFlex, textAlign: "center", color: "var(--faint)" }}>weight ({unit})</span>
+          <span className="t-cap" style={{ ...rFlex, textAlign: "center", color: "var(--faint)" }}>reps</span>
+          <span style={{ width: 44, flex: "none" }} />
+        </div>
+      )}
+
+      <div style={{ display: "flex", flexDirection: "column" }}>
+        {ex.sets.map((set, i) => {
+          const meta = set.pr
+            ? <span className="t-num" style={{ fontSize: 11, fontWeight: 600, color: "var(--accent)", whiteSpace: "nowrap" }}>◆ PR</span>
+            : <span className="t-num" style={{ fontSize: 11, color: "var(--faint)", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{set.prev ? `last ${set.prev}` : "new"}</span>;
+          const weightStepper = <Stepper value={set.weight} step={unit === "kg" ? 2.5 : 5} decimals onChange={(v) => onSetChange(set.id, { weight: v })} style={wFlex} />;
+          const repsStepper = <Stepper value={set.reps} step={1} onChange={(v) => onSetChange(set.id, { reps: v })} style={rFlex} />;
+          const logBtn = (
+            <button onClick={() => onToggleSet(set)} aria-label={set.done ? "undo set" : "log set"} style={{
+              width: 44, height: 44, flex: "none", borderRadius: 12, border: "none", cursor: "pointer",
+              display: "inline-flex", alignItems: "center", justifyContent: "center",
+              background: set.done ? "var(--green)" : "var(--ink-a06)",
+              color: set.done ? "var(--surface)" : "var(--faint)",
+            }}>
+              <IcCheck size={20} />
+            </button>
+          );
+          const removeBtn = (extra) => (
+            <button onClick={() => onRemoveSet(set.id)} aria-label="remove set" style={{
+              width: 44, height: 44, flex: "none", display: "inline-flex", alignItems: "center", justifyContent: "center",
+              background: "none", border: "none", color: "var(--faint)", cursor: "pointer", padding: 0, ...extra,
+            }}>
+              <IcClose size={15} />
+            </button>
+          );
+          const sep = i ? { marginTop: 10, paddingTop: 10, borderTop: "0.5px solid var(--line)" } : {};
+          return (
+            <div key={set.id} style={{ opacity: set.done ? 0.92 : 1, display: "flex", flexDirection: "column", gap: 8, ...sep }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 8, minHeight: 32 }}>
+                <span className="t-num" style={{ fontSize: 14, fontWeight: 600, color: set.done ? "var(--green)" : "var(--sub)", flex: "none", minWidth: 16 }}>{i + 1}</span>
+                {meta}
+                {removeBtn({ margin: "-6px -8px -6px auto" })}
+              </div>
+              <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                {weightStepper}
+                {repsStepper}
+                {logBtn}
               </div>
             </div>
-            <Stepper value={set.weight} step={unit === "kg" ? 2.5 : 5} inputWidth={isMobile ? 52 : 62} decimals onChange={(v) => onSetChange(set.id, { weight: v })} />
-            <Stepper value={set.reps} step={1} inputWidth={isMobile ? 36 : 44} onChange={(v) => onSetChange(set.id, { reps: v })} />
-            <button onClick={() => onToggleSet(set)} aria-label={set.done ? "undo set" : "log set"}
-              style={{ width: 42, height: 42, flex: "none", borderRadius: 10, cursor: "pointer", fontSize: 16, fontWeight: 700, transition: "all 0.15s ease", ...(set.done ? { ...S.brassBtn, borderRadius: 10 } : { background: "var(--brass-a06)", border: "1.5px solid var(--brass-a40)", color: T.brass }) }}>
-              ✓
-            </button>
-            <button onClick={() => onRemoveSet(set.id)} style={{ background: "none", border: "none", color: T.faint, cursor: "pointer", fontSize: 13, padding: 2, flex: "none", lineHeight: 1 }} aria-label="remove set">×</button>
-          </div>
-        ))}
+          );
+        })}
       </div>
-      <button onClick={onAddSet} style={{ background: "none", border: `1px dashed var(--brass-a40)`, borderRadius: 9, color: T.brass, fontSize: 10.5, fontWeight: 700, fontFamily: syne, cursor: "pointer", padding: "8px 0", width: "100%", marginTop: 9 }}>+ Add set</button>
-    </div>
+
+      <Button kind="quiet" size="md" full onClick={onAddSet} style={{ marginTop: 12 }}><IcPlus size={15} /> Add set</Button>
+    </Card>
   );
 }
 
 // ─── exercise picker — search the library or type anything ───────────────────
-function ExercisePicker({ isMobile, onPick, onClose }) {
+function ExercisePicker({ onPick, onClose }) {
   const [q, setQ] = useState("");
   const nq = norm(q);
   const groups = LIB.map(([g, items]) => [g, items.filter((n) => !nq || norm(n).includes(nq))]).filter(([, items]) => items.length);
   const exact = LIB.some(([, items]) => items.some((n) => norm(n) === nq));
   return (
-    <SheetShell onClose={onClose} isMobile={isMobile}>
-      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 12 }}>
-        <span style={S.title}>Add exercise</span>
-        <button onClick={onClose} style={{ background: "none", border: "none", color: T.faint, fontSize: 17, cursor: "pointer", padding: 2, lineHeight: 1 }}>×</button>
-      </div>
-      <input autoFocus value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search, or type your own…"
+    // z 320 keeps the picker above the sticky rest bar (z 5)
+    <Sheet onClose={onClose} title="Add exercise" z={320} bodyStyle={{ minHeight: "min(66dvh, 560px)" }}>
+      {/* deliberately no autoFocus — the keyboard would bury the library list; tap to search instead */}
+      <Field value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search, or type your own…"
         onKeyDown={(e) => { if (e.key === "Enter" && q.trim()) onPick(q.trim()); }}
-        style={{ ...S.input, width: "100%", padding: "11px 13px", fontSize: 13, marginBottom: 12 }} />
-      <div style={{ display: "flex", flexDirection: "column", gap: 12, maxHeight: isMobile ? "48dvh" : 380, overflowY: "auto", paddingRight: 2 }}>
-        {q.trim() && !exact && (
-          <button onClick={() => onPick(q.trim())} style={{ ...S.ghostBtn, padding: "11px 13px", fontSize: 12, textAlign: "left" }}>
-            + Add "{q.trim()}" as a custom exercise
-          </button>
-        )}
-        {groups.map(([g, items]) => (
-          <div key={g}>
-            <div style={{ ...S.microLabel, marginBottom: 6 }}>{g.toUpperCase()}</div>
-            <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
-              {items.map((n) => (
-                <button key={n} onClick={() => onPick(n)}
-                  style={{ ...S.inner, padding: "10px 12px", fontSize: 12, color: T.ink, textAlign: "left", cursor: "pointer", fontWeight: 600 }}>
-                  {n}
-                </button>
-              ))}
-            </div>
-          </div>
-        ))}
-        {!groups.length && !q.trim() && <div style={{ fontSize: 11, color: T.faint, textAlign: "center", padding: "12px 0" }}>Nothing here.</div>}
-      </div>
-    </SheetShell>
+        style={{ marginBottom: 12 }} />
+      {q.trim() && !exact && (
+        <Button kind="quiet" size="md" full onClick={() => onPick(q.trim())} style={{ justifyContent: "flex-start", marginBottom: 12 }}>
+          <IcPlus size={15} /> Add "{q.trim()}" as a custom exercise
+        </Button>
+      )}
+      {groups.map(([g, items]) => (
+        <div key={g} style={{ marginBottom: 14 }}>
+          <div className="t-label" style={{ padding: "0 4px 8px" }}>{g}</div>
+          <CellGroup style={{ background: "var(--surface-2)", boxShadow: "none" }}>
+            {items.map((n) => <Cell key={n} title={n} onClick={() => onPick(n)} />)}
+          </CellGroup>
+        </div>
+      ))}
+      {!groups.length && !q.trim() && <EmptyState title="Nothing here." />}
+    </Sheet>
   );
 }
 
 // ─── finish sheet — summary, notes, and the write-back toggle ─────────────────
-function FinishSheet({ isMobile, active, doneSets, volume, prCount, elapsed, saving, saveErr, onSave, onClose, onDiscard }) {
+function FinishSheet({ active, doneSets, volume, prCount, elapsed, saving, saveErr, onSave, onClose, onDiscard }) {
   const [notes, setNotes] = useState("");
+  // updateTemplate defaults ON whenever the session came from a routine — progressive overload by default
   const [updateTemplate, setUpdateTemplate] = useState(!!active.templateId);
-  const stat = (label, val, color) => (
-    <div style={{ ...S.inner, padding: "10px 12px", flex: 1, minWidth: 0 }}>
-      <div style={S.microLabel}>{label}</div>
-      <div style={{ fontSize: 16, fontWeight: 600, fontFamily: mono, color: color || T.ink, marginTop: 3 }}>{val}</div>
-    </div>
-  );
   return (
-    <SheetShell onClose={onClose} isMobile={isMobile}>
-      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 14 }}>
-        <span style={{ fontSize: 15, fontWeight: 700, fontFamily: syne }}>Finish workout</span>
-        <button onClick={onClose} style={{ background: "none", border: "none", color: T.faint, fontSize: 17, cursor: "pointer", padding: 2, lineHeight: 1 }}>×</button>
+    <Sheet onClose={onClose} title="Finish workout" z={320}
+      footer={
+        <>
+          <Button kind="quiet" size="lg" onClick={onClose} style={{ flex: 1 }}>Keep going</Button>
+          <Button kind="primary" size="lg" onClick={() => onSave({ notes, updateTemplate })} disabled={saving || doneSets === 0} style={{ flex: 1.4 }}>
+            {saving ? "Saving…" : "Save workout"}
+          </Button>
+        </>
+      }>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(2, 1fr)", gap: 8 }}>
+        <StatTile value={fmtDur(elapsed)} label="Time" />
+        <StatTile value={doneSets} label="Sets" />
+        <StatTile value={`${fmtVol(volume)} ${active.unit}`} label="Volume" />
+        <StatTile value={prCount ? `◆ ${prCount}` : "—"} label="PRs" valueTone={prCount ? "var(--accent)" : "var(--faint)"} />
       </div>
-      <div style={{ display: "flex", gap: 8, marginBottom: 8 }}>
-        {stat("TIME", fmtDur(elapsed))}
-        {stat("SETS", doneSets)}
-      </div>
-      <div style={{ display: "flex", gap: 8, marginBottom: 14 }}>
-        {stat("VOLUME", `${fmtVol(volume)} ${active.unit}`)}
-        {stat("PRS", prCount ? `◆ ${prCount}` : "—", prCount ? T.brass : T.faint)}
-      </div>
-      {doneSets === 0 && <div style={{ fontSize: 10.5, color: T.amber, marginBottom: 12 }}>No sets logged yet — finishing now saves nothing. Discard instead, or go log a set.</div>}
-      <textarea value={notes} onChange={(e) => setNotes(e.target.value)} placeholder="Notes — how it felt, anything to remember (optional)" rows={2}
-        style={{ ...S.input, width: "100%", padding: "10px 12px", fontSize: 12.5, resize: "vertical", marginBottom: 12 }} />
-      {active.templateId && (
-        <label style={{ display: "flex", alignItems: "center", gap: 9, cursor: "pointer", marginBottom: 14, ...S.inner, padding: "11px 12px" }}>
-          <input type="checkbox" checked={updateTemplate} onChange={(e) => setUpdateTemplate(e.target.checked)} style={{ accentColor: T.brass, width: 16, height: 16, flex: "none" }} />
-          <span style={{ fontSize: 11.5, color: T.ink }}>Update <b>{active.templateName}</b> with today's weights, reps & set counts</span>
-        </label>
+      {doneSets === 0 && (
+        <div className="t-foot" style={{ color: "var(--amber)", marginTop: 10 }}>
+          No sets logged yet — finishing now saves nothing. Discard instead, or go log a set.
+        </div>
       )}
-      {saveErr && <div style={{ fontSize: 10.5, color: T.red, marginBottom: 10 }}>{saveErr}</div>}
-      <div style={{ display: "flex", gap: 8 }}>
-        <button onClick={() => onSave({ notes, updateTemplate })} disabled={saving || doneSets === 0}
-          style={{ ...S.brassBtn, flex: 1, padding: "12px 0", fontSize: 12.5, opacity: doneSets === 0 ? 0.45 : 1 }}>
-          {saving ? "Saving…" : "Save workout"}
-        </button>
-        <button onClick={onClose} style={{ ...S.ghostBtn, padding: "12px 18px", fontSize: 12.5 }}>Keep going</button>
-      </div>
-      <button onClick={onDiscard} style={{ background: "none", border: "none", color: T.red, fontSize: 10.5, fontWeight: 700, cursor: "pointer", padding: "12px 0 0", width: "100%", fontFamily: syne }}>Discard workout</button>
-    </SheetShell>
+      <TextArea value={notes} onChange={(e) => setNotes(e.target.value)} rows={2}
+        placeholder="Notes — how it felt, anything to remember (optional)"
+        style={{ marginTop: 12, resize: "vertical" }} />
+      {active.templateId && (
+        <div style={{ marginTop: 12, background: "var(--surface-2)", borderRadius: 12, overflow: "hidden" }}>
+          <SwitchRow title="Update routine" sub={`Write today's weights, reps & sets back to ${active.templateName}`}
+            on={updateTemplate} onToggle={() => setUpdateTemplate((v) => !v)} />
+        </div>
+      )}
+      {saveErr && <div className="t-foot" style={{ color: "var(--red)", marginTop: 10 }}>{saveErr}</div>}
+      <Button kind="danger" size="md" full onClick={onDiscard} style={{ marginTop: 14 }}>Discard workout</Button>
+    </Sheet>
   );
 }
 
 // ─── Routines — list + builder ────────────────────────────────────────────────
-function RoutineList({ card, templates, onNew, onEdit, onStart }) {
+function RoutineList({ templates, onNew, onEdit, onStart }) {
   return (
-    <div style={card}>
-      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 12 }}>
-        <span style={S.title}>Routines</span>
-        <button onClick={onNew} style={{ ...S.brassBtn, padding: "7px 14px", fontSize: 11.5 }}>+ New routine</button>
-      </div>
+    <section style={{ minWidth: 0 }}>
+      <SectionHeader title="Routines"
+        trailing={<button className="sec-link" style={{ padding: "12px 8px", margin: "-12px -8px" }} onClick={onNew}>New routine</button>} />
       {templates === null ? (
-        <div style={{ fontSize: 11.5, color: T.faint, padding: "16px 0", textAlign: "center", animation: "pulse 1.4s infinite" }}>Loading…</div>
+        <div className="sk" style={{ height: 120, borderRadius: 18 }} />
       ) : templates.length === 0 ? (
-        <div style={{ fontSize: 11.5, color: T.faint, padding: "20px 0", textAlign: "center" }}>No routines yet — tap "+ New routine" to build one.</div>
+        <Card pad="md">
+          <EmptyState icon={<IcDumbbell size={26} />} title="No routines yet"
+            sub="Name it, add the lifts and targets — starting a session becomes two taps."
+            action={<Button kind="primary" size="md" onClick={onNew}><IcPlus size={15} /> New routine</Button>} />
+        </Card>
       ) : (
-        <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+        <CellGroup>
           {templates.map((t) => (
-            <div key={t.id} style={{ ...S.inner, padding: "11px 13px", display: "flex", alignItems: "center", gap: 10 }}>
-              <div style={{ flex: 1, minWidth: 0 }}>
-                <div style={{ fontSize: 12.5, fontWeight: 700, fontFamily: syne, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{t.name}</div>
-                <div style={{ fontSize: 10, color: T.faint, marginTop: 2, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
-                  {(t.exercises || []).map((e) => e.name).join(" · ") || "Empty"}
-                </div>
-              </div>
-              <button onClick={() => onEdit(t)} style={{ ...S.ghostBtn, padding: "8px 14px", fontSize: 11, flex: "none" }}>Edit</button>
-              <button onClick={() => onStart(t)} style={{ ...S.brassBtn, padding: "8px 14px", fontSize: 11, flex: "none" }}>Start</button>
-            </div>
+            <Cell key={t.id} title={t.name}
+              sub={(t.exercises || []).map((e) => e.name).join(" · ") || "Empty"}
+              trailing={
+                <span style={{ display: "inline-flex", gap: 8, flex: "none" }}>
+                  <Button kind="quiet" size="md" onClick={() => onEdit(t)}>Edit</Button>
+                  <Button kind="tinted" size="md" onClick={() => onStart(t)}>Start</Button>
+                </span>
+              } />
           ))}
-        </div>
+        </CellGroup>
       )}
-    </div>
+    </section>
   );
 }
 
-function RoutineEditor({ card, isMobile, unit, defaultRest, initial, nextPosition, onSave, onDelete, onCancel }) {
+function RoutineEditor({ isMobile, unit, defaultRest, initial, nextPosition, onSave, onDelete, onCancel }) {
   const [name, setName] = useState(initial?.name || "");
+  // stored weights convert from the template's saved unit to the CURRENT preference unit —
+  // the routine is written back in the current unit on save
   const [exercises, setExercises] = useState(() => (initial?.exercises || []).map((e) => ({ ...e, id: e.id || uuid(), weight: Math.round((conv(e.weight, initial?.unit || "lb", unit) || 0) * 10) / 10 })));
   const [pickerOpen, setPickerOpen] = useState(false);
   const [saving, setSaving] = useState(false);
   const [err, setErr] = useState(null);
+  const [confirmEl, confirm] = useConfirm();
 
   const updEx = (id, patch) => setExercises((arr) => arr.map((e) => (e.id === id ? { ...e, ...patch } : e)));
   const move = (id, dir) => setExercises((arr) => {
@@ -835,7 +978,13 @@ function RoutineEditor({ card, isMobile, unit, defaultRest, initial, nextPositio
     const next = [...arr]; [next[i], next[j]] = [next[j], next[i]];
     return next;
   });
-  const numField = (val, onCh, w = 52, dec = false) => <NumField value={val} onChange={onCh} width={w} decimals={dec} />;
+  const numField = (val, onCh, w = 56, dec = false) => (
+    <NumField value={val} onChange={onCh} width={w} decimals={dec} style={{ background: "var(--surface)" }} />
+  );
+  const ctlBtn = {
+    width: 44, height: 44, flex: "none", display: "inline-flex", alignItems: "center", justifyContent: "center",
+    background: "none", border: "none", color: "var(--faint)", cursor: "pointer", padding: 0, margin: "-4px 0",
+  };
 
   const save = () => {
     if (!name.trim()) { setErr("Name the routine."); return; }
@@ -846,60 +995,73 @@ function RoutineEditor({ card, isMobile, unit, defaultRest, initial, nextPositio
   };
 
   return (
-    <div style={card}>
-      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 12 }}>
-        <button onClick={onCancel} style={{ background: "none", border: "none", color: T.brass, fontFamily: syne, fontWeight: 700, fontSize: 12, cursor: "pointer", padding: 0 }}>‹ Routines</button>
-        <span style={S.microLabel}>{initial ? "EDITING" : "NEW ROUTINE"}</span>
+    <Card pad="md" style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, margin: "-4px 0 -2px -10px" }}>
+        <Button kind="plain" size="md" onClick={onCancel} style={{ paddingLeft: 10, paddingRight: 12 }}>
+          <IcChevronLeft size={15} /> Routines
+        </Button>
+        <span className="t-label">{initial ? "Editing" : "New routine"}</span>
       </div>
-      <input value={name} onChange={(e) => setName(e.target.value)} placeholder="Routine name — e.g. Push Day"
-        style={{ ...S.input, width: "100%", padding: "11px 13px", fontSize: 14, fontWeight: 700, fontFamily: syne, marginBottom: 12 }} />
+      <Field value={name} onChange={(e) => setName(e.target.value)} placeholder="Routine name — e.g. Push Day"
+        style={{ fontWeight: 600, fontSize: 16 }} />
 
-      <div style={{ display: "flex", flexDirection: "column", gap: 9 }}>
-        {exercises.map((ex, i) => (
-          <div key={ex.id} style={{ ...S.inner, padding: "11px 12px" }}>
-            <div style={{ display: "flex", alignItems: "center", gap: 7, marginBottom: 9 }}>
-              <div style={{ display: "flex", flexDirection: "column", flex: "none" }}>
-                <button onClick={() => move(ex.id, -1)} disabled={i === 0} style={{ background: "none", border: "none", color: T.faint, cursor: "pointer", fontSize: 10, padding: "1px 3px", lineHeight: 1, opacity: i === 0 ? 0.25 : 1 }}>▲</button>
-                <button onClick={() => move(ex.id, 1)} disabled={i === exercises.length - 1} style={{ background: "none", border: "none", color: T.faint, cursor: "pointer", fontSize: 10, padding: "1px 3px", lineHeight: 1, opacity: i === exercises.length - 1 ? 0.25 : 1 }}>▼</button>
+      {exercises.length > 0 && (
+        <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+          {exercises.map((ex, i) => (
+            <div key={ex.id} style={{ background: "var(--surface-2)", borderRadius: 12, padding: "10px 12px" }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 2 }}>
+                <span className="t-call" style={{ fontWeight: 600, flex: 1, minWidth: 0, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{ex.name}</span>
+                <button onClick={() => move(ex.id, -1)} disabled={i === 0} aria-label="move up" style={{ ...ctlBtn, opacity: i === 0 ? 0.35 : 1 }}>
+                  <IcChevronDown size={14} style={{ transform: "rotate(180deg)" }} />
+                </button>
+                <button onClick={() => move(ex.id, 1)} disabled={i === exercises.length - 1} aria-label="move down" style={{ ...ctlBtn, opacity: i === exercises.length - 1 ? 0.35 : 1 }}>
+                  <IcChevronDown size={14} />
+                </button>
+                <button onClick={() => setExercises((arr) => arr.filter((e) => e.id !== ex.id))} aria-label="remove" style={{ ...ctlBtn, marginRight: -8 }}>
+                  <IcClose size={15} />
+                </button>
               </div>
-              <span style={{ fontSize: 12.5, fontWeight: 700, fontFamily: syne, flex: 1, minWidth: 0, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{ex.name}</span>
-              <button onClick={() => setExercises((arr) => arr.filter((e) => e.id !== ex.id))} style={{ background: "none", border: "none", color: T.faint, cursor: "pointer", fontSize: 14, padding: 2, lineHeight: 1 }} aria-label="remove">×</button>
+              <div style={{ display: "flex", gap: isMobile ? 8 : 14, flexWrap: "wrap", marginTop: 8 }}>
+                <div><div className="t-cap" style={{ color: "var(--faint)", marginBottom: 4 }}>Sets</div>{numField(ex.targetSets ?? 3, (v) => updEx(ex.id, { targetSets: v }))}</div>
+                <div><div className="t-cap" style={{ color: "var(--faint)", marginBottom: 4 }}>Reps</div>{numField(ex.targetReps ?? 8, (v) => updEx(ex.id, { targetReps: v }))}</div>
+                <div><div className="t-cap" style={{ color: "var(--faint)", marginBottom: 4 }}>Weight ({unit})</div>{numField(ex.weight ?? 0, (v) => updEx(ex.id, { weight: v }), 72, true)}</div>
+                <div><div className="t-cap" style={{ color: "var(--faint)", marginBottom: 4 }}>Rest (sec)</div>{numField(ex.restSec ?? defaultRest, (v) => updEx(ex.id, { restSec: v }), 64)}</div>
+              </div>
             </div>
-            <div style={{ display: "flex", gap: isMobile ? 8 : 14, flexWrap: "wrap" }}>
-              <div><div style={{ ...S.microLabel, marginBottom: 4 }}>SETS</div>{numField(ex.targetSets ?? 3, (v) => updEx(ex.id, { targetSets: v }), 44)}</div>
-              <div><div style={{ ...S.microLabel, marginBottom: 4 }}>REPS</div>{numField(ex.targetReps ?? 8, (v) => updEx(ex.id, { targetReps: v }), 44)}</div>
-              <div><div style={{ ...S.microLabel, marginBottom: 4 }}>WEIGHT ({unit.toUpperCase()})</div>{numField(ex.weight ?? 0, (v) => updEx(ex.id, { weight: v }), 60, true)}</div>
-              <div><div style={{ ...S.microLabel, marginBottom: 4 }}>REST (SEC)</div>{numField(ex.restSec ?? defaultRest, (v) => updEx(ex.id, { restSec: v }), 52)}</div>
-            </div>
-          </div>
-        ))}
-      </div>
+          ))}
+        </div>
+      )}
 
-      <button onClick={() => setPickerOpen(true)} style={{ ...S.ghostBtn, width: "100%", padding: "11px 0", fontSize: 11.5, marginTop: 10 }}>+ Add exercise</button>
-      {err && <div style={{ fontSize: 10.5, color: T.red, marginTop: 10 }}>{err}</div>}
-      <div style={{ display: "flex", gap: 8, marginTop: 12 }}>
-        <button onClick={save} disabled={saving} style={{ ...S.brassBtn, flex: 1, padding: "11px 0", fontSize: 12 }}>{saving ? "Saving…" : "Save routine"}</button>
-        <button onClick={onCancel} style={{ ...S.ghostBtn, padding: "11px 18px", fontSize: 12 }}>Cancel</button>
+      <Button kind="quiet" size="md" full onClick={() => setPickerOpen(true)}><IcPlus size={15} /> Add exercise</Button>
+      {err && <div className="t-foot" style={{ color: "var(--red)" }}>{err}</div>}
+      <div style={{ display: "flex", gap: 10 }}>
+        <Button kind="primary" size="md" onClick={save} disabled={saving} style={{ flex: 1 }}>{saving ? "Saving…" : "Save routine"}</Button>
+        <Button kind="quiet" size="md" onClick={onCancel}>Cancel</Button>
       </div>
       {initial && (
-        <button onClick={() => { if (window.confirm("Delete this routine? Past sessions stay in History.")) onDelete(initial.id); }}
-          style={{ background: "none", border: "none", color: T.red, fontSize: 10.5, fontWeight: 700, cursor: "pointer", padding: "12px 0 0", width: "100%", fontFamily: syne }}>
+        <Button kind="danger" size="md" full
+          onClick={async () => {
+            if (await confirm({ title: "Delete routine?", message: "Past sessions stay in History.", confirmLabel: "Delete", destructive: true })) onDelete(initial.id);
+          }}>
           Delete routine
-        </button>
+        </Button>
       )}
       {pickerOpen && (
-        <ExercisePicker isMobile={isMobile}
+        <ExercisePicker
           onPick={(n) => { setExercises((arr) => [...arr, { id: uuid(), name: n, targetSets: 3, targetReps: 8, weight: 0, restSec: defaultRest }]); setPickerOpen(false); }}
           onClose={() => setPickerOpen(false)} />
       )}
-    </div>
+      {confirmEl}
+    </Card>
   );
 }
 
 // ─── History — sessions, per-lift trend, CSV export ──────────────────────────
-function HistoryView({ card, isMobile, sessions, unit, onDelete }) {
+function HistoryView({ isMobile, sessions, unit, onDelete }) {
   const [openId, setOpenId] = useState(null);
   const [trendEx, setTrendEx] = useState("");
+  const [showAll, setShowAll] = useState(false);
+  const [confirmEl, confirm] = useConfirm();
 
   const exNames = useMemo(() => {
     const freq = new Map();
@@ -911,7 +1073,7 @@ function HistoryView({ card, isMobile, sessions, unit, onDelete }) {
   const trend = useMemo(() => {
     if (!trendEx) return [];
     const pts = [];
-    for (const s of [...(sessions || [])].reverse()) {
+    for (const s of [...(sessions || [])].reverse()) { // oldest first
       let best = 0;
       for (const ex of s.exercises || []) if (norm(ex.name) === norm(trendEx))
         for (const x of ex.sets || []) best = Math.max(best, epley(conv(x.weight, s.unit || "lb", unit), x.reps));
@@ -921,6 +1083,7 @@ function HistoryView({ card, isMobile, sessions, unit, onDelete }) {
   }, [sessions, trendEx, unit]);
 
   const exportCsv = () => {
+    // naive CSV escaping: commas are stripped from name fields, never emitted raw
     const rows = [["date", "routine", "exercise", "set", "weight", "unit", "reps", "est_1rm"]];
     for (const s of sessions || []) for (const ex of s.exercises || []) (ex.sets || []).forEach((x, i) => {
       rows.push([s.started_at, (s.template_name || "Quick session").replace(/,/g, " "), ex.name.replace(/,/g, " "), i + 1, x.weight, s.unit || "lb", x.reps, Math.round(epley(x.weight, x.reps))]);
@@ -933,93 +1096,151 @@ function HistoryView({ card, isMobile, sessions, unit, onDelete }) {
     URL.revokeObjectURL(a.href);
   };
 
-  if (sessions === null) return <div style={{ ...card, fontSize: 11.5, color: T.faint, textAlign: "center", animation: "pulse 1.4s infinite" }}>Loading history…</div>;
-  if (!sessions.length) return <div style={{ ...card, fontSize: 11.5, color: T.faint, textAlign: "center", padding: "26px 20px" }}>Nothing logged yet — your first finished workout lands here.</div>;
+  if (sessions === null) {
+    return (
+      <Card pad="md">
+        <div className="sk sk-line w40" />
+        <div className="sk" style={{ height: 76, borderRadius: 12, margin: "12px 0" }} />
+        <div className="sk sk-line w60" />
+      </Card>
+    );
+  }
+  if (!sessions.length) {
+    return (
+      <Card pad="md">
+        <EmptyState icon={<IcDumbbell size={26} />} title="Nothing logged yet" sub="Your first finished workout lands here." />
+      </Card>
+    );
+  }
 
   const bestPt = trend.reduce((m, p) => (p.v > m ? p.v : m), 0);
+  const visible = showAll || sessions.length <= 12 ? sessions : sessions.slice(0, 10);
 
   return (
-    <>
-      <div style={card}>
-        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, marginBottom: 12 }}>
-          <span style={S.title}>Progress</span>
-          <select value={trendEx} onChange={(e) => setTrendEx(e.target.value)} style={{ ...S.input, padding: "7px 10px", fontSize: 11.5, maxWidth: isMobile ? 170 : 260 }}>
-            {exNames.map((n) => <option key={n} value={n}>{n}</option>)}
-          </select>
+    <Grid min={340} gap={12}>
+      <Card pad="md" style={{ minWidth: 0 }}>
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, marginBottom: 8 }}>
+          <span className="t-head">Progress</span>
+          {exNames.length > 4 && (
+            <select className="field t-num" value={trendEx} onChange={(e) => setTrendEx(e.target.value)}
+              style={{ width: "auto", maxWidth: isMobile ? 185 : 260, fontSize: 13, padding: "8px 12px" }}>
+              {exNames.map((n) => <option key={n} value={n}>{n}</option>)}
+            </select>
+          )}
         </div>
+        {exNames.length > 0 && exNames.length <= 4 && (
+          <PillRow options={exNames} value={trendEx} onChange={setTrendEx} style={{ padding: "0 0 10px" }} />
+        )}
         {trend.length >= 2 ? (
           <>
-            <TrendLine points={trend} />
-            <div style={{ display: "flex", gap: 16, marginTop: 10 }}>
-              <span style={{ fontSize: 10, color: T.sub, fontFamily: mono }}>BEST EST 1RM <b style={{ color: T.brass }}>{fmtW(bestPt)} {unit}</b></span>
-              <span style={{ fontSize: 10, color: T.sub, fontFamily: mono }}>LATEST <b style={{ color: T.ink }}>{fmtW(trend[trend.length - 1].v)} {unit}</b></span>
-              <span style={{ fontSize: 10, color: T.faint, fontFamily: mono }}>{trend.length} SESSIONS</span>
+            <TrendLine points={trend} unit={unit} />
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 8, marginTop: 12 }}>
+              <StatTile value={`${fmtW(bestPt)} ${unit}`} label="Best est 1RM" />
+              <StatTile value={`${fmtW(trend[trend.length - 1].v)} ${unit}`} label="Latest" />
+              <StatTile value={trend.length} label="Sessions" />
             </div>
           </>
         ) : (
-          <div style={{ fontSize: 11, color: T.faint, padding: "10px 0" }}>Log {trendEx || "a lift"} twice and the trend line appears here.</div>
+          <div className="t-foot" style={{ color: "var(--faint)", padding: "10px 0" }}>
+            Log {trendEx || "a lift"} twice and the trend line appears here.
+          </div>
         )}
-      </div>
+      </Card>
 
-      <div style={card}>
-        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 12 }}>
-          <span style={S.title}>Sessions</span>
-          <button onClick={exportCsv} style={{ ...S.ghostBtn, padding: "7px 13px", fontSize: 10.5 }}>Export CSV</button>
+      <Card style={{ padding: 0, overflow: "hidden", minWidth: 0 }}>
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, padding: "12px 12px 4px 16px" }}>
+          <span className="t-head">Sessions</span>
+          <Button kind="quiet" size="md" onClick={exportCsv}>Export CSV</Button>
         </div>
-        <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-          {sessions.map((s) => {
+        <div style={{ paddingBottom: 6 }}>
+          {visible.map((s, idx) => {
             const open = openId === s.id;
             return (
-              <div key={s.id} style={{ ...S.inner, padding: "11px 13px" }}>
-                <div onClick={() => setOpenId(open ? null : s.id)} style={{ display: "flex", alignItems: "center", gap: 10, cursor: "pointer" }}>
-                  <div style={{ flex: 1, minWidth: 0 }}>
-                    <div style={{ fontSize: 12, fontWeight: 700, fontFamily: syne, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
-                      {s.template_name || "Quick session"}{s.pr_count ? <span style={{ color: T.brass }}> · ◆{s.pr_count}</span> : null}
-                    </div>
-                    <div style={{ fontSize: 9.5, color: T.faint, fontFamily: mono, marginTop: 2 }}>
+              <div key={s.id}>
+                {idx > 0 && <div style={{ height: 0.5, background: "var(--line)", marginLeft: 16 }} />}
+                <button className="cell tappable" onClick={() => setOpenId(open ? null : s.id)} style={{ width: "100%" }}>
+                  <span className="cell-body">
+                    <span className="cell-title">
+                      {s.template_name || "Quick session"}
+                      {s.pr_count ? <span className="t-num" style={{ color: "var(--accent)", fontWeight: 600, fontSize: 12.5 }}> ◆{s.pr_count}</span> : null}
+                    </span>
+                    <span className="cell-sub t-num" style={{ fontSize: 11.5 }}>
                       {fmtDate(s.started_at)} · {s.duration_sec ? fmtDur(s.duration_sec) : "—"} · {s.total_sets || 0} sets · {fmtVol(s.total_volume || 0)} {s.unit}
+                    </span>
+                  </span>
+                  <span className="cell-chevron" style={{ transform: open ? "rotate(90deg)" : "none", transition: "transform var(--dur-2) var(--ease-out)" }}>
+                    <IcChevronRight />
+                  </span>
+                </button>
+                <div className={`expand${open ? " open" : ""}`}>
+                  <div>
+                    <div style={{ padding: "2px 16px 14px", display: "flex", flexDirection: "column", gap: 6 }}>
+                      {(s.exercises || []).map((ex, i) => (
+                        <div key={i} style={{ display: "flex", gap: 8, alignItems: "baseline" }}>
+                          <span className="t-call" style={{ fontWeight: 600, flex: "none", minWidth: 0 }}>{ex.name}</span>
+                          <span className="t-num" style={{ fontSize: 12, color: "var(--sub)" }}>
+                            {(ex.sets || []).map((x, j) => (
+                              <span key={j}>{j > 0 ? ", " : ""}{fmtW(x.weight)}×{x.reps}{x.pr ? <span style={{ color: "var(--accent)" }}>◆</span> : ""}</span>
+                            ))}
+                          </span>
+                        </div>
+                      ))}
+                      {s.notes && <div className="t-foot" style={{ fontStyle: "italic" }}>"{s.notes}"</div>}
+                      <Button kind="danger" size="md" style={{ alignSelf: "flex-start", marginTop: 4 }}
+                        onClick={async () => {
+                          if (await confirm({ title: "Delete session?", message: "It comes out of History for good.", confirmLabel: "Delete", destructive: true })) onDelete(s.id);
+                        }}>
+                        Delete session
+                      </Button>
                     </div>
                   </div>
-                  <span style={{ color: T.faint, fontSize: 11, flex: "none", transform: open ? "rotate(90deg)" : "none", transition: "transform 0.15s" }}>›</span>
                 </div>
-                {open && (
-                  <div style={{ marginTop: 10, borderTop: `1px solid ${T.line}`, paddingTop: 10, display: "flex", flexDirection: "column", gap: 6 }}>
-                    {(s.exercises || []).map((ex, i) => (
-                      <div key={i} style={{ display: "flex", gap: 8, alignItems: "baseline" }}>
-                        <span style={{ fontSize: 11, fontWeight: 700, color: T.ink, flex: "none", minWidth: 0 }}>{ex.name}</span>
-                        <span style={{ fontSize: 10, color: T.sub, fontFamily: mono }}>
-                          {(ex.sets || []).map((x, j) => <span key={j}>{j > 0 ? ", " : ""}{fmtW(x.weight)}×{x.reps}{x.pr ? <span style={{ color: T.brass }}>◆</span> : ""}</span>)}
-                        </span>
-                      </div>
-                    ))}
-                    {s.notes && <div style={{ fontSize: 10.5, color: T.sub, fontStyle: "italic" }}>"{s.notes}"</div>}
-                    <button onClick={() => { if (window.confirm("Delete this session from history?")) onDelete(s.id); }}
-                      style={{ background: "none", border: "none", color: T.red, fontSize: 10, fontWeight: 700, cursor: "pointer", padding: "4px 0 0", textAlign: "left", fontFamily: syne }}>
-                      Delete session
-                    </button>
-                  </div>
-                )}
               </div>
             );
           })}
+          {sessions.length > 12 && !showAll && (
+            <Button kind="plain" size="md" full onClick={() => setShowAll(true)}>Show all {sessions.length} sessions</Button>
+          )}
         </div>
-      </div>
-    </>
+      </Card>
+      {confirmEl}
+    </Grid>
   );
 }
 
-function TrendLine({ points }) {
-  const W = 300, H = 64, P = 6;
+// Sparkline, not a chart: no axes — just the three numbers the eye needs
+// (max, min, latest) in quiet mono, and a 2px line with a 9% wash.
+function TrendLine({ points, unit }) {
+  const W = 300, H = 76, P = 12;
   const vs = points.map((p) => p.v);
-  const min = Math.min(...vs), max = Math.max(...vs), span = max - min || 1;
+  const min = Math.min(...vs), max = Math.max(...vs), span = max - min || 1; // span fallback avoids divide-by-zero on flat data
   const x = (i) => P + (i / (points.length - 1)) * (W - 2 * P);
   const y = (v) => H - P - ((v - min) / span) * (H - 2 * P);
-  const d = points.map((p, i) => `${x(i)},${y(p.v)}`).join(" ");
   const last = points[points.length - 1];
+  const linePts = points.map((p, i) => `${x(i)},${y(p.v)}`).join(" ");
+  const area = `${x(0)},${H} ${linePts} ${x(points.length - 1)},${H}`;
+  const lastXPct = (x(points.length - 1) / W) * 100;
+  const lastYPct = (y(last.v) / H) * 100;
   return (
-    <svg viewBox={`0 0 ${W} ${H}`} style={{ width: "100%", height: "auto", display: "block" }}>
-      <polyline points={d} fill="none" stroke={T.brass} strokeWidth="2" strokeLinejoin="round" strokeLinecap="round" />
-      <circle cx={x(points.length - 1)} cy={y(last.v)} r="3.2" fill={T.brass} stroke={T.surface} strokeWidth="1.5" />
-    </svg>
+    <div style={{ position: "relative", margin: "2px 0" }}>
+      <svg viewBox={`0 0 ${W} ${H}`} preserveAspectRatio="none" style={{ width: "100%", height: H, display: "block" }} aria-hidden>
+        <polygon points={area} fill="var(--blue)" opacity="0.09" />
+        <line x1="0" y1={H - 0.5} x2={W} y2={H - 0.5} stroke="var(--line)" strokeWidth="1" vectorEffect="non-scaling-stroke" />
+        <polyline points={linePts} fill="none" stroke="var(--blue)" strokeWidth="2" strokeLinejoin="round" strokeLinecap="round" vectorEffect="non-scaling-stroke" />
+      </svg>
+      {/* last-point marker + direct label (text lives in HTML so it never stretches with the svg) */}
+      <span style={{
+        position: "absolute", left: `${lastXPct}%`, top: `${lastYPct}%`, width: 7, height: 7, borderRadius: "50%",
+        background: "var(--blue)", boxShadow: "0 0 0 1.5px var(--surface)", transform: "translate(-50%, -50%)",
+      }} />
+      <span className="t-num" style={{
+        position: "absolute", right: 0, fontSize: 11, fontWeight: 600, color: "var(--ink)", lineHeight: 1, whiteSpace: "nowrap",
+        ...(lastYPct < 50 ? { top: `calc(${lastYPct}% + 9px)` } : { top: `calc(${lastYPct}% - 19px)` }),
+      }}>
+        {fmtW(last.v)} {unit}
+      </span>
+      <span className="t-num" style={{ position: "absolute", left: 0, top: 0, fontSize: 10.5, color: "var(--faint)", lineHeight: 1 }}>{fmtW(max)}</span>
+      <span className="t-num" style={{ position: "absolute", left: 0, bottom: 0, fontSize: 10.5, color: "var(--faint)", lineHeight: 1 }}>{fmtW(min)}</span>
+    </div>
   );
 }

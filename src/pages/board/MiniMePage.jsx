@@ -7,6 +7,7 @@ import { T } from "../../theme.js";
 import { Card, Button, Dot, Switch, Field, Grid, useConfirm } from "../../ui/kit.jsx";
 import { IcClose, IcChevronDown, IcChevronRight } from "../../ui/icons.jsx";
 import { ToggleRow, Segmented, Chips } from "../../ui/primitives.jsx";
+import { pingFn } from "../../lib/functions.js";
 import { supabase } from "../../lib/supabase.js";
 import { callClaude } from "../../lib/claude.js";
 
@@ -24,22 +25,6 @@ export const EFFORT_LEVELS = [
 // Display casing only — the underlying status strings (queued/review/
 // delivered/failed) are shared with the worker and must never be renamed.
 const STATUS_LABELS = { queued: "Queued", review: "Review", delivered: "Delivered", failed: "Failed" };
-
-// Mirror of App.jsx's pingFn health probe — the worker pill needs the same
-// three-way reading (ok / warn = deployed-but-missing-keys / off).
-// TODO(integration): hoist a single copy into lib/functions.js.
-async function pingFn(name) {
-  const t0 = Date.now();
-  try {
-    const res = await fetch(`/.netlify/functions/${name}`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ ping: true }) });
-    const ms = Date.now() - t0;
-    if (res.status === 404) return { status: "off", detail: "function not deployed", ms };
-    const data = await res.json().catch(() => null);
-    if (!res.ok) return { status: "down", detail: data?.error || `HTTP ${res.status}`, ms };
-    if (data?.configured === false) return { status: "warn", detail: data?.missing ? `deployed — missing ${data.missing}` : "deployed — keys not set", ms };
-    return { status: "ok", detail: "responding", ms };
-  } catch { return { status: "down", detail: "unreachable", ms: Date.now() - t0 }; }
-}
 
 /* Hairline between sections inside a settings card. */
 function Rule() {
