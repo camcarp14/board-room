@@ -20,8 +20,10 @@ const chartHeight = (width) =>
 
 // isMobile is accepted for call-site compat only — one Sheet mount now adapts
 // by breakpoint (bottom sheet on phone, centered modal ≥761px).
-export default function BtcChartModal({ isMobile, onClose, callFnFull }) {
-  const [interval, setInterval_] = useState("1m");
+// Generalized: BTC by default, but any ticker with a candles endpoint can reuse
+// it — pass title, fn, fnArgs (e.g. {symbol:"gold"}), and a default interval.
+export default function BtcChartModal({ isMobile, onClose, callFnFull, title = "BTC/USDT", fn = "btc-candles", fnArgs = null, defaultInterval = "1m" }) {
+  const [interval, setInterval_] = useState(defaultInterval);
   const [candles, setCandles] = useState(null);
   const [candleErr, setCandleErr] = useState(null);
   const [retryNonce, setRetryNonce] = useState(0);
@@ -33,7 +35,7 @@ export default function BtcChartModal({ isMobile, onClose, callFnFull }) {
     let cancelled = false;
     setCandles(null);
     setCandleErr(null);
-    callFnFull("btc-candles", { interval }).then(({ ok, data }) => {
+    callFnFull(fn, { interval, ...(fnArgs || {}) }).then(({ ok, data }) => {
       if (cancelled) return;
       if (ok && data?.success) setCandles(data.candles);
       else setCandleErr(data?.error || "Couldn't load candles — try again in a moment.");
@@ -54,6 +56,10 @@ export default function BtcChartModal({ isMobile, onClose, callFnFull }) {
     let C = resolve();
     const monoStack = cssVar("--font-mono");
     const chart = createChart(container, {
+      // Pin the locale — some environments report an invalid navigator locale
+      // (e.g. "en-US@posix"), which makes lightweight-charts' Intl formatting
+      // throw and the axes fail to draw.
+      localization: { locale: "en-US" },
       layout: { background: { type: ColorType.Solid, color: "transparent" }, textColor: C.faint, fontFamily: monoStack, fontSize: 11 },
       grid: { vertLines: { visible: false }, horzLines: { color: C.line } }, // horizontal hairlines only
       rightPriceScale: { borderColor: C.line },
@@ -116,7 +122,7 @@ export default function BtcChartModal({ isMobile, onClose, callFnFull }) {
   return createPortal(
     <Sheet
       onClose={onClose}
-      title="BTC/USDT"
+      title={title}
       // keep the chart clear of the home indicator on iOS standalone
       bodyStyle={{ paddingBottom: "calc(16px + env(safe-area-inset-bottom))" }}
     >

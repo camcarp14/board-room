@@ -87,6 +87,7 @@ export function MorningBriefPage({ btc, isMobile, settings, updateSetting, onOpe
   const [miniEvents, setMiniEvents] = useState([]); // for the mini calendar card — same personal_events table CalendarPanel uses
   const [eventAnalysis, setEventAnalysis] = useState({}); // idx -> one-sentence take | "loading" | "error"
   const [btcChartOpen, setBtcChartOpen] = useState(false);
+  const [tickerChart, setTickerChart] = useState(null); // {key,label} of the watchlist ticker whose chart is open
   const [wireAll, setWireAll] = useState(false);
   const [meetingsAll, setMeetingsAll] = useState(false);
   const [watchAll, setWatchAll] = useState(false);
@@ -261,9 +262,13 @@ export function MorningBriefPage({ btc, isMobile, settings, updateSetting, onOpe
       {/* the watchlist: gold + the names worth watching. auto-fit so the tiles
           wrap to 2-up instead of crushing the price to "$…" on a narrow card. */}
       <div style={{ display: "grid", gridTemplateColumns: isMobile ? "repeat(2, minmax(0, 1fr))" : "repeat(auto-fit, minmax(96px, 1fr))", gap: 8 }}>
-        {[["Gold", stocks.gold], ["NVDA", stocks.nvda], ["MSTR", stocks.mstr], ["STRC", stocks.strc]].map(([l, s], i) => {
+        {[["Gold", "gold", stocks.gold], ["NVDA", "nvda", stocks.nvda], ["MSTR", "mstr", stocks.mstr], ["STRC", "strc", stocks.strc]].map(([l, key, s]) => {
           const lvl = s?.price && s.price !== "—" ? s.price : (s?.value || "—");
-          return <StatTile key={i} value={lvl} label={l} delta={s?.delta} deltaTone={s?.up ? T.green : T.red} valueTone={lvl === "—" ? T.faint : undefined} />;
+          const live = lvl !== "—";
+          // Tap a ticker to open its own price chart (same modal as BTC). Dead
+          // tiles (no quote) aren't tappable.
+          return <StatTile key={key} value={lvl} label={l} delta={s?.delta} deltaTone={s?.up ? T.green : T.red}
+            valueTone={live ? undefined : T.faint} onClick={live ? () => setTickerChart({ key, label: l }) : undefined} />;
         })}
       </div>
       <div style={{ marginTop: 8, display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 }}>
@@ -528,6 +533,18 @@ export function MorningBriefPage({ btc, isMobile, settings, updateSetting, onOpe
         {masonry([card_gsc, card_clarify, card_zts, card_shopify, card_meetings])}
       </div>
       {btcChartOpen && <BtcChartModal isMobile={isMobile} onClose={() => setBtcChartOpen(false)} callFnFull={callFnFull} />}
+      {tickerChart && (
+        <BtcChartModal
+          key={tickerChart.key}
+          isMobile={isMobile}
+          onClose={() => setTickerChart(null)}
+          callFnFull={callFnFull}
+          title={tickerChart.label}
+          fn="ticker-candles"
+          fnArgs={{ symbol: tickerChart.key }}
+          defaultInterval="1d"
+        />
+      )}
     </div>
   );
 }
