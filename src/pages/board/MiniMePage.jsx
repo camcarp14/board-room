@@ -26,6 +26,24 @@ export const EFFORT_LEVELS = [
 // delivered/failed) are shared with the worker and must never be renamed.
 const STATUS_LABELS = { queued: "Queued", review: "Review", delivered: "Delivered", failed: "Failed" };
 
+// Tap-to-configure starting points — the plug-and-play path. Each fills both
+// the role and the directive in one tap (no typing, no model call), tuned to
+// the ventures this app already tracks. Refine anytime in the box below.
+const MINI_PRESETS = [
+  { label: "Clarify outreach",
+    role: "a B2B outreach copywriter for Clarify Paid Search, a boutique Google Ads agency serving local service verticals (legal, med spa, dental, home services)",
+    directive: "Move prospects toward booked discovery calls — sharp, specific, and never generic." },
+  { label: "Zero To Secure content",
+    role: "a security-fluent content strategist growing Zero To Secure's audience and creator pipeline",
+    directive: "Turn security topics into content that ranks, teaches, and converts." },
+  { label: "Research analyst",
+    role: "a rigorous research analyst who turns open questions into decision-ready briefs",
+    directive: "Answer the real question — concise, sourced, and honest about what's uncertain." },
+  { label: "Right hand",
+    role: "a sharp chief of staff who clears queued work without hand-holding",
+    directive: "Knock out what's queued cleanly and fast; flag only what truly needs my call." },
+];
+
 /* Hairline between sections inside a settings card. */
 function Rule() {
   return <div style={{ height: 0.5, background: "var(--line)", margin: "14px 0" }} />;
@@ -156,6 +174,17 @@ Decide which of the two his message actually addresses — often just one. Outpu
     setDirectiveSending(false);
   };
 
+  // One-tap setup: drop in a preset's role + directive directly (no model
+  // round-trip) and note both in the briefing log so the change is visible.
+  const applyPreset = (p) => {
+    const ts = Date.now();
+    const entries = [
+      { role: "system", field: "role", text: p.role, ts },
+      { role: "system", field: "directive", text: p.directive, ts },
+    ];
+    setMini({ role: p.role, directive: p.directive, briefingLog: [...(mini.briefingLog || []), ...entries].slice(-24) });
+  };
+
   const queuedCount = tasks.filter(t => t.status === "queued").length;
   const [statusLabel, statusTone, statusPulse] =
     mini.enabled === false ? ["Off", "var(--faint)", false]
@@ -175,6 +204,7 @@ Decide which of the two his message actually addresses — often just one. Outpu
 
   const log = mini.briefingLog || [];
   const shownLog = showFullLog ? log : log.slice(-LOG_PREVIEW);
+  const configured = !!(mini.directive || mini.role); // once set up, show identity; before that, offer quick-start presets
 
   const TaskCell = ({ t, first }) => {
     const c = TASK_COLORS[t.status] || T.faint;
@@ -231,7 +261,7 @@ Decide which of the two his message actually addresses — often just one. Outpu
                     <span className="t-cap" style={{ color: statusTone, fontWeight: 600 }}>{statusLabel}</span>
                   </span>
                 </span>
-                <span className="t-foot" style={{ lineHeight: 1.5 }}>Queue work below, set the dial, hit Run — nothing happens until you say so.</span>
+                <span className="t-foot" style={{ lineHeight: 1.5 }}>Your delegate. Set it up below, then queue work and hit Run — nothing runs until you say so.</span>
                 {onOpenLearn && skillCount !== null && (
                   <Button kind="plain" size="sm" onClick={onOpenLearn}
                     style={{ alignSelf: "flex-start", height: "auto", minHeight: 40, paddingLeft: 0, paddingRight: 0, gap: 4 }}>
@@ -254,26 +284,45 @@ Decide which of the two his message actually addresses — often just one. Outpu
               </div>
             )}
 
-            {/* Prime Directive + Role — one conversation shapes both. Stacks
-                to a single column on the phone so neither field gets cramped. */}
-            <div style={{ display: "grid", gridTemplateColumns: isMobile ? "1fr" : "1fr 1fr", gap: 8, marginBottom: 10 }}>
-              <div>
-                <div className="t-label" style={{ marginBottom: 6 }}>Prime directive</div>
-                {mini.directive ? (
-                  <div className="t-call" style={{ background: "var(--surface-2)", borderRadius: 12, padding: "11px 13px", lineHeight: 1.5, fontStyle: "italic" }}>"{mini.directive}"</div>
-                ) : (
-                  <div className="t-foot" style={{ background: "var(--surface-2)", borderRadius: 12, padding: "11px 13px", color: "var(--faint)", lineHeight: 1.45 }}>No directive yet — the mission that shapes every task.</div>
-                )}
+            {configured ? (
+              /* Set up — show the identity it works from. One conversation
+                 (the box below) shapes both fields. Stacks on the phone. */
+              <div style={{ display: "grid", gridTemplateColumns: isMobile ? "1fr" : "1fr 1fr", gap: 8, marginBottom: 10 }}>
+                <div>
+                  <div className="t-label" style={{ marginBottom: 6 }}>Prime directive</div>
+                  {mini.directive ? (
+                    <div className="t-call" style={{ background: "var(--surface-2)", borderRadius: 12, padding: "11px 13px", lineHeight: 1.5, fontStyle: "italic" }}>"{mini.directive}"</div>
+                  ) : (
+                    <div className="t-foot" style={{ background: "var(--surface-2)", borderRadius: 12, padding: "11px 13px", color: "var(--faint)", lineHeight: 1.45 }}>No mission yet — what should shape every task?</div>
+                  )}
+                </div>
+                <div>
+                  <div className="t-label" style={{ marginBottom: 6 }}>Role</div>
+                  {mini.role ? (
+                    <div className="t-call" style={{ background: "var(--surface-2)", borderRadius: 12, padding: "11px 13px", lineHeight: 1.5 }}>{mini.role}</div>
+                  ) : (
+                    <div className="t-foot" style={{ background: "var(--surface-2)", borderRadius: 12, padding: "11px 13px", color: "var(--faint)", lineHeight: 1.45 }}>No role yet — who should it work as?</div>
+                  )}
+                </div>
               </div>
-              <div>
-                <div className="t-label" style={{ marginBottom: 6 }}>Role</div>
-                {mini.role ? (
-                  <div className="t-call" style={{ background: "var(--surface-2)", borderRadius: 12, padding: "11px 13px", lineHeight: 1.5 }}>{mini.role}</div>
-                ) : (
-                  <div className="t-foot" style={{ background: "var(--surface-2)", borderRadius: 12, padding: "11px 13px", color: "var(--faint)", lineHeight: 1.45 }}>No role yet — the identity it works from.</div>
-                )}
+            ) : (
+              /* First run — plug-and-play: one tap fills the role + directive
+                 so it's ready to work, no jargon to decode. */
+              <div style={{ marginBottom: 10 }}>
+                <div className="t-foot" style={{ color: "var(--sub)", lineHeight: 1.5, marginBottom: 10 }}>
+                  New here? Tap a starting point — that's the whole setup. You can fine-tune it anytime.
+                </div>
+                <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
+                  {MINI_PRESETS.map(p => (
+                    <button key={p.label} onClick={() => applyPreset(p)} className="hoverable"
+                      style={{ padding: "9px 14px", minHeight: 40, borderRadius: 999, border: "0.5px solid var(--line-strong)", background: "var(--surface-2)", color: "var(--ink)", fontSize: 13, fontWeight: 600, cursor: "pointer" }}>
+                      {p.label}
+                    </button>
+                  ))}
+                </div>
+                <div className="t-cap" style={{ color: "var(--faint)", marginTop: 12 }}>or describe it in your own words below</div>
               </div>
-            </div>
+            )}
 
             {log.length > 0 && (
               <div style={{ display: "flex", flexDirection: "column", gap: 6, marginBottom: 10, padding: "2px 1px" }}>
@@ -296,7 +345,7 @@ Decide which of the two his message actually addresses — often just one. Outpu
             <div style={{ display: "flex", gap: 8 }}>
               <Field value={directiveInput} onChange={e => setDirectiveInput(e.target.value)}
                 onKeyDown={e => { if (e.key === "Enter") { e.preventDefault(); sendDirectiveUpdate(); } }}
-                placeholder="Tell it who it is and what matters right now…" disabled={directiveSending} style={{ flex: 1 }} />
+                placeholder={configured ? "Refine it — e.g. focus on the dental vertical this week" : "Or describe it — e.g. you're my SEO strategist for Zero To Secure"} disabled={directiveSending} style={{ flex: 1 }} />
               <Button kind="quiet" size="md" onClick={sendDirectiveUpdate} disabled={directiveSending || !directiveInput.trim()} style={{ flex: "none" }}>
                 {directiveSending ? "…" : "Send"}
               </Button>
