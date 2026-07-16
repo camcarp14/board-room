@@ -200,7 +200,7 @@ behavior.)*
 - **Brief** — the flagship. Large title is the greeting ("Tuesday, July 15" as
   sub). Docket card first (the Word reads as `.t-title2` serifless prose, quiet
   chips), Notes capture second, then MARKET section (BTC outlook card with
-  levels as StatTiles, stocks, chart modal), then SIGNALS (GSC, sports, wires,
+  levels as StatTiles, stocks, chart modal), then SIGNALS (GSC, wires,
   shops). Every card: `.t-head` title + optional `.t-cap` status at right —
   status text pills become `<Dot tone> + .t-cap`, not filled badges.
 - **Personal** — PillRow of sections (Notes & Calendar first). Notes: capture

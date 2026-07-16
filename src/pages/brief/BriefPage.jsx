@@ -17,7 +17,7 @@ import { callFnFull } from "../../lib/functions.js";
 import { callClaude } from "../../lib/claude.js";
 import { updateSnapshot, getSnapshot } from "../../lib/snapshot.js";
 import { db } from "../../data/db.js";
-import { nextBirthdayOccurrence } from "../../lib/dates.js";
+import { nextBirthdayOccurrence, localDayKey } from "../../lib/dates.js";
 import { DocketCard } from "./DocketCard.jsx";
 import { NotesTile } from "./NotesTile.jsx";
 import { EVENT_CATEGORIES } from "../personal/CalendarPanel.jsx"; // canonical category → color map (mini-calendar pills)
@@ -33,7 +33,10 @@ const WATCH_CAP = 3; // Watch this week: taller rows, so show fewer before "Show
 // also persist to localStorage so returning to the Brief doesn't re-spend the
 // calls (or re-flash "Reading the likely impact…") for takes that haven't changed.
 const TAKES_LS = "br_event_takes";
-const takeKey = (e) => `${e.time || ""}|${(e.text || "").trim()}`;
+// Include isPast: when an event flips from upcoming to a posted result the feed
+// often keeps the same time+text, so without this the forward-looking take
+// stays cached and never regenerates against the actual print.
+const takeKey = (e) => `${e.isPast ? "p" : "f"}|${e.time || ""}|${(e.text || "").trim()}`;
 
 /* Card header: .t-head title + status cluster at right — one grammar for every
    Brief card. */
@@ -163,6 +166,16 @@ export function MorningBriefPage({ btc, isMobile, settings, updateSetting, onOpe
   // when you switch back to this tab after it's been hidden a while.
   const refreshBrief = useCallback(async () => {
     let alive = true;
+    // On a failed refresh, if the card is already showing good data (seeded from
+    // the snapshot or from a prior successful load), keep it and just flag it
+    // stale — don't yank real numbers for an "unreachable" row. Only show the
+    // error when there was nothing good on screen to begin with.
+    const keepIfLive = (res) => (prev) => {
+      const detail = res.data?.error || (res.status ? `HTTP ${res.status}` : "unreachable");
+      return prev?.state === "live"
+        ? { state: "live", stale: true, detail }
+        : { state: "error", detail };
+    };
     const loadCredentialed = async (fn, payload, setData, setStatus, hint) => {
       const ping = await callFnFull(fn, { ping: true });
       if (!alive) return;
@@ -173,14 +186,14 @@ export function MorningBriefPage({ btc, isMobile, settings, updateSetting, onOpe
       // A backend can answer 200 with its last-good value when the upstream
       // failed (stale/cached flags) — surface that instead of stamping it fresh.
       if (res.ok && res.data?.success) { setData(res.data); setStatus({ state: "live", stale: !!(res.data.stale || res.data.cached) }); }
-      else setStatus({ state: "error", detail: res.data?.error || (res.status ? `HTTP ${res.status}` : "unreachable") });
+      else setStatus(keepIfLive(res));
     };
     const loadOpen = async (fn, apply, setStatus) => {
       const res = await callFnFull(fn, {});
       if (!alive) return;
       if (res.status === 404) return setStatus({ state: "nofn", detail: `push netlify/functions/${fn}.js and redeploy` });
       if (res.ok && res.data?.success) { apply(res.data); setStatus({ state: "live", stale: !!(res.data.stale || res.data.cached) }); }
-      else setStatus({ state: "error", detail: res.data?.error || (res.status ? `HTTP ${res.status}` : "unreachable") });
+      else setStatus(keepIfLive(res));
     };
     await Promise.all([
       // Each of these also writes into the live snapshot the board seats read,
@@ -213,7 +226,7 @@ export function MorningBriefPage({ btc, isMobile, settings, updateSetting, onOpe
         const res = await callFnFull("calendar-events", { url: settings.calendar_url });
         if (!alive) return;
         if (res.ok && res.data?.success) { setMeetings(res.data.events || []); setMeetingsStatus({ state: "live", stale: !!(res.data.stale || res.data.cached) }); }
-        else setMeetingsStatus({ state: "error", detail: res.data?.error || "unreachable" });
+        else setMeetingsStatus(keepIfLive(res));
       })(),
     ]);
     if (alive) setBriefRefreshedAt(Date.now());
@@ -247,8 +260,10 @@ export function MorningBriefPage({ btc, isMobile, settings, updateSetting, onOpe
     return () => { clearInterval(iv); document.removeEventListener("visibilitychange", onVisible); };
   }, [refreshBrief]);
 
-  const price = btc.loading ? "…" : btc.error || btc.price == null ? "—" : "$" + btc.price.toLocaleString(undefined, { maximumFractionDigits: 0 });
-  const hasChange = !btc.loading && !btc.error && btc.changePct !== null && btc.changePct !== undefined;
+  // Show the last-known price even on error (it's seeded/kept stale) — the whole
+  // point of persisting the snapshot is not to blank the hero to "—" on a blip.
+  const price = btc.loading && btc.price == null ? "…" : btc.price == null ? "—" : "$" + btc.price.toLocaleString(undefined, { maximumFractionDigits: 0 });
+  const hasChange = !btc.loading && btc.changePct !== null && btc.changePct !== undefined;
   const up = (btc.changePct || 0) >= 0;
   const hasRange = !btc.loading && !btc.error && btc.high24 != null && btc.low24 != null;
   // A one-word read on the day's tape — the only interpretive thing the card
@@ -258,7 +273,7 @@ export function MorningBriefPage({ btc, isMobile, settings, updateSetting, onOpe
 
   // Markets card was the one card with no status indicator and an always-fresh
   // stamp — so a failed/stale price refresh was invisible. Give it an honest one.
-  const marketsStale = !!(btc.stale || stocksStatus.stale);
+  const marketsStale = !!(btc.stale || btc.error || stocksStatus.stale);
   const marketsStatus = (stocksStatus.state === "error" || stocksStatus.state === "nofn")
     ? stocksStatus
     : { state: "live", stale: marketsStale, detail: marketsStale ? "Showing the last good prices" : undefined };
@@ -296,12 +311,12 @@ export function MorningBriefPage({ btc, isMobile, settings, updateSetting, onOpe
       />
       {/* Bitcoin hero — price, day move, and a sparkline that taps to the chart */}
       <div onClick={() => setBtcChartOpen(true)} style={{ cursor: "pointer" }} title="Tap for the full chart">
-        <div style={{ display: "flex", alignItems: "baseline", gap: 8, marginBottom: !btc.loading && !btc.error ? 10 : 4 }}>
+        <div style={{ display: "flex", alignItems: "baseline", gap: 8, marginBottom: btc.price != null ? 10 : 4 }}>
           <span className="t-cap" style={{ color: "var(--faint)", flex: "none" }}>Bitcoin</span>
-          <span className="t-title1 t-num">{btc.price != null && !btc.error ? <NumTween v={btc.price} f={n => "$" + n.toLocaleString(undefined, { maximumFractionDigits: 0 })} /> : price}</span>
+          <span className="t-title1 t-num">{btc.price != null ? <NumTween v={btc.price} f={n => "$" + n.toLocaleString(undefined, { maximumFractionDigits: 0 })} /> : price}</span>
           {hasChange && <Delta pct={btc.changePct} />}
         </div>
-        {!btc.loading && !btc.error && (
+        {btc.points?.length > 0 && (
           <div style={{ marginBottom: 8 }}>
             <Sparkline points={btc.points} color={up ? T.green : T.red} height={34} />
           </div>
@@ -447,7 +462,10 @@ export function MorningBriefPage({ btc, isMobile, settings, updateSetting, onOpe
   const miniLeading = new Date(miniYear, miniMonth, 1).getDay();
   const miniCells = [...Array(miniLeading).fill(null), ...Array.from({ length: miniDaysInMonth }, (_, i) => i + 1)];
   const miniEventsByDay = {};
-  (miniEvents || []).forEach(ev => { const k = ev.start_time.slice(0, 10); (miniEventsByDay[k] = miniEventsByDay[k] || []).push(ev); });
+  // Local day-key (all-day events keep their literal date) so an evening event
+  // lands on the same cell the Personal calendar and the Docket show it on —
+  // start_time is stored UTC, and slice(0,10) put evening events a day early.
+  (miniEvents || []).forEach(ev => { const k = ev.all_day ? String(ev.start_time).slice(0, 10) : localDayKey(ev.start_time); (miniEventsByDay[k] = miniEventsByDay[k] || []).push(ev); });
   const miniDateKey = (day) => `${miniYear}-${String(miniMonth + 1).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
   const todayDate = miniNow.getDate();
   const card_minicalendar = (

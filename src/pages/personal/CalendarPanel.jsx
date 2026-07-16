@@ -10,6 +10,7 @@ import { db } from "../../data/db.js";
 import { queryClient } from "../../lib/queryClient.js";
 import { useEvents, useSaveEvent, useDeleteEvent } from "../../data/calendar.js";
 import { callClaude } from "../../lib/claude.js";
+import { localDayKey, todayISO } from "../../lib/dates.js";
 import { tint } from "../../ui/styles.js";
 import { Card, SectionHeader, Button, Cell, CellGroup, Sheet, useConfirm, EmptyState, Dot, Pill, Switch } from "../../ui/kit.jsx";
 import { IcChevronLeft, IcChevronRight, IcCalendar, IcClose, IcTrash } from "../../ui/icons.jsx";
@@ -153,9 +154,10 @@ Only extract entries you can read with real confidence — skip anything blurry,
     }).catch(e => { setBulkSaving(false); setBulkErr(e.message || "Couldn't save the batch."); });
   };
 
-  // UTC-based day string — a long-standing quirk, preserved on purpose
-  // (today-highlighting below uses local-midnight math independently).
-  const todayStr = new Date().toISOString().slice(0, 10);
+  // Local calendar day — must match the local day-keys the grid renders with,
+  // or the "today" ring lands on tomorrow and new events pre-date to tomorrow
+  // every evening (UTC rolls over hours before local midnight in the Americas).
+  const todayStr = todayISO();
 
   const catColor = (key) => (EVENT_CATEGORIES.find(c => c.key === key) || EVENT_CATEGORIES[0]).color;
 
@@ -171,7 +173,9 @@ Only extract entries you can read with real confidence — skip anything blurry,
     setForm({
       id: ev.id, title: ev.title, notes: ev.notes || "", allDay: ev.all_day,
       location: ev.location || "", category: ev.category || "personal",
-      date: d.toISOString().slice(0, 10),
+      // Local parts, not toISOString() — otherwise opening an 8pm event for
+      // edit shows tomorrow's date, and saving it unchanged shifts it +1 day.
+      date: localDayKey(d),
       time: ev.all_day ? "09:00" : d.toTimeString().slice(0, 5),
       endTime: ev.end_time ? new Date(ev.end_time).toTimeString().slice(0, 5) : "",
     });
@@ -218,7 +222,9 @@ Only extract entries you can read with real confidence — skip anything blurry,
   const cells = [...Array(leadingBlanks).fill(null), ...Array.from({ length: daysInMonth }, (_, i) => i + 1)];
   const eventsByDay = {}; // "YYYY-MM-DD" -> [events]
   (events || []).forEach(ev => {
-    const key = ev.start_time.slice(0, 10);
+    // Local day-key so an evening event lands on the day the user sees on the
+    // clock, matching dateKey()/isToday() below (start_time is stored UTC).
+    const key = ev.all_day ? String(ev.start_time).slice(0, 10) : localDayKey(ev.start_time);
     (eventsByDay[key] = eventsByDay[key] || []).push(ev);
   });
   const dateKey = (day) => `${gridYear}-${String(gridMonth + 1).padStart(2, "0")}-${String(day).padStart(2, "0")}`;

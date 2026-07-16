@@ -34,4 +34,17 @@ if (import.meta.env.PROD && "serviceWorker" in navigator) {
       });
     }).catch(() => {});
   });
+  // When a new SW takes control (VERSION bump → skipWaiting + clients.claim),
+  // reload once so this tab moves onto the fresh shell. Without it the running
+  // page keeps its old HTML while the new SW has already purged the old hashed
+  // chunks, so any not-yet-loaded lazy chunk 404s ("Failed to load module").
+  // Guard on hadController so the FIRST install's claim (no prior controller)
+  // doesn't bounce a first-time visitor.
+  const hadController = !!navigator.serviceWorker.controller;
+  let reloaded = false;
+  navigator.serviceWorker.addEventListener("controllerchange", () => {
+    if (reloaded || !hadController) return;
+    reloaded = true;
+    window.location.reload();
+  });
 }

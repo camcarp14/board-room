@@ -3,7 +3,7 @@
 // · navigations + everything else same-origin: network-first, cache fallback
 // · /.netlify/functions/* and cross-origin: never touched
 // Bump VERSION to invalidate old caches on deploy of this file.
-const VERSION = "br-v3"; // precache shell + stale-while-revalidate navigations
+const VERSION = "br-v4"; // never cache HTML under asset URLs; waitUntil revalidation
 const ASSET_CACHE = `${VERSION}-assets`;
 const PAGE_CACHE = `${VERSION}-pages`;
 
@@ -30,14 +30,19 @@ self.addEventListener("fetch", (e) => {
   if (url.origin !== self.location.origin) return;
   if (url.pathname.startsWith("/.netlify/")) return;
 
-  // Immutable hashed assets: cache-first.
-  if (url.pathname.startsWith("/assets/") || url.pathname.startsWith("/icons/")) {
+  // Immutable hashed assets: cache-first. (/icons/ stays network-first below —
+  // its filenames are stable, so cache-first would pin an old icon forever.)
+  if (url.pathname.startsWith("/assets/")) {
     e.respondWith(
       caches.open(ASSET_CACHE).then(async (cache) => {
         const hit = await cache.match(req);
         if (hit) return hit;
         const res = await fetch(req);
-        if (res.ok) cache.put(req, res.clone());
+        // Never cache an HTML body under an asset URL: the SPA fallback used to
+        // answer purged hashed chunks with index.html + 200, and caching that
+        // here poisoned the immutable cache ("Failed to load module script").
+        const ct = res.headers.get("content-type") || "";
+        if (res.ok && !ct.includes("text/html")) cache.put(req, res.clone());
         return res;
       })
     );
@@ -53,6 +58,10 @@ self.addEventListener("fetch", (e) => {
       caches.open(PAGE_CACHE).then(async (cache) => {
         const cached = (await cache.match("/")) || (await cache.match(req));
         const fresh = fetch(req).then((res) => { if (res.ok) cache.put("/", res.clone()); return res; }).catch(() => null);
+        // Keep the worker alive until the background revalidation lands —
+        // without this the browser may reap the SW right after the cached
+        // response is returned, and the shell never actually refreshes.
+        e.waitUntil(fresh);
         return cached || (await fresh) || new Response("offline", { status: 503 });
       })
     );

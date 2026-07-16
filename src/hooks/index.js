@@ -103,6 +103,10 @@ export function useBitcoinPrice() {
         fetch("https://api.coingecko.com/api/v3/simple/price?ids=bitcoin&vs_currencies=usd&include_24hr_change=true"),
         fetch("https://api.coingecko.com/api/v3/coins/bitcoin/market_chart?vs_currency=usd&days=1"),
       ]);
+      // Without these, a CoinGecko 429/5xx (common on rate-limited mobile IPs —
+      // the very reason the proxy exists) parses to price:null and would be
+      // written straight through updateSnapshot, destroying the last-good seed.
+      if (!priceRes.ok || !chartRes.ok) throw new Error(`coingecko ${priceRes.status}/${chartRes.status}`);
       const priceData = await priceRes.json();
       const chartData = await chartRes.json();
       const raw = (chartData.prices || []).map(([, p]) => p);
@@ -116,14 +120,14 @@ export function useBitcoinPrice() {
         const res = await fetch("/.netlify/functions/btc");
         if (res.ok) {
           const data = await res.json();
-          if (data?.success && alive) { const next = { price: data.price, changePct: data.changePct, points: data.points || [], high24: data.high24 ?? null, low24: data.low24 ?? null, loading: false, error: null, stale: !!(data.stale || data.cached), fetchedAt: Date.now() }; setState(next); updateSnapshot({ btc: next }); return; }
+          if (data?.success && data.price != null && alive) { const next = { price: data.price, changePct: data.changePct, points: data.points || [], high24: data.high24 ?? null, low24: data.low24 ?? null, loading: false, error: null, stale: !!(data.stale || data.cached), fetchedAt: Date.now() }; setState(next); updateSnapshot({ btc: next }); return; }
         }
         if (res.status !== 404) throw new Error(`proxy ${res.status}`);
       } catch { /* fall through to direct fetch below */ }
       // Function not deployed yet (e.g. plain `vite dev`) or the proxy failed — try direct.
       try {
         const direct = await fetchDirect();
-        if (alive) { const next = { ...direct, loading: false, error: null, fetchedAt: Date.now() }; setState(next); updateSnapshot({ btc: next }); }
+        if (alive) { const next = { ...direct, loading: false, error: null, fetchedAt: Date.now() }; setState(next); if (next.price != null) updateSnapshot({ btc: next }); }
       } catch { if (alive) setState(s => ({ ...s, loading: false, error: "price feed unavailable" })); }
     };
     load();

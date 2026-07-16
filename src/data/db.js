@@ -10,7 +10,9 @@ export const db = {
     const { data, error } = await supabase.from("chat_messages")
       .select("role,content,consulted_seats,created_at,source")
       .order("created_at", { ascending: false }).limit(limit);
-    if (error) return [];
+    // Throw rather than return [] — a transient error must not read as "no
+    // messages" and clobber the loaded chat; callers catch and keep prior state.
+    if (error) throw error;
     return (data || []).reverse().map(r => ({ role: r.role, content: r.content, consulted: r.consulted_seats || [], ts: new Date(r.created_at).getTime(), source: r.source }));
   },
   async saveMessage({ role, content, consulted = [] }) {
@@ -25,7 +27,7 @@ export const db = {
   },
   async loadSeatNotes() {
     const { data, error } = await supabase.from("seat_notes").select("seat_key,notes");
-    if (error) return {};
+    if (error) throw error; // don't let a blip erase the loaded seat notes
     const out = {};
     (data || []).forEach(r => { out[r.seat_key] = r.notes; });
     return out;
@@ -37,7 +39,10 @@ export const db = {
   },
   async loadSettings() {
     const { data, error } = await supabase.from("app_settings").select("setting_key,setting_value");
-    if (error) return {};
+    // Throw, don't return {} — an error here previously looked like "no settings
+    // saved" and one flaky refresh wiped calendar_url, model prefs, and the Mini
+    // Me queue out of live state. Callers keep the previous settings on throw.
+    if (error) throw error;
     const out = {};
     (data || []).forEach(r => { out[r.setting_key] = r.setting_value; });
     return out;
@@ -83,7 +88,8 @@ export const db = {
     return data;
   },
   async deleteNote(id) {
-    try { await supabase.from("personal_notes").delete().eq("id", id); } catch {}
+    const { error } = await supabase.from("personal_notes").delete().eq("id", id);
+    if (error) throw error;
   },
   async bulkDeleteNotes(ids) {
     if (!ids?.length) return;
@@ -131,7 +137,8 @@ export const db = {
     return data;
   },
   async deleteEvent(id) {
-    try { await supabase.from("personal_events").delete().eq("id", id); } catch {}
+    const { error } = await supabase.from("personal_events").delete().eq("id", id);
+    if (error) throw error; // a failed delete must not report success — the row would silently return on refetch
   },
   async saveEventsBulk(rows) {
     const user_id = await db.uid();
@@ -264,7 +271,8 @@ export const db = {
     if (error) throw error;
   },
   async deleteBirthday(id) {
-    try { await supabase.from("personal_birthdays").delete().eq("id", id); } catch {}
+    const { error } = await supabase.from("personal_birthdays").delete().eq("id", id);
+    if (error) throw error;
   },
 };
 

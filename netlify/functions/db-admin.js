@@ -16,6 +16,16 @@ exports.handler = async (event) => {
   if (body.ping) return json(200, { success: true, service: "db-admin", configured, missing: configured ? undefined : "SUPABASE_URL / SUPABASE_SERVICE_ROLE_KEY" });
   if (!configured) return json(500, { error: "Supabase service env vars not set" });
 
+  // Require a valid session before running service-role commands (which include
+  // DELETEs against the shared brain). Unauthenticated, this exposed row counts
+  // and destructive maintenance to anyone who found the URL.
+  {
+    const token = (event.headers.authorization || event.headers.Authorization || "").replace(/^Bearer\s+/i, "");
+    if (!token) return json(401, { error: "sign in first" });
+    const who = await fetch(`${url}/auth/v1/user`, { headers: { apikey: key, Authorization: `Bearer ${token}` } });
+    if (!who.ok) return json(401, { error: "session expired — refresh and try again" });
+  }
+
   const rest = (path, opts = {}) => fetch(`${url}/rest/v1/${path}`, {
     ...opts,
     headers: { apikey: key, Authorization: `Bearer ${key}`, "Content-Type": "application/json", Prefer: "count=exact", ...(opts.headers || {}) },

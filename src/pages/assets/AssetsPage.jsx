@@ -77,7 +77,7 @@ export function PropertiesPage({ isMobile, settings, updateSetting, session }) {
       // eternal "Checking" (the pre-SESSION bug).
       if (!d?.success) { setCheckFailed(true); return; }
       const map = {};
-      d.results.forEach(r => { map[r.url] = r; });
+      (d.results || []).forEach(r => { map[r.url] = r; }); // tolerate a success payload with no results array
       setStatus(map);
     });
     return () => { alive = false; };
@@ -153,7 +153,7 @@ export function PropertiesPage({ isMobile, settings, updateSetting, session }) {
 // ─── The auditor ──────────────────────────────────────────────────────────────
 async function auditProperty(p, token, ask) {
   const data = await callFn("audit", { name: p.name, url: p.url || p.appUrl, repo: p.repo, ask }, token ? { Authorization: `Bearer ${token}` } : undefined);
-  return data?.success ? data.findings : [];
+  return (data?.success && Array.isArray(data.findings)) ? data.findings : [];
 }
 
 const SEV_TONE = { high: "var(--red)", medium: "var(--amber)", low: "var(--sub)" };

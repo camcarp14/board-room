@@ -1,12 +1,26 @@
 import { logUsage } from "./telemetry.js";
+import { supabase } from "./supabase.js";
+
+// The signed-in user's access token, best-effort. Attached to every function
+// call so the credentialed/secret-wielding functions (claude, deploy, db-admin,
+// auto-fix, fetch-page, mini-worker) can verify the caller instead of running
+// open to the internet. getSession() is a local read — no network round-trip.
+async function authHeader() {
+  try {
+    const { data } = (await supabase?.auth?.getSession?.()) || {};
+    const t = data?.session?.access_token;
+    return t ? { Authorization: `Bearer ${t}` } : {};
+  } catch { return {}; }
+}
 
 // ─── Netlify function helpers (graceful fallback when a fn isn't built yet) ──
 export async function callFn(name, payload, extraHeaders) {
   const t0 = Date.now();
   let ok = false, detail;
   try {
+    const auth = await authHeader();
     const res = await fetch(`/.netlify/functions/${name}`, {
-      method: "POST", headers: { "Content-Type": "application/json", ...(extraHeaders || {}) }, body: JSON.stringify(payload || {}),
+      method: "POST", headers: { "Content-Type": "application/json", ...auth, ...(extraHeaders || {}) }, body: JSON.stringify(payload || {}),
     });
     ok = res.ok;
     if (!ok) { detail = `HTTP ${res.status}`; throw new Error(detail); }
@@ -23,8 +37,9 @@ export async function callFnFull(name, payload) {
   const t0 = Date.now();
   let ok = false, status = 0, data = null, detail;
   try {
+    const auth = await authHeader();
     const res = await fetch(`/.netlify/functions/${name}`, {
-      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload || {}),
+      method: "POST", headers: { "Content-Type": "application/json", ...auth }, body: JSON.stringify(payload || {}),
     });
     status = res.status; ok = res.ok;
     data = await res.json().catch(() => null);

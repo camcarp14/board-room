@@ -40,6 +40,18 @@ exports.handler = async (event) => {
 
   if (body.ping) return json(200, { success: true, service: "auto-fix", configured, missing: configured ? undefined : "ANTHROPIC_API_KEY / GITHUB_TOKEN" });
   if (!configured) return json(500, { error: "auto-fix env vars not set" });
+
+  // Gate before touching GitHub: unauthenticated this endpoint would let anyone
+  // commit arbitrary files to any repo the GITHUB_TOKEN can write (which then
+  // auto-deploys). Require a valid Supabase session, same as the other funcs.
+  const supaUrl = process.env.SUPABASE_URL, service = process.env.SUPABASE_SERVICE_ROLE_KEY;
+  if (supaUrl && service) {
+    const token = (event.headers.authorization || event.headers.Authorization || "").replace(/^Bearer\s+/i, "");
+    if (!token) return json(401, { error: "sign in first" });
+    const who = await fetch(`${supaUrl}/auth/v1/user`, { headers: { apikey: service, Authorization: `Bearer ${token}` } });
+    if (!who.ok) return json(401, { error: "session expired — refresh and try again" });
+  }
+
   if (!body.repo) return json(400, { error: "repo is required" });
 
   try {

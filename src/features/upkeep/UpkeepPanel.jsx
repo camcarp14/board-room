@@ -5,6 +5,7 @@ import { IcWrench } from "../../ui/icons.jsx";
 import { Chips } from "../../ui/primitives.jsx";
 import { isMissingTable } from "../../data/db.js";
 import { upkeepDue } from "../../lib/upkeep.js";
+import { todayISO } from "../../lib/dates.js";
 import { useUpkeep, useSaveUpkeepItem, useDeleteUpkeepItem, useMarkUpkeepDone } from "../../data/upkeep.js";
 
 // ─── Upkeep — recurring maintenance with a memory ─────────────────────────────
@@ -68,7 +69,7 @@ export function UpkeepPanel({ isMobile }) {
 
   const openNew = () => {
     setSaveErr(null);
-    setForm({ id: crypto.randomUUID(), name: "", interval: 182, customDays: "", last_done: new Date().toISOString().slice(0, 10), notes: "", isNew: true });
+    setForm({ id: crypto.randomUUID(), name: "", interval: 182, customDays: "", last_done: todayISO(), notes: "", isNew: true });
   };
   const openEdit = (it) => {
     setSaveErr(null);
@@ -94,7 +95,10 @@ export function UpkeepPanel({ isMobile }) {
     });
   };
   const markDone = (it) => {
-    const today = new Date().toISOString().slice(0, 10);
+    // Local today — upkeepDue() parses last_done as local midnight, so a UTC
+    // date logged in the evening reads as "done tomorrow" and adds a day to the
+    // whole rotation.
+    const today = todayISO();
     setDoneFlash(it.id);
     setTimeout(() => setDoneFlash(null), 1600);
     markDoneMut.mutate({ item: it, today }); // optimistic cache update lives in the hook

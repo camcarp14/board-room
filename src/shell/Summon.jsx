@@ -129,7 +129,7 @@ export function Summon({ onClose, onGo, onJot, onQueueTask, onAsk, isMobile }) {
   const ok = flash && !/couldn|try again/i.test(flash);
 
   return (
-    <div onClick={onClose} style={{ position: "fixed", inset: 0, background: "var(--scrim)", zIndex: 120, display: "flex", alignItems: "flex-start", justifyContent: "center", padding: isMobile ? "calc(env(safe-area-inset-top) + 54px) 12px 0" : "14vh 20px 0", animation: "fadein 0.14s ease" }}>
+    <div onClick={onClose} style={{ position: "fixed", inset: 0, background: "var(--scrim)", zIndex: 600, display: "flex", alignItems: "flex-start", justifyContent: "center", padding: isMobile ? "calc(env(safe-area-inset-top) + 54px) 12px 0" : "14vh 20px 0", animation: "fadein 0.14s ease" }}>
       <div onClick={e => e.stopPropagation()} onKeyDown={onKey}
         style={{ width: "100%", maxWidth: 580, background: "var(--surface)", border: "none", borderRadius: 18, boxShadow: "var(--shadow-deep)", overflow: "hidden", display: "flex", flexDirection: "column", maxHeight: isMobile ? "72dvh" : "62vh" }}>
 

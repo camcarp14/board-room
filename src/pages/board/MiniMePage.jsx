@@ -124,15 +124,17 @@ export function MiniMePage({ settings, updateSetting, session, onWorkerRun, onOp
   };
 
   const approveTask = async (id) => {
-    setRunning(true);
-    await callWorker({ approve: id });
+    setRunning(true); setRunMsg(null);
+    const { ok, data, status } = await callWorker({ approve: id });
+    if (!ok || !data?.success) setRunMsg({ ok: false, text: data?.error || `couldn't approve (${status || "network"})` });
     await loadFeed();
     await onWorkerRun?.();
     setRunning(false);
   };
   const rejectTask = async (id) => {
-    setRunning(true);
-    await callWorker({ reject: id });
+    setRunning(true); setRunMsg(null);
+    const { ok, data, status } = await callWorker({ reject: id });
+    if (!ok || !data?.success) setRunMsg({ ok: false, text: data?.error || `couldn't reject (${status || "network"})` });
     await loadFeed();
     await onWorkerRun?.();
     setRunning(false);

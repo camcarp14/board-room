@@ -199,13 +199,32 @@ export function EmptyState({ icon, title, sub, action, style }) {
 }
 
 /* ── sheets ────────────────────────────────────────────────────────────────── */
+// Open sheets, oldest→newest. Only the top-most handles Escape, so a confirm
+// layered over a form sheet doesn't dismiss both on one keypress.
+const sheetStack = [];
 // Phone: bottom sheet with grabber. ≥761px: centered modal. Scrim closes it.
 export function Sheet({ onClose, title, headTrailing, footer, children, z = 300, bodyStyle, dismissible = true }) {
+  const idRef = useRef(null);
+  if (!idRef.current) idRef.current = {};
+  // Latest onClose/dismissible read through a ref so the keydown listener can be
+  // registered once (stable stack order) without re-pushing on every rerender.
+  const cbRef = useRef();
+  cbRef.current = { onClose, dismissible };
   useEffect(() => {
-    const onKey = (e) => { if (e.key === "Escape" && dismissible) onClose?.(); };
+    const id = idRef.current;
+    sheetStack.push(id);
+    const onKey = (e) => {
+      if (e.key !== "Escape") return;
+      const { onClose, dismissible } = cbRef.current;
+      if (dismissible && sheetStack[sheetStack.length - 1] === id) onClose?.();
+    };
     window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [onClose, dismissible]);
+    return () => {
+      window.removeEventListener("keydown", onKey);
+      const i = sheetStack.indexOf(id);
+      if (i >= 0) sheetStack.splice(i, 1);
+    };
+  }, []);
   // Portaled to <body>: page wrappers animate with transform, which makes
   // them the containing block for position:fixed — a sheet rendered in place
   // could sit above a live tab bar with a clipped scrim. At body level no
@@ -220,7 +239,9 @@ export function Sheet({ onClose, title, headTrailing, footer, children, z = 300,
             <span className="t-title2" style={{ minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{title}</span>
             <span style={{ display: "inline-flex", alignItems: "center", gap: 6, flex: "none" }}>
               {headTrailing}
-              <button className="icon-btn" onClick={onClose} aria-label="Close"><IcClose size={19} /></button>
+              {/* Gate the X on dismissible like the scrim/Escape, so a locked
+                  sheet (e.g. mid-import) can't be closed out from under the work. */}
+              <button className="icon-btn" onClick={dismissible ? onClose : undefined} disabled={!dismissible} aria-label="Close"><IcClose size={19} /></button>
             </span>
           </div>
         )}

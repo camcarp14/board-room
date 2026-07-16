@@ -28,7 +28,8 @@ export function BirthdaysPanel({ isMobile }) {
   const openNew = () => {
     setSaveErr(null);
     const today = new Date();
-    setForm({ id: crypto.randomUUID(), name: "", date: today.toISOString().slice(0, 10), unknownYear: true, notes: "" });
+    const local = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, "0")}-${String(today.getDate()).padStart(2, "0")}`;
+    setForm({ id: crypto.randomUUID(), name: "", date: local, unknownYear: true, notes: "" });
   };
   const openEdit = (b) => {
     setSaveErr(null);

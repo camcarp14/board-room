@@ -8,8 +8,22 @@
 
 # Mini Me runs on demand only (Run now / Approve / Reject) — no schedule here.
 
+# Purged hashed chunks must 404, never fall back to index.html — a stale shell
+# importing a vanished /assets/*.js should fail fast (and trigger the error
+# boundary's reload), not receive HTML with a 200 that poisons caches.
+[[redirects]]
+  from = "/assets/*"
+  to = "/index.html"
+  status = 404
+
 # SPA fallback — everything that isn't a function or asset serves index.html
 [[redirects]]
   from = "/*"
   to = "/index.html"
   status = 200
+
+# Hashed build assets are immutable by filename — let browsers keep them.
+[[headers]]
+  for = "/assets/*"
+  [headers.values]
+    Cache-Control = "public, max-age=31536000, immutable"

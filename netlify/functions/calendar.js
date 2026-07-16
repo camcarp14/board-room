@@ -18,8 +18,11 @@ const TTL_MS = 20 * 60 * 1000;
 async function fetchWeek(name) {
   const res = await fetch(`https://nfs.faireconomy.media/ff_calendar_${name}.json`, { headers: { "User-Agent": "Mozilla/5.0 (compatible; BoardRoom/1.0)" } });
   const raw = await res.text();
-  const rows = JSON.parse(raw); // throws on "Request Denied" HTML or any non-JSON — caller decides what to do
+  // Check status BEFORE parsing — a 429/500 returns an HTML "Request Denied"
+  // page, and parsing it first threw a JSON SyntaxError that masked the real
+  // upstream status (the throw below was unreachable).
   if (!res.ok) throw new Error(`upstream ${res.status}`);
+  const rows = JSON.parse(raw);
   return Array.isArray(rows) ? rows : [];
 }
 

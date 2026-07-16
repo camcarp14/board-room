@@ -9,7 +9,7 @@ import { T } from "../../theme.js";
 import { useEvents } from "../../data/calendar.js";
 import { useUpkeep, useMarkUpkeepDone } from "../../data/upkeep.js";
 import { upkeepDue } from "../../lib/upkeep.js";
-import { nextBirthdayOccurrence } from "../../lib/dates.js";
+import { nextBirthdayOccurrence, todayISO } from "../../lib/dates.js";
 
 export function DocketCard({ isMobile, birthdays, macroEvents, settings, onOpenCalendar, onOpenQueue, onOpenBirthdays }) {
   // Shares the same cached events/upkeep the Calendar and Upkeep tabs read, so
@@ -21,7 +21,7 @@ export function DocketCard({ isMobile, birthdays, macroEvents, settings, onOpenC
   // Tap an upkeep row to log it done — same optimistic mutation the Upkeep tab
   // uses (strip the derived `meta` before it hits the DB). It vanishes from the
   // due list on the next render.
-  const logUpkeepDone = (it) => { const { meta, ...item } = it; markUpkeepDone.mutate({ item, today: new Date().toISOString().slice(0, 10) }); };
+  const logUpkeepDone = (it) => { const { meta, ...item } = it; markUpkeepDone.mutate({ item, today: todayISO() }); };
   const now = new Date();
   const sameDay = (iso) => {
     const x = new Date(iso);
@@ -45,7 +45,7 @@ export function DocketCard({ isMobile, birthdays, macroEvents, settings, onOpenC
   const loading = todayEvents === null || upkeepDueItems === null;
 
   const fmtEvTime = (e) => e.all_day ? "All day" : new Date(e.start_time).toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" });
-  const bdayTag = (b) => b.daysUntil === 0 ? "Today" : b.daysUntil === 1 ? "Tmrw" : new Date(Date.now() + b.daysUntil * 86400000).toLocaleDateString("en-US", { weekday: "short" });
+  const bdayTag = (b) => b.daysUntil === 0 ? "Today" : b.daysUntil === 1 ? "Tmrw" : b.next.toLocaleDateString("en-US", { weekday: "short" });
 
   // one flat, prioritized list: birthdays today → calendar → macro → upkeep → queue
   const rows = [];

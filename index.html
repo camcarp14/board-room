@@ -35,7 +35,11 @@
         try {
           var p = localStorage.getItem("br_theme") || "auto";
           if (p === "day" || p === "night") t = p;
-          else if (window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches) t = "night";
+          // Must match resolveTheme() in src/theme.js exactly, or React repaints
+          // a different theme after hydration (a flash). matchMedia is
+          // authoritative in BOTH directions when present; the sun-based hour
+          // fallback is only for browsers without matchMedia.
+          else if (window.matchMedia) t = window.matchMedia("(prefers-color-scheme: dark)").matches ? "night" : "day";
           else { var h = new Date().getHours(); t = (h >= 19 || h < 7) ? "night" : "day"; }
         } catch (e) {}
         document.documentElement.setAttribute("data-theme", t);

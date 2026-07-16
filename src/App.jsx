@@ -108,7 +108,19 @@ export default function App() {
   useEffect(() => {
     if (!supabase) { setAuthChecked(true); return; }
     supabase.auth.getSession().then(({ data }) => { setSession(data.session || null); setAuthChecked(true); });
-    const { data: sub } = supabase.auth.onAuthStateChange((_event, s) => setSession(s));
+    const { data: sub } = supabase.auth.onAuthStateChange((event, s) => {
+      setSession(s);
+      // On sign-out, purge everything persisted to this device — the query
+      // cache holds notes/events/birthdays/groceries and the query keys carry
+      // no user id, so without this the next account to sign in on the same
+      // device briefly rehydrates the previous user's private data.
+      if (event === "SIGNED_OUT") {
+        try {
+          queryClient.clear();
+          ["br_rq_cache", "br_snapshot", "br_event_takes"].forEach(k => localStorage.removeItem(k));
+        } catch { /* storage unavailable — nothing to leak anyway */ }
+      }
+    });
     return () => { sub.subscription.unsubscribe(); };
   }, []);
 
@@ -118,7 +130,16 @@ export default function App() {
     let alive = true;
     setLoadingData(true);
     (async () => {
-      const [chat, notes, sets] = await Promise.all([db.loadChat(), db.loadSeatNotes(), db.loadSettings()]);
+      let chat, notes, sets;
+      try {
+        [chat, notes, sets] = await Promise.all([db.loadChat(), db.loadSeatNotes(), db.loadSettings()]);
+      } catch {
+        // A load failed (offline, RLS blip). Don't clobber whatever we already
+        // have, and don't get stuck on skeletons — just drop the loading state
+        // so the persisted query cache / prior state shows through.
+        if (alive) setLoadingData(false);
+        return;
+      }
       if (!alive) return;
       setMessages(chat); setSeatNotes(notes); setSettings(sets);
       setDataStamp(Date.now());
@@ -135,8 +156,13 @@ export default function App() {
   }, [session?.user?.id]);
 
   useEffect(() => {
-    const el = endRef.current;
-    if (el && el.parentElement) el.parentElement.scrollTop = el.parentElement.scrollHeight;
+    // Pin the chat to the newest message. endRef's immediate parent is a
+    // non-scrolling flex column — the real scroller is the shell's #page-scroll
+    // (same id in both shells), so scrolling the parent did nothing. Only acts
+    // when the chat is mounted (endRef attached), so other tabs are untouched.
+    if (!endRef.current) return;
+    const scroller = document.getElementById("page-scroll");
+    if (scroller) scroller.scrollTop = scroller.scrollHeight;
   }, [messages, thinking, page]);
 
   const updateSetting = (key, value) => {

@@ -1,4 +1,4 @@
-import { ANTHROPIC_API_KEY } from "./supabase.js";
+import { supabase, ANTHROPIC_API_KEY } from "./supabase.js";
 import { obs } from "./storage.js";
 import { logUsage } from "./telemetry.js";
 import { formatSnapshotForChat, formatSnapshotForSeat } from "./snapshot.js";
@@ -23,13 +23,34 @@ export async function callClaude({ system, messages, modelKey = "haiku", maxToke
   const t0 = Date.now();
   const model = MODEL_IDS[modelKey] || MODEL_IDS.haiku;
   try {
-    const isDeployed = window.location.hostname !== "localhost";
+    // Gate on DEV (compile-time constant) rather than hostname: production
+    // builds always use the server proxy, which lets esbuild dead-code-eliminate
+    // the direct branch — so VITE_ANTHROPIC_API_KEY is never inlined into the
+    // shipped bundle. Dev (incl. LAN/127.0.0.1 phone testing) hits the API direct.
+    const isDeployed = !import.meta.env.DEV;
     const url = isDeployed ? "/.netlify/functions/claude" : "https://api.anthropic.com/v1/messages";
-    const headers = isDeployed ? { "Content-Type": "application/json" } : { "Content-Type": "application/json", "x-api-key": ANTHROPIC_API_KEY, "anthropic-version": "2023-06-01", "anthropic-dangerous-direct-browser-access": "true" };
+    let headers;
+    if (isDeployed) {
+      // Carry the user's session so the proxy can verify it before spending the
+      // owner's API key (the function ran open to the internet before this).
+      headers = { "Content-Type": "application/json" };
+      try { const { data } = (await supabase?.auth?.getSession?.()) || {}; const t = data?.session?.access_token; if (t) headers.Authorization = `Bearer ${t}`; } catch { /* no session — proxy will 401 */ }
+    } else {
+      headers = { "Content-Type": "application/json", "x-api-key": ANTHROPIC_API_KEY, "anthropic-version": "2023-06-01", "anthropic-dangerous-direct-browser-access": "true" };
+    }
     const body = { model, max_tokens: maxTokens, messages };
     if (system) body.system = system;
     const res = await fetch(url, { method: "POST", headers, body: JSON.stringify(body) });
     const data = await res.json();
+    // Distinguish rate-limit / bad-key / unauthorized in telemetry instead of
+    // collapsing every failure into an empty "no text" answer.
+    if (!res.ok) {
+      const detail = data?.error?.message || `HTTP ${res.status}`;
+      const ms = Date.now() - t0;
+      obs.log({ fn, model, ok: false, ms, detail });
+      logUsage({ fn, kind: "anthropic", model: modelKey, ms, ok: false, detail });
+      return null;
+    }
     const text = data.content?.map(b => b.type === "text" ? b.text : "").join("") || "";
     const inTok = data.usage?.input_tokens || 0, outTok = data.usage?.output_tokens || 0;
     const cost = estCost(modelKey, inTok, outTok);
