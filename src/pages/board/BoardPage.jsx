@@ -162,14 +162,18 @@ export function BoardRoomPage({ messages, thinking, loadingData, input, setInput
     // must never break the split layout, where seats are always on screen.
     const value = sub === "seats" ? "chat" : sub;
     return (
-      <div style={{ display: "flex", flex: 1, minHeight: 0, alignItems: "stretch" }}>
-        <div style={{ flex: "1 1 auto", minWidth: 0, display: "flex", flexDirection: "column" }}>
-          <div style={{ flex: "none", paddingBottom: 16 }}>
-            <Segmented options={SPLIT_SUBTABS} value={value} onChange={setSub} style={{ maxWidth: 420 }} />
+      // Center the [main column · board rail] group in the shell so it isn't
+      // stranded left with a huge gap. The main column is snug (not flex:1), and
+      // the tabs are centered over it — so the tab bar lines up with the panel
+      // below instead of floating far to its left.
+      <div style={{ display: "flex", flex: 1, minHeight: 0, justifyContent: "center" }}>
+        <div style={{ flex: "0 1 720px", minWidth: 0, display: "flex", flexDirection: "column" }}>
+          <div style={{ flex: "none", paddingBottom: 16, display: "flex", justifyContent: "center" }}>
+            <Segmented options={SPLIT_SUBTABS} value={value} onChange={setSub} style={{ width: "100%", maxWidth: 440 }} />
           </div>
           {panel(value)}
         </div>
-        <div style={{ flex: "0 0 320px", marginLeft: 20, paddingLeft: 20, borderLeft: "0.5px solid var(--line)" }}>
+        <div style={{ flex: "0 0 320px", marginLeft: 24, paddingLeft: 24, borderLeft: "0.5px solid var(--line)" }}>
           <div style={{ position: "sticky", top: 12 }}>
             <BoardSeatsRail seatNotes={seatNotes} onEditSeat={onEditSeat} />
           </div>
@@ -180,8 +184,8 @@ export function BoardRoomPage({ messages, thinking, loadingData, input, setInput
 
   return (
     <div style={{ display: "flex", flexDirection: "column", flex: 1, minHeight: 0 }}>
-      <div style={{ flex: "none", padding: isMobile ? "2px 16px 12px" : "0 0 14px" }}>
-        <Segmented options={BOARDROOM_SUBTABS} value={sub} onChange={setSub} style={isMobile ? undefined : { maxWidth: 520 }} />
+      <div style={{ flex: "none", padding: isMobile ? "2px 16px 12px" : "0 0 14px", ...(isMobile ? {} : { display: "flex", justifyContent: "center" }) }}>
+        <Segmented options={BOARDROOM_SUBTABS} value={sub} onChange={setSub} style={isMobile ? undefined : { width: "100%", maxWidth: 520 }} />
       </div>
       {/* key={sub} restarts the fade on tab change — do not lose the key */}
       <div key={sub} className="pagefade" style={{ display: "flex", flexDirection: "column", flex: 1, minHeight: 0 }}>
