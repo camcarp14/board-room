@@ -4,7 +4,7 @@
 // to it. The add/edit form lives in a Sheet. Bulk import reads calendar
 // screenshots via Claude vision and cross-checks Birthdays before saving.
 
-import { useState, useRef } from "react";
+import { useState, useRef, useEffect } from "react";
 import { T } from "../../theme.js";
 import { db } from "../../data/db.js";
 import { queryClient } from "../../lib/queryClient.js";
@@ -24,7 +24,11 @@ export const EVENT_CATEGORIES = [
   { key: "bills", label: "Bills / Finance", color: T.red },
 ];
 
-export function CalendarPanel({ isMobile }) {
+// Timestamp of the last Brief-deep-link new-event signal we've acted on, kept
+// at module scope so it survives this panel remounting on tab navigation.
+let lastHandledNewEvent = null;
+
+export function CalendarPanel({ isMobile, newEventSignal }) {
   const { data: events = null, error } = useEvents();
   const loadErr = error ? (error.message || "Couldn't load your calendar.") : null;
   const saveMut = useSaveEvent();
@@ -167,6 +171,18 @@ Only extract entries you can read with real confidence — skip anything blurry,
   });
 
   const openNew = (presetDate) => { setSaveErr(null); setForm(blankDraft(presetDate)); };
+  // Deep-link from the Brief mini-calendar: open a new event pre-dated to the
+  // tapped day. Each jump carries a unique timestamp; handle each one exactly
+  // once (tracked at module scope so a plain remount on later navigation, which
+  // still carries the old jump, doesn't re-pop the form).
+  useEffect(() => {
+    const t = newEventSignal?.t;
+    if (newEventSignal?.date && t && t !== lastHandledNewEvent) {
+      lastHandledNewEvent = t;
+      openNew(newEventSignal.date);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [newEventSignal?.t]);
   const openEdit = (ev) => {
     setSaveErr(null);
     const d = new Date(ev.start_time);

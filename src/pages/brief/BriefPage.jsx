@@ -66,7 +66,7 @@ function ShowMore({ open, count, onToggle }) {
   );
 }
 
-export function MorningBriefPage({ btc, isMobile, settings, updateSetting, onOpenCalendar, onOpenNotes, onOpenQueue, onOpenBirthdays, refreshSignal }) {
+export function MorningBriefPage({ btc, isMobile, settings, updateSetting, onOpenCalendar, onAddEvent, onOpenNotes, onOpenQueue, onOpenBirthdays, refreshSignal }) {
   // Two columns only when there's real width for them (desktop / tablet
   // landscape ≥1024). Tablet portrait and phone get a single column so cards
   // never get squeezed — that's what truncated the market tiles to "$…".
@@ -149,13 +149,11 @@ export function MorningBriefPage({ btc, isMobile, settings, updateSetting, onOpe
 
   const [briefRefreshedAt, setBriefRefreshedAt] = useState(null); // shared freshness stamp for every card fetched in the batch below
   const freshnessLabel = (ts) => ts ? `Updated ${new Date(ts).toLocaleTimeString("en-US", { timeZone: "America/Chicago", hour: "numeric", minute: "2-digit" })} CT` : "Updating…";
-  // The footer stamp for a card: a fresh "Updated …" only when the source
-  // actually refreshed; an honest amber note when it's serving stale/cached.
+  // The footer stamp: a quiet "Updated …" only when the source actually
+  // refreshed. When stale the small header "Stale" tag already says so — no
+  // wordy footer callout, keep the card clean.
   const freshOrStale = (status) =>
-    status?.state !== "live" ? null
-      : status.stale
-        ? <div className="t-cap t-num" style={{ marginTop: 6, color: "var(--amber)" }}>Showing last good data — refresh to retry</div>
-        : <Fresh>{freshnessLabel(briefRefreshedAt)}</Fresh>;
+    status?.state === "live" && !status.stale ? <Fresh>{freshnessLabel(briefRefreshedAt)}</Fresh> : null;
 
   // This used to be a fire-once effect — gsc/clarify/zts/wire/shopify/
   // calendar never refreshed again after the initial page load, and the
@@ -335,7 +333,7 @@ export function MorningBriefPage({ btc, isMobile, settings, updateSetting, onOpe
         })}
       </div>
       <div style={{ marginTop: 8, display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 }}>
-        <span className="t-cap t-num" style={{ color: marketsStale ? "var(--amber)" : "var(--faint)", minWidth: 0 }}>{marketsStale ? "Prices may be stale — refresh to retry" : freshnessLabel(briefRefreshedAt)}</span>
+        <span className="t-cap t-num" style={{ color: "var(--faint)", minWidth: 0 }}>{marketsStale ? "" : freshnessLabel(briefRefreshedAt)}</span>
         <Button kind="plain" size="sm" onClick={() => setBtcChartOpen(true)}
           style={{ height: 44, margin: "-6px -10px -8px 0", padding: "0 10px", flex: "none" }}>
           Chart <IcChevronRight size={12} />
@@ -454,7 +452,7 @@ export function MorningBriefPage({ btc, isMobile, settings, updateSetting, onOpe
     </Card>
   );
 
-  /* ── Mini calendar — whole card taps through to the Calendar tab ───────── */
+  /* ── Mini calendar — tap a day to add an event on it; "Open" for the full tab ── */
   const miniCatColor = (key) => (EVENT_CATEGORIES.find(c => c.key === key) || EVENT_CATEGORIES[0]).color;
   const miniNow = new Date();
   const miniYear = miniNow.getFullYear(), miniMonth = miniNow.getMonth();
@@ -469,9 +467,11 @@ export function MorningBriefPage({ btc, isMobile, settings, updateSetting, onOpe
   const miniDateKey = (day) => `${miniYear}-${String(miniMonth + 1).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
   const todayDate = miniNow.getDate();
   const card_minicalendar = (
-    <Card pad={pad} pressable onClick={onOpenCalendar} title="Open the full calendar" style={{ minWidth: 0 }}>
+    <Card pad={pad} style={{ minWidth: 0 }}>
+      {/* Title stays informative; the "Open" link goes to the full calendar.
+          Each day is a button that starts a new event pre-dated to it. */}
       <CardHead tight title={miniNow.toLocaleDateString("en-US", { month: "long", year: "numeric" })}
-        trailing={<span className="t-cap" style={{ color: "var(--faint)" }}>This month</span>} />
+        trailing={<button className="sec-link" onClick={onOpenCalendar} style={{ display: "inline-flex", alignItems: "center", gap: 2 }}>Open<IcChevronRight size={12} /></button>} />
       {/* minmax(0,1fr) columns + minWidth 0 cells: a long event title can never
           widen its column — the pill truncates inside a fixed, even grid */}
       <div style={{ display: "grid", gridTemplateColumns: "repeat(7, minmax(0, 1fr))", gap: 2, marginBottom: 4 }}>
@@ -485,7 +485,11 @@ export function MorningBriefPage({ btc, isMobile, settings, updateSetting, onOpe
           const dayEvents = miniEventsByDay[miniDateKey(day)] || [];
           const isToday = day === todayDate;
           return (
-            <div key={day} style={{ display: "flex", flexDirection: "column", alignItems: "stretch", gap: 2, textAlign: "left", minWidth: 0, height: 56, overflow: "hidden", padding: 3, borderRadius: 8 }}>
+            <button key={day} type="button" className="hoverable"
+              onClick={() => onAddEvent?.(miniDateKey(day))}
+              aria-label={`Add an event on ${miniNow.toLocaleDateString("en-US", { month: "long" })} ${day}`}
+              title="Add an event on this day"
+              style={{ display: "flex", flexDirection: "column", alignItems: "stretch", gap: 2, textAlign: "left", minWidth: 0, height: 56, overflow: "hidden", padding: 3, borderRadius: 8, background: "none", border: "none", font: "inherit", color: "inherit", cursor: "pointer" }}>
               {/* today = filled accent circle on the number, same as the Personal calendar */}
               <span className="t-num" style={{ width: 20, height: 20, borderRadius: "50%", display: "inline-flex", alignItems: "center", justifyContent: "center", alignSelf: "flex-start", flex: "none", fontSize: 11, fontWeight: isToday ? 600 : 500, background: isToday ? "var(--accent)" : "transparent", color: isToday ? "var(--on-accent)" : "var(--ink)" }}>{day}</span>
               {dayEvents.length > 0 && (
@@ -493,7 +497,7 @@ export function MorningBriefPage({ btc, isMobile, settings, updateSetting, onOpe
                 // 4-character stub; minWidth:0 keeps it from widening the column
                 <span style={{ fontSize: 9.5, fontWeight: 600, color: "var(--chip-ink)", background: miniCatColor(dayEvents[0].category), borderRadius: 4, padding: "1px 3px", lineHeight: 1.2, minWidth: 0, maxWidth: "100%", display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical", overflow: "hidden", wordBreak: "break-word" }}>{dayEvents.length > 1 ? `${dayEvents[0].title} +${dayEvents.length - 1}` : dayEvents[0].title}</span>
               )}
-            </div>
+            </button>
           );
         })}
       </div>
