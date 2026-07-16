@@ -124,7 +124,7 @@ export function PropertiesPage({ isMobile, settings, updateSetting, session }) {
           </div>
 
           <div>
-            <SectionHeader title="Command centers" />
+            <SectionHeader title="Command Centers" />
             <CellGroup>
               {managed.map(p => (
                 <Cell
@@ -240,7 +240,7 @@ function AuditorCard({ settings, updateSetting, session, isMobile }) {
       {/* ── Audit ── */}
       <Card pad="md">
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, marginBottom: 4 }}>
-          <span className="t-head">Site auditor</span>
+          <span className="t-head">Site Auditor</span>
           <Switch on={enabled} onToggle={() => updateSetting("auditor_enabled", !enabled)} aria-label="Auditor enabled" />
         </div>
         <div className="t-foot" style={{ color: "var(--faint)", marginBottom: 12 }}>Auto-audits every 6 hours while enabled.</div>
@@ -300,7 +300,7 @@ function AuditorCard({ settings, updateSetting, session, isMobile }) {
 
       {/* ── Propose a fix — read-only until Approve & Commit ── */}
       <Card pad="md">
-        <div className="t-head" style={{ marginBottom: 4 }}>Propose a fix</div>
+        <div className="t-head" style={{ marginBottom: 4 }}>Propose a Fix</div>
         <div className="t-foot" style={{ color: "var(--faint)", marginBottom: 12 }}>
           Commits straight to the site's repo — nothing goes live until you approve. Works for the static template (meta tags, title, robots.txt, sitemap) — not page content rendered by app code yet.
         </div>

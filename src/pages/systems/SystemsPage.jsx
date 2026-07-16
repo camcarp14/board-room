@@ -425,7 +425,7 @@ export function SystemsPage({ settings, updateSetting, session, btc, isMobile })
           {sub === "usage" && (
             <Grid min={isMobile ? 320 : 380} gap={12}>
               <div>
-                <SectionHeader title="Model control" trailing="Tokens" />
+                <SectionHeader title="Model Control" trailing="Tokens" />
                 <Card pad="md">
                   <div className="t-foot" style={{ color: "var(--sub)" }}>Start cheap. Escalate a layer only when the answers need it.</div>
                   {layers.map(r => (
@@ -523,7 +523,7 @@ export function SystemsPage({ settings, updateSetting, session, btc, isMobile })
               </div>
 
               <div>
-                <SectionHeader title="Replace a file" trailing="Single-file swap" />
+                <SectionHeader title="Replace a File" trailing="Single-file swap" />
                 <Card pad="md">
                   <div className="t-foot" style={{ color: "var(--sub)" }}>
                     Swaps one file on the sites you pick — every other file on the live site is left exactly as it is. For a full rebuild, use Deployments instead.
@@ -575,7 +575,7 @@ export function SystemsPage({ settings, updateSetting, session, btc, isMobile })
 
           {sub === "supabase" && (
             <div>
-              <SectionHeader title="Supabase console" trailing="Allowlisted ops" />
+              <SectionHeader title="Supabase Console" trailing="Allowlisted ops" />
               <Card pad="md">
                 <div className="t-foot" style={{ color: "var(--sub)" }}>Run maintenance against a project's shared memory. Guardrails on — destructive ops ask twice.</div>
                 <div className="t-foot" style={{ color: "var(--sub)", margin: "12px 0 8px" }}>Project</div>

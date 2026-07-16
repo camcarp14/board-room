@@ -312,7 +312,7 @@ Decide which of the two his message actually addresses — often just one. Outpu
           {/* Task Queue — its own run controls, so you never have to leave this card to work the queue */}
           <Card pad="md">
             <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", gap: 10, marginBottom: 2 }}>
-              <span className="t-head">Task queue</span>
+              <span className="t-head">Task Queue</span>
               <span className="t-cap" style={{ color: "var(--faint)", textAlign: "right" }}>Runs only when you hit Run</span>
             </div>
             <div className="t-foot" style={{ color: "var(--faint)", lineHeight: 1.5, marginBottom: 12 }}>Hand it work. Tap a task with output to read it.</div>
@@ -370,7 +370,7 @@ Decide which of the two his message actually addresses — often just one. Outpu
 
           {/* Activity feed — real */}
           <Card pad="md">
-            <div className="t-head" style={{ marginBottom: 2 }}>Activity feed</div>
+            <div className="t-head" style={{ marginBottom: 2 }}>Activity Feed</div>
             <div className="t-foot" style={{ color: "var(--faint)", lineHeight: 1.5, marginBottom: 10 }}>Real worker runs, oversight findings, and your approvals — most recent first.</div>
             {feed === null && <div className="t-foot" style={{ color: "var(--faint)", textAlign: "center", padding: "8px 0" }}>Loading…</div>}
             {feed?.error && <div className="t-foot" style={{ color: "var(--amber)", lineHeight: 1.5 }}>{feed.error}</div>}
@@ -389,7 +389,7 @@ Decide which of the two his message actually addresses — often just one. Outpu
         {/* Right column: ambient behavior settings — not tied to any one run */}
         <div style={col}>
           <Card pad="md">
-            <div className="t-head" style={{ marginBottom: 2 }}>Control panel</div>
+            <div className="t-head" style={{ marginBottom: 2 }}>Control Panel</div>
             <div className="t-foot" style={{ color: "var(--faint)", lineHeight: 1.5, marginBottom: 14 }}>How it behaves in general — separate from what happens on any one run.</div>
 
             <div className="t-label" style={{ marginBottom: 8 }}>Brain</div>
@@ -399,7 +399,7 @@ Decide which of the two his message actually addresses — often just one. Outpu
             <Rule />
 
             <div className="t-label" style={{ marginBottom: 2 }}>Oversight</div>
-            <ToggleRow title="Full oversight" sub="Audits Chief chat answers for smoothed-over board dissent" on={mini.oversight} onToggle={() => setMini({ oversight: !mini.oversight })} />
+            <ToggleRow title="Full Oversight" sub="Audits Chief chat answers for smoothed-over board dissent" on={mini.oversight} onToggle={() => setMini({ oversight: !mini.oversight })} />
 
             <Rule />
 
@@ -416,7 +416,7 @@ Decide which of the two his message actually addresses — often just one. Outpu
               </div>
             )}
             <div style={{ height: 6 }} />
-            <ToggleRow title="Approval gate" sub="Finished drafts wait for your tap before counting as delivered" on={mini.approvalOn} onToggle={() => setMini({ approvalOn: !mini.approvalOn })} />
+            <ToggleRow title="Approval Gate" sub="Finished drafts wait for your tap before counting as delivered" on={mini.approvalOn} onToggle={() => setMini({ approvalOn: !mini.approvalOn })} />
           </Card>
         </div>
       </Grid>

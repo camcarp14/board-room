@@ -16,7 +16,9 @@
 .t-foot   { font-size: 12.5px; line-height: 1.4; font-weight: 400; color: var(--sub); }
 .t-cap    { font-size: 11.5px; line-height: 1.3; font-weight: 500; color: var(--sub); }
 .t-label  { font-size: 12px; line-height: 1; font-weight: 600; letter-spacing: 0.05em; text-transform: uppercase; color: var(--sub); }
-.t-num    { font-family: var(--font-mono); font-weight: 500; font-variant-numeric: tabular-nums; }
+/* Inline dates, times, and tags — proportional Inter with tabular figures so
+   digits still column up, but the letters read as prose, not a terminal. */
+.t-num    { font-weight: 500; font-variant-numeric: tabular-nums; font-feature-settings: "tnum" 1, "cv05" 1; }
 
 /* ── press physics — every touch acknowledged inside 100ms ─────────────────── */
 button:active:not(:disabled) { transform: scale(0.97); }

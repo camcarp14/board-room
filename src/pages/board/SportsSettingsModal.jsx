@@ -119,7 +119,7 @@ export function SportsSettingsModal({ cfg, onSave, onClose, isMobile }) { // esl
   return (
     <Sheet
       onClose={onClose}
-      title="Sports settings"
+      title="Sports Settings"
       footer={<Button kind="primary" size="lg" full onClick={onClose}>Done</Button>}>
 
       <SectionLabel hint="Significant games show even without a followed team — tap to toggle.">Watch leagues</SectionLabel>

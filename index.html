@@ -7,16 +7,25 @@
     <meta name="theme-color" content="#F2F1EB" />
     <meta name="description" content="Your command center — markets, ventures, board of advisors, and the day's brief." />
     <link rel="manifest" href="/manifest.webmanifest" />
+    <!-- Preload the house typeface (Inter, self-hosted) so first paint already
+         has it — no swap flicker. crossorigin is required even same-origin. -->
+    <link rel="preload" href="/fonts/inter-var-latin.woff2" as="font" type="font/woff2" crossorigin />
     <link rel="icon" type="image/png" sizes="192x192" href="/icons/icon-192.png" />
     <link rel="apple-touch-icon" href="/icons/icon-180.png" />
     <meta name="apple-mobile-web-app-capable" content="yes" />
     <meta name="mobile-web-app-capable" content="yes" />
-    <!-- "default", not "black-translucent": on this iOS, translucent mode
-         sizes the window below the status bar but anchors it at the top,
-         leaving a dead 59pt letterbox at the BOTTOM. Default mode gets the
-         window's bottom edge to the physical bottom of the screen.
-         iOS reads this at Add-to-Home-Screen time only. -->
-    <meta name="apple-mobile-web-app-status-bar-style" content="default" />
+    <!-- "black" (opaque), NOT "default" and NOT "black-translucent":
+         • "default" paints the status bar WHITE with dark glyphs — fine over the
+           old light-only app, but it clashes as a white cap over Graphite (dark).
+         • "black-translucent" is seamless but this iOS half-applies it: it sizes
+           the window below the status bar yet anchors it at the top, leaving a
+           dead 59pt letterbox at the BOTTOM.
+         "black" keeps the opaque, below-status-bar window (bottom reaches the
+         physical screen edge, no letterbox) while painting the bar black with
+         white glyphs — seamless with the dark app, readable over light.
+         iOS reads this at Add-to-Home-Screen time only: an already-installed
+         icon must be deleted and re-added for the change to take. -->
+    <meta name="apple-mobile-web-app-status-bar-style" content="black" />
     <meta name="apple-mobile-web-app-title" content="Board Room" />
     <script>
       // Resolve the room's theme before first paint — no flash, ever.
@@ -34,8 +43,8 @@
         if (m) m.setAttribute("content", t === "night" ? "#000000" : "#F2F1EB");
       })();
     </script>
-    <!-- SESSION uses the platform's own type (San Francisco on iOS/iPadOS) —
-         no webfonts, nothing to download before first paint. -->
+    <!-- Type: Inter (self-hosted, preloaded above) with the platform stack as
+         the cold-cache fallback. One small variable file, same origin. -->
   </head>
   <body>
     <div id="root"></div>

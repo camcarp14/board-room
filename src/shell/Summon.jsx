@@ -135,7 +135,7 @@ export function Summon({ onClose, onGo, onJot, onQueueTask, onAsk, isMobile }) {
 
         {mode ? (
           <div style={{ padding: 16 }}>
-            <div className="t-head" style={{ padding: "2px 2px 12px" }}>{mode === "jot" ? "Jot a note" : "Queue a task"}</div>
+            <div className="t-head" style={{ padding: "2px 2px 12px" }}>{mode === "jot" ? "Jot a Note" : "Queue a Task"}</div>
             <textarea ref={inputRef} value={modeText} onChange={e => setModeText(e.target.value)} rows={3} className="field"
               placeholder={mode === "jot" ? "The thought, as it comes." : "What should Mini Me take on?"}
               onKeyDown={e => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); e.stopPropagation(); commitMode(); } }}

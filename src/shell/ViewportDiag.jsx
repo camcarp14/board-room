@@ -52,7 +52,7 @@ export function ViewportDiag({ onClose }) {
         </div>
       ))}
       <div className="card pad-lg" style={{ width: "100%", maxWidth: 340, fontFamily: "var(--font-mono)", fontSize: 12, color: "var(--ink)", lineHeight: 1.9, boxShadow: "var(--shadow-deep)" }}>
-        <div className="t-head" style={{ marginBottom: 8 }}>Viewport diagnostics</div>
+        <div className="t-head" style={{ marginBottom: 8 }}>Viewport Diagnostics</div>
         {info && Object.entries(info).map(([k, v]) => (
           <div key={k} style={{ display: "flex", justifyContent: "space-between", gap: 10 }}>
             <span style={{ color: "var(--sub)" }}>{k}</span><span style={{ fontVariantNumeric: "tabular-nums" }}>{String(v)}</span>

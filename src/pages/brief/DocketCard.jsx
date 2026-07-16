@@ -71,7 +71,7 @@ export function DocketCard({ isMobile, birthdays, macroEvents, settings, onOpenC
   return (
     <Card pad={isMobile ? "md" : "lg"} style={{ minWidth: 0 }}>
       <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", gap: 10 }}>
-        <span className="t-head">The docket</span>
+        <span className="t-head">The Docket</span>
         <span className="t-cap t-num" style={{ color: "var(--faint)", flex: "none" }}>{dateLabel}</span>
       </div>
       <div className="t-title2" style={{ marginTop: 6 }}>{greeting}, Cameron.</div>

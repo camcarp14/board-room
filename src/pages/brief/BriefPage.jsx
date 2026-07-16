@@ -268,7 +268,7 @@ export function MorningBriefPage({ btc, isMobile, settings, updateSetting, onOpe
   /* ── Watch this week — US econ calendar with one-line AI takes ─────────── */
   const card_watch = (
     <Card pad={pad} style={{ minWidth: 0 }}>
-      <CardHead title="Watch this week" tight
+      <CardHead title="Watch This Week" tight
         trailing={<><span className="t-cap" style={{ color: "var(--faint)" }}>CT time</span><StatusTag status={eventsStatus} /></>} />
       <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
         {eventsStatus.state === "live" ? (
@@ -323,7 +323,7 @@ export function MorningBriefPage({ btc, isMobile, settings, updateSetting, onOpe
   /* ── Clarify pipeline ──────────────────────────────────────────────────── */
   const card_clarify = (
     <Card pad={pad} style={{ minWidth: 0 }}>
-      <CardHead title="Clarify · outreach pipeline" trailing={<StatusTag status={clarifyStatus} />} />
+      <CardHead title="Clarify · Outreach Pipeline" trailing={<StatusTag status={clarifyStatus} />} />
       {clarifyStatus.state === "live" ? (
         <>
           <div style={{ display: "grid", gridTemplateColumns: "repeat(4, minmax(0, 1fr))", gap: 6, marginBottom: 6 }}>
@@ -341,7 +341,7 @@ export function MorningBriefPage({ btc, isMobile, settings, updateSetting, onOpe
   /* ── ZTS creator pipeline ──────────────────────────────────────────────── */
   const card_zts = (
     <Card pad={pad} style={{ minWidth: 0 }}>
-      <CardHead title="Zero To Secure · creator pipeline" trailing={<StatusTag status={ztsPipeStatus} />} />
+      <CardHead title="Zero To Secure · Creator Pipeline" trailing={<StatusTag status={ztsPipeStatus} />} />
       {ztsPipeStatus.state === "live" ? (
         <>
           <div style={{ display: "grid", gridTemplateColumns: "repeat(4, minmax(0, 1fr))", gap: 6, marginBottom: 6 }}>
@@ -359,7 +359,7 @@ export function MorningBriefPage({ btc, isMobile, settings, updateSetting, onOpe
   /* ── Shopify store ─────────────────────────────────────────────────────── */
   const card_shopify = (
     <Card pad={pad} style={{ minWidth: 0 }}>
-      <CardHead title="Zero To Secure · store" trailing={<StatusTag status={shopifyStatus} />} />
+      <CardHead title="Zero To Secure · Store" trailing={<StatusTag status={shopifyStatus} />} />
       {shopifyStatus.state === "live" ? (
         <>
           <div style={{ display: "grid", gridTemplateColumns: "repeat(2, minmax(0, 1fr))", gap: 8, marginBottom: 6 }}>
@@ -421,7 +421,7 @@ export function MorningBriefPage({ btc, isMobile, settings, updateSetting, onOpe
   const visibleMeetings = meetingsAll ? meetings : meetings.slice(0, ROW_CAP);
   const card_meetings = (
     <Card pad={pad} style={{ minWidth: 0 }}>
-      <CardHead tight title="Business meetings" trailing={<StatusTag status={meetingsStatus} />} />
+      <CardHead tight title="Business Meetings" trailing={<StatusTag status={meetingsStatus} />} />
       <div style={{ display: "flex", flexDirection: "column" }}>
         {meetingsStatus.state === "live" ? (
           meetings.length ? (
@@ -447,7 +447,7 @@ export function MorningBriefPage({ btc, isMobile, settings, updateSetting, onOpe
   const visibleWire = wireAll ? wire : wire.slice(0, ROW_CAP);
   const card_wire = (
     <Card pad={pad} style={{ minWidth: 0 }}>
-      <CardHead tight title="The wire" trailing={<StatusTag status={wireStatus} />} />
+      <CardHead tight title="The Wire" trailing={<StatusTag status={wireStatus} />} />
       {wireStatus.state === "live" ? (
         wire.length ? (
           <div style={{ display: "flex", flexDirection: "column" }}>

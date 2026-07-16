@@ -103,7 +103,7 @@ function BoardSeatsPage({ seatNotes, onEditSeat, onEnterRoom, isMobile }) {
 function BoardSeatsRail({ seatNotes, onEditSeat }) {
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-      <SectionHeader title="The board" />
+      <SectionHeader title="The Board" />
       {BOARD.map(b => (
         <SeatCard key={b.key} compact seat={b} has={!!seatNotes[b.key]} onClick={() => onEditSeat(b.key)} />
       ))}
