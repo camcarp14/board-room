@@ -1,20 +1,17 @@
 // ─── The tablet / desktop shell ───────────────────────────────────────────────
 // iPadOS grammar: a canvas-colored sidebar with grouped navigation, a content
 // column with its own header, and a centered max-width content well.
-import { useState } from "react";
 import { NAV, HEADERS } from "./nav.js";
 import { TopStatus } from "./TopStatus.jsx";
 import { ThemeToggle } from "./Boot.jsx";
-import { NAV_ICONS, IcSearch, IcCalendar, IcExternal } from "../ui/icons.jsx";
+import { NAV_ICONS, IcSearch } from "../ui/icons.jsx";
 import { NumTween, Sparkline } from "../ui/primitives.jsx";
-import { Button, Field, Delta } from "../ui/kit.jsx";
+import { Button, Delta } from "../ui/kit.jsx";
 import { supabase } from "../lib/supabase.js";
 
 const GROUPS = [...new Set(NAV.map(n => n.group))];
 
-export function SidebarShell({ page, theme, onNavigate, onSummon, btc, session, calUrl, onSaveCalUrl, totalSpend, callCount, now, dataStamp, refreshing, onRefresh, children }) {
-  const [editingCal, setEditingCal] = useState(false);
-  const [calDraft, setCalDraft] = useState("");
+export function SidebarShell({ page, theme, onNavigate, onSummon, btc, session, totalSpend, callCount, now, dataStamp, refreshing, onRefresh, children }) {
   const head = HEADERS[page];
 
   return (
@@ -61,28 +58,6 @@ export function SidebarShell({ page, theme, onNavigate, onSummon, btc, session, 
               <Sparkline points={btc.points} color={(btc.changePct || 0) >= 0 ? "var(--green)" : "var(--red)"} height={30} />
             )}
           </div>
-
-          {calUrl && !editingCal ? (
-            <a href={calUrl} target="_blank" rel="noopener"
-              style={{ display: "flex", alignItems: "center", gap: 10, padding: "11px 14px", minHeight: 44, background: "var(--ink-a04)", borderRadius: 12, color: "var(--ink)", fontSize: 13.5, fontWeight: 500, textDecoration: "none" }}>
-              <IcCalendar size={17} style={{ color: "var(--accent)" }} />
-              <span style={{ flex: 1 }}>Open calendar</span>
-              <IcExternal size={14} style={{ color: "var(--faint)" }} />
-            </a>
-          ) : !editingCal ? (
-            <Button kind="quiet" size="md" full style={{ justifyContent: "flex-start", gap: 10, fontWeight: 500, color: "var(--sub)" }}
-              onClick={() => { setEditingCal(true); setCalDraft(calUrl); }}>
-              <IcCalendar size={17} /> Link your calendar
-            </Button>
-          ) : (
-            <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-              <Field value={calDraft} onChange={e => setCalDraft(e.target.value)} placeholder="Calendar share URL" style={{ fontSize: 13 }} />
-              <div style={{ display: "flex", gap: 6 }}>
-                <Button kind="primary" size="sm" style={{ flex: 1 }} onClick={() => { onSaveCalUrl(calDraft.trim()); setEditingCal(false); }}>Save</Button>
-                <Button kind="quiet" size="sm" onClick={() => setEditingCal(false)}>Cancel</Button>
-              </div>
-            </div>
-          )}
 
           <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8, borderTop: "0.5px solid var(--line)", paddingTop: 12 }}>
             <span className="t-cap" style={{ color: "var(--faint)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{session?.user?.email}</span>

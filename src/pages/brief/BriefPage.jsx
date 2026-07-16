@@ -55,6 +55,16 @@ function ShowMore({ open, count, onToggle }) {
 }
 
 export function MorningBriefPage({ btc, isMobile, settings, updateSetting, onOpenCalendar, onOpenNotes, refreshSignal }) {
+  // Two columns only when there's real width for them (desktop / tablet
+  // landscape ≥1024). Tablet portrait and phone get a single column so cards
+  // never get squeezed — that's what truncated the market tiles to "$…".
+  const [wide, setWide] = useState(() => typeof window !== "undefined" && window.matchMedia("(min-width: 1024px)").matches);
+  useEffect(() => {
+    const mq = window.matchMedia("(min-width: 1024px)");
+    const fn = (e) => setWide(e.matches);
+    mq.addEventListener("change", fn);
+    return () => mq.removeEventListener("change", fn);
+  }, []);
   const [gsc, setGsc] = useState(GSC_EMPTY);
   const [gscStatus, setGscStatus] = useState({ state: "loading" });
   const [gscMetric, setGscMetric] = useState("impressions");
@@ -248,8 +258,9 @@ export function MorningBriefPage({ btc, isMobile, settings, updateSetting, onOpe
           </div>
         )}
       </div>
-      {/* the watchlist: gold + the names worth watching */}
-      <div style={{ display: "grid", gridTemplateColumns: isMobile ? "repeat(2, minmax(0, 1fr))" : "repeat(4, minmax(0, 1fr))", gap: 8 }}>
+      {/* the watchlist: gold + the names worth watching. auto-fit so the tiles
+          wrap to 2-up instead of crushing the price to "$…" on a narrow card. */}
+      <div style={{ display: "grid", gridTemplateColumns: isMobile ? "repeat(2, minmax(0, 1fr))" : "repeat(auto-fit, minmax(96px, 1fr))", gap: 8 }}>
         {[["Gold", stocks.gold], ["NVDA", stocks.nvda], ["MSTR", stocks.mstr], ["STRC", stocks.strc]].map(([l, s], i) => {
           const lvl = s?.price && s.price !== "—" ? s.price : (s?.value || "—");
           return <StatTile key={i} value={lvl} label={l} delta={s?.delta} deltaTone={s?.up ? T.green : T.red} valueTone={lvl === "—" ? T.faint : undefined} />;
@@ -403,8 +414,9 @@ export function MorningBriefPage({ btc, isMobile, settings, updateSetting, onOpe
           const dayEvents = miniEventsByDay[miniDateKey(day)] || [];
           const isToday = day === todayDate;
           return (
-            <div key={day} style={{ display: "flex", flexDirection: "column", alignItems: "stretch", gap: 2, textAlign: "left", minWidth: 0, height: 56, overflow: "hidden", padding: 3, borderRadius: 8, background: isToday ? "var(--accent-a10)" : "transparent" }}>
-              <span className="t-num" style={{ fontSize: 11, fontWeight: isToday ? 700 : 500, color: isToday ? "var(--accent)" : "var(--ink)", paddingLeft: 1 }}>{day}</span>
+            <div key={day} style={{ display: "flex", flexDirection: "column", alignItems: "stretch", gap: 2, textAlign: "left", minWidth: 0, height: 56, overflow: "hidden", padding: 3, borderRadius: 8 }}>
+              {/* today = filled accent circle on the number, same as the Personal calendar */}
+              <span className="t-num" style={{ width: 20, height: 20, borderRadius: "50%", display: "inline-flex", alignItems: "center", justifyContent: "center", alignSelf: "flex-start", flex: "none", fontSize: 11, fontWeight: isToday ? 600 : 500, background: isToday ? "var(--accent)" : "transparent", color: isToday ? "var(--on-accent)" : "var(--ink)" }}>{day}</span>
               {dayEvents.length > 0 && (
                 // title pill — wraps to two lines so the name is readable, not a
                 // 4-character stub; minWidth:0 keeps it from widening the column
@@ -487,13 +499,13 @@ export function MorningBriefPage({ btc, isMobile, settings, updateSetting, onOpe
   // line (a URL in a note) from stretching the page sideways on mobile — the
   // same guard the old grid carried. The shell (#page-scroll) owns scrolling
   // and the desktop gutters — this page never nests its own scroll region.
-  const gmin = isMobile ? 9999 : 320;
+  const gmin = wide ? 320 : 9999;
   // Cards vary a lot in height (a tall Watch beside a short Markets), so a
   // row-based grid stranded a big empty cell next to the tall one on desktop.
   // Two masonry columns, cards dealt round-robin, pack vertically instead — no
-  // orphan gaps, and the two columns stay close in height. Phone = one stack.
+  // orphan gaps, and the two columns stay close in height. Narrow = one stack.
   const masonry = (cards) => {
-    if (isMobile) return <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>{cards.map((c, i) => <div key={i}>{c}</div>)}</div>;
+    if (!wide) return <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>{cards.map((c, i) => <div key={i}>{c}</div>)}</div>;
     const cols = [[], []];
     cards.forEach((c, i) => cols[i % 2].push(<div key={i} style={{ marginBottom: 8 }}>{c}</div>));
     return (

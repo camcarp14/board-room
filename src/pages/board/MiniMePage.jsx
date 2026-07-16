@@ -4,7 +4,7 @@
 // queue, writes deliverables onto tasks, and logs to mini_feed.
 import { useState, useEffect } from "react";
 import { T } from "../../theme.js";
-import { Card, Button, Dot, Switch, Field, Grid, useConfirm } from "../../ui/kit.jsx";
+import { Card, Button, Dot, Switch, Field, useConfirm } from "../../ui/kit.jsx";
 import { IcClose, IcChevronDown, IcChevronRight } from "../../ui/icons.jsx";
 import { ToggleRow, Segmented, Chips } from "../../ui/primitives.jsx";
 import { pingFn } from "../../lib/functions.js";
@@ -242,11 +242,11 @@ Decide which of the two his message actually addresses — often just one. Outpu
   const col = { display: "flex", flexDirection: "column", gap: isMobile ? 12 : 14, minWidth: 0 };
 
   return (
-    <div style={{ width: "100%", maxWidth: 1020, margin: "0 auto", padding: isMobile ? "8px 16px 0" : "4px 0 0" }}>
-      <Grid min={340} gap={isMobile ? 12 : 14}>
-
-        {/* Left column: identity, then the actual work surface */}
-        <div style={col}>
+    <div style={{ width: "100%", maxWidth: 640, margin: "0 auto", padding: isMobile ? "8px 16px 0" : "4px 0 0" }}>
+      {/* One column everywhere: identity → queue → activity → settings. The old
+          two-column split left the small collapsed Settings card stranded in an
+          empty right column. */}
+      <div style={col}>
 
           {/* Hero — identity, directive, role. No XP/level — just what it is and what it's doing. */}
           <Card pad="md">
@@ -384,12 +384,9 @@ Decide which of the two his message actually addresses — often just one. Outpu
               </div>
             ))}
           </Card>
-        </div>
 
-        {/* Right column: everything advanced, collapsed behind one disclosure
-            so the default view is just set-up → queue → run → results. Sensible
-            defaults mean most people never open this. */}
-        <div style={col}>
+          {/* Everything advanced, collapsed behind one disclosure so the default
+              view stays set-up → queue → run → results. */}
           <Card pad="md">
             <button onClick={() => setShowSettings(s => !s)} aria-expanded={showSettings}
               style={{ width: "100%", display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, background: "none", border: "none", cursor: "pointer", padding: 0, minHeight: 32, textAlign: "left" }}>
@@ -435,7 +432,6 @@ Decide which of the two his message actually addresses — often just one. Outpu
             )}
           </Card>
         </div>
-      </Grid>
       {confirmEl}
     </div>
   );
