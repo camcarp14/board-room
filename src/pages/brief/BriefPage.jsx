@@ -362,9 +362,12 @@ export function MorningBriefPage({ btc, isMobile, settings, updateSetting, onOpe
       <CardHead title="Zero To Secure · Store" trailing={<StatusTag status={shopifyStatus} />} />
       {shopifyStatus.state === "live" ? (
         <>
+          {/* No delta line here — it added a third row to each tile and made
+              this card taller than the pipeline cards above it; value + label
+              keeps it the same height. */}
           <div style={{ display: "grid", gridTemplateColumns: "repeat(2, minmax(0, 1fr))", gap: 8, marginBottom: 6 }}>
-            <StatTile value={String(shopify.orders)} label="Orders" delta={shopify.ordersD} />
-            <StatTile value={shopify.visits} label="Visits" delta={shopify.visitsD} />
+            <StatTile value={String(shopify.orders)} label="Orders" />
+            <StatTile value={shopify.visits} label="Visits" />
           </div>
           <Fresh>{freshnessLabel(briefRefreshedAt)}</Fresh>
         </>

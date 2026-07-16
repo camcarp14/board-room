@@ -415,7 +415,7 @@ Only extract entries you can read with real confidence — skip anything blurry,
                   aria-label={`${monthLabel} ${day}${dayEvents.length ? `, ${dayEvents.length} event${dayEvents.length > 1 ? "s" : ""}: ${dayEvents.map(e => e.title).join(", ")}` : ""}`}
                   style={{
                     display: "flex", flexDirection: "column", alignItems: "center", gap: 2,
-                    padding: "4px 2px 5px", minHeight: 62, minWidth: 0, overflow: "hidden",
+                    padding: "4px 2px 5px", minHeight: 70, minWidth: 0, overflow: "hidden",
                     background: "none", border: "none", borderRadius: 10, cursor: "pointer",
                   }}>
                   <span className="t-num" style={{
@@ -431,12 +431,12 @@ Only extract entries you can read with real confidence — skip anything blurry,
                     <span style={{ display: "flex", flexDirection: "column", gap: 2, width: "100%", minWidth: 0 }}>
                       {dayEvents.slice(0, 2).map((ev, j) => (
                         <span key={j} title={ev.title} style={{
-                          display: "block", width: "100%", minWidth: 0, textAlign: "left",
-                          fontSize: 10.5, lineHeight: 1.3, fontWeight: 600,
-                          padding: "0 3px", borderRadius: 4,
+                          width: "100%", minWidth: 0, textAlign: "left",
+                          fontSize: 10.5, lineHeight: 1.25, fontWeight: 600,
+                          padding: "1px 3px", borderRadius: 4,
                           background: `color-mix(in srgb, ${catColor(ev.category)} 14%, transparent)`,
                           color: catColor(ev.category),
-                          overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
+                          overflow: "hidden", display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical", wordBreak: "break-word",
                         }}>{ev.title}</span>
                       ))}
                       {dayEvents.length > 2 && (
