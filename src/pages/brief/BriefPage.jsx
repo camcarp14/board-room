@@ -488,6 +488,20 @@ export function MorningBriefPage({ btc, isMobile, settings, updateSetting, onOpe
   // same guard the old grid carried. The shell (#page-scroll) owns scrolling
   // and the desktop gutters — this page never nests its own scroll region.
   const gmin = isMobile ? 9999 : 320;
+  // Cards vary a lot in height (a tall Watch beside a short Markets), so a
+  // row-based grid stranded a big empty cell next to the tall one on desktop.
+  // Two masonry columns, cards dealt round-robin, pack vertically instead — no
+  // orphan gaps, and the two columns stay close in height. Phone = one stack.
+  const masonry = (cards) => {
+    if (isMobile) return <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>{cards.map((c, i) => <div key={i}>{c}</div>)}</div>;
+    const cols = [[], []];
+    cards.forEach((c, i) => cols[i % 2].push(<div key={i} style={{ marginBottom: 8 }}>{c}</div>));
+    return (
+      <div style={{ display: "flex", gap: 8, alignItems: "flex-start" }}>
+        {cols.map((col, i) => <div key={i} style={{ flex: 1, minWidth: 0 }}>{col}</div>)}
+      </div>
+    );
+  };
   return (
     <div style={{ flex: 1, padding: isMobile ? "2px 12px 20px" : "6px 0 0", minWidth: 0 }}>
       <div className="stagger" style={{ maxWidth: 960, width: "100%", margin: "0 auto", display: "flex", flexDirection: "column", gap: 8, minWidth: 0 }}>
@@ -497,13 +511,9 @@ export function MorningBriefPage({ btc, isMobile, settings, updateSetting, onOpe
         </Grid>
         {card_minicalendar}
         <SectionHeader title="Market" style={{ marginTop: 4 }} />
-        <Grid min={gmin} gap={8}>
-          {card_markets}{card_wire}{card_watch}
-        </Grid>
+        {masonry([card_markets, card_wire, card_watch])}
         <SectionHeader title="Signals" style={{ marginTop: 4 }} />
-        <Grid min={gmin} gap={8}>
-          {card_gsc}{card_clarify}{card_zts}{card_shopify}{card_meetings}
-        </Grid>
+        {masonry([card_gsc, card_clarify, card_zts, card_shopify, card_meetings])}
       </div>
       {btcChartOpen && <BtcChartModal isMobile={isMobile} onClose={() => setBtcChartOpen(false)} callFnFull={callFnFull} />}
     </div>

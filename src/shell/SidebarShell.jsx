@@ -25,7 +25,7 @@ export function SidebarShell({ page, theme, onNavigate, onSummon, btc, session, 
           <span className="side-brand-name">Board Room</span>
         </div>
 
-        <nav style={{ display: "flex", flexDirection: "column", gap: 18 }} aria-label="Primary">
+        <nav className="side-nav" style={{ display: "flex", flexDirection: "column", gap: 18 }} aria-label="Primary">
           {GROUPS.map(g => (
             <div className="side-group" key={g}>
               <div className="side-group-label t-label">{g}</div>
