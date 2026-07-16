@@ -170,7 +170,10 @@ button:active:not(:disabled) { transform: scale(0.97); }
 .content-head .head-title .t-foot { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 @media (max-width: 1023px) { .head-spend { display: none; } }
 .content-scroll { flex: 1; min-height: 0; overflow-y: auto; display: flex; flex-direction: column; }
-.content-max { width: 100%; max-width: 1120px; margin: 0 auto; padding: 4px 28px 40px; }
+/* Outer bound for page content in the desktop/tablet shell. Wide enough for the
+   Brief's 3-column layout to breathe on a large monitor; every other page sets
+   its own narrower inner max-width, so they stay centered and unaffected. */
+.content-max { width: 100%; max-width: 1480px; margin: 0 auto; padding: 4px 28px 40px; }
 
 /* ═══ THE KIT ════════════════════════════════════════════════════════════════ */
 

@@ -67,16 +67,22 @@ function ShowMore({ open, count, onToggle }) {
 }
 
 export function MorningBriefPage({ btc, isMobile, settings, updateSetting, onOpenCalendar, onAddEvent, onOpenNotes, onOpenQueue, onOpenBirthdays, refreshSignal }) {
-  // Two columns only when there's real width for them (desktop / tablet
-  // landscape ≥1024). Tablet portrait and phone get a single column so cards
-  // never get squeezed — that's what truncated the market tiles to "$…".
-  const [wide, setWide] = useState(() => typeof window !== "undefined" && window.matchMedia("(min-width: 1024px)").matches);
-  useEffect(() => {
-    const mq = window.matchMedia("(min-width: 1024px)");
-    const fn = (e) => setWide(e.matches);
-    mq.addEventListener("change", fn);
-    return () => mq.removeEventListener("change", fn);
-  }, []);
+  // Column count follows the width: 1 (phone / tablet portrait), 2 (desktop &
+  // tablet landscape ≥1024 — below this the market tiles truncated to "$…"),
+  // 3 (wide desktop ≥1440, where a 2-column layout left big empty gutters).
+  const useMq = (query) => {
+    const [m, setM] = useState(() => typeof window !== "undefined" && window.matchMedia(query).matches);
+    useEffect(() => {
+      const mq = window.matchMedia(query);
+      const fn = (e) => setM(e.matches);
+      mq.addEventListener("change", fn);
+      setM(mq.matches);
+      return () => mq.removeEventListener("change", fn);
+    }, [query]);
+    return m;
+  };
+  const wide = useMq("(min-width: 1024px)");
+  const xwide = useMq("(min-width: 1440px)");
   // Hydrate the market/pipeline cards from the last persisted snapshot so a
   // reopen paints real numbers instantly (flagged stale amber), then the
   // refresh below overwrites them with fresh data a beat later.
@@ -574,15 +580,20 @@ export function MorningBriefPage({ btc, isMobile, settings, updateSetting, onOpe
   // line (a URL in a note) from stretching the page sideways on mobile — the
   // same guard the old grid carried. The shell (#page-scroll) owns scrolling
   // and the desktop gutters — this page never nests its own scroll region.
-  const gmin = wide ? 320 : 9999;
+  // Column count + container width scale with the viewport so a wide desktop
+  // fills the space instead of stranding two narrow columns in a sea of black:
+  // 1 col (phone/tablet portrait), 2 (≥1024), 3 (≥1440). The container cap grows
+  // with the columns so each stays a comfortable ~460px, never stretched thin.
+  const nCols = xwide ? 3 : wide ? 2 : 1;
+  const maxW = xwide ? 1480 : 960;
   // Cards vary a lot in height (a tall Watch beside a short Markets), so a
   // row-based grid stranded a big empty cell next to the tall one on desktop.
-  // Two masonry columns, cards dealt round-robin, pack vertically instead — no
-  // orphan gaps, and the two columns stay close in height. Narrow = one stack.
+  // Masonry columns, cards dealt round-robin, pack vertically instead — no
+  // orphan gaps, and the columns stay close in height. Narrow = one stack.
   const masonry = (cards) => {
-    if (!wide) return <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>{cards.map((c, i) => <div key={i}>{c}</div>)}</div>;
-    const cols = [[], []];
-    cards.forEach((c, i) => cols[i % 2].push(<div key={i} style={{ marginBottom: 8 }}>{c}</div>));
+    if (nCols === 1) return <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>{cards.map((c, i) => <div key={i}>{c}</div>)}</div>;
+    const cols = Array.from({ length: nCols }, () => []);
+    cards.forEach((c, i) => cols[i % nCols].push(<div key={i} style={{ marginBottom: 8 }}>{c}</div>));
     return (
       <div style={{ display: "flex", gap: 8, alignItems: "flex-start" }}>
         {cols.map((col, i) => <div key={i} style={{ flex: 1, minWidth: 0 }}>{col}</div>)}
@@ -591,12 +602,23 @@ export function MorningBriefPage({ btc, isMobile, settings, updateSetting, onOpe
   };
   return (
     <div style={{ flex: 1, padding: isMobile ? "2px 12px 20px" : "6px 0 0", minWidth: 0 }}>
-      <div className="stagger" style={{ maxWidth: 960, width: "100%", margin: "0 auto", display: "flex", flexDirection: "column", gap: 8, minWidth: 0 }}>
-        <Grid min={gmin} gap={8} style={{ alignItems: "stretch" }}>
-          {card_docket}
-          {card_notes}
-        </Grid>
-        {card_minicalendar}
+      <div className="stagger" style={{ maxWidth: maxW, width: "100%", margin: "0 auto", display: "flex", flexDirection: "column", gap: 8, minWidth: 0 }}>
+        {xwide ? (
+          // Wide desktop: the daily-glance trio sits in one row across the top.
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(3, minmax(0, 1fr))", gap: 8, alignItems: "start" }}>
+            {card_docket}
+            {card_notes}
+            {card_minicalendar}
+          </div>
+        ) : (
+          <>
+            <Grid min={wide ? 320 : 9999} gap={8} style={{ alignItems: "stretch" }}>
+              {card_docket}
+              {card_notes}
+            </Grid>
+            {card_minicalendar}
+          </>
+        )}
         <SectionHeader title="Market" style={{ marginTop: 4 }} />
         {masonry([card_markets, card_wire, card_watch])}
         <SectionHeader title="Signals" style={{ marginTop: 4 }} />
