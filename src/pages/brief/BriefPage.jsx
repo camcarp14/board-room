@@ -86,7 +86,9 @@ export function MorningBriefPage({ btc, isMobile, settings, updateSetting, onOpe
   // reopen paints real numbers instantly (flagged stale amber), then the
   // refresh below overwrites them with fresh data a beat later.
   const boot = useState(() => getSnapshot())[0];
-  const cachedStatus = (v) => v ? { state: "live", stale: true } : { state: "loading" };
+  // Seeded-from-snapshot cards are stale and dated to when the snapshot was last
+  // saved (updatedAt) — that timestamp is what the card shows in place of a tag.
+  const cachedStatus = (v) => v ? { state: "live", stale: true, at: boot.updatedAt } : { state: "loading" };
   const [gsc, setGsc] = useState(boot.gsc || GSC_EMPTY);
   const [gscStatus, setGscStatus] = useState(cachedStatus(boot.gsc));
   const [gscMetric, setGscMetric] = useState("impressions");
@@ -173,9 +175,13 @@ export function MorningBriefPage({ btc, isMobile, settings, updateSetting, onOpe
     const keepIfLive = (res) => (prev) => {
       const detail = res.data?.error || (res.status ? `HTTP ${res.status}` : "unreachable");
       return prev?.state === "live"
-        ? { state: "live", stale: true, detail }
+        ? { state: "live", stale: true, at: prev?.at ?? boot.updatedAt, detail }
         : { state: "error", detail };
     };
+    // Stamp a live status with its data's timestamp: fresh data is "now"; stale/
+    // cached data keeps the last known-good time (the card shows that instead of
+    // a "Stale" tag), falling back to the persisted snapshot's time.
+    const liveStatus = (stale) => (prev) => ({ state: "live", stale, at: stale ? (prev?.at ?? boot.updatedAt ?? Date.now()) : Date.now() });
     const loadCredentialed = async (fn, payload, setData, setStatus, hint) => {
       const ping = await callFnFull(fn, { ping: true });
       if (!alive) return;
@@ -185,14 +191,14 @@ export function MorningBriefPage({ btc, isMobile, settings, updateSetting, onOpe
       if (!alive) return;
       // A backend can answer 200 with its last-good value when the upstream
       // failed (stale/cached flags) — surface that instead of stamping it fresh.
-      if (res.ok && res.data?.success) { setData(res.data); setStatus({ state: "live", stale: !!(res.data.stale || res.data.cached) }); }
+      if (res.ok && res.data?.success) { setData(res.data); setStatus(liveStatus(!!(res.data.stale || res.data.cached))); }
       else setStatus(keepIfLive(res));
     };
     const loadOpen = async (fn, apply, setStatus) => {
       const res = await callFnFull(fn, {});
       if (!alive) return;
       if (res.status === 404) return setStatus({ state: "nofn", detail: `push netlify/functions/${fn}.js and redeploy` });
-      if (res.ok && res.data?.success) { apply(res.data); setStatus({ state: "live", stale: !!(res.data.stale || res.data.cached) }); }
+      if (res.ok && res.data?.success) { apply(res.data); setStatus(liveStatus(!!(res.data.stale || res.data.cached))); }
       else setStatus(keepIfLive(res));
     };
     await Promise.all([
@@ -225,7 +231,7 @@ export function MorningBriefPage({ btc, isMobile, settings, updateSetting, onOpe
         if (!settings?.calendar_url) { if (alive) setMeetingsStatus({ state: "notconfigured", detail: "Link a calendar (iCal / .ics URL) in the sidebar to see meetings here." }); return; }
         const res = await callFnFull("calendar-events", { url: settings.calendar_url });
         if (!alive) return;
-        if (res.ok && res.data?.success) { setMeetings(res.data.events || []); setMeetingsStatus({ state: "live", stale: !!(res.data.stale || res.data.cached) }); }
+        if (res.ok && res.data?.success) { setMeetings(res.data.events || []); setMeetingsStatus(liveStatus(!!(res.data.stale || res.data.cached))); }
         else setMeetingsStatus(keepIfLive(res));
       })(),
     ]);
@@ -276,7 +282,7 @@ export function MorningBriefPage({ btc, isMobile, settings, updateSetting, onOpe
   const marketsStale = !!(btc.stale || btc.error || stocksStatus.stale);
   const marketsStatus = (stocksStatus.state === "error" || stocksStatus.state === "nofn")
     ? stocksStatus
-    : { state: "live", stale: marketsStale, detail: marketsStale ? "Showing the last good prices" : undefined };
+    : { state: "live", stale: marketsStale, at: marketsStale ? (stocksStatus.at ?? btc.fetchedAt ?? boot.updatedAt) : null, detail: marketsStale ? "Showing the last good prices" : undefined };
 
   const pad = isMobile ? "sm" : "md";
 

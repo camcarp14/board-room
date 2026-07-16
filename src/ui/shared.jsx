@@ -27,10 +27,23 @@ export const CARD_STATES = {
   nofn: { label: "Not deployed", color: T.red },
 };
 export function StatusTag({ status }) {
-  // A card can be live yet serving the source's last-good value (stale flag) —
-  // show that honestly as amber "Stale" rather than a pulsing green "Live".
+  // A card can be live yet serving the source's last-good value (stale flag).
+  // Instead of a "Stale" badge, show WHEN the data is from — the timestamp is
+  // the honest freshness signal (an old time reads as old on its own).
   if (status?.stale && (status.state === "live" || status.state == null)) {
-    return <Status state="stale" title={status?.detail || "Showing the last good data"} />;
+    const at = status.at;
+    if (!at) return null; // nothing to timestamp — quieter than a bare label
+    const d = new Date(at), now = new Date();
+    // Same-day data shows the time; older data reads as a date/relative age so a
+    // bare "1:15 AM" from yesterday can't be mistaken for fresh.
+    const label = d.toDateString() === now.toDateString()
+      ? d.toLocaleTimeString("en-US", { timeZone: "America/Chicago", hour: "numeric", minute: "2-digit" }) + " CT"
+      : (Math.round((now - d) / 86400000) <= 1 ? "yesterday" : d.toLocaleDateString("en-US", { month: "short", day: "numeric" }));
+    return (
+      <span className="t-cap t-num" style={{ color: "var(--faint)", whiteSpace: "nowrap" }} title="Last good data — refresh for the latest">
+        {label}
+      </span>
+    );
   }
   return <Status state={status?.state || "loading"} title={status?.detail} />;
 }
