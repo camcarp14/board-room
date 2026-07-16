@@ -86,10 +86,14 @@ export function MorningBriefPage({ btc, isMobile, settings, updateSetting, onOpe
   const fetchEventTake = async (i, e) => {
     if (eventAnalysis[i]) return; // already have a read on this one
     setEventAnalysis(prev => ({ ...prev, [i]: "loading" }));
+    // The reader already understands markets — give a terse directional read,
+    // not an explainer. One short clause, ~12 words, no preamble, no hedging,
+    // and NEVER a disclaimer about lacking real-time data (just give the bias
+    // the number itself implies).
     const system = e.isPast
-      ? `You give a single, tidy, opinionated read on how a US economic event ACTUALLY moved Bitcoin and equities together — ONE sentence covering both, not two. The event has already released; you're told the actual result vs. forecast/prior. Describe the real reaction, not a prediction — if you don't have enough to know the actual market reaction, say what the result itself implies instead of guessing at price action. No labels, no "BTC:"/"Stocks:" prefixes, no preamble, no markdown.`
-      : `You give a single, tidy, opinionated read on how a US economic event will likely move Bitcoin and equities together — ONE sentence covering both, not two. Given a US economic calendar event (with forecast/prior if given), respond with ONLY that one sentence — no labels, no "BTC:"/"Stocks:" prefixes, no preamble, no markdown. Be directional where the data supports it — don't hedge into uselessness — but don't overstate certainty on an event that hasn't happened yet.`;
-    const raw = await callClaude({ system, messages: [{ role: "user", content: e.text }], modelKey: "haiku", maxTokens: 100, fn: "event_impact" });
+      ? `Given a US econ result vs forecast/prior, reply with ONE terse clause (≈12 words max) on the directional read for Bitcoin and equities — shorthand for someone who already knows markets. e.g. "Cooler core PPI — risk-on, both bid." No preamble, no full explanation, no hedging, no disclaimers about missing market data, no "BTC:"/"Stocks:" labels, no markdown. If the reaction is genuinely unknowable, give the bias the result itself implies.`
+      : `Given an upcoming US econ event (with forecast/prior if shown), reply with ONE terse clause (≈12 words max) on the likely directional lean for Bitcoin and equities — shorthand for someone who already knows markets. e.g. "Hot print risks risk-off; both lower." No preamble, no explanation, no hedging, no disclaimers, no labels, no markdown — just the lean.`;
+    const raw = await callClaude({ system, messages: [{ role: "user", content: e.text }], modelKey: "haiku", maxTokens: 48, fn: "event_impact" });
     if (raw && raw.trim()) setEventAnalysis(prev => ({ ...prev, [i]: raw.trim() }));
     else setEventAnalysis(prev => ({ ...prev, [i]: "error" }));
   };
