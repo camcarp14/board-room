@@ -2,7 +2,7 @@
 // Mini Me is now real: on-demand only — you queue work and hit Run, nothing
 // fires on a schedule. The worker (mini-worker) runs Claude against the
 // queue, writes deliverables onto tasks, and logs to mini_feed.
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect } from "react";
 import { T } from "../../theme.js";
 import { Card, Button, Dot, Switch, Field, Grid, useConfirm } from "../../ui/kit.jsx";
 import { IcClose, IcChevronDown, IcChevronRight } from "../../ui/icons.jsx";
@@ -49,7 +49,6 @@ function Rule() {
   return <div style={{ height: 0.5, background: "var(--line)", margin: "14px 0" }} />;
 }
 
-const LOG_PREVIEW = 4; // briefing lines shown before the in-page expander
 
 export function MiniMePage({ settings, updateSetting, session, onWorkerRun, onOpenLearn, isMobile }) {
   const mini = { ...MINI_DEFAULTS, ...(settings?.mini || {}) };
@@ -64,12 +63,10 @@ export function MiniMePage({ settings, updateSetting, session, onWorkerRun, onOp
   const [runMsg, setRunMsg] = useState(null);
   const [openTask, setOpenTask] = useState(null);
   const [showCompleted, setShowCompleted] = useState(false);
-  const [showFullLog, setShowFullLog] = useState(false);
   const [showSettings, setShowSettings] = useState(false); // advanced knobs stay tucked away by default
   const [directiveInput, setDirectiveInput] = useState("");
   const [directiveSending, setDirectiveSending] = useState(false);
   const [skillCount, setSkillCount] = useState(null); // null loading · number · "teach" when table missing
-  const directiveEndRef = useRef(null);
   const [confirmEl, confirm] = useConfirm();
 
   const loadFeed = async () => {
@@ -94,7 +91,6 @@ export function MiniMePage({ settings, updateSetting, session, onWorkerRun, onOp
     return () => { alive = false; };
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
-  useEffect(() => { directiveEndRef.current?.scrollIntoView({ block: "nearest" }); }, [mini.briefingLog?.length]);
 
   const delivered = tasks.filter(t => t.status === "delivered");
   const active = tasks.filter(t => t.status !== "delivered");
@@ -185,6 +181,8 @@ Decide which of the two his message actually addresses — often just one. Outpu
     ];
     setMini({ role: p.role, directive: p.directive, briefingLog: [...(mini.briefingLog || []), ...entries].slice(-24) });
   };
+  // "Change" — wipe the identity so the starting-point picker comes back.
+  const resetIdentity = () => setMini({ role: "", directive: "", briefingLog: [] });
 
   const queuedCount = tasks.filter(t => t.status === "queued").length;
   const [statusLabel, statusTone, statusPulse] =
@@ -204,8 +202,6 @@ Decide which of the two his message actually addresses — often just one. Outpu
     else setMini({ reflectOn: true, loopOn: true, loopMax: mini.loopMax || "5" });
   };
 
-  const log = mini.briefingLog || [];
-  const shownLog = showFullLog ? log : log.slice(-LOG_PREVIEW);
   const configured = !!(mini.directive || mini.role); // once set up, show identity; before that, offer quick-start presets
 
   const TaskCell = ({ t, first }) => {
@@ -280,31 +276,17 @@ Decide which of the two his message actually addresses — often just one. Outpu
                 <span className="t-cap" style={{ fontWeight: 600, color: mini.enabled === false ? "var(--faint)" : "var(--green)" }}>{mini.enabled === false ? "Off" : "On"}</span>
               </div>
             </div>
-            {mini.enabled === false && (
-              <div className="t-foot" style={{ background: "var(--surface-2)", borderRadius: 12, padding: "10px 13px", marginBottom: 12, color: "var(--faint)", lineHeight: 1.5 }}>
-                Mini Me is off — Run now won't do anything until you flip it back on above.
-              </div>
-            )}
-
             {configured ? (
-              /* Set up — show the identity it works from. One conversation
-                 (the box below) shapes both fields. Stacks on the phone. */
-              <div style={{ display: "grid", gridTemplateColumns: isMobile ? "1fr" : "1fr 1fr", gap: 8, marginBottom: 10 }}>
-                <div>
-                  <div className="t-label" style={{ marginBottom: 6 }}>Prime directive</div>
-                  {mini.directive ? (
-                    <div className="t-call" style={{ background: "var(--surface-2)", borderRadius: 12, padding: "11px 13px", lineHeight: 1.5, fontStyle: "italic" }}>"{mini.directive}"</div>
-                  ) : (
-                    <div className="t-foot" style={{ background: "var(--surface-2)", borderRadius: 12, padding: "11px 13px", color: "var(--faint)", lineHeight: 1.45 }}>No mission yet — what should shape every task?</div>
-                  )}
+              /* Set up — one compact line of who it is and its mission, no
+                 big jargon labels. "Change" drops back to the picker. */
+              <div style={{ marginBottom: 10 }}>
+                <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", gap: 10, marginBottom: 6 }}>
+                  <span className="t-label">Set up as</span>
+                  <button onClick={resetIdentity} className="hoverable" style={{ background: "none", border: "none", cursor: "pointer", color: "var(--accent)", fontSize: 12.5, fontWeight: 600, padding: "2px 2px" }}>Change</button>
                 </div>
-                <div>
-                  <div className="t-label" style={{ marginBottom: 6 }}>Role</div>
-                  {mini.role ? (
-                    <div className="t-call" style={{ background: "var(--surface-2)", borderRadius: 12, padding: "11px 13px", lineHeight: 1.5 }}>{mini.role}</div>
-                  ) : (
-                    <div className="t-foot" style={{ background: "var(--surface-2)", borderRadius: 12, padding: "11px 13px", color: "var(--faint)", lineHeight: 1.45 }}>No role yet — who should it work as?</div>
-                  )}
+                <div style={{ background: "var(--surface-2)", borderRadius: 12, padding: "11px 13px" }}>
+                  {mini.role && <div className="t-call" style={{ lineHeight: 1.5 }}>{mini.role}</div>}
+                  {mini.directive && <div className="t-foot" style={{ lineHeight: 1.5, marginTop: mini.role ? 5 : 0, fontStyle: "italic", color: "var(--sub)" }}>"{mini.directive}"</div>}
                 </div>
               </div>
             ) : (
@@ -326,24 +308,6 @@ Decide which of the two his message actually addresses — often just one. Outpu
               </div>
             )}
 
-            {log.length > 0 && (
-              <div style={{ display: "flex", flexDirection: "column", gap: 6, marginBottom: 10, padding: "2px 1px" }}>
-                {log.length > LOG_PREVIEW && (
-                  <Button kind="plain" size="sm" onClick={() => setShowFullLog(v => !v)}
-                    style={{ alignSelf: "flex-start", color: "var(--sub)", height: "auto", minHeight: 34, paddingLeft: 0, paddingRight: 0 }}>
-                    {showFullLog ? "Show recent only" : `Show all ${log.length} lines`}
-                  </Button>
-                )}
-                {shownLog.map((l, i) => (
-                  <div key={i} className="t-foot" style={{ lineHeight: 1.5, fontStyle: l.role === "user" ? "normal" : "italic" }}>
-                    {l.role === "user"
-                      ? l.text
-                      : <><span style={{ fontWeight: 600, fontStyle: "normal", color: "var(--ink)" }}>→ {l.field === "role" ? "Role" : "Directive"}:</span> {l.text}</>}
-                  </div>
-                ))}
-                <div ref={directiveEndRef} />
-              </div>
-            )}
             <div style={{ display: "flex", gap: 8 }}>
               <Field value={directiveInput} onChange={e => setDirectiveInput(e.target.value)}
                 onKeyDown={e => { if (e.key === "Enter") { e.preventDefault(); sendDirectiveUpdate(); } }}
@@ -352,12 +316,6 @@ Decide which of the two his message actually addresses — often just one. Outpu
                 {directiveSending ? "…" : "Send"}
               </Button>
             </div>
-            {log.length > 0 && (
-              <Button kind="plain" size="sm" onClick={() => setMini({ briefingLog: [] })}
-                style={{ color: "var(--sub)", marginTop: 4, height: "auto", minHeight: 40, paddingLeft: 0, paddingRight: 0, fontWeight: 500 }}>
-                Clear conversation (keeps the current directive &amp; role)
-              </Button>
-            )}
           </Card>
 
           {/* Task Queue — its own run controls, so you never have to leave this card to work the queue */}
