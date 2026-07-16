@@ -65,6 +65,7 @@ export function MiniMePage({ settings, updateSetting, session, onWorkerRun, onOp
   const [openTask, setOpenTask] = useState(null);
   const [showCompleted, setShowCompleted] = useState(false);
   const [showFullLog, setShowFullLog] = useState(false);
+  const [showSettings, setShowSettings] = useState(false); // advanced knobs stay tucked away by default
   const [directiveInput, setDirectiveInput] = useState("");
   const [directiveSending, setDirectiveSending] = useState(false);
   const [skillCount, setSkillCount] = useState(null); // null loading · number · "teach" when table missing
@@ -196,6 +197,7 @@ Decide which of the two his message actually addresses — often just one. Outpu
   // Effort is a single dial derived from the underlying reflectOn/loopOn
   // fields the worker already reads — no worker changes needed.
   const effort = mini.reflectOn === false ? "quick" : mini.loopOn === false ? "careful" : "thorough";
+  const effortLabel = EFFORT_LEVELS.find(e => e.key === effort)?.label || effort;
   const setEffort = (e) => {
     if (e === "quick") setMini({ reflectOn: false, loopOn: false });
     else if (e === "careful") setMini({ reflectOn: true, loopOn: false });
@@ -364,30 +366,21 @@ Decide which of the two his message actually addresses — often just one. Outpu
               <span className="t-head">Task Queue</span>
               <span className="t-cap" style={{ color: "var(--faint)", textAlign: "right" }}>Runs only when you hit Run</span>
             </div>
-            <div className="t-foot" style={{ color: "var(--faint)", lineHeight: 1.5, marginBottom: 12 }}>Hand it work. Tap a task with output to read it.</div>
-            <div style={{ display: "flex", gap: 8, marginBottom: 12 }}>
+            <div style={{ display: "flex", gap: 8, marginBottom: 10 }}>
               <Field value={taskInput} onChange={e => setTaskInput(e.target.value)}
                 onKeyDown={e => { if (e.key === "Enter") { e.preventDefault(); addTask(); } }}
                 placeholder="e.g. Draft 5 outreach angles for the med-spa vertical" style={{ flex: 1 }} />
               <Button kind="quiet" size="md" onClick={addTask} style={{ flex: "none" }}>Queue</Button>
             </div>
-
-            <div style={{ background: "var(--surface-2)", borderRadius: 12, padding: "12px 13px", marginBottom: 12 }}>
-              <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", gap: 10, marginBottom: 8 }}>
-                <span className="t-call" style={{ fontWeight: 600 }}>Daily budget</span>
-                <span className="t-cap" style={{ color: "var(--faint)", fontWeight: 400 }}>caps tasks per run: $1→1 · $3→3 · $10→8</span>
+            <Button kind="primary" size="lg" full disabled={running || worker.state === "off" || mini.enabled === false} onClick={runNow} style={{ marginBottom: 12 }}>
+              {running ? "Working the queue…" : mini.enabled === false ? "Mini Me is off" : `Run queue now${queuedCount ? ` (${queuedCount} queued)` : ""}`}
+            </Button>
+            {runMsg && (
+              <div style={{ marginTop: -2, marginBottom: 12, display: "flex", alignItems: "flex-start", gap: 7 }}>
+                <span style={{ paddingTop: 5, display: "inline-flex" }}><Dot tone={runMsg.ok ? "var(--green)" : "var(--red)"} size={6} /></span>
+                <span className="t-foot" style={{ color: runMsg.ok ? "var(--green)" : "var(--red)", lineHeight: 1.5 }}>{runMsg.text}</span>
               </div>
-              <Chips options={["$1", "$3", "$10"]} value={mini.budget} onChange={b => setMini({ budget: b })} fmt={v => v + "/day"} />
-              <Button kind="primary" size="lg" full disabled={running || worker.state === "off" || mini.enabled === false} onClick={runNow} style={{ marginTop: 11 }}>
-                {running ? "Working the queue…" : mini.enabled === false ? "Mini Me is off" : `Run queue now${queuedCount ? ` (${queuedCount} queued)` : ""}`}
-              </Button>
-              {runMsg && (
-                <div style={{ marginTop: 9, display: "flex", alignItems: "flex-start", gap: 7 }}>
-                  <span style={{ paddingTop: 5, display: "inline-flex" }}><Dot tone={runMsg.ok ? "var(--green)" : "var(--red)"} size={6} /></span>
-                  <span className="t-foot" style={{ color: runMsg.ok ? "var(--green)" : "var(--red)", lineHeight: 1.5 }}>{runMsg.text}</span>
-                </div>
-              )}
-            </div>
+            )}
 
             {active.length === 0 && delivered.length === 0 && (
               <div className="t-foot" style={{ color: "var(--faint)", textAlign: "center", padding: "10px 0" }}>Nothing queued yet — give it something to work on.</div>
@@ -420,7 +413,7 @@ Decide which of the two his message actually addresses — often just one. Outpu
           {/* Activity feed — real */}
           <Card pad="md">
             <div className="t-head" style={{ marginBottom: 2 }}>Activity Feed</div>
-            <div className="t-foot" style={{ color: "var(--faint)", lineHeight: 1.5, marginBottom: 10 }}>Real worker runs, oversight findings, and your approvals — most recent first.</div>
+            <div className="t-foot" style={{ color: "var(--faint)", lineHeight: 1.5, marginBottom: 10 }}>Runs, findings, and approvals — newest first.</div>
             {feed === null && <div className="t-foot" style={{ color: "var(--faint)", textAlign: "center", padding: "8px 0" }}>Loading…</div>}
             {feed?.error && <div className="t-foot" style={{ color: "var(--amber)", lineHeight: 1.5 }}>{feed.error}</div>}
             {Array.isArray(feed) && feed.length === 0 && (
@@ -435,37 +428,53 @@ Decide which of the two his message actually addresses — often just one. Outpu
           </Card>
         </div>
 
-        {/* Right column: ambient behavior settings — not tied to any one run */}
+        {/* Right column: everything advanced, collapsed behind one disclosure
+            so the default view is just set-up → queue → run → results. Sensible
+            defaults mean most people never open this. */}
         <div style={col}>
           <Card pad="md">
-            <div className="t-head" style={{ marginBottom: 2 }}>Control Panel</div>
-            <div className="t-foot" style={{ color: "var(--faint)", lineHeight: 1.5, marginBottom: 14 }}>How it behaves in general — separate from what happens on any one run.</div>
+            <button onClick={() => setShowSettings(s => !s)} aria-expanded={showSettings}
+              style={{ width: "100%", display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, background: "none", border: "none", cursor: "pointer", padding: 0, minHeight: 32, textAlign: "left" }}>
+              <span className="t-head">Settings</span>
+              <span style={{ display: "inline-flex", alignItems: "center", gap: 8, flex: "none" }}>
+                <span className="t-cap" style={{ color: "var(--faint)" }}>{mini.budget}/day · {effortLabel}</span>
+                <IcChevronDown size={14} style={{ color: "var(--faint)", transform: showSettings ? "rotate(180deg)" : "none", transition: "transform var(--dur-2) var(--ease-out)" }} />
+              </span>
+            </button>
+            {showSettings && (
+              <div style={{ marginTop: 14 }}>
+                <div className="t-label" style={{ marginBottom: 8 }}>Daily budget</div>
+                <div className="t-cap" style={{ color: "var(--faint)", fontWeight: 400, marginBottom: 8 }}>Caps how many tasks run each time: $1→1 · $3→3 · $10→8</div>
+                <Chips options={["$1", "$3", "$10"]} value={mini.budget} onChange={b => setMini({ budget: b })} fmt={v => v + "/day"} />
 
-            <div className="t-label" style={{ marginBottom: 8 }}>Brain</div>
-            <div className="t-cap" style={{ color: "var(--faint)", fontWeight: 400, marginBottom: 8 }}>Model used for queued tasks</div>
-            <Segmented value={mini.model} onChange={k => setMini({ model: k })} />
+                <Rule />
 
-            <Rule />
+                <div className="t-label" style={{ marginBottom: 10 }}>Quality &amp; review</div>
+                <Chips options={["quick", "careful", "thorough"]} value={effort} onChange={setEffort} fmt={k => EFFORT_LEVELS.find(e => e.key === k)?.label || k} />
+                <div className="t-foot" style={{ color: "var(--faint)", lineHeight: 1.5, margin: "8px 0 4px" }}>{EFFORT_LEVELS.find(e => e.key === effort)?.desc}</div>
+                {effort === "thorough" && (
+                  <div style={{ margin: "10px 0 4px" }}>
+                    <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", gap: 10, marginBottom: 7 }}>
+                      <span className="t-call" style={{ fontWeight: 600 }}>Max passes</span>
+                      <span className="t-cap" style={{ color: "var(--faint)", fontWeight: 400 }}>Auto-stops early if nothing's changing</span>
+                    </div>
+                    <Chips options={["5", "15", "50"]} value={mini.loopMax} onChange={n => setMini({ loopMax: n })} fmt={v => v + "×"} />
+                  </div>
+                )}
 
-            <div className="t-label" style={{ marginBottom: 2 }}>Oversight</div>
-            <ToggleRow title="Full Oversight" sub="Audits Chief chat answers for smoothed-over board dissent" on={mini.oversight} onToggle={() => setMini({ oversight: !mini.oversight })} />
+                <Rule />
 
-            <Rule />
+                <ToggleRow title="Approval Gate" sub="Finished drafts wait for your tap before they count as delivered" on={mini.approvalOn} onToggle={() => setMini({ approvalOn: !mini.approvalOn })} />
+                <div style={{ height: 6 }} />
+                <ToggleRow title="Full Oversight" sub="Audits Chief chat answers for smoothed-over board dissent" on={mini.oversight} onToggle={() => setMini({ oversight: !mini.oversight })} />
 
-            <div className="t-label" style={{ marginBottom: 10 }}>Quality &amp; review</div>
-            <Chips options={["quick", "careful", "thorough"]} value={effort} onChange={setEffort} fmt={k => EFFORT_LEVELS.find(e => e.key === k)?.label || k} />
-            <div className="t-foot" style={{ color: "var(--faint)", lineHeight: 1.5, margin: "8px 0 4px" }}>{EFFORT_LEVELS.find(e => e.key === effort)?.desc}</div>
-            {effort === "thorough" && (
-              <div style={{ margin: "10px 0 4px" }}>
-                <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", gap: 10, marginBottom: 7 }}>
-                  <span className="t-call" style={{ fontWeight: 600 }}>Max passes</span>
-                  <span className="t-cap" style={{ color: "var(--faint)", fontWeight: 400 }}>Auto-stops early if nothing's changing</span>
-                </div>
-                <Chips options={["5", "15", "50"]} value={mini.loopMax} onChange={n => setMini({ loopMax: n })} fmt={v => v + "×"} />
+                <Rule />
+
+                <div className="t-label" style={{ marginBottom: 8 }}>Brain</div>
+                <div className="t-cap" style={{ color: "var(--faint)", fontWeight: 400, marginBottom: 8 }}>Model used for queued tasks</div>
+                <Segmented value={mini.model} onChange={k => setMini({ model: k })} />
               </div>
             )}
-            <div style={{ height: 6 }} />
-            <ToggleRow title="Approval Gate" sub="Finished drafts wait for your tap before counting as delivered" on={mini.approvalOn} onToggle={() => setMini({ approvalOn: !mini.approvalOn })} />
           </Card>
         </div>
       </Grid>
