@@ -120,15 +120,6 @@ export const IcWrench = (p = {}) => <svg {...base(p)}><path d="M14.2 6.3a4.6 4.6
 export const IcCompass = (p = {}) => <svg {...base(p)}><circle cx="12" cy="12" r="8.5" /><path d="m15.5 8.5-2 5-5 2 2-5z" fill="currentColor" stroke="none" /></svg>;
 export const IcSeal = (p = {}) => <svg {...base(p)}><circle cx="12" cy="12" r="8.5" /><rect x="9.2" y="9.2" width="5.6" height="5.6" rx="0.8" transform="rotate(45 12 12)" fill="currentColor" stroke="none" /></svg>;
 
-/* ── sports — tiny in-row glyphs, colored by callers as state ──────────────── */
-export const SPORT_ICONS = {
-  baseball: (p) => (<svg {...p} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round"><circle cx="12" cy="12" r="8.5" /><path d="M6.3 6c1.8 2 2.7 3.9 2.7 6s-.9 4-2.7 6" /><path d="M17.7 6c-1.8 2-2.7 3.9-2.7 6s.9 4 2.7 6" /></svg>),
-  football: (p) => (<svg {...p} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round"><ellipse cx="12" cy="12" rx="8.5" ry="5.5" /><line x1="6" y1="12" x2="18" y2="12" /><line x1="10.5" y1="9.8" x2="10.5" y2="8.4" /><line x1="13.5" y1="9.8" x2="13.5" y2="8.4" /><line x1="10.5" y1="14.2" x2="10.5" y2="15.6" /><line x1="13.5" y1="14.2" x2="13.5" y2="15.6" /></svg>),
-  basketball: (p) => (<svg {...p} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round"><circle cx="12" cy="12" r="8.5" /><line x1="3.5" y1="12" x2="20.5" y2="12" /><line x1="12" y1="3.5" x2="12" y2="20.5" /><path d="M6 5.8c2.2 2.2 3.3 4.2 3.3 6.2s-1.1 4-3.3 6.2" /><path d="M18 5.8c-2.2 2.2-3.3 4.2-3.3 6.2s1.1 4 3.3 6.2" /></svg>),
-  hockey: (p) => (<svg {...p} viewBox="0 0 24 24" fill="currentColor" stroke="none"><ellipse cx="12" cy="12" rx="8.5" ry="4" /></svg>),
-  soccer: (p) => (<svg {...p} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="8.5" /><polygon points="12,8 14.6,9.9 13.6,13 10.4,13 9.4,9.9" fill="currentColor" stroke="none" /><line x1="12" y1="3.5" x2="12" y2="8" /><line x1="14.6" y1="9.9" x2="18.7" y2="8.6" /><line x1="13.6" y1="13" x2="15.5" y2="17.2" /><line x1="10.4" y1="13" x2="8.5" y2="17.2" /><line x1="9.4" y1="9.9" x2="5.3" y2="8.6" /></svg>),
-};
-
 /* ── tab registry — one place decides what the five tabs look like ─────────── */
 export const NAV_ICONS = {
   brief: { line: IcBrief, fill: IcBriefFill },

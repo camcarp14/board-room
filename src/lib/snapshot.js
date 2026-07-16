@@ -5,9 +5,48 @@
 // read it back out into a compact context block. Module-level on purpose —
 // this is a single-instance app, and it avoids threading every page's state
 // through the whole component tree just so the chat can see it.
-const siteSnapshot = { btc: null, stocks: null, wire: null, todayEvents: null, todayBirthdays: null, updatedAt: null };
+const siteSnapshot = { btc: null, stocks: null, wire: null, todayEvents: null, todayBirthdays: null, clarify: null, zts: null, shopify: null, gsc: null, updatedAt: null };
+
+// Persisted so the Brief can paint last-known market/pipeline data instantly on
+// reopen (instead of skeletons), and so the board seats have real numbers even
+// before the Brief tab has been opened this session. Hydrated once on load.
+const SNAP_LS = "br_snapshot";
+try {
+  const saved = JSON.parse(localStorage.getItem(SNAP_LS) || "null");
+  if (saved && typeof saved === "object") Object.assign(siteSnapshot, saved);
+} catch { /* ignore */ }
+
+export function getSnapshot() { return { ...siteSnapshot }; }
+
 export function updateSnapshot(patch) {
   Object.assign(siteSnapshot, patch, { updatedAt: Date.now() });
+  try { localStorage.setItem(SNAP_LS, JSON.stringify(siteSnapshot)); } catch { /* storage full/unavailable */ }
+}
+
+// Which live venture numbers each board seat should automatically see, so an
+// advisor speaks to current reality instead of asking Cameron to paste figures.
+// Macro/career lean on the general markets block already in every seat prompt.
+const SEAT_VENTURE = {
+  clarify: ["clarify"],
+  zts: ["zts", "shopify", "gsc"],
+  ops: ["clarify", "zts", "shopify", "gsc"],
+  macro: [],
+  career: [],
+};
+export function formatSnapshotForSeat(seatKey) {
+  const general = formatSnapshotForChat();
+  const wants = SEAT_VENTURE[seatKey] || [];
+  const lines = [];
+  const c = siteSnapshot.clarify;
+  if (wants.includes("clarify") && c) lines.push(`Clarify outreach pipeline: ${c.prospected ?? "—"} prospected, ${c.drafts ?? "—"} drafts, ${c.sent ?? "—"} sent, ${c.replied ?? "—"} replied`);
+  const z = siteSnapshot.zts;
+  if (wants.includes("zts") && z) lines.push(`Zero To Secure creator pipeline: ${z.prospected ?? "—"} prospected, ${z.sent ?? "—"} sent, ${z.replied ?? "—"} replied, ${z.collab ?? "—"} collabs`);
+  const s = siteSnapshot.shopify;
+  if (wants.includes("shopify") && s) lines.push(`ZTS Shopify store (last 14d): ${s.orders ?? "—"} orders, ${s.visits ?? "—"} visits`);
+  const g = siteSnapshot.gsc;
+  if (wants.includes("gsc") && g) lines.push(`ZTS Search Console (last 14d): ${g.impressions ?? "—"} impressions, ${g.clicks ?? "—"} clicks, avg position ${g.pos ?? "—"}`);
+  if (!lines.length) return general;
+  return `${general}\n\nYour venture's live numbers (as of the last Brief refresh — treat as current):\n${lines.join("\n")}`;
 }
 export function formatSnapshotForChat() {
   const parts = [];

@@ -6,6 +6,10 @@ import { QueryClient } from "@tanstack/react-query";
 // covers a transient network blip without hanging a card on a real outage.
 export const queryClient = new QueryClient({
   defaultOptions: {
-    queries: { staleTime: 60_000, refetchOnWindowFocus: false, retry: 1 },
+    // gcTime long enough that entries survive to be written to localStorage and
+    // rehydrated on the next launch (see main.jsx) — this is what lets the
+    // Docket, calendar, notes, etc. paint their last-known data instantly on
+    // reopen instead of flashing skeletons while the network round-trips.
+    queries: { staleTime: 60_000, gcTime: 1000 * 60 * 60 * 24, refetchOnWindowFocus: false, retry: 1 },
   },
 });

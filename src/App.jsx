@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, lazy, Suspense } from "react";
 import { supabase } from "./lib/supabase.js";
 import { sm, obs } from "./lib/storage.js";
 import { db } from "./data/db.js";
@@ -13,11 +13,15 @@ import { Summon } from "./shell/Summon.jsx";
 import { BootScreen, LoginScreen, SetupNotice } from "./shell/Boot.jsx";
 import { ErrorBoundary } from "./shell/ErrorBoundary.jsx";
 import { Sheet, Button, useConfirm } from "./ui/kit.jsx";
+// The Brief is the landing tab — keep it in the main chunk so first paint is
+// immediate. The other four pages (and their heavier panels) split into their
+// own chunks and load the first time you open that tab.
 import { MorningBriefPage } from "./pages/brief/BriefPage.jsx";
-import { PersonalPage } from "./pages/personal/PersonalPage.jsx";
-import { BoardRoomPage, SeatNotesModal } from "./pages/board/BoardPage.jsx";
-import { PropertiesPage } from "./pages/assets/AssetsPage.jsx";
-import { SystemsPage } from "./pages/systems/SystemsPage.jsx";
+import { SeatNotesModal } from "./pages/board/SeatNotesModal.jsx";
+const PersonalPage = lazy(() => import("./pages/personal/PersonalPage.jsx").then(m => ({ default: m.PersonalPage })));
+const BoardRoomPage = lazy(() => import("./pages/board/BoardPage.jsx").then(m => ({ default: m.BoardRoomPage })));
+const PropertiesPage = lazy(() => import("./pages/assets/AssetsPage.jsx").then(m => ({ default: m.PropertiesPage })));
+const SystemsPage = lazy(() => import("./pages/systems/SystemsPage.jsx").then(m => ({ default: m.SystemsPage })));
 
 // ════════════════════════════════════════════════════════════════════════════
 // THE BOARD ROOM — SESSION edition.
@@ -381,7 +385,7 @@ export default function App() {
 
   const renderPageInner = (key) => {
     switch (key) {
-      case "brief": return <MorningBriefPage btc={btc} isMobile={isMobile} settings={settings} updateSetting={updateSetting} onOpenCalendar={goToCalendar} onOpenNotes={(noteId) => summonGo({ page: "personal", sub: "notes", noteId })} refreshSignal={briefRefreshSignal} />;
+      case "brief": return <MorningBriefPage btc={btc} isMobile={isMobile} settings={settings} updateSetting={updateSetting} onOpenCalendar={goToCalendar} onOpenNotes={(noteId) => summonGo({ page: "personal", sub: "notes", noteId })} onOpenQueue={() => jumpTo({ page: "boardroom", sub: "mini" })} onOpenBirthdays={() => jumpTo({ page: "personal", sub: "birthdays" })} refreshSignal={briefRefreshSignal} />;
       case "boardroom": return <BoardRoomPage messages={messages} thinking={thinking} loadingData={loadingData} input={input} setInput={setInput} onSend={send} onClearChat={clearChat} endRef={endRef} seatNotes={seatNotes} onEditSeat={setEditSeat} settings={settings} updateSetting={updateSetting} session={session} onWorkerRun={refreshData} onSkillsChanged={refreshSkills} jump={jump} isMobile={isMobile} />;
       case "personal": return <PersonalPage isMobile={isMobile} jumpSignal={personalJumpTo} jump={jump} settings={settings} updateSetting={updateSetting} />;
       case "assets": return <PropertiesPage isMobile={isMobile} settings={settings} updateSetting={updateSetting} session={session} />;
@@ -391,9 +395,12 @@ export default function App() {
   };
   // A crashing panel shows an error card; the shell + nav stay alive so the
   // other tabs are still reachable. key={key} resets the boundary on nav.
+  // Suspense catches the lazy page chunk on first open of a non-Brief tab.
   const renderPage = (key) => (
     <ErrorBoundary key={key} label={NAV.find(n => n.key === key)?.label || key}>
-      {renderPageInner(key)}
+      <Suspense fallback={<div style={{ flex: 1, minHeight: 220, display: "flex", alignItems: "center", justifyContent: "center" }}><div className="sk" style={{ width: 140, height: 12, borderRadius: 6 }} /></div>}>
+        {renderPageInner(key)}
+      </Suspense>
     </ErrorBoundary>
   );
 

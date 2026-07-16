@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from "react";
 import { getThemePref, setThemePref, resolveTheme, applyTheme } from "../theme.js";
-import { updateSnapshot } from "../lib/snapshot.js";
+import { updateSnapshot, getSnapshot } from "../lib/snapshot.js";
 
 // The room follows the sun: Nocturne 19:00–07:00, Daylight otherwise, unless
 // pinned. index.html applies the same resolution pre-paint; this keeps it
@@ -87,7 +87,14 @@ export function useIsMobile() {
 
 // ─── Bitcoin ──────────────────────────────────────────────────────────────────
 export function useBitcoinPrice() {
-  const [state, setState] = useState({ price: null, changePct: null, points: [], high24: null, low24: null, loading: true, error: null, fetchedAt: null });
+  // Seed from the persisted snapshot so the BTC hero shows the last price
+  // instantly on reopen (flagged stale) instead of "…" while the proxy answers.
+  const [state, setState] = useState(() => {
+    const b = getSnapshot().btc;
+    return b && b.price != null
+      ? { price: b.price, changePct: b.changePct, points: b.points || [], high24: b.high24 ?? null, low24: b.low24 ?? null, loading: false, error: null, stale: true, fetchedAt: b.fetchedAt || null }
+      : { price: null, changePct: null, points: [], high24: null, low24: null, loading: true, error: null, stale: false, fetchedAt: null };
+  });
   const [nonce, setNonce] = useState(0);
   useEffect(() => {
     let alive = true;
@@ -109,7 +116,7 @@ export function useBitcoinPrice() {
         const res = await fetch("/.netlify/functions/btc");
         if (res.ok) {
           const data = await res.json();
-          if (data?.success && alive) { const next = { price: data.price, changePct: data.changePct, points: data.points || [], high24: data.high24 ?? null, low24: data.low24 ?? null, loading: false, error: null, fetchedAt: Date.now() }; setState(next); updateSnapshot({ btc: next }); return; }
+          if (data?.success && alive) { const next = { price: data.price, changePct: data.changePct, points: data.points || [], high24: data.high24 ?? null, low24: data.low24 ?? null, loading: false, error: null, stale: !!(data.stale || data.cached), fetchedAt: Date.now() }; setState(next); updateSnapshot({ btc: next }); return; }
         }
         if (res.status !== 404) throw new Error(`proxy ${res.status}`);
       } catch { /* fall through to direct fetch below */ }

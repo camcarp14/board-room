@@ -27,6 +27,11 @@ export const CARD_STATES = {
   nofn: { label: "Not deployed", color: T.red },
 };
 export function StatusTag({ status }) {
+  // A card can be live yet serving the source's last-good value (stale flag) —
+  // show that honestly as amber "Stale" rather than a pulsing green "Live".
+  if (status?.stale && (status.state === "live" || status.state == null)) {
+    return <Status state="stale" title={status?.detail || "Showing the last good data"} />;
+  }
   return <Status state={status?.state || "loading"} title={status?.detail} />;
 }
 

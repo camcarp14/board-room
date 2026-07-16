@@ -87,6 +87,7 @@ export function Delta({ pct, digits = 2, suffix = "%" }) {
 const STATE_META = {
   loading: { tone: "var(--faint)", label: "Loading" },
   live: { tone: "var(--green)", label: "Live", pulse: true },
+  stale: { tone: "var(--amber)", label: "Stale" }, // served, but the source didn't refresh — no pulse
   notconfigured: { tone: "var(--amber)", label: "Not connected" },
   error: { tone: "var(--red)", label: "Error" },
   nofn: { tone: "var(--red)", label: "Not deployed" },

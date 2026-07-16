@@ -3,17 +3,19 @@
 // No fabricated fallback numbers anywhere on this page. Each card is either
 // live (real data), not connected (with exact setup instructions), or error
 // (with the actual failure). Empty dashes beat plausible-looking fake data.
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, lazy, Suspense } from "react";
 import { T } from "../../theme.js";
 import { Card, SectionHeader, StatTile, Button, Dot, Delta, Grid } from "../../ui/kit.jsx";
 import { IcChevronRight } from "../../ui/icons.jsx";
 import { StancePill, StatusTag, CARD_STATES } from "../../ui/shared.jsx";
 import { NumTween, Sparkline } from "../../ui/primitives.jsx";
 import GscLineChart from "../../GscLineChart.jsx";
-import BtcChartModal from "../../BtcChartModal.jsx";
+// Lazy — pulls lightweight-charts (~a quarter of the old bundle) into its own
+// chunk that loads only when you actually open a price chart.
+const BtcChartModal = lazy(() => import("../../BtcChartModal.jsx"));
 import { callFnFull } from "../../lib/functions.js";
 import { callClaude } from "../../lib/claude.js";
-import { updateSnapshot } from "../../lib/snapshot.js";
+import { updateSnapshot, getSnapshot } from "../../lib/snapshot.js";
 import { db } from "../../data/db.js";
 import { nextBirthdayOccurrence } from "../../lib/dates.js";
 import { DocketCard } from "./DocketCard.jsx";
@@ -25,6 +27,13 @@ const STOCKS_EMPTY = { gold: { value: "—", price: "—", up: true }, nvda: { v
 
 const ROW_CAP = 5; // list cards show the first N in-page; the rest behind "Show all"
 const WATCH_CAP = 3; // Watch this week: taller rows, so show fewer before "Show all"
+// AI takes are keyed by a STABLE event identity (its time + text), not list
+// position — the econ feed re-sorts and drops old events on refresh, so an
+// index key would leave a cached take displayed under a different event. They
+// also persist to localStorage so returning to the Brief doesn't re-spend the
+// calls (or re-flash "Reading the likely impact…") for takes that haven't changed.
+const TAKES_LS = "br_event_takes";
+const takeKey = (e) => `${e.time || ""}|${(e.text || "").trim()}`;
 
 /* Card header: .t-head title + status cluster at right — one grammar for every
    Brief card. */
@@ -54,7 +63,7 @@ function ShowMore({ open, count, onToggle }) {
   );
 }
 
-export function MorningBriefPage({ btc, isMobile, settings, updateSetting, onOpenCalendar, onOpenNotes, refreshSignal }) {
+export function MorningBriefPage({ btc, isMobile, settings, updateSetting, onOpenCalendar, onOpenNotes, onOpenQueue, onOpenBirthdays, refreshSignal }) {
   // Two columns only when there's real width for them (desktop / tablet
   // landscape ≥1024). Tablet portrait and phone get a single column so cards
   // never get squeezed — that's what truncated the market tiles to "$…".
@@ -65,27 +74,34 @@ export function MorningBriefPage({ btc, isMobile, settings, updateSetting, onOpe
     mq.addEventListener("change", fn);
     return () => mq.removeEventListener("change", fn);
   }, []);
-  const [gsc, setGsc] = useState(GSC_EMPTY);
-  const [gscStatus, setGscStatus] = useState({ state: "loading" });
+  // Hydrate the market/pipeline cards from the last persisted snapshot so a
+  // reopen paints real numbers instantly (flagged stale amber), then the
+  // refresh below overwrites them with fresh data a beat later.
+  const boot = useState(() => getSnapshot())[0];
+  const cachedStatus = (v) => v ? { state: "live", stale: true } : { state: "loading" };
+  const [gsc, setGsc] = useState(boot.gsc || GSC_EMPTY);
+  const [gscStatus, setGscStatus] = useState(cachedStatus(boot.gsc));
   const [gscMetric, setGscMetric] = useState("impressions");
-  const [stocks, setStocks] = useState(STOCKS_EMPTY);
-  const [stocksStatus, setStocksStatus] = useState({ state: "loading" });
+  const [stocks, setStocks] = useState(boot.stocks || STOCKS_EMPTY);
+  const [stocksStatus, setStocksStatus] = useState(cachedStatus(boot.stocks));
   const [events, setEvents] = useState([]);
   const [eventsStatus, setEventsStatus] = useState({ state: "loading" });
-  const [clarify, setClarify] = useState(null);
-  const [clarifyStatus, setClarifyStatus] = useState({ state: "loading" });
-  const [ztsPipe, setZtsPipe] = useState(null);
-  const [ztsPipeStatus, setZtsPipeStatus] = useState({ state: "loading" });
-  const [wire, setWire] = useState([]);
-  const [wireStatus, setWireStatus] = useState({ state: "loading" });
-  const [shopify, setShopify] = useState(null);
-  const [shopifyStatus, setShopifyStatus] = useState({ state: "loading" });
+  const [clarify, setClarify] = useState(boot.clarify || null);
+  const [clarifyStatus, setClarifyStatus] = useState(cachedStatus(boot.clarify));
+  const [ztsPipe, setZtsPipe] = useState(boot.zts || null);
+  const [ztsPipeStatus, setZtsPipeStatus] = useState(cachedStatus(boot.zts));
+  const [wire, setWire] = useState(boot.wire || []);
+  const [wireStatus, setWireStatus] = useState(cachedStatus(boot.wire && boot.wire.length ? boot.wire : null));
+  const [shopify, setShopify] = useState(boot.shopify || null);
+  const [shopifyStatus, setShopifyStatus] = useState(cachedStatus(boot.shopify));
   const [meetings, setMeetings] = useState([]);
   const [meetingsStatus, setMeetingsStatus] = useState({ state: "loading" });
   const [birthdays, setBirthdays] = useState(null); // null = loading
   const [birthdaysErr, setBirthdaysErr] = useState(null);
   const [miniEvents, setMiniEvents] = useState([]); // for the mini calendar card — same personal_events table CalendarPanel uses
-  const [eventAnalysis, setEventAnalysis] = useState({}); // idx -> one-sentence take | "loading" | "error"
+  const [eventAnalysis, setEventAnalysis] = useState(() => { // takeKey(e) -> take | "loading" | "error"; hydrated from localStorage
+    try { return JSON.parse(localStorage.getItem(TAKES_LS) || "{}") || {}; } catch { return {}; }
+  });
   const [btcChartOpen, setBtcChartOpen] = useState(false);
   const [tickerChart, setTickerChart] = useState(null); // {key,label} of the watchlist ticker whose chart is open
   const [wireAll, setWireAll] = useState(false);
@@ -96,9 +112,10 @@ export function MorningBriefPage({ btc, isMobile, settings, updateSetting, onOpe
   // together, not separate lines) for every Watch This Week event as soon
   // as the events load — no click needed, and each is cached by index so
   // it only ever generates once per event per session.
-  const fetchEventTake = async (i, e) => {
-    if (eventAnalysis[i]) return; // already have a read on this one
-    setEventAnalysis(prev => ({ ...prev, [i]: "loading" }));
+  const fetchEventTake = async (e) => {
+    const k = takeKey(e);
+    if (eventAnalysis[k] && eventAnalysis[k] !== "error") return; // have a take (or one in flight); errors may retry
+    setEventAnalysis(prev => ({ ...prev, [k]: "loading" }));
     // The reader already understands markets — give a terse directional read,
     // not an explainer. One short clause, ~12 words, no preamble, no hedging,
     // and NEVER a disclaimer about lacking real-time data (just give the bias
@@ -107,20 +124,35 @@ export function MorningBriefPage({ btc, isMobile, settings, updateSetting, onOpe
       ? `Given a US econ result vs forecast/prior, reply with ONE terse clause (≈12 words max) on the directional read for Bitcoin and equities — shorthand for someone who already knows markets. e.g. "Cooler core PPI — risk-on, both bid." No preamble, no full explanation, no hedging, no disclaimers about missing market data, no "BTC:"/"Stocks:" labels, no markdown. If the reaction is genuinely unknowable, give the bias the result itself implies.`
       : `Given an upcoming US econ event (with forecast/prior if shown), reply with ONE terse clause (≈12 words max) on the likely directional lean for Bitcoin and equities — shorthand for someone who already knows markets. e.g. "Hot print risks risk-off; both lower." No preamble, no explanation, no hedging, no disclaimers, no labels, no markdown — just the lean.`;
     const raw = await callClaude({ system, messages: [{ role: "user", content: e.text }], modelKey: "haiku", maxTokens: 48, fn: "event_impact" });
-    if (raw && raw.trim()) setEventAnalysis(prev => ({ ...prev, [i]: raw.trim() }));
-    else setEventAnalysis(prev => ({ ...prev, [i]: "error" }));
+    if (raw && raw.trim()) setEventAnalysis(prev => ({ ...prev, [k]: raw.trim() }));
+    else setEventAnalysis(prev => ({ ...prev, [k]: "error" }));
   };
   useEffect(() => {
     if (eventsStatus.state !== "live" || !events.length) return;
     // only spend a call on the takes actually on screen — the rest generate
-    // when the card is expanded. Front-slicing keeps indices aligned.
+    // when the card is expanded. fetchEventTake no-ops if we already have one.
     const shown = watchAll ? events : events.slice(0, WATCH_CAP);
-    shown.forEach((e, i) => { if (!eventAnalysis[i]) fetchEventTake(i, e); });
+    shown.forEach((e) => fetchEventTake(e));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [eventsStatus.state, events, watchAll]);
+  // Persist resolved takes (not transient loading/error) so a return to the
+  // Brief reuses them instead of re-spending Haiku; cap growth at the newest ~60.
+  useEffect(() => {
+    try {
+      const keep = Object.entries(eventAnalysis).filter(([, v]) => v && v !== "loading" && v !== "error").slice(-60);
+      localStorage.setItem(TAKES_LS, JSON.stringify(Object.fromEntries(keep)));
+    } catch { /* storage full / unavailable — takes just won't persist */ }
+  }, [eventAnalysis]);
 
   const [briefRefreshedAt, setBriefRefreshedAt] = useState(null); // shared freshness stamp for every card fetched in the batch below
   const freshnessLabel = (ts) => ts ? `Updated ${new Date(ts).toLocaleTimeString("en-US", { timeZone: "America/Chicago", hour: "numeric", minute: "2-digit" })} CT` : "Updating…";
+  // The footer stamp for a card: a fresh "Updated …" only when the source
+  // actually refreshed; an honest amber note when it's serving stale/cached.
+  const freshOrStale = (status) =>
+    status?.state !== "live" ? null
+      : status.stale
+        ? <div className="t-cap t-num" style={{ marginTop: 6, color: "var(--amber)" }}>Showing last good data — refresh to retry</div>
+        : <Fresh>{freshnessLabel(briefRefreshedAt)}</Fresh>;
 
   // This used to be a fire-once effect — gsc/clarify/zts/wire/shopify/
   // calendar never refreshed again after the initial page load, and the
@@ -138,26 +170,30 @@ export function MorningBriefPage({ btc, isMobile, settings, updateSetting, onOpe
       if (ping.data?.configured === false) return setStatus({ state: "notconfigured", detail: hint(ping.data.missing) });
       const res = await callFnFull(fn, payload);
       if (!alive) return;
-      if (res.ok && res.data?.success) { setData(res.data); setStatus({ state: "live" }); }
+      // A backend can answer 200 with its last-good value when the upstream
+      // failed (stale/cached flags) — surface that instead of stamping it fresh.
+      if (res.ok && res.data?.success) { setData(res.data); setStatus({ state: "live", stale: !!(res.data.stale || res.data.cached) }); }
       else setStatus({ state: "error", detail: res.data?.error || (res.status ? `HTTP ${res.status}` : "unreachable") });
     };
     const loadOpen = async (fn, apply, setStatus) => {
       const res = await callFnFull(fn, {});
       if (!alive) return;
       if (res.status === 404) return setStatus({ state: "nofn", detail: `push netlify/functions/${fn}.js and redeploy` });
-      if (res.ok && res.data?.success) { apply(res.data); setStatus({ state: "live" }); }
+      if (res.ok && res.data?.success) { apply(res.data); setStatus({ state: "live", stale: !!(res.data.stale || res.data.cached) }); }
       else setStatus({ state: "error", detail: res.data?.error || (res.status ? `HTTP ${res.status}` : "unreachable") });
     };
     await Promise.all([
-      loadCredentialed("gsc", { site: "zerotosecure.com", days: 14 }, setGsc, setGscStatus,
+      // Each of these also writes into the live snapshot the board seats read,
+      // so an advisor sees the current pipeline/store/search numbers automatically.
+      loadCredentialed("gsc", { site: "zerotosecure.com", days: 14 }, (d) => { setGsc(d); updateSnapshot({ gsc: d }); }, setGscStatus,
         (m) => `Add ${m || "GSC_CLIENT_EMAIL + GSC_PRIVATE_KEY"} in Netlify env vars, share the Search Console property with the service account, then redeploy.`),
-      loadCredentialed("clarify-pipeline", {}, (d) => setClarify(d), setClarifyStatus,
+      loadCredentialed("clarify-pipeline", {}, (d) => { setClarify(d); updateSnapshot({ clarify: d }); }, setClarifyStatus,
         (m) => `Add ${m || "CLARIFY_SUPABASE_URL + CLARIFY_SUPABASE_ANON_KEY"} in Netlify env vars, then redeploy.`),
-      loadCredentialed("zts-pipeline", {}, (d) => setZtsPipe(d), setZtsPipeStatus,
+      loadCredentialed("zts-pipeline", {}, (d) => { setZtsPipe(d); updateSnapshot({ zts: d }); }, setZtsPipeStatus,
         (m) => `Add ${m || "ZTS_SUPABASE_URL + ZTS_SUPABASE_ANON_KEY"} in Netlify env vars, then redeploy.`),
       loadOpen("markets", (d) => { setStocks(d); updateSnapshot({ stocks: d }); }, setStocksStatus),
       loadOpen("wire", (d) => { setWire(d.wire || []); updateSnapshot({ wire: d.wire || [] }); }, setWireStatus),
-      loadCredentialed("shopify", { days: 14 }, (d) => setShopify(d), setShopifyStatus,
+      loadCredentialed("shopify", { days: 14 }, (d) => { setShopify(d); updateSnapshot({ shopify: d }); }, setShopifyStatus,
         (m) => `Add ${m || "SHOPIFY_SHOP + SHOPIFY_CLIENT_ID + SHOPIFY_CLIENT_SECRET"} in Netlify env vars, then redeploy.`),
       db.loadBirthdays().then(rows => {
         if (!alive) return;
@@ -176,7 +212,7 @@ export function MorningBriefPage({ btc, isMobile, settings, updateSetting, onOpe
         if (!settings?.calendar_url) { if (alive) setMeetingsStatus({ state: "notconfigured", detail: "Link a calendar (iCal / .ics URL) in the sidebar to see meetings here." }); return; }
         const res = await callFnFull("calendar-events", { url: settings.calendar_url });
         if (!alive) return;
-        if (res.ok && res.data?.success) { setMeetings(res.data.events || []); setMeetingsStatus({ state: "live" }); }
+        if (res.ok && res.data?.success) { setMeetings(res.data.events || []); setMeetingsStatus({ state: "live", stale: !!(res.data.stale || res.data.cached) }); }
         else setMeetingsStatus({ state: "error", detail: res.data?.error || "unreachable" });
       })(),
     ]);
@@ -192,10 +228,10 @@ export function MorningBriefPage({ btc, isMobile, settings, updateSetting, onOpe
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [refreshSignal]);
 
-  // One shared interval for everything above (was 3 separate mechanisms:
-  // this one-time effect, plus bespoke stocks-only and sports-only
-  // intervals — consolidated since they were all polling the same way for
-  // no real reason). Also refetches when you switch back to this tab after
+  // One shared interval for everything above (was several separate mechanisms
+  // — this one-time effect plus bespoke per-feed intervals — consolidated
+  // since they were all polling the same way for no real reason). Also
+  // refetches when you switch back to this tab after
   // it's been hidden a while, so alt-tabbing away for hours doesn't leave
   // you staring at a stale page until the next 5-min tick happens to land.
   useEffect(() => {
@@ -219,6 +255,13 @@ export function MorningBriefPage({ btc, isMobile, settings, updateSetting, onOpe
   // still shows now that the levels + AI explanation are gone.
   let stance = "Neutral", stanceColor = T.sub;
   if (hasRange) { stance = up ? "Constructive" : "Cautious"; stanceColor = up ? T.green : T.amber; }
+
+  // Markets card was the one card with no status indicator and an always-fresh
+  // stamp — so a failed/stale price refresh was invisible. Give it an honest one.
+  const marketsStale = !!(btc.stale || stocksStatus.stale);
+  const marketsStatus = (stocksStatus.state === "error" || stocksStatus.state === "nofn")
+    ? stocksStatus
+    : { state: "live", stale: marketsStale, detail: marketsStale ? "Showing the last good prices" : undefined };
 
   const pad = isMobile ? "sm" : "md";
 
@@ -244,7 +287,12 @@ export function MorningBriefPage({ btc, isMobile, settings, updateSetting, onOpe
       <CardHead
         leading={<span aria-hidden style={{ width: 20, height: 20, borderRadius: "50%", background: "var(--btc)", color: "#1A0F00", display: "inline-flex", alignItems: "center", justifyContent: "center", fontSize: 11, fontWeight: 700, flex: "none" }}>₿</span>}
         title="Markets"
-        trailing={<StancePill text={stance} color={stanceColor} />}
+        trailing={
+          <span style={{ display: "inline-flex", alignItems: "center", gap: 10, minWidth: 0 }}>
+            <StancePill text={stance} color={stanceColor} />
+            {(marketsStatus.state !== "live" || marketsStatus.stale) && <StatusTag status={marketsStatus} />}
+          </span>
+        }
       />
       {/* Bitcoin hero — price, day move, and a sparkline that taps to the chart */}
       <div onClick={() => setBtcChartOpen(true)} style={{ cursor: "pointer" }} title="Tap for the full chart">
@@ -272,7 +320,7 @@ export function MorningBriefPage({ btc, isMobile, settings, updateSetting, onOpe
         })}
       </div>
       <div style={{ marginTop: 8, display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 }}>
-        <span className="t-cap t-num" style={{ color: "var(--faint)", minWidth: 0 }}>{freshnessLabel(briefRefreshedAt)}</span>
+        <span className="t-cap t-num" style={{ color: marketsStale ? "var(--amber)" : "var(--faint)", minWidth: 0 }}>{marketsStale ? "Prices may be stale — refresh to retry" : freshnessLabel(briefRefreshedAt)}</span>
         <Button kind="plain" size="sm" onClick={() => setBtcChartOpen(true)}
           style={{ height: 44, margin: "-6px -10px -8px 0", padding: "0 10px", flex: "none" }}>
           Chart <IcChevronRight size={12} />
@@ -289,7 +337,7 @@ export function MorningBriefPage({ btc, isMobile, settings, updateSetting, onOpe
       <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
         {eventsStatus.state === "live" ? (
           events.length ? <>{(watchAll ? events : events.slice(0, WATCH_CAP)).map((e, i) => {
-            const analysis = eventAnalysis[i];
+            const analysis = eventAnalysis[takeKey(e)];
             return (
               // Stacked, not squeezed: the time + Result badge share the top
               // line; the event title gets the full width below it (aligned
@@ -315,7 +363,7 @@ export function MorningBriefPage({ btc, isMobile, settings, updateSetting, onOpe
           </> : <div className="t-foot" style={{ color: "var(--faint)", padding: "6px 0" }}>No high/medium-impact US events in the last 12 hours or next 7 days.</div>
         ) : <FeedFallbackRow status={eventsStatus} />}
       </div>
-      {eventsStatus.state === "live" && <Fresh>{freshnessLabel(briefRefreshedAt)}</Fresh>}
+      {freshOrStale(eventsStatus)}
     </Card>
   );
 
@@ -332,7 +380,7 @@ export function MorningBriefPage({ btc, isMobile, settings, updateSetting, onOpe
       <div className="t-foot" style={{ marginTop: 6, color: gscStatus.state === "live" ? "var(--sub)" : "var(--faint)", lineHeight: 1.5 }}>
         {gscStatus.state === "live" ? gsc.note : gscStatus.state === "loading" ? "Loading…" : gscStatus.detail}
       </div>
-      {gscStatus.state === "live" && <Fresh>{freshnessLabel(briefRefreshedAt)}</Fresh>}
+      {freshOrStale(gscStatus)}
     </Card>
   );
 
@@ -348,7 +396,7 @@ export function MorningBriefPage({ btc, isMobile, settings, updateSetting, onOpe
             <StatTile value={String(clarify.sent)} label="Sent" />
             <StatTile value={String(clarify.replied)} label="Replied" />
           </div>
-          <Fresh>{freshnessLabel(briefRefreshedAt)}</Fresh>
+          {freshOrStale(clarifyStatus)}
         </>
       ) : <FeedFallbackRow status={clarifyStatus} />}
     </Card>
@@ -366,7 +414,7 @@ export function MorningBriefPage({ btc, isMobile, settings, updateSetting, onOpe
             <StatTile value={String(ztsPipe.replied)} label="Replied" />
             <StatTile value={String(ztsPipe.collab)} label="Collab" />
           </div>
-          <Fresh>{freshnessLabel(briefRefreshedAt)}</Fresh>
+          {freshOrStale(ztsPipeStatus)}
         </>
       ) : <FeedFallbackRow status={ztsPipeStatus} />}
     </Card>
@@ -385,7 +433,7 @@ export function MorningBriefPage({ btc, isMobile, settings, updateSetting, onOpe
             <StatTile value={String(shopify.orders)} label="Orders" />
             <StatTile value={shopify.visits} label="Visits" />
           </div>
-          <Fresh>{freshnessLabel(briefRefreshedAt)}</Fresh>
+          {freshOrStale(shopifyStatus)}
         </>
       ) : <FeedFallbackRow status={shopifyStatus} />}
     </Card>
@@ -490,11 +538,11 @@ export function MorningBriefPage({ btc, isMobile, settings, updateSetting, onOpe
           </div>
         ) : <div className="t-foot" style={{ color: "var(--faint)", padding: "6px 0" }}>No headlines returned this cycle.</div>
       ) : <FeedFallbackRow status={wireStatus} />}
-      {wireStatus.state === "live" && <Fresh>{freshnessLabel(briefRefreshedAt)}</Fresh>}
+      {freshOrStale(wireStatus)}
     </Card>
   );
 
-  const card_docket =<DocketCard isMobile={isMobile} birthdays={birthdays} macroEvents={eventsStatus.state === "live" ? events : []} settings={settings} onOpenCalendar={onOpenCalendar} />;
+  const card_docket =<DocketCard isMobile={isMobile} birthdays={birthdays} macroEvents={eventsStatus.state === "live" ? events : []} settings={settings} onOpenCalendar={onOpenCalendar} onOpenQueue={onOpenQueue} onOpenBirthdays={onOpenBirthdays} />;
   const card_notes = <NotesTile isMobile={isMobile} refreshSignal={refreshSignal} onOpenNotes={onOpenNotes} />;
 
   // One flow for both platforms: a single calm column on the phone (min=9999
@@ -532,18 +580,22 @@ export function MorningBriefPage({ btc, isMobile, settings, updateSetting, onOpe
         <SectionHeader title="Signals" style={{ marginTop: 4 }} />
         {masonry([card_gsc, card_clarify, card_zts, card_shopify, card_meetings])}
       </div>
-      {btcChartOpen && <BtcChartModal isMobile={isMobile} onClose={() => setBtcChartOpen(false)} callFnFull={callFnFull} />}
-      {tickerChart && (
-        <BtcChartModal
-          key={tickerChart.key}
-          isMobile={isMobile}
-          onClose={() => setTickerChart(null)}
-          callFnFull={callFnFull}
-          title={tickerChart.label}
-          fn="ticker-candles"
-          fnArgs={{ symbol: tickerChart.key }}
-          defaultInterval="1d"
-        />
+      {(btcChartOpen || tickerChart) && (
+        <Suspense fallback={null}>
+          {btcChartOpen && <BtcChartModal isMobile={isMobile} onClose={() => setBtcChartOpen(false)} callFnFull={callFnFull} />}
+          {tickerChart && (
+            <BtcChartModal
+              key={tickerChart.key}
+              isMobile={isMobile}
+              onClose={() => setTickerChart(null)}
+              callFnFull={callFnFull}
+              title={tickerChart.label}
+              fn="ticker-candles"
+              fnArgs={{ symbol: tickerChart.key }}
+              defaultInterval="1d"
+            />
+          )}
+        </Suspense>
       )}
     </div>
   );

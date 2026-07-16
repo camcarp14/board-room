@@ -1,7 +1,7 @@
 import { ANTHROPIC_API_KEY } from "./supabase.js";
 import { obs } from "./storage.js";
 import { logUsage } from "./telemetry.js";
-import { formatSnapshotForChat } from "./snapshot.js";
+import { formatSnapshotForChat, formatSnapshotForSeat } from "./snapshot.js";
 import { buildSkillsBlock } from "../LearnPanel.jsx";
 
 // ─── Model registry — every layer starts on the cheapest model ───────────────
@@ -85,7 +85,7 @@ async function consultSeat(seatKey, question, seatNotes, models) {
   const seat = BOARD.find(b => b.key === seatKey);
   if (!seat) return null;
   const notes = (seatNotes || {})[seatKey] || "";
-  const system = `${seat.charter}${notes ? `\n\nCurrent context from Cameron (treat as ground truth):\n${notes}` : ""}${formatSnapshotForChat()}\n\nYou are giving your seat's perspective to the Chief of Staff, who will synthesize. Be concise: 2-4 sentences of your genuine take, including any disagreement or risk you see. No preamble.`;
+  const system = `${seat.charter}${notes ? `\n\nCurrent context from Cameron (treat as ground truth):\n${notes}` : ""}${formatSnapshotForSeat(seatKey)}\n\nYou are giving your seat's perspective to the Chief of Staff, who will synthesize. Be concise: 2-4 sentences of your genuine take, including any disagreement or risk you see. No preamble.`;
   const text = await callClaude({ system, messages: [{ role: "user", content: question }], modelKey: models.seats, maxTokens: 300, fn: `seat_${seatKey}` });
   return text ? { seat: seat.key, name: seat.name, emoji: seat.emoji, color: seat.color, take: text } : null;
 }

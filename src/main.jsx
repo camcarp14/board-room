@@ -1,15 +1,25 @@
 import React from "react";
 import { createRoot } from "react-dom/client";
-import { QueryClientProvider } from "@tanstack/react-query";
+import { PersistQueryClientProvider } from "@tanstack/react-query-persist-client";
+import { createSyncStoragePersister } from "@tanstack/query-sync-storage-persister";
 import "./styles.css";
 import App from "./App.jsx";
 import { queryClient } from "./lib/queryClient.js";
 import { ErrorBoundary } from "./shell/ErrorBoundary.jsx";
+
+// Persist the query cache to localStorage so a relaunch (iOS evicts backgrounded
+// PWAs constantly) paints last-known data immediately, then revalidates in the
+// background — instead of an empty screen while every fetch round-trips.
+const persister = createSyncStoragePersister({ storage: window.localStorage, key: "br_rq_cache" });
+
 createRoot(document.getElementById("root")).render(
   <ErrorBoundary full>
-    <QueryClientProvider client={queryClient}>
+    <PersistQueryClientProvider
+      client={queryClient}
+      persistOptions={{ persister, maxAge: 1000 * 60 * 60 * 24, buster: "br-rq-1" }}
+    >
       <App />
-    </QueryClientProvider>
+    </PersistQueryClientProvider>
   </ErrorBoundary>
 );
 

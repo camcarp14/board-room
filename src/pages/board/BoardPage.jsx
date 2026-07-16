@@ -12,10 +12,8 @@ import LearnPanel from "../../LearnPanel.jsx";
 import { ChatRoom } from "./ChatRoom.jsx";
 import { MiniMePage } from "./MiniMePage.jsx";
 
-// The two modals stay importable from here as well as from their own files
-// (the Brief mounts SportsSettingsModal from ./SportsSettingsModal.jsx).
+// Seat notes modal stays importable from here as well as from its own file.
 export { SeatNotesModal } from "./SeatNotesModal.jsx";
-export { SportsSettingsModal } from "./SportsSettingsModal.jsx";
 
 /* ── seat identity — one mark, no emoji: a tinted well carrying the seat's
       color dot (the same dot the chat's consulted-chips wear) ─────────────── */
