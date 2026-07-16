@@ -326,13 +326,12 @@ export function MorningBriefPage({ btc, isMobile, settings, updateSetting, onOpe
       <CardHead title="Clarify · outreach pipeline" trailing={<StatusTag status={clarifyStatus} />} />
       {clarifyStatus.state === "live" ? (
         <>
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(4, minmax(0, 1fr))", gap: 6, marginBottom: 10 }}>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(4, minmax(0, 1fr))", gap: 6, marginBottom: 6 }}>
             <StatTile value={String(clarify.prospected)} label="Prospected" />
             <StatTile value={String(clarify.drafts)} label="Drafts" />
             <StatTile value={String(clarify.sent)} label="Sent" />
             <StatTile value={String(clarify.replied)} label="Replied" />
           </div>
-          <div className="t-call" style={{ color: "var(--sub)" }}><span className="t-num" style={{ fontWeight: 600, color: "var(--ink)" }}>{clarify.replyRate}%</span> reply rate</div>
           <Fresh>{freshnessLabel(briefRefreshedAt)}</Fresh>
         </>
       ) : <FeedFallbackRow status={clarifyStatus} />}
@@ -345,13 +344,12 @@ export function MorningBriefPage({ btc, isMobile, settings, updateSetting, onOpe
       <CardHead title="Zero To Secure · creator pipeline" trailing={<StatusTag status={ztsPipeStatus} />} />
       {ztsPipeStatus.state === "live" ? (
         <>
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(4, minmax(0, 1fr))", gap: 6, marginBottom: 10 }}>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(4, minmax(0, 1fr))", gap: 6, marginBottom: 6 }}>
             <StatTile value={String(ztsPipe.prospected)} label="Prospected" />
             <StatTile value={String(ztsPipe.sent)} label="Sent" />
             <StatTile value={String(ztsPipe.replied)} label="Replied" />
             <StatTile value={String(ztsPipe.collab)} label="Collab" />
           </div>
-          <div className="t-call" style={{ color: "var(--sub)" }}><span className="t-num" style={{ fontWeight: 600, color: "var(--ink)" }}>{ztsPipe.weightedReach.toLocaleString()}</span> weighted reach in pipeline</div>
           <Fresh>{freshnessLabel(briefRefreshedAt)}</Fresh>
         </>
       ) : <FeedFallbackRow status={ztsPipeStatus} />}
@@ -364,11 +362,10 @@ export function MorningBriefPage({ btc, isMobile, settings, updateSetting, onOpe
       <CardHead title="Zero To Secure · store" trailing={<StatusTag status={shopifyStatus} />} />
       {shopifyStatus.state === "live" ? (
         <>
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(2, minmax(0, 1fr))", gap: 8, marginBottom: 11 }}>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(2, minmax(0, 1fr))", gap: 8, marginBottom: 6 }}>
             <StatTile value={String(shopify.orders)} label="Orders" delta={shopify.ordersD} />
             <StatTile value={shopify.visits} label="Visits" delta={shopify.visitsD} />
           </div>
-          {shopify.series && <Sparkline points={shopify.series} color={T.green} height={40} />}
           <Fresh>{freshnessLabel(briefRefreshedAt)}</Fresh>
         </>
       ) : <FeedFallbackRow status={shopifyStatus} />}
