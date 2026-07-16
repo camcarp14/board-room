@@ -37,8 +37,8 @@ const SERIES = {
   position: { color: "var(--purple)", label: "Avg position" },
 };
 
-const H = 180;
-const PAD = { top: 16, right: 8, bottom: 26, left: 8 };
+const H = 124;
+const PAD = { top: 10, right: 8, bottom: 22, left: 8 };
 // SVG text can consume var() live (unlike canvas) — keep references, not literals.
 const MONO = "var(--font-mono)";
 
@@ -140,7 +140,7 @@ export default function GscLineChart({ rows = [], metric = "impressions" }) {
   return (
     <div ref={wrapRef} style={{ width: "100%" }}>
       {/* series identity — 6px dots, text in ink tokens, never in series color */}
-      <div style={{ display: "flex", justifyContent: "flex-end", alignItems: "center", gap: 14, padding: "0 8px 8px", minHeight: 14 }}>
+      <div style={{ display: "flex", justifyContent: "flex-end", alignItems: "center", gap: 14, padding: "0 8px 4px", minHeight: 12 }}>
         {legendKeys.map((k) => (
           <span key={k} style={{ display: "inline-flex", alignItems: "center", gap: 5 }}>
             <Dot tone={SERIES[k].color} size={6} />

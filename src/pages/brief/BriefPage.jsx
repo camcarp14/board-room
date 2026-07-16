@@ -24,6 +24,7 @@ const GSC_EMPTY = { impressions: "—", impressionsD: "", clicks: "—", clicksD
 const STOCKS_EMPTY = { gold: { value: "—", price: "—", up: true }, nvda: { value: "—", price: "—", up: true }, mstr: { value: "—", price: "—", up: true }, strc: { value: "—", price: "—", up: true } };
 
 const ROW_CAP = 5; // list cards show the first N in-page; the rest behind "Show all"
+const WATCH_CAP = 3; // Watch this week: taller rows, so show fewer before "Show all"
 
 /* Card header: .t-head title + status cluster at right — one grammar for every
    Brief card. */
@@ -78,6 +79,7 @@ export function MorningBriefPage({ btc, isMobile, settings, updateSetting, onOpe
   const [btcChartOpen, setBtcChartOpen] = useState(false);
   const [wireAll, setWireAll] = useState(false);
   const [meetingsAll, setMeetingsAll] = useState(false);
+  const [watchAll, setWatchAll] = useState(false);
 
   // Auto-generates a single, tidy one-sentence take (Bitcoin + stocks
   // together, not separate lines) for every Watch This Week event as soon
@@ -99,9 +101,12 @@ export function MorningBriefPage({ btc, isMobile, settings, updateSetting, onOpe
   };
   useEffect(() => {
     if (eventsStatus.state !== "live" || !events.length) return;
-    events.forEach((e, i) => { if (!eventAnalysis[i]) fetchEventTake(i, e); });
+    // only spend a call on the takes actually on screen — the rest generate
+    // when the card is expanded. Front-slicing keeps indices aligned.
+    const shown = watchAll ? events : events.slice(0, WATCH_CAP);
+    shown.forEach((e, i) => { if (!eventAnalysis[i]) fetchEventTake(i, e); });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [eventsStatus.state, events]);
+  }, [eventsStatus.state, events, watchAll]);
 
   const [briefRefreshedAt, setBriefRefreshedAt] = useState(null); // shared freshness stamp for every card fetched in the batch below
   const freshnessLabel = (ts) => ts ? `Updated ${new Date(ts).toLocaleTimeString("en-US", { timeZone: "America/Chicago", hour: "numeric", minute: "2-digit" })} CT` : "Updating…";
@@ -267,7 +272,7 @@ export function MorningBriefPage({ btc, isMobile, settings, updateSetting, onOpe
         trailing={<><span className="t-cap" style={{ color: "var(--faint)" }}>CT time</span><StatusTag status={eventsStatus} /></>} />
       <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
         {eventsStatus.state === "live" ? (
-          events.length ? events.map((e, i) => {
+          events.length ? <>{(watchAll ? events : events.slice(0, WATCH_CAP)).map((e, i) => {
             const analysis = eventAnalysis[i];
             return (
               // Stacked, not squeezed: the time + Result badge share the top
@@ -289,7 +294,9 @@ export function MorningBriefPage({ btc, isMobile, settings, updateSetting, onOpe
                 </div>
               </div>
             );
-          }) : <div className="t-foot" style={{ color: "var(--faint)", padding: "6px 0" }}>No high/medium-impact US events in the last 12 hours or next 7 days.</div>
+          })}
+          {events.length > WATCH_CAP && <ShowMore open={watchAll} count={events.length} onToggle={() => setWatchAll(v => !v)} />}
+          </> : <div className="t-foot" style={{ color: "var(--faint)", padding: "6px 0" }}>No high/medium-impact US events in the last 12 hours or next 7 days.</div>
         ) : <FeedFallbackRow status={eventsStatus} />}
       </div>
       {eventsStatus.state === "live" && <Fresh>{freshnessLabel(briefRefreshedAt)}</Fresh>}
@@ -319,7 +326,7 @@ export function MorningBriefPage({ btc, isMobile, settings, updateSetting, onOpe
       <CardHead title="Clarify · outreach pipeline" trailing={<StatusTag status={clarifyStatus} />} />
       {clarifyStatus.state === "live" ? (
         <>
-          <div style={{ display: "grid", gridTemplateColumns: isMobile ? "repeat(2, minmax(0, 1fr))" : "repeat(4, minmax(0, 1fr))", gap: 8, marginBottom: 11 }}>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(4, minmax(0, 1fr))", gap: 6, marginBottom: 10 }}>
             <StatTile value={String(clarify.prospected)} label="Prospected" />
             <StatTile value={String(clarify.drafts)} label="Drafts" />
             <StatTile value={String(clarify.sent)} label="Sent" />
@@ -338,7 +345,7 @@ export function MorningBriefPage({ btc, isMobile, settings, updateSetting, onOpe
       <CardHead title="Zero To Secure · creator pipeline" trailing={<StatusTag status={ztsPipeStatus} />} />
       {ztsPipeStatus.state === "live" ? (
         <>
-          <div style={{ display: "grid", gridTemplateColumns: isMobile ? "repeat(2, minmax(0, 1fr))" : "repeat(4, minmax(0, 1fr))", gap: 8, marginBottom: 11 }}>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(4, minmax(0, 1fr))", gap: 6, marginBottom: 10 }}>
             <StatTile value={String(ztsPipe.prospected)} label="Prospected" />
             <StatTile value={String(ztsPipe.sent)} label="Sent" />
             <StatTile value={String(ztsPipe.replied)} label="Replied" />

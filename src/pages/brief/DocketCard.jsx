@@ -74,8 +74,8 @@ export function DocketCard({ isMobile, birthdays, macroEvents, settings, onOpenC
         <span className="t-head">The docket</span>
         <span className="t-cap t-num" style={{ color: "var(--faint)", flex: "none" }}>{dateLabel}</span>
       </div>
-      <div className="t-title2" style={{ marginTop: 8 }}>{greeting}, Cameron.</div>
-      <div className="t-foot" style={{ marginTop: 3, marginBottom: rows.length || loading ? 10 : 0 }}>{summary}</div>
+      <div className="t-title2" style={{ marginTop: 6 }}>{greeting}, Cameron.</div>
+      <div className="t-foot" style={{ marginTop: 2, marginBottom: rows.length || loading ? 6 : 0 }}>{summary}</div>
       {loading ? (
         <div style={{ display: "flex", flexDirection: "column", gap: 8, paddingTop: 2 }}>
           <div className="sk sk-line w80" style={{ margin: 0 }} />
@@ -88,15 +88,15 @@ export function DocketCard({ isMobile, birthdays, macroEvents, settings, onOpenC
             return (
               <Tag key={i} onClick={r.onClick} className={r.onClick ? "hoverable" : undefined}
                 style={{
-                  display: "flex", alignItems: "center", gap: 10, width: "100%", minHeight: 44,
-                  padding: "5px 0", background: "none", border: "none",
+                  display: "flex", alignItems: "center", gap: 10, width: "100%", minHeight: r.onClick ? 40 : 34,
+                  padding: "3px 0", background: "none", border: "none",
                   borderTop: i === 0 ? "none" : "0.5px solid var(--line)",
                   textAlign: "left", color: "inherit", font: "inherit", borderRadius: 0,
                   cursor: r.onClick ? "pointer" : undefined,
                 }}>
                 <Dot tone={r.c} />
-                <span className="t-num" style={{ fontSize: 12, color: r.c, flex: "none", minWidth: 58, whiteSpace: "nowrap" }}>{r.tag}</span>
-                <span className="t-call" style={{ flex: 1, minWidth: 0, lineHeight: 1.45 }}>{r.text}</span>
+                <span className="t-num" style={{ fontSize: 11.5, color: r.c, flex: "none", minWidth: 50, whiteSpace: "nowrap" }}>{r.tag}</span>
+                <span className="t-call" style={{ flex: 1, minWidth: 0, lineHeight: 1.3, display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical", overflow: "hidden" }}>{r.text}</span>
                 {r.onClick && <span style={{ color: "var(--faint)", display: "inline-flex", flex: "none" }}><IcChevronRight /></span>}
               </Tag>
             );
