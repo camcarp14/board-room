@@ -208,7 +208,7 @@ button:active:not(:disabled) { transform: scale(0.97); }
 /* stat tiles — hero numbers */
 .stattile {
   background: var(--surface-2); border: none; border-radius: var(--r-well);
-  padding: 12px 12px 10px; text-align: left; display: flex; flex-direction: column; gap: 3px;
+  padding: 12px 9px 10px; text-align: left; display: flex; flex-direction: column; gap: 3px;
   min-width: 0; position: relative;
 }
 .stattile.on-canvas { background: var(--surface); box-shadow: var(--shadow-card); border-radius: var(--r-card); padding: 16px; }
@@ -217,9 +217,8 @@ button:active:not(:disabled) { transform: scale(0.97); }
 .stattile.selected { box-shadow: inset 0 0 0 1.5px var(--accent); }
 .stattile-value { font-family: var(--font-mono); font-variant-numeric: tabular-nums; font-size: 19px; font-weight: 600; letter-spacing: -0.01em; color: var(--ink); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .stattile-label {
-  font-size: 11px; font-weight: 500; letter-spacing: 0.01em; color: var(--sub);
-  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
-  line-height: 1.25; overflow-wrap: anywhere;
+  font-size: 10.5px; font-weight: 500; letter-spacing: -0.003em; color: var(--sub);
+  line-height: 1.25; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
 .stattile-delta { font-family: var(--font-mono); font-size: 11px; font-variant-numeric: tabular-nums; }
 

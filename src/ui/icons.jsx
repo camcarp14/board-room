@@ -39,16 +39,24 @@ export const IcPersonalFill = (p = {}) => (
     <path d="M12 13.6c-3.9 0-7 2.4-7.8 6.1-.1.7.4 1.3 1.1 1.3h13.4c.7 0 1.2-.6 1.1-1.3-.8-3.7-3.9-6.1-7.8-6.1z" />
   </svg>
 );
-export const IcBoard = (p = {}) => ( // two voices — the room in conversation
+export const IcBoard = (p = {}) => ( // Mini Me — your delegate, a small stand-in
   <svg {...base(p)}>
-    <path d="M4 6.8A2.8 2.8 0 0 1 6.8 4h7.4A2.8 2.8 0 0 1 17 6.8v4.4a2.8 2.8 0 0 1-2.8 2.8H9l-3.6 2.8V14A2.8 2.8 0 0 1 4 11.4z" />
-    <path d="M19.6 9.5c.3.4.4.9.4 1.5v4.4c0 1-.8 1.9-1.9 1.9h-.8v2.6l-3.2-2.6h-2.5" />
+    <line x1="12" y1="3.7" x2="12" y2="5.9" />
+    <circle cx="12" cy="2.8" r="1" fill="currentColor" stroke="none" />
+    <rect x="4.6" y="5.9" width="14.8" height="12" rx="3.6" />
+    <circle cx="9.5" cy="11.7" r="1.15" fill="currentColor" stroke="none" />
+    <circle cx="14.5" cy="11.7" r="1.15" fill="currentColor" stroke="none" />
+    <path d="M9.8 15h4.4" />
   </svg>
 );
 export const IcBoardFill = (p = {}) => (
   <svg {...solid(p)}>
-    <path d="M4 6.8A2.8 2.8 0 0 1 6.8 4h7.4A2.8 2.8 0 0 1 17 6.8v4.4a2.8 2.8 0 0 1-2.8 2.8H9.4L5.4 17V14A2.8 2.8 0 0 1 4 11.4z" />
-    <path d="M18.4 8.9c1 .3 1.6 1.1 1.6 2.1v4.4c0 1-.8 1.9-1.9 1.9h-.8v2.6l-3.2-2.6h-3.4c.4-.4 3.4-.4 4.6-1.5 1.6 0 3.1-1.3 3.1-3z" />
+    <circle cx="12" cy="2.8" r="1.1" />
+    <rect x="11.1" y="3" width="1.8" height="3.2" rx="0.9" />
+    <rect x="4.4" y="5.7" width="15.2" height="12.4" rx="3.8" />
+    <circle cx="9.4" cy="11.6" r="1.35" fill="var(--bg)" />
+    <circle cx="14.6" cy="11.6" r="1.35" fill="var(--bg)" />
+    <path d="M9.7 15h4.6" stroke="var(--bg)" strokeWidth="1.5" strokeLinecap="round" />
   </svg>
 );
 export const IcAssets = (p = {}) => ( // the bank — what you own

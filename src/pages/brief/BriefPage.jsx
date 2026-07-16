@@ -400,12 +400,12 @@ export function MorningBriefPage({ btc, isMobile, settings, updateSetting, onOpe
           const dayEvents = miniEventsByDay[miniDateKey(day)] || [];
           const isToday = day === todayDate;
           return (
-            <div key={day} style={{ display: "flex", flexDirection: "column", alignItems: "stretch", gap: 2, textAlign: "left", minWidth: 0, height: 44, overflow: "hidden", padding: 3, borderRadius: 8, background: isToday ? "var(--accent-a10)" : "transparent" }}>
+            <div key={day} style={{ display: "flex", flexDirection: "column", alignItems: "stretch", gap: 2, textAlign: "left", minWidth: 0, height: 56, overflow: "hidden", padding: 3, borderRadius: 8, background: isToday ? "var(--accent-a10)" : "transparent" }}>
               <span className="t-num" style={{ fontSize: 11, fontWeight: isToday ? 700 : 500, color: isToday ? "var(--accent)" : "var(--ink)", paddingLeft: 1 }}>{day}</span>
               {dayEvents.length > 0 && (
-                // a real (truncated) title pill, not a dot — minWidth:0 + overflow
-                // let it clip inside the narrow cell instead of stretching it
-                <span style={{ fontSize: 10.5, fontWeight: 600, color: "var(--chip-ink)", background: miniCatColor(dayEvents[0].category), borderRadius: 4, padding: "1px 4px", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", lineHeight: 1.5, minWidth: 0, maxWidth: "100%", display: "block" }}>{dayEvents.length > 1 ? `${dayEvents[0].title} +${dayEvents.length - 1}` : dayEvents[0].title}</span>
+                // title pill — wraps to two lines so the name is readable, not a
+                // 4-character stub; minWidth:0 keeps it from widening the column
+                <span style={{ fontSize: 9.5, fontWeight: 600, color: "var(--chip-ink)", background: miniCatColor(dayEvents[0].category), borderRadius: 4, padding: "1px 3px", lineHeight: 1.2, minWidth: 0, maxWidth: "100%", display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical", overflow: "hidden", wordBreak: "break-word" }}>{dayEvents.length > 1 ? `${dayEvents[0].title} +${dayEvents.length - 1}` : dayEvents[0].title}</span>
               )}
             </div>
           );

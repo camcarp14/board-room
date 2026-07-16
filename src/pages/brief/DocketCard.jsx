@@ -45,7 +45,7 @@ export function DocketCard({ isMobile, birthdays, macroEvents, settings, onOpenC
   // one flat, prioritized list: birthdays today → calendar → macro → upkeep → queue
   const rows = [];
   if (!loading) {
-    bdays.filter(b => b.daysUntil === 0).forEach(b => rows.push({ c: T.pink, tag: "Today", text: `${b.name}'s birthday — don't let it slide` }));
+    bdays.filter(b => b.daysUntil === 0).forEach(b => rows.push({ c: T.pink, tag: "Today", text: `${b.name}'s birthday` }));
     (todayEvents || []).forEach(e => rows.push({ c: T.blue, tag: fmtEvTime(e), text: e.title + (e.location ? ` · ${e.location}` : ""), onClick: onOpenCalendar }));
     if (nextMacro) rows.push({ c: T.blue, tag: nextMacro.time, text: nextMacro.text });
     (upkeepDueItems || []).forEach(it => rows.push({

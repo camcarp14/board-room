@@ -4,7 +4,7 @@
 export const NAV = [
   { key: "brief", label: "Brief", group: "Today" },
   { key: "personal", label: "Personal", group: "Today" },
-  { key: "boardroom", label: "Board", group: "The Firm" },
+  { key: "boardroom", label: "Mini Me", group: "The Firm" },
   { key: "assets", label: "Assets", group: "The Firm" },
   { key: "systems", label: "Systems", group: "The Firm" },
 ];
@@ -17,7 +17,7 @@ const DATE_LINE = (d) =>
 export const HEADERS = {
   brief: { title: "Brief", sub: (d) => DATE_LINE(d) },
   personal: { title: "Personal", sub: () => "Notes, calendar, and training" },
-  boardroom: { title: "Board", sub: () => "Five seats, one synthesis" },
+  boardroom: { title: "Mini Me", sub: () => "Your delegate — queue, run, review" },
   assets: { title: "Assets", sub: () => "Everything you run" },
   systems: { title: "Systems", sub: () => "Usage, status, and deploys" },
 };
