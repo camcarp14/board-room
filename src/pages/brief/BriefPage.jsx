@@ -30,7 +30,7 @@ const WATCH_CAP = 3; // Watch this week: taller rows, so show fewer before "Show
    Brief card. */
 function CardHead({ title, leading, trailing, tight }) {
   return (
-    <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, marginBottom: tight ? 8 : 12 }}>
+    <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, marginBottom: tight ? 5 : 9 }}>
       <span style={{ display: "flex", alignItems: "center", gap: 8, minWidth: 0 }}>
         {leading}
         <span className="t-head" style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{title}</span>
@@ -42,7 +42,7 @@ function CardHead({ title, leading, trailing, tight }) {
 
 /* Freshness stamp — same voice and position on every card that has one. */
 function Fresh({ children }) {
-  return <div className="t-cap t-num" style={{ marginTop: 10, color: "var(--faint)" }}>{children}</div>;
+  return <div className="t-cap t-num" style={{ marginTop: 6, color: "var(--faint)" }}>{children}</div>;
 }
 
 /* In-page list expander — replaces the old capped nested-scroll regions. */
@@ -209,7 +209,7 @@ export function MorningBriefPage({ btc, isMobile, settings, updateSetting, onOpe
   let stance = "Neutral", stanceColor = T.sub;
   if (hasRange) { stance = up ? "Constructive" : "Cautious"; stanceColor = up ? T.green : T.amber; }
 
-  const pad = isMobile ? "md" : "lg";
+  const pad = isMobile ? "sm" : "md";
 
   const FeedFallbackRow = ({ status }) => status.state === "loading" ? (
     // skeleton matches the row it resolves into — pages develop, not arrive
@@ -243,8 +243,8 @@ export function MorningBriefPage({ btc, isMobile, settings, updateSetting, onOpe
           {hasChange && <Delta pct={btc.changePct} />}
         </div>
         {!btc.loading && !btc.error && (
-          <div style={{ marginBottom: 12 }}>
-            <Sparkline points={btc.points} color={up ? T.green : T.red} height={36} />
+          <div style={{ marginBottom: 8 }}>
+            <Sparkline points={btc.points} color={up ? T.green : T.red} height={34} />
           </div>
         )}
       </div>
@@ -307,13 +307,13 @@ export function MorningBriefPage({ btc, isMobile, settings, updateSetting, onOpe
   const card_gsc = (
     <Card pad={pad} style={{ minWidth: 0 }}>
       <CardHead title="Zero To Secure · Search Console" trailing={<StatusTag status={gscStatus} />} />
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(3, minmax(0, 1fr))", gap: 8, marginBottom: 12 }}>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(3, minmax(0, 1fr))", gap: 8, marginBottom: 8 }}>
         <StatTile value={gsc.impressions} label="Impressions" onClick={() => setGscMetric("impressions")} selected={gscMetric === "impressions"} />
         <StatTile value={gsc.clicks} label="Clicks" onClick={() => setGscMetric("clicks")} selected={gscMetric === "clicks"} />
         <StatTile value={gsc.pos} label="Avg position" onClick={() => setGscMetric("position")} selected={gscMetric === "position"} />
       </div>
       <GscLineChart rows={gsc.daily} metric={gscMetric} />
-      <div className="t-foot" style={{ marginTop: 8, color: gscStatus.state === "live" ? "var(--sub)" : "var(--faint)", lineHeight: 1.5 }}>
+      <div className="t-foot" style={{ marginTop: 6, color: gscStatus.state === "live" ? "var(--sub)" : "var(--faint)", lineHeight: 1.5 }}>
         {gscStatus.state === "live" ? gsc.note : gscStatus.state === "loading" ? "Loading…" : gscStatus.detail}
       </div>
       {gscStatus.state === "live" && <Fresh>{freshnessLabel(briefRefreshedAt)}</Fresh>}
@@ -486,19 +486,19 @@ export function MorningBriefPage({ btc, isMobile, settings, updateSetting, onOpe
   // and the desktop gutters — this page never nests its own scroll region.
   const gmin = isMobile ? 9999 : 320;
   return (
-    <div style={{ flex: 1, padding: isMobile ? "2px 16px 24px" : "6px 0 0", minWidth: 0 }}>
-      <div className="stagger" style={{ maxWidth: 960, width: "100%", margin: "0 auto", display: "flex", flexDirection: "column", gap: 10, minWidth: 0 }}>
-        <Grid min={gmin} gap={10} style={{ alignItems: "stretch" }}>
+    <div style={{ flex: 1, padding: isMobile ? "2px 12px 20px" : "6px 0 0", minWidth: 0 }}>
+      <div className="stagger" style={{ maxWidth: 960, width: "100%", margin: "0 auto", display: "flex", flexDirection: "column", gap: 8, minWidth: 0 }}>
+        <Grid min={gmin} gap={8} style={{ alignItems: "stretch" }}>
           {card_docket}
           {card_notes}
         </Grid>
         {card_minicalendar}
-        <SectionHeader title="Market" style={{ marginTop: 8 }} />
-        <Grid min={gmin} gap={10}>
+        <SectionHeader title="Market" style={{ marginTop: 4 }} />
+        <Grid min={gmin} gap={8}>
           {card_markets}{card_wire}{card_watch}
         </Grid>
-        <SectionHeader title="Signals" style={{ marginTop: 8 }} />
-        <Grid min={gmin} gap={10}>
+        <SectionHeader title="Signals" style={{ marginTop: 4 }} />
+        <Grid min={gmin} gap={8}>
           {card_gsc}{card_clarify}{card_zts}{card_shopify}{card_meetings}
         </Grid>
       </div>
