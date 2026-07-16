@@ -34,7 +34,18 @@ export async function callClaude({ system, messages, modelKey = "haiku", maxToke
       // Carry the user's session so the proxy can verify it before spending the
       // owner's API key (the function ran open to the internet before this).
       headers = { "Content-Type": "application/json" };
-      try { const { data } = (await supabase?.auth?.getSession?.()) || {}; const t = data?.session?.access_token; if (t) headers.Authorization = `Bearer ${t}`; } catch { /* no session — proxy will 401 */ }
+      // getSession() is normally an instant local read, but supabase-js serializes
+      // it behind an auth lock that a stuck token refresh can hold — never let that
+      // hang the whole call. Race it against a short timeout and proceed tokenless
+      // if it's slow (the proxy just 401s; it won't wedge chat/takes).
+      try {
+        const r = await Promise.race([
+          supabase?.auth?.getSession?.(),
+          new Promise((resolve) => setTimeout(() => resolve(null), 1500)),
+        ]);
+        const t = r?.data?.session?.access_token;
+        if (t) headers.Authorization = `Bearer ${t}`;
+      } catch { /* no session — proxy will 401 */ }
     } else {
       headers = { "Content-Type": "application/json", "x-api-key": ANTHROPIC_API_KEY, "anthropic-version": "2023-06-01", "anthropic-dangerous-direct-browser-access": "true" };
     }

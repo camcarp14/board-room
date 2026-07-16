@@ -121,15 +121,20 @@ export function MorningBriefPage({ btc, isMobile, settings, updateSetting, onOpe
   // as the events load — no click needed, and each is cached by index so
   // it only ever generates once per event per session.
   const fetchEventTake = async (e) => {
+    // Three states: released (past AND the actual number is in), pending (its
+    // time passed but no number yet), upcoming. Only released/upcoming get an AI
+    // take — never fabricate an "outcome" for a pending print (the source of the
+    // old bug where the pre-event guess was shown as if it were the result).
+    if (e.isPast && !e.actual) return;
     const k = takeKey(e);
     if (eventAnalysis[k] && eventAnalysis[k] !== "error") return; // have a take (or one in flight); errors may retry
     setEventAnalysis(prev => ({ ...prev, [k]: "loading" }));
     // The reader already understands markets — give a terse directional read,
-    // not an explainer. One short clause, ~12 words, no preamble, no hedging,
-    // and NEVER a disclaimer about lacking real-time data (just give the bias
-    // the number itself implies).
-    const system = e.isPast
-      ? `Given a US econ result vs forecast/prior, reply with ONE terse clause (≈12 words max) on the directional read for Bitcoin and equities — shorthand for someone who already knows markets. e.g. "Cooler core PPI — risk-on, both bid." No preamble, no full explanation, no hedging, no disclaimers about missing market data, no "BTC:"/"Stocks:" labels, no markdown. If the reaction is genuinely unknowable, give the bias the result itself implies.`
+    // not an explainer. One short clause, ~12 words, no preamble, no hedging.
+    const system = (e.isPast && e.actual)
+      // Released: the text carries "actual X — forecast Y — prior Z" — react to
+      // how it ACTUALLY landed, not what was expected beforehand.
+      ? `You're given a US economic release with its ACTUAL result alongside the forecast/prior. Reply with ONE terse clause (≈12 words max) on how it landed and the market read — lead with the surprise (beat/miss/in line) and the risk direction for Bitcoin and equities. e.g. "Hot 0.6% vs 0.0% — risk-off, both sold." No preamble, no hedging, no disclaimers, no "BTC:"/"Stocks:" labels, no markdown.`
       : `Given an upcoming US econ event (with forecast/prior if shown), reply with ONE terse clause (≈12 words max) on the likely directional lean for Bitcoin and equities — shorthand for someone who already knows markets. e.g. "Hot print risks risk-off; both lower." No preamble, no explanation, no hedging, no disclaimers, no labels, no markdown — just the lean.`;
     const raw = await callClaude({ system, messages: [{ role: "user", content: e.text }], modelKey: "haiku", maxTokens: 48, fn: "event_impact" });
     if (raw && raw.trim()) setEventAnalysis(prev => ({ ...prev, [k]: raw.trim() }));
@@ -359,21 +364,25 @@ export function MorningBriefPage({ btc, isMobile, settings, updateSetting, onOpe
         {eventsStatus.state === "live" ? (
           events.length ? <>{events.map((e, i) => {
             const analysis = eventAnalysis[takeKey(e)];
+            const released = e.isPast && !!e.actual; // has the real number
+            const pending = e.isPast && !e.actual;   // time passed, number not out yet
             return (
               // Stacked, not squeezed: the time + Result badge share the top
               // line; the event title gets the full width below it (aligned
               // under the time), then the one-line take. Reads cleanly on a
               // phone instead of wrapping the title into a narrow middle column.
-              <div key={i} style={{ background: e.isPast ? "var(--green-a06)" : "var(--surface-2)", borderRadius: 12, padding: "11px 13px", display: "flex", flexDirection: "column", gap: 5, flexShrink: 0 }}>
+              <div key={i} style={{ background: released ? "var(--green-a06)" : "var(--surface-2)", borderRadius: 12, padding: "11px 13px", display: "flex", flexDirection: "column", gap: 5, flexShrink: 0 }}>
                 <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
                   <Dot tone={e.color} />
                   <span className="t-cap t-num" style={{ color: "var(--faint)", whiteSpace: "nowrap" }}>{e.time}</span>
                   <span style={{ flex: 1 }} />
-                  {e.isPast && <span className="t-cap" style={{ color: "var(--green)", fontWeight: 600, flex: "none" }}>Result</span>}
+                  {released && <span className="t-cap" style={{ color: "var(--green)", fontWeight: 600, flex: "none" }}>Result</span>}
+                  {pending && <span className="t-cap" style={{ color: "var(--faint)", fontWeight: 600, flex: "none" }}>Awaiting</span>}
                 </div>
                 <div className="t-call" style={{ lineHeight: 1.4, paddingLeft: 17 }}>{e.text}</div>
                 <div className="t-foot" style={{ color: "var(--faint)", paddingLeft: 17, lineHeight: 1.5 }}>
-                  {analysis === "loading" || !analysis ? <span style={{ animation: "pulse 1.4s infinite" }}>{e.isPast ? "Reading the actual impact…" : "Reading the likely impact…"}</span>
+                  {pending ? "Number's not out yet — check back after the print lands."
+                    : analysis === "loading" || !analysis ? <span style={{ animation: "pulse 1.4s infinite" }}>{released ? "Reading how it landed…" : "Reading the likely impact…"}</span>
                     : analysis === "error" ? "Couldn't get a read on this one."
                     : analysis}
                 </div>
@@ -552,13 +561,16 @@ export function MorningBriefPage({ btc, isMobile, settings, updateSetting, onOpe
               return (
                 <Row key={i} {...(w.link ? { href: w.link, target: "_blank", rel: "noreferrer" } : {})}
                   className={w.link ? "hoverable" : undefined}
-                  style={{ display: "flex", alignItems: "baseline", gap: 9, textDecoration: "none", color: "inherit", minHeight: 44, flexShrink: 0, padding: "8px 0", borderTop: i === 0 ? "none" : "0.5px solid var(--line)" }}>
-                  <span className="t-cap t-num" style={{ color: "var(--faint)", flex: "none" }}>{w.time}</span>
-                  <span style={{ display: "inline-flex", alignItems: "center", gap: 5, flex: "none" }}>
+                  title={w.tag ? `${w.tag} · ${w.text}` : w.text}
+                  style={{ display: "flex", alignItems: "baseline", gap: 8, textDecoration: "none", color: "inherit", minHeight: 34, flexShrink: 0, padding: "6px 0", borderTop: i === 0 ? "none" : "0.5px solid var(--line)" }}>
+                  {/* Category is now just the colored dot next to the time — the
+                      text label (WIRE/REGULATORY/…) is dropped so each headline
+                      gets the full remaining width and wraps to fewer lines. */}
+                  <span style={{ display: "inline-flex", alignItems: "center", gap: 6, flex: "none" }}>
                     <Dot tone={w.tagColor} size={6} />
-                    <span className="t-cap" style={{ color: "var(--sub)", fontWeight: 600 }}>{w.tag}</span>
+                    <span className="t-cap t-num" style={{ color: "var(--faint)" }}>{w.time}</span>
                   </span>
-                  <span className="t-call" style={{ minWidth: 0, flex: 1, lineHeight: 1.45 }}>{w.text}</span>
+                  <span className="t-call" style={{ minWidth: 0, flex: 1, lineHeight: 1.4 }}>{w.text}</span>
                 </Row>
               );
             })}
