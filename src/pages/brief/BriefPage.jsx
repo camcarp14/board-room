@@ -5,7 +5,7 @@
 // (with the actual failure). Empty dashes beat plausible-looking fake data.
 import { useState, useEffect, useCallback, lazy, Suspense } from "react";
 import { T } from "../../theme.js";
-import { Card, SectionHeader, StatTile, Button, Dot, Delta, Grid } from "../../ui/kit.jsx";
+import { Card, StatTile, Button, Dot, Delta } from "../../ui/kit.jsx";
 import { IcChevronRight } from "../../ui/icons.jsx";
 import { StancePill, StatusTag, CARD_STATES } from "../../ui/shared.jsx";
 import { NumTween, Sparkline } from "../../ui/primitives.jsx";
@@ -25,8 +25,7 @@ import { EVENT_CATEGORIES } from "../personal/CalendarPanel.jsx"; // canonical c
 const GSC_EMPTY = { impressions: "—", impressionsD: "", clicks: "—", clicksD: "", pos: "—", posD: "", series: Array(14).fill(0), daily: [], note: "" };
 const STOCKS_EMPTY = { gold: { value: "—", price: "—", up: true }, nvda: { value: "—", price: "—", up: true }, mstr: { value: "—", price: "—", up: true }, strc: { value: "—", price: "—", up: true } };
 
-const ROW_CAP = 5; // list cards show the first N in-page; the rest behind "Show all"
-const WATCH_CAP = 3; // Watch this week: taller rows, so show fewer before "Show all"
+const ROW_CAP = 5; // Business Meetings shows the first N in-page; the rest behind "Show all"
 // AI takes are keyed by a STABLE event identity (its time + text), not list
 // position — the econ feed re-sorts and drops old events on refresh, so an
 // index key would leave a cached take displayed under a different event. They
@@ -113,9 +112,7 @@ export function MorningBriefPage({ btc, isMobile, settings, updateSetting, onOpe
   });
   const [btcChartOpen, setBtcChartOpen] = useState(false);
   const [tickerChart, setTickerChart] = useState(null); // {key,label} of the watchlist ticker whose chart is open
-  const [wireAll, setWireAll] = useState(false);
   const [meetingsAll, setMeetingsAll] = useState(false);
-  const [watchAll, setWatchAll] = useState(false);
 
   // Auto-generates a single, tidy one-sentence take (Bitcoin + stocks
   // together, not separate lines) for every Watch This Week event as soon
@@ -138,12 +135,11 @@ export function MorningBriefPage({ btc, isMobile, settings, updateSetting, onOpe
   };
   useEffect(() => {
     if (eventsStatus.state !== "live" || !events.length) return;
-    // only spend a call on the takes actually on screen — the rest generate
-    // when the card is expanded. fetchEventTake no-ops if we already have one.
-    const shown = watchAll ? events : events.slice(0, WATCH_CAP);
-    shown.forEach((e) => fetchEventTake(e));
+    // The card now scrolls (no "show all"), so generate a take for every event —
+    // each is a cheap Haiku call cached in localStorage, fetched once per event.
+    events.forEach((e) => fetchEventTake(e));
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [eventsStatus.state, events, watchAll]);
+  }, [eventsStatus.state, events]);
   // Persist resolved takes (not transient loading/error) so a return to the
   // Brief reuses them instead of re-spending Haiku; cap growth at the newest ~60.
   useEffect(() => {
@@ -353,16 +349,16 @@ export function MorningBriefPage({ btc, isMobile, settings, updateSetting, onOpe
     <Card pad={pad} style={{ minWidth: 0 }}>
       <CardHead title="Watch This Week" tight
         trailing={<><span className="t-cap" style={{ color: "var(--faint)" }}>CT time</span><StatusTag status={eventsStatus} /></>} />
-      <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+      <div className="brief-scroll" style={{ display: "flex", flexDirection: "column", gap: 8, maxHeight: 340, overflowY: "auto" }}>
         {eventsStatus.state === "live" ? (
-          events.length ? <>{(watchAll ? events : events.slice(0, WATCH_CAP)).map((e, i) => {
+          events.length ? <>{events.map((e, i) => {
             const analysis = eventAnalysis[takeKey(e)];
             return (
               // Stacked, not squeezed: the time + Result badge share the top
               // line; the event title gets the full width below it (aligned
               // under the time), then the one-line take. Reads cleanly on a
               // phone instead of wrapping the title into a narrow middle column.
-              <div key={i} style={{ background: e.isPast ? "var(--green-a06)" : "var(--surface-2)", borderRadius: 12, padding: "11px 13px", display: "flex", flexDirection: "column", gap: 5 }}>
+              <div key={i} style={{ background: e.isPast ? "var(--green-a06)" : "var(--surface-2)", borderRadius: 12, padding: "11px 13px", display: "flex", flexDirection: "column", gap: 5, flexShrink: 0 }}>
                 <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
                   <Dot tone={e.color} />
                   <span className="t-cap t-num" style={{ color: "var(--faint)", whiteSpace: "nowrap" }}>{e.time}</span>
@@ -378,7 +374,6 @@ export function MorningBriefPage({ btc, isMobile, settings, updateSetting, onOpe
               </div>
             );
           })}
-          {events.length > WATCH_CAP && <ShowMore open={watchAll} count={events.length} onToggle={() => setWatchAll(v => !v)} />}
           </> : <div className="t-foot" style={{ color: "var(--faint)", padding: "6px 0" }}>No high/medium-impact US events in the last 12 hours or next 7 days.</div>
         ) : <FeedFallbackRow status={eventsStatus} />}
       </div>
@@ -540,19 +535,18 @@ export function MorningBriefPage({ btc, isMobile, settings, updateSetting, onOpe
   );
 
   /* ── The wire — headline ticker ────────────────────────────────────────── */
-  const visibleWire = wireAll ? wire : wire.slice(0, ROW_CAP);
   const card_wire = (
     <Card pad={pad} style={{ minWidth: 0 }}>
       <CardHead tight title="The Wire" trailing={<StatusTag status={wireStatus} />} />
       {wireStatus.state === "live" ? (
         wire.length ? (
-          <div style={{ display: "flex", flexDirection: "column" }}>
-            {visibleWire.map((w, i) => {
+          <div className="brief-scroll" style={{ display: "flex", flexDirection: "column", maxHeight: 320, overflowY: "auto" }}>
+            {wire.map((w, i) => {
               const Row = w.link ? "a" : "div";
               return (
                 <Row key={i} {...(w.link ? { href: w.link, target: "_blank", rel: "noreferrer" } : {})}
                   className={w.link ? "hoverable" : undefined}
-                  style={{ display: "flex", alignItems: "baseline", gap: 9, textDecoration: "none", color: "inherit", minHeight: 44, padding: "8px 0", borderTop: i === 0 ? "none" : "0.5px solid var(--line)" }}>
+                  style={{ display: "flex", alignItems: "baseline", gap: 9, textDecoration: "none", color: "inherit", minHeight: 44, flexShrink: 0, padding: "8px 0", borderTop: i === 0 ? "none" : "0.5px solid var(--line)" }}>
                   <span className="t-cap t-num" style={{ color: "var(--faint)", flex: "none" }}>{w.time}</span>
                   <span style={{ display: "inline-flex", alignItems: "center", gap: 5, flex: "none" }}>
                     <Dot tone={w.tagColor} size={6} />
@@ -562,7 +556,6 @@ export function MorningBriefPage({ btc, isMobile, settings, updateSetting, onOpe
                 </Row>
               );
             })}
-            {wire.length > ROW_CAP && <ShowMore open={wireAll} count={wire.length} onToggle={() => setWireAll(v => !v)} />}
           </div>
         ) : <div className="t-foot" style={{ color: "var(--faint)", padding: "6px 0" }}>No headlines returned this cycle.</div>
       ) : <FeedFallbackRow status={wireStatus} />}
@@ -573,56 +566,24 @@ export function MorningBriefPage({ btc, isMobile, settings, updateSetting, onOpe
   const card_docket =<DocketCard isMobile={isMobile} birthdays={birthdays} macroEvents={eventsStatus.state === "live" ? events : []} settings={settings} onOpenCalendar={onOpenCalendar} onOpenQueue={onOpenQueue} onOpenBirthdays={onOpenBirthdays} />;
   const card_notes = <NotesTile isMobile={isMobile} refreshSignal={refreshSignal} onOpenNotes={onOpenNotes} />;
 
-  // One flow for both platforms: a single calm column on the phone (min=9999
-  // collapses every Grid to one track), the same order flowing 2-up on tablet
-  // (min=320 + maxWidth 960 caps the Grids at two columns — never three).
-  // minmax(min(...,100%),1fr) tracks + minWidth:0 cards keep an unbreakable
-  // line (a URL in a note) from stretching the page sideways on mobile — the
-  // same guard the old grid carried. The shell (#page-scroll) owns scrolling
-  // and the desktop gutters — this page never nests its own scroll region.
   // Column count + container width scale with the viewport so a wide desktop
   // fills the space instead of stranding two narrow columns in a sea of black:
-  // 1 col (phone/tablet portrait), 2 (≥1024), 3 (≥1440). The container cap grows
-  // with the columns so each stays a comfortable ~460px, never stretched thin.
+  // 1 col (phone/tablet portrait), 2 (≥1024), 3 (≥1440).
   const nCols = xwide ? 3 : wide ? 2 : 1;
   const maxW = xwide ? 1480 : 960;
-  // Cards vary a lot in height (a tall Watch beside a short Markets), so a
-  // row-based grid stranded a big empty cell next to the tall one on desktop.
-  // Masonry columns, cards dealt round-robin, pack vertically instead — no
-  // orphan gaps, and the columns stay close in height. Narrow = one stack.
-  const masonry = (cards) => {
-    if (nCols === 1) return <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>{cards.map((c, i) => <div key={i}>{c}</div>)}</div>;
-    const cols = Array.from({ length: nCols }, () => []);
-    cards.forEach((c, i) => cols[i % nCols].push(<div key={i} style={{ marginBottom: 8 }}>{c}</div>));
-    return (
-      <div style={{ display: "flex", gap: 8, alignItems: "flex-start" }}>
-        {cols.map((col, i) => <div key={i} style={{ flex: 1, minWidth: 0 }}>{col}</div>)}
-      </div>
-    );
-  };
+  // ONE masonry over every card — no fixed rows, no full-width section dividers
+  // that would strand a short card above a gap. Cards are dealt round-robin into
+  // nCols columns that each pack vertically, so tall and short widgets nestle
+  // together like a puzzle. Row-major deal means the daily trio (Docket · Notes ·
+  // Calendar) lands as the three column-tops; on the phone (nCols 1) it's simply
+  // one calm ordered stack.
+  const allCards = [card_docket, card_notes, card_minicalendar, card_markets, card_wire, card_watch, card_gsc, card_clarify, card_zts, card_shopify, card_meetings];
+  const columns = Array.from({ length: nCols }, () => []);
+  allCards.forEach((c, i) => columns[i % nCols].push(<div key={i} style={{ marginBottom: 8 }}>{c}</div>));
   return (
     <div style={{ flex: 1, padding: isMobile ? "2px 12px 20px" : "6px 0 0", minWidth: 0 }}>
-      <div className="stagger" style={{ maxWidth: maxW, width: "100%", margin: "0 auto", display: "flex", flexDirection: "column", gap: 8, minWidth: 0 }}>
-        {xwide ? (
-          // Wide desktop: the daily-glance trio sits in one row across the top.
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(3, minmax(0, 1fr))", gap: 8, alignItems: "start" }}>
-            {card_docket}
-            {card_notes}
-            {card_minicalendar}
-          </div>
-        ) : (
-          <>
-            <Grid min={wide ? 320 : 9999} gap={8} style={{ alignItems: "stretch" }}>
-              {card_docket}
-              {card_notes}
-            </Grid>
-            {card_minicalendar}
-          </>
-        )}
-        <SectionHeader title="Market" style={{ marginTop: 4 }} />
-        {masonry([card_markets, card_wire, card_watch])}
-        <SectionHeader title="Signals" style={{ marginTop: 4 }} />
-        {masonry([card_gsc, card_clarify, card_zts, card_shopify, card_meetings])}
+      <div className="stagger" style={{ maxWidth: maxW, width: "100%", margin: "0 auto", minWidth: 0, display: "flex", gap: 8, alignItems: "flex-start" }}>
+        {columns.map((col, i) => <div key={i} style={{ flex: 1, minWidth: 0 }}>{col}</div>)}
       </div>
       {(btcChartOpen || tickerChart) && (
         <Suspense fallback={null}>
