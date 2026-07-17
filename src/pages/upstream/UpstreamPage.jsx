@@ -476,12 +476,19 @@ function useRunPolling(runId, onDone) {
     doneRef.current = false;
     let timer = null;
     let cancelled = false;
+    let missingPolls = 0;
     const tick = async () => {
       try {
         const r = await fetchRun(runId);
         if (cancelled) return;
         setErr(null);
         if (r) setRun(r);
+        else if (++missingPolls >= 20) {
+          // The background function ACKed but never created the run row — a pre-run
+          // failure (env, auth). Fail loudly instead of spinning forever.
+          setErr("The engine acknowledged the run but never started it — check the upstream-run-background function logs on Netlify (likely a missing env var).");
+          return;
+        }
         if (r && r.status !== "running") {
           if (!doneRef.current) { doneRef.current = true; onDone?.(r); }
           return; // stop polling
@@ -547,7 +554,12 @@ function EngineTab() {
 
       {selectedId && (selectedRun
         ? <RunDetail run={selectedRun} />
-        : <Card pad="lg" style={{ marginTop: 12 }}><Spinner size={16} /> <span style={{ fontSize: 13, color: "var(--sub)" }}>engine starting — first artifact lands in ~30s</span>{pollErr && <p style={{ color: "var(--red)", fontSize: 12 }}>{pollErr}</p>}</Card>)}
+        : (
+          <Card pad="lg" style={{ marginTop: 12 }}>
+            {!pollErr && <><Spinner size={16} /> <span style={{ fontSize: 13, color: "var(--sub)" }}>engine starting — first artifact lands in ~30s</span></>}
+            {pollErr && <p style={{ color: "var(--red)", fontSize: 12.5, margin: 0 }}>{pollErr}</p>}
+          </Card>
+        ))}
 
       <SectionHeader title="Runs" trailing={<Button kind="quiet" size="md" onClick={loadRuns} aria-label="Refresh runs"><IcRefresh size={13} /></Button>} style={{ marginTop: 20 }} />
       {listErr && <Card><p style={{ color: "var(--red)", fontSize: 13, margin: 0 }}>{listErr}</p><Button kind="quiet" size="md" onClick={loadRuns} style={{ marginTop: 8 }}>Retry</Button></Card>}
