@@ -22,6 +22,7 @@ const PersonalPage = lazy(() => import("./pages/personal/PersonalPage.jsx").then
 const BoardRoomPage = lazy(() => import("./pages/board/BoardPage.jsx").then(m => ({ default: m.BoardRoomPage })));
 const PropertiesPage = lazy(() => import("./pages/assets/AssetsPage.jsx").then(m => ({ default: m.PropertiesPage })));
 const SystemsPage = lazy(() => import("./pages/systems/SystemsPage.jsx").then(m => ({ default: m.SystemsPage })));
+const UpstreamPage = lazy(() => import("./pages/upstream/UpstreamPage.jsx").then(m => ({ default: m.UpstreamPage })));
 
 // ════════════════════════════════════════════════════════════════════════════
 // THE BOARD ROOM — SESSION edition.
@@ -416,6 +417,7 @@ export default function App() {
       case "personal": return <PersonalPage isMobile={isMobile} jumpSignal={personalJumpTo} jump={jump} settings={settings} updateSetting={updateSetting} />;
       case "assets": return <PropertiesPage isMobile={isMobile} settings={settings} updateSetting={updateSetting} session={session} />;
       case "systems": return <SystemsPage settings={settings} updateSetting={updateSetting} session={session} btc={btc} isMobile={isMobile} />;
+      case "upstream": return <UpstreamPage isMobile={isMobile} />;
       default: return null;
     }
   };

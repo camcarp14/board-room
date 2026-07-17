@@ -7,6 +7,7 @@ export const NAV = [
   { key: "boardroom", label: "Mini Me", group: "The Firm" },
   { key: "assets", label: "Assets", group: "The Firm" },
   { key: "systems", label: "Systems", group: "The Firm" },
+  { key: "upstream", label: "Upstream", group: "The Firm" },
 ];
 
 const DATE_LINE = (d) =>
@@ -20,4 +21,5 @@ export const HEADERS = {
   boardroom: { title: "Mini Me", sub: () => "Your delegate — queue, run, review" },
   assets: { title: "Assets", sub: () => "Everything you run" },
   systems: { title: "Systems", sub: () => "Usage, status, and deploys" },
+  upstream: { title: "Upstream", sub: () => "Non-consensus questions · NOSTRADAMUS" },
 };

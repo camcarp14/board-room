@@ -120,11 +120,26 @@ export const IcWrench = (p = {}) => <svg {...base(p)}><path d="M14.2 6.3a4.6 4.6
 export const IcCompass = (p = {}) => <svg {...base(p)}><circle cx="12" cy="12" r="8.5" /><path d="m15.5 8.5-2 5-5 2 2-5z" fill="currentColor" stroke="none" /></svg>;
 export const IcSeal = (p = {}) => <svg {...base(p)}><circle cx="12" cy="12" r="8.5" /><rect x="9.2" y="9.2" width="5.6" height="5.6" rx="0.8" transform="rotate(45 12 12)" fill="currentColor" stroke="none" /></svg>;
 
-/* ── tab registry — one place decides what the five tabs look like ─────────── */
+export const IcUpstream = (p = {}) => ( // arrow rising against the current — upstream
+  <svg {...base(p)}>
+    <line x1="12" y1="14.5" x2="12" y2="4.5" />
+    <polyline points="7.8 8.7 12 4.5 16.2 8.7" />
+    <path d="M3.5 19c1.4 1.2 2.85 1.2 4.25 0s2.85-1.2 4.25 0 2.85 1.2 4.25 0 2.85-1.2 4.25 0" />
+  </svg>
+);
+export const IcUpstreamFill = (p = {}) => (
+  <svg {...base(p)}>
+    <path d="M12 3.2c.3 0 .6.1.8.3l4.6 4.6a1.05 1.05 0 0 1-1.5 1.5L13 6.75v8.05a1 1 0 0 1-2 0V6.75L8.1 9.6a1.05 1.05 0 0 1-1.5-1.5l4.6-4.6c.2-.2.5-.3.8-.3z" fill="currentColor" stroke="none" />
+    <path d="M3.5 19c1.4 1.2 2.85 1.2 4.25 0s2.85-1.2 4.25 0 2.85 1.2 4.25 0 2.85-1.2 4.25 0" strokeWidth="2.4" />
+  </svg>
+);
+
+/* ── tab registry — one place decides what the tabs look like ──────────────── */
 export const NAV_ICONS = {
   brief: { line: IcBrief, fill: IcBriefFill },
   personal: { line: IcPersonal, fill: IcPersonalFill },
   boardroom: { line: IcBoard, fill: IcBoardFill },
   assets: { line: IcAssets, fill: IcAssetsFill },
   systems: { line: IcSystems, fill: IcSystemsFill },
+  upstream: { line: IcUpstream, fill: IcUpstreamFill },
 };
