@@ -3,7 +3,7 @@
 // (engine-side distance judge), persists them to the ledger for scoring over time.
 import {
   MODELS, makeLedger, ledgerTotal, structured, searchCall, jsonCall,
-  parseJsonLoose, repairJson, normalizeUrl, LoudError,
+  parseJsonLoose, repairJson, matchFetched, LoudError,
 } from './llm.js';
 import { MECHANISM_TYPES, NO_EDGE_TYPE, validatePrediction } from './rigor.js';
 import { overlap } from './exclusion.js';
@@ -194,17 +194,24 @@ export async function runNostradamus({ runId, store }) {
     let cfParsed = parseJsonLoose(cf.lastText) || parseJsonLoose(cf.text);
     if (!cfParsed || !Array.isArray(cfParsed.claims)) cfParsed = await repairJson(cf.lastText || cf.text, CF_SCHEMA, ledger);
     const cfClaims = [];
+    let cfCitedButUnmatched = 0;
     for (const c of cfParsed?.claims || []) {
-      const orig = c.url ? cf.fetchedNormalized.get(normalizeUrl(c.url)) : null;
-      if (orig && c.claim) cfClaims.push({ id: `cf${cfClaims.length + 1}`, claim: c.claim, urls: [orig], horizon: c.horizon || '' });
+      const hit = c.url ? matchFetched(c.url, cf.fetchedNormalized) : null;
+      if (hit && c.claim) cfClaims.push({ id: `cf${cfClaims.length + 1}`, claim: c.claim, urls: [hit.url], matchTier: hit.tier, horizon: c.horizon || '' });
+      else if (c.claim) cfCitedButUnmatched++;
     }
     artifact.stages.consensusFuture = {
       startedAt: cfStart, claims: cfClaims, fetchedUrls: cf.fetchedUrls,
       searchDegraded: cfClaims.length < 3, searchCount: cf.searchCount,
+      // Diagnostics: if this ever fails again, the artifact says exactly why.
+      harvest: cf.harvest, parsedClaims: (cfParsed?.claims || []).length, citedButUnmatched: cfCitedButUnmatched,
       servedBy: cf.meta.servedBy, durationMs: Date.now() - new Date(cfStart).getTime(),
     };
     await save();
-    if (cfClaims.length < 3) throw new LoudError(`consensus future unmappable — only ${cfClaims.length} cited claims found; distance cannot be measured, so nothing ships`, 'CONSENSUS_FUTURE_UNMAPPABLE');
+    if (cfClaims.length < 3) {
+      const diag = `harvested ${cf.harvest?.urls || 0} urls from ${cf.searchCount} searches, model returned ${(cfParsed?.claims || []).length} claims (${cfCitedButUnmatched} cited an unfetched url)`;
+      throw new LoudError(`consensus future unmappable — only ${cfClaims.length} cited claims found; distance cannot be measured, so nothing ships. [${diag}]`, 'CONSENSUS_FUTURE_UNMAPPABLE');
+    }
     emit({ type: 'stage', stage: 'consensusFuture', status: 'done', summary: { claims: cfClaims.length } });
 
     currentStage = 'predictions';
@@ -229,7 +236,7 @@ export async function runNostradamus({ runId, store }) {
         const pred = { id: newId(), ...raw };
         pred.consensusCounterpart = pred.consensusCounterpart || {};
         pred.consensusCounterpart.urls = (pred.consensusCounterpart.urls || [])
-          .map((u) => cf.fetchedNormalized.get(normalizeUrl(u))).filter(Boolean);
+          .map((u) => matchFetched(u, cf.fetchedNormalized)?.url).filter(Boolean);
         const problems = validatePrediction(pred, { fetchedUrls: artifact.stages.consensusFuture.fetchedUrls, now: startedAt });
         if (problems.length) { rejected.push({ statement: pred.statement || '(no statement)', problems }); continue; }
         const dist = await distanceGate(pred, cfClaims, ledger);
@@ -298,7 +305,7 @@ export async function checkTell({ predictionId, store }) {
     throw new LoudError('tell check produced no classifiable signal', 'TELL_UNPARSEABLE');
   }
   const evidence = (parsed.evidence || [])
-    .map((e) => ({ url: res.fetchedNormalized.get(normalizeUrl(e.url)) || null, note: e.note }))
+    .map((e) => ({ url: matchFetched(e.url, res.fetchedNormalized)?.url || null, note: e.note }))
     .filter((e) => e.url);
   await store.insertTellCheck(predictionId, { signal: parsed.signal, summary: parsed.summary || '', evidence });
   const totals = ledgerTotal(ledger);

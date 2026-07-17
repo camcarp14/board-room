@@ -172,6 +172,11 @@ export async function searchCall({ model = MODELS.sonnet, system, user, maxUses 
   // each getting a fresh allowance (otherwise a failing search stage could run 5x past
   // its stage budget before failing).
   const callT0 = Date.now();
+  const blockTypes = {}; // diagnostics: what block shapes actually came back
+  const harvestUrl = (u) => { if (u) fetched.set(normalizeUrl(u), u); };
+  // Some result-block content items nest the URL; be defensive about the shape.
+  const urlOf = (r) => r?.url || r?.source?.url || r?.document?.source?.url || null;
+
   for (let hop = 0; hop < 5; hop++) {
     const hopBudget = timeoutMs - (Date.now() - callT0);
     if (hopBudget < 5000) throw new LoudError(`searchCall(${model}) exhausted its ${Math.round(timeoutMs / 1000)}s budget across continuation hops`, 'STAGE_TIMEOUT');
@@ -179,16 +184,22 @@ export async function searchCall({ model = MODELS.sonnet, system, user, maxUses 
     msg = await finalWithTimeout(stream, hopBudget, `searchCall(${model})`);
     let hopSearches = 0;
     for (const block of msg.content || []) {
+      blockTypes[block.type] = (blockTypes[block.type] || 0) + 1;
       if (block.type === 'server_tool_use') hopSearches++;
-      if (block.type === 'web_search_tool_result' && Array.isArray(block.content)) {
-        for (const r of block.content) {
-          if (r?.url) fetched.set(normalizeUrl(r.url), r.url);
-        }
+      // Raw search / fetch result blocks — harvest destination URLs when present.
+      if ((block.type === 'web_search_tool_result' || block.type === 'web_fetch_tool_result') && Array.isArray(block.content)) {
+        for (const r of block.content) harvestUrl(urlOf(r));
+      }
+      if (block.type === 'web_fetch_tool_result' && block.content && !Array.isArray(block.content)) {
+        harvestUrl(urlOf(block.content));
       }
       if (block.type === 'text') {
         if (block.text) texts.push(block.text);
+        // Citations are the RELIABLE URL source under web_search_20260209's dynamic
+        // filtering (raw result blocks may not surface) — harvest them as fetched URLs,
+        // not just into the citations array. This is what makes the citation gate pass.
         for (const cit of block.citations || []) {
-          if (cit?.url) citations.push({ url: cit.url, title: cit.title || '', citedText: cit.cited_text || '' });
+          if (cit?.url) { citations.push({ url: cit.url, title: cit.title || '', citedText: cit.cited_text || '' }); harvestUrl(cit.url); }
         }
       }
     }
@@ -211,8 +222,33 @@ export async function searchCall({ model = MODELS.sonnet, system, user, maxUses 
     fetchedNormalized: fetched,
     searchCount,
     citations,
+    harvest: { urls: fetched.size, citations: citations.length, blockTypes },
     meta: { servedBy: msg.model },
   };
+}
+
+// Tiered match of a model-cited URL against the set of URLs actually fetched this session.
+// Returns the canonical fetched URL (so audits are exact-match against stored URLs) or null.
+//   exact normalized  →  same host + overlapping path  →  same host (last resort).
+// Host-only means the model demonstrably visited that domain live this session — still
+// "cited, not remembered", just looser about which page. `tier` is recorded for audit.
+export function matchFetched(url, fetchedNormalized) {
+  if (!url) return null;
+  const exact = fetchedNormalized.get(normalizeUrl(url));
+  if (exact) return { url: exact, tier: 'exact' };
+  let host, path;
+  try { const u = new URL(String(url).includes('://') ? url : `https://${url}`); host = u.host.replace(/^www\./, '').toLowerCase(); path = u.pathname.replace(/\/+$/, ''); }
+  catch { return null; }
+  let hostOnly = null;
+  for (const orig of fetchedNormalized.values()) {
+    let oh, op;
+    try { const ou = new URL(orig); oh = ou.host.replace(/^www\./, '').toLowerCase(); op = ou.pathname.replace(/\/+$/, ''); }
+    catch { continue; }
+    if (oh !== host) continue;
+    if (op && path && op.length > 1 && path.length > 1 && (op.startsWith(path) || path.startsWith(op))) return { url: orig, tier: 'path' };
+    if (!hostOnly) hostOnly = orig;
+  }
+  return hostOnly ? { url: hostOnly, tier: 'host' } : null;
 }
 
 // ---------- JSON utilities ----------
@@ -249,8 +285,11 @@ export function normalizeUrl(u) {
     url.hash = '';
     for (const k of [...url.searchParams.keys()]) if (/^utm_|^fbclid|^gclid/i.test(k)) url.searchParams.delete(k);
     let path = url.pathname.replace(/\/+$/, '');
-    return `${url.protocol}//${url.host.toLowerCase()}${path}${url.search}`;
+    // Treat www.x.com and x.com as the same page — otherwise a model that cites the bare
+    // host misses a fetched www URL (or vice versa) and drops to the weaker host tier.
+    const host = url.host.toLowerCase().replace(/^www\./, '');
+    return `${url.protocol}//${host}${path}${url.search}`;
   } catch {
-    return String(u).trim().replace(/\/+$/, '').toLowerCase();
+    return String(u).trim().replace(/\/+$/, '').toLowerCase().replace(/^(https?:\/\/)www\./, '$1');
   }
 }

@@ -1,6 +1,6 @@
 // Stage 3 — deep dive. Sonnet + live web search. Every claim must cite a URL from THIS
 // dive's own fetched set; anything else is rejected and recorded. Nothing from memory.
-import { MODELS, searchCall, parseJsonLoose, repairJson, normalizeUrl, LoudError } from './llm.js';
+import { MODELS, searchCall, parseJsonLoose, repairJson, matchFetched, LoudError } from './llm.js';
 
 const DIVE_SCHEMA = {
   type: 'object',
@@ -62,23 +62,24 @@ export async function deepDive({ question, questionId, domain, ledger, timeoutMs
     try { parsed = await repairJson(res.lastText || res.text, DIVE_SCHEMA, ledger); } catch { parsed = null; }
   }
   if (!parsed || !Array.isArray(parsed.claims)) {
-    return { ...base, status: 'failed', failReason: 'dive output unparseable', fetchedUrls: res.fetchedUrls, searchCount: res.searchCount, durationMs: Date.now() - t0 };
+    return { ...base, status: 'failed', failReason: 'dive output unparseable', fetchedUrls: res.fetchedUrls, searchCount: res.searchCount, harvest: res.harvest, durationMs: Date.now() - t0 };
   }
 
-  // Citation gate: claim URLs must be in this dive's own fetched set (normalized match,
-  // stored back as the exact fetched string so audits are exact-match).
+  // Citation gate: every claim must cite a URL this dive actually fetched (tiered match,
+  // stored back as the canonical fetched string so audits are exact-match). Nothing from memory.
   const claims = [];
   const rejectedClaims = [];
   let n = 0;
   for (const c of parsed.claims) {
     if (!c.claim || String(c.claim).trim().length < 15) { rejectedClaims.push({ claim: String(c.claim || ''), reason: 'empty_or_trivial' }); continue; }
-    const fetchedOriginal = c.url ? res.fetchedNormalized.get(normalizeUrl(c.url)) : null;
-    if (!fetchedOriginal) { rejectedClaims.push({ claim: c.claim, reason: c.url ? 'url_not_fetched_this_session' : 'no_citation' }); continue; }
+    const hit = c.url ? matchFetched(c.url, res.fetchedNormalized) : null;
+    if (!hit) { rejectedClaims.push({ claim: c.claim, reason: c.url ? 'url_not_fetched_this_session' : 'no_citation' }); continue; }
     n++;
     claims.push({
       id: `${questionId}-cl${n}`,
       claim: String(c.claim).trim(),
-      urls: [fetchedOriginal],
+      urls: [hit.url],
+      matchTier: hit.tier,
       quote: String(c.quote || '').slice(0, 400),
       sourceTitle: String(c.sourceTitle || ''),
     });
@@ -95,6 +96,7 @@ export async function deepDive({ question, questionId, domain, ledger, timeoutMs
     claims, rejectedClaims,
     fetchedUrls: res.fetchedUrls,
     searchCount: res.searchCount,
+    harvest: res.harvest,
     tensions: (parsed.tensions || []).slice(0, 6).map(String),
     durationMs: Date.now() - t0,
   };
