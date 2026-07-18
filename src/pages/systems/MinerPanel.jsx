@@ -11,7 +11,7 @@
 
 import { Card, SectionHeader, Status, Dot, EmptyState, Grid } from "../../ui/kit.jsx";
 import {
-  useMiner, MIXED_CONTENT_BLOCKED, fmtDiff, fmtUptime, fmtAgo, fmtNum,
+  useMiner, MIXED_CONTENT_BLOCKED, STALE_MS, fmtDiff, fmtUptime, fmtAgo, fmtNum,
   efficiency, tempTone, vrTempTone, rejectTone,
 } from "../../lib/miner.js";
 
@@ -53,16 +53,16 @@ function Stat({ label, value, unit, helper, tone, aside, big, valueSize, dim }) 
 /* ── the panel ─────────────────────────────────────────────────────────────── */
 
 export function MinerPanel({ active, isMobile }) {
-  const { data: d, at, live, tried } = useMiner(active);
+  const { data: d, at, live, tried, source } = useMiner(active);
 
   // Nothing cached and nothing reachable — the only case with no numbers to show.
   if (!d) {
     return (
       <Card pad="md">
         <EmptyState
-          title={MIXED_CONTENT_BLOCKED ? "Can't reach the miner from here" : tried ? "Miner not answering" : "Looking for the miner…"}
+          title={MIXED_CONTENT_BLOCKED ? "No readings yet" : tried ? "Miner not answering" : "Looking for the miner…"}
           sub={MIXED_CONTENT_BLOCKED
-            ? "This page is served over HTTPS, which browsers won't let talk to the miner's local HTTP address. Run Board Room locally to see live stats."
+            ? "This page can't reach the miner directly — browsers block an HTTPS page from talking to a local HTTP address. Readings arrive instead from the pusher on your desktop; start it with `node scripts/miner-push.mjs --watch` and they'll show up here within a couple of minutes."
             : tried
               ? "Nothing cached yet. Connect to Pirate WiFi and make sure the miner is powered on — stats will appear here and stay cached afterwards."
               : "Checking 10.0.0.157 on the local network."}
@@ -77,22 +77,42 @@ export function MinerPanel({ active, isMobile }) {
   const pool = d.stratum?.pools?.[0];
   const connected = !!pool?.connected;
 
-  // Truthful per cause: on HTTPS the WiFi was never the problem, so don't send
-  // anyone to go check their router (see the header comment in lib/miner.js).
-  const banner = live ? null : MIXED_CONTENT_BLOCKED
-    ? "This page is served over HTTPS and can't reach the miner's local address. Run Board Room locally for live stats."
-    : "Reconnect to Pirate WiFi to refresh.";
+  // A pushed sample is a couple of minutes old by design, not stale — treat it
+  // as current so the phone doesn't wear a permanent warning for working
+  // normally. Only silence past the push cadence means something is wrong.
+  const synced = source === "supabase" && at != null && Date.now() - at < STALE_MS;
+  const current = live || synced;
+
+  // Truthful per cause. Sending someone to check their WiFi when the real
+  // problem is a sleeping desktop (or an HTTPS page that was never going to
+  // reach a LAN address) wastes their time on the wrong hunt.
+  const banner = current ? null
+    : source === "supabase" || (source === "cache" && MIXED_CONTENT_BLOCKED)
+      ? "Your desktop hasn't pushed a reading recently — it's probably asleep or off the network."
+      : MIXED_CONTENT_BLOCKED
+        ? "This page reads what your desktop pushes, and nothing has arrived yet. Start it with `node scripts/miner-push.mjs --watch`."
+        : "Reconnect to Pirate WiFi to refresh.";
 
   return (
     <div style={{ display: "flex", flexDirection: "column", minWidth: 0 }}>
 
-      {/* header — live pulse vs. cached badge */}
+      {/* header — live pulse / synced-via-desktop / cached */}
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, padding: "0 4px 10px" }}>
         <span style={{ display: "flex", alignItems: "baseline", gap: 8, minWidth: 0 }}>
           <span className="t-head">{d.deviceModel || "Miner"}</span>
           <span className="t-cap" style={{ color: "var(--faint)", whiteSpace: "nowrap" }}>{d.ASICModel}</span>
         </span>
-        {live ? <Status state="live" /> : <Status state="stale" label="Cached" />}
+        {/* Only a DIRECT read pulses. Synced data is real and current but a
+            couple of minutes behind, so it gets a steady dot — claiming "live"
+            for a 2-minute-old number would be a small lie told every 30s. */}
+        {live ? <Status state="live" /> : synced ? (
+          <span style={{ display: "inline-flex", alignItems: "center", gap: 6, flex: "none" }}>
+            <Dot tone="var(--green)" size={6} />
+            <span className="t-cap" style={{ color: "var(--green)", fontWeight: 600, whiteSpace: "nowrap" }}>
+              Synced {fmtAgo(at)}
+            </span>
+          </span>
+        ) : <Status state="stale" label="Cached" />}
       </div>
 
       {banner && (
@@ -121,19 +141,19 @@ export function MinerPanel({ active, isMobile }) {
             dropped the row to three cards. 200 keeps all four on one line on
             desktop and still falls to 2×2 on a phone. */}
         <Grid min={isMobile ? 150 : 200} gap={12}>
-          <Stat dim={!live}
+          <Stat dim={!current}
             big label="Mining Speed" value={fmtNum(hash10m)} unit="GH/s"
             helper="How many billions of guesses per second it's making (hashrate). Higher = more chances."
           />
-          <Stat dim={!live}
+          <Stat dim={!current}
             big label="Chip Temp" value={fmtNum(d.temp, 1)} unit="°C" tone={tempTone(d.temp, overheat)}
             helper={`Keep under ${overheat}°C. It'll auto-shutoff there to protect itself.`}
           />
-          <Stat dim={!live}
+          <Stat dim={!current}
             big label="Efficiency" value={eff == null ? "—" : fmtNum(eff, 1)} unit="W/Th"
             helper="Watts per unit of work (W/Th). Lower is better — same as MPG for a car."
           />
-          <Stat dim={!live}
+          <Stat dim={!current}
             big label="Best Lucky Share" value={fmtDiff(d.bestDiff)}
             helper="Your rarest guess so far (best difficulty). A personal record to beat — not a win."
           />
@@ -141,37 +161,37 @@ export function MinerPanel({ active, isMobile }) {
 
         <SectionHeader title="Everything else" style={{ marginTop: 22 }} />
         <Grid min={isMobile ? 150 : 200} gap={12}>
-          <Stat dim={!live}
+          <Stat dim={!current}
             label="Regulator Temp" value={fmtNum(d.vrTemp, 1)} unit="°C" tone={vrTempTone(d.vrTemp)}
             helper="The power components' temp. Watch this too — it climbs fast under load."
           />
-          <Stat dim={!live}
+          <Stat dim={!current}
             label="Power Use" value={fmtNum(d.power, 1)} unit="W"
             helper="Watts it's pulling from the wall right now."
           />
-          <Stat dim={!live}
+          <Stat dim={!current}
             label="Shares" value={fmtNum(d.sharesAccepted)} unit="accepted"
             aside={<span className="t-num" style={{ fontSize: 11.5, color: rejectTone(d.sharesAccepted, d.sharesRejected) }}>
               {fmtNum(d.sharesRejected)} rejected
             </span>}
             helper="Valid work the pool counted. Rejected should stay at/near zero."
           />
-          <Stat dim={!live}
+          <Stat dim={!current}
             label="Uptime" value={fmtUptime(d.uptimeSeconds)}
             helper="How long it's run without a restart."
           />
-          <Stat dim={!live}
+          <Stat dim={!current}
             label="Speed Setting" value={fmtNum(d.frequency)} unit={`MHz · ${fmtNum(d.coreVoltageActual)} mV`}
             helper="Clock speed and voltage — what we tuned during overclocking."
           />
-          <Stat dim={!live}
+          <Stat dim={!current}
             label="Fan" value={fmtNum(d.fanrpm)} unit={`RPM · ${fmtNum(d.fanspeed)}%`}
             helper="Cooling. % is how hard it's working to hold the target temp."
           />
           {/* A plain dot, not <Status state="live">: that one pulses, and a
               pulsing "Connected" under a Cached badge would claim liveness the
               panel doesn't have. */}
-          <Stat dim={!live}
+          <Stat dim={!current}
             label="Pool" value={d.stratumURL || "—"} valueSize={15}
             aside={
               <span style={{ display: "inline-flex", alignItems: "center", gap: 5 }}>

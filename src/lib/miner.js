@@ -1,4 +1,4 @@
-// ─── NerdQaxe++ miner — one JSON endpoint, polled while the panel is open ────
+// ─── NerdQaxe++ miner — two ways in, because one of them can't reach it ──────
 // The miner is an ESP32 on the home LAN serving plain HTTP. Verified 2026-07-18:
 // it DOES send permissive CORS headers (Access-Control-Allow-Origin: *), so the
 // browser fetch itself is fine — but only from an http:// page.
@@ -11,19 +11,34 @@
 //     opaque, so the JSON body is unreadable — it is not a workaround;
 //   · a Netlify function proxy can't help either: 10.0.0.157 is RFC1918, and
 //     the cloud has no route to a private LAN.
-// So we detect that case up front and skip polling entirely rather than firing
-// a doomed request (and a console error) every five seconds.
 //
-// Swap MINER_URL for an https:// relay on the LAN and live data starts working
-// everywhere, phone included — nothing else in this file or the panel changes.
+// The fix isn't a better pull, it's a push: scripts/miner-push.mjs runs on a
+// machine that CAN reach the miner and writes readings to Supabase, which every
+// client can already read over HTTPS. So there are two sources, in order:
+//
+//   1. DIRECT   — fetch the miner. Live, 5s. Only possible on an http:// page,
+//                 i.e. local dev on the home network.
+//   2. SUPABASE — the newest pushed sample. Works on the phone, the tablet, the
+//                 deployed site, and off your WiFi entirely. As fresh as the
+//                 push cadence (default 2 min).
+//
+// localStorage remains the last-resort seed so a cold offline open still shows
+// real numbers instead of a blank panel.
 
 import { useState, useEffect } from "react";
 import { sm } from "./storage.js";
+import { supabase } from "./supabase.js";
 
 export const MINER_URL = "http://10.0.0.157/api/system/info";
 
-const POLL_MS = 5000;
-const TIMEOUT_MS = 4000; // shorter than the poll interval, so requests never stack
+const DIRECT_POLL_MS = 5000;   // the miner is on the LAN — cheap to ask often
+const REMOTE_POLL_MS = 30000;  // Supabase only changes when the pusher writes
+const TIMEOUT_MS = 4000;       // shorter than the poll, so requests never stack
+
+// A sample older than this means the pushing machine has gone quiet (asleep,
+// rebooted, off the network). 2.5x the default 2-minute cadence, so an ordinary
+// late push doesn't trip it.
+export const STALE_MS = 5 * 60 * 1000;
 
 // Deterministic — computed once at module load, not per attempt.
 export const MIXED_CONTENT_BLOCKED =
@@ -33,18 +48,43 @@ export const MIXED_CONTENT_BLOCKED =
 
 /* ── the poll ──────────────────────────────────────────────────────────────── */
 
-// Returns { data, at, live, tried }. `data` is the last GOOD payload — it
-// survives failures, reloads, and trips off the network, so the panel can keep
-// showing real numbers (dimmed) instead of blanking. Never throws.
+// Returns { data, at, live, tried, source }. `data` is the last GOOD payload
+// and `at` is when that reading was TAKEN (not when we read it — a Supabase row
+// carries its own timestamp, and "last updated" must reflect the miner, not the
+// query). Never throws; failure is a normal state here.
 export function useMiner(active) {
   const [state, setState] = useState(() => {
     const c = sm.get("miner"); // br_miner
-    return { data: c?.data ?? null, at: c?.at ?? null, live: false, tried: false };
+    return { data: c?.data ?? null, at: c?.at ?? null, live: false, tried: false, source: c?.data ? "cache" : null };
   });
 
   useEffect(() => {
-    if (!active || MIXED_CONTENT_BLOCKED) return;
+    if (!active) return;
     let alive = true;
+
+    // Source 2. The pusher writes the whole miner response, so the payload here
+    // is the same shape a direct fetch returns and the panel needs no branch.
+    const readRemote = async () => {
+      if (!supabase) return null;
+      // try/catch as well as the error field: supabase-js reports query errors
+      // in `error`, but a dead network (or the placeholder creds used in
+      // preview mode) rejects outright. This runs inside setInterval, where an
+      // unhandled rejection would kill the poll loop.
+      const ctrl = new AbortController();
+      const bail = setTimeout(() => ctrl.abort(), TIMEOUT_MS);
+      try {
+        const { data, error } = await supabase
+          .from("miner_samples")
+          .select("payload, created_at")
+          .order("created_at", { ascending: false })
+          .limit(1)
+          .abortSignal(ctrl.signal) // never outlive the poll interval
+          .maybeSingle();
+        if (error || !data?.payload) return null;
+        return { data: data.payload, at: new Date(data.created_at).getTime() };
+      } catch { return null; }
+      finally { clearTimeout(bail); }
+    };
 
     // `force` is the mount/return-to-tab fetch, which must always run. The
     // visibility guard exists to stop the REPEATING poll from burning radio and
@@ -53,27 +93,47 @@ export function useMiner(active) {
     // forever with no request ever sent. (Caught in the browser, not in review.)
     const tick = async (force) => {
       if (!force && document.visibilityState === "hidden") return;
-      const ctrl = new AbortController();
-      const bail = setTimeout(() => ctrl.abort(), TIMEOUT_MS);
-      try {
-        const r = await fetch(MINER_URL, { signal: ctrl.signal, cache: "no-store" });
-        if (!r.ok) throw new Error(`HTTP ${r.status}`);
-        const data = await r.json();
-        if (!alive) return;
-        const at = Date.now();
-        setState({ data, at, live: true, tried: true });
-        sm.set("miner", { data, at }); // memory + localStorage, with the timestamp
-      } catch {
-        // Off-network, miner rebooting, or request timed out — hold the last
-        // good payload and let the panel dim it. Failure is a normal state here.
-        if (alive) setState((s) => ({ ...s, live: false, tried: true }));
-      } finally {
-        clearTimeout(bail);
+
+      // Source 1 — skipped entirely when the page scheme makes it impossible,
+      // rather than firing a doomed request every few seconds.
+      if (!MIXED_CONTENT_BLOCKED) {
+        const ctrl = new AbortController();
+        const bail = setTimeout(() => ctrl.abort(), TIMEOUT_MS);
+        try {
+          const r = await fetch(MINER_URL, { signal: ctrl.signal, cache: "no-store" });
+          if (!r.ok) throw new Error(`HTTP ${r.status}`);
+          const data = await r.json();
+          if (!alive) return;
+          const at = Date.now();
+          setState({ data, at, live: true, tried: true, source: "direct" });
+          sm.set("miner", { data, at });
+          return;
+        } catch {
+          // Off-network or the miner is rebooting — fall through to Supabase,
+          // which may still hold a recent reading from the pushing machine.
+          // Drop the live flag NOW rather than after that round trip: if the
+          // remote read is slow (or hangs, as it does against preview-mode
+          // placeholder credentials), the badge would otherwise keep claiming
+          // "Live" while nothing at all is working.
+          if (alive) setState((s) => ({ ...s, live: false, tried: true }));
+        } finally {
+          clearTimeout(bail);
+        }
       }
+
+      const remote = await readRemote();
+      if (!alive) return;
+      if (remote) {
+        setState({ ...remote, live: false, tried: true, source: "supabase" });
+        sm.set("miner", remote);
+        return;
+      }
+      // Both sources dark. Hold whatever we already had.
+      setState((s) => ({ ...s, live: false, tried: true }));
     };
 
     tick(true);
-    const iv = setInterval(tick, POLL_MS);
+    const iv = setInterval(tick, MIXED_CONTENT_BLOCKED ? REMOTE_POLL_MS : DIRECT_POLL_MS);
     // Coming back to the tab shouldn't wait out the rest of the interval.
     const onVis = () => { if (document.visibilityState === "visible") tick(true); };
     document.addEventListener("visibilitychange", onVis);

@@ -4,3 +4,5 @@ dist/
 .env
 .env.local
 .env.*.local
+# Holds the Supabase service-role key for scripts/miner-push.mjs.
+.env.miner
