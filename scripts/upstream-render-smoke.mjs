@@ -147,6 +147,15 @@ check("nostradamus run renders predictions + tell", () => {
   return html;
 });
 
+// 5b. A failed run must explain itself ONCE, not once per question card.
+check("failed run states the reason once, not per card", () => {
+  const html = render(baseballFailed);
+  const occurrences = (html.match(/research stage ran out of time/g) || []).length;
+  if (occurrences !== 1) throw new Error(`reason appears ${occurrences}x, expected exactly 1`);
+  if (!html.includes("Questions found")) throw new Error("failed run should not promise 'what you should be asking'");
+  return html;
+});
+
 // 6. Degenerate shapes must not crash.
 check("run with no artifact renders", () => render({ id: "r6", surface: "upstream", domain: "x", status: "done", verdict: "povs_shipped", started_at: new Date().toISOString(), duration_ms: 1, artifact: null }));
 check("run with empty stages renders", () => render({ id: "r7", surface: "nostradamus", domain: null, status: "done", verdict: null, started_at: new Date().toISOString(), duration_ms: 1, artifact: { stages: {} } }));
