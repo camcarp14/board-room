@@ -88,7 +88,19 @@ export async function runUpstream({ runId, domain, store }) {
     currentStage = 'dives';
     checkBudget(currentStage);
     emit({ type: 'stage', stage: 'dives', status: 'start', summary: { questions: survivors.map((s) => s.text) } });
-    const diveBudget = Math.min(300000, Math.max(45000, DEADLINE_MS - (Date.now() - t0) - 120000));
+    // Dives are the evidence engine — each runs up to 5 live searches and needs a real
+    // window. Reserve a synthesis tail, floor the dive window, and if the pre-dive stages
+    // ate so much budget that dives can't get that floor, fail loudly HERE rather than
+    // burning three doomed search calls (the 88s-timeout failure mode).
+    const SYNTH_RESERVE = 80000;
+    const DIVE_FLOOR = 150000;
+    const remainingMs = DEADLINE_MS - (Date.now() - t0);
+    if (remainingMs < DIVE_FLOOR + SYNTH_RESERVE) {
+      throw new LoudError(
+        `pre-dive stages consumed ${Math.round((DEADLINE_MS - remainingMs) / 1000)}s of the ${DEADLINE_MS / 1000}s budget — under ${(DIVE_FLOOR + SYNTH_RESERVE) / 1000}s left, too little to dive properly. Nothing was spent on doomed searches.`,
+        'TIME_BUDGET');
+    }
+    const diveBudget = Math.min(260000, remainingMs - SYNTH_RESERVE);
     artifact.stages.dives = await Promise.all(
       survivors.map((q) => deepDive({ question: q.text, questionId: q.id, domain, ledger, timeoutMs: diveBudget })
         .then((d) => { emit({ type: 'dive', questionId: q.id, status: d.status, claims: d.claims?.length || 0, rejected: d.rejectedClaims?.length || 0 }); return d; })),

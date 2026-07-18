@@ -51,7 +51,7 @@ For every candidate, name the single NEAREST consensus question (verbatim from t
 
 Score harshly; a 7 is earned. Manufactured contrarianism — a question that exists only to disagree — scores LOW on leverage, because no decision hangs on a pose. If nothing clears the bar, that is a valid, useful outcome. Do not inflate.`;
 
-export async function runGauntlet({ domain, consensus, candidates, ledger, timeoutMs = 220000 }) {
+export async function runGauntlet({ domain, consensus, candidates, ledger, timeoutMs = 110000 }) {
   const startedAt = new Date().toISOString();
   const t0 = Date.now();
   const kills = [];
@@ -83,7 +83,7 @@ export async function runGauntlet({ domain, consensus, candidates, ledger, timeo
   const artifactText = consensus.questions.map((q) => `- ${q.text}`).join('\n');
   const { data, meta } = await structured({
     model: MODELS.fable,
-    effort: 'high',
+    effort: 'medium',
     maxTokens: 16000,
     timeoutMs,
     ledger,

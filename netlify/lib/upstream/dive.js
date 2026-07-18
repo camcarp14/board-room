@@ -45,7 +45,7 @@ export async function deepDive({ question, questionId, domain, ledger, timeoutMs
   try {
     res = await searchCall({
       model: MODELS.sonnet,
-      maxUses: 6,
+      maxUses: 5,
       maxTokens: 14000,
       effort: 'medium',
       timeoutMs,

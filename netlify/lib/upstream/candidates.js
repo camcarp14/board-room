@@ -49,7 +49,7 @@ Strategies that reliably get off the consensus manifold (tag each question with 
 
 Do NOT manufacture contrarianism. A question whose only virtue is disagreeing with consensus is as worthless as consensus. Aim for questions a sharp operator would pin to the wall, not debate-club prompts.`;
 
-export async function generateCandidates({ domain, consensus, ledger, timeoutMs = 220000 }) {
+export async function generateCandidates({ domain, consensus, ledger, timeoutMs = 130000 }) {
   const startedAt = new Date().toISOString();
   const t0 = Date.now();
   const artifact = [
