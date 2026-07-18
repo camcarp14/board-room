@@ -15,6 +15,7 @@ import { pingFn, callFn } from "../../lib/functions.js";
 import { callClaude, DEFAULT_MODELS, MODEL_META } from "../../lib/claude.js";
 import { obs } from "../../lib/storage.js";
 import { PROPERTIES } from "../assets/AssetsPage.jsx";
+import { MinerPanel } from "./MinerPanel.jsx";
 
 /* ═══ Usage ════════════════════════════════════════════════════════════════ */
 
@@ -297,6 +298,7 @@ const SYSTEMS_SUBTABS = [
   { key: "status", label: "Status" },
   { key: "deploy", label: "Deploy" },
   { key: "supabase", label: "Supabase" },
+  { key: "miner", label: "Miner" },
 ];
 
 const REPLACE_ACCEPT = ".html,.htm,.js,.mjs,.css,.svg,.txt,.xml,.json,.webmanifest,image/*"; // matches the hint: HTML, JS, CSS, images
@@ -416,7 +418,11 @@ export function SystemsPage({ settings, updateSetting, session, btc, isMobile })
   return (
     <div style={{ flex: 1, display: "flex", flexDirection: "column", padding: isMobile ? "4px 16px 24px" : "6px 0 40px" }}>
       <div style={{ width: "100%", maxWidth: 1020, margin: "0 auto", display: "flex", flexDirection: "column", minWidth: 0 }}>
-        <Segmented options={SYSTEMS_SUBTABS} value={sub} onChange={setSub} style={{ marginBottom: 14, maxWidth: isMobile ? undefined : 480 }} />
+        {/* PillRow, not Segmented: the fifth sub-tab (Miner) puts this past
+            Segmented's ≤4 equal-width ceiling (DESIGN.md §6), and five equal
+            columns would crush the labels on a phone. PillRow scrolls and
+            keeps the active pill centered. */}
+        <PillRow options={SYSTEMS_SUBTABS} value={sub} onChange={setSub} style={{ marginBottom: 14 }} />
 
         {/* key={sub} re-mounts and animates the content on every tab switch. */}
         <div key={sub} className="pagefade" style={{ display: "flex", flexDirection: "column", minWidth: 0 }}>
@@ -571,6 +577,10 @@ export function SystemsPage({ settings, updateSetting, session, btc, isMobile })
               </div>
             </Grid>
           )}
+
+          {/* `active` gates the 5s poll — it stops the moment you leave the
+              sub-tab, so the other four never pay for it. */}
+          {sub === "miner" && <MinerPanel active={sub === "miner"} isMobile={isMobile} />}
 
           {sub === "supabase" && (
             <div>
