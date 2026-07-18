@@ -8,7 +8,7 @@ import {
 import { MECHANISM_TYPES, NO_EDGE_TYPE, validatePrediction } from './rigor.js';
 import { overlap } from './exclusion.js';
 
-export const DEADLINE_MS = 480000;
+export const DEADLINE_MS = 600000;
 const nowIso = () => new Date().toISOString();
 const newId = () => crypto.randomUUID();
 

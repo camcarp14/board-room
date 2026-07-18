@@ -15,10 +15,10 @@ import {
   Card, SectionHeader, CellGroup, Cell, StatTile, Button, Segmented, Field,
   Dot, EmptyState, Spinner, useConfirm,
 } from "../../ui/kit.jsx";
-import { IcRefresh, IcChevronDown, IcExternal, IcSearch } from "../../ui/icons.jsx";
+import { IcRefresh, IcChevronDown, IcExternal, IcSearch, IcTrash } from "../../ui/icons.jsx";
 import {
   startJob, fetchRuns, fetchRun, fetchPredictions, resolvePrediction,
-  calibration, fmtDuration, daysUntil, hostOf,
+  deleteRun, deletePrediction, calibration, fmtDuration, daysUntil, hostOf,
 } from "../../lib/upstream.js";
 
 /* ── primitives ─────────────────────────────────────────────────────────────── */
@@ -333,8 +333,10 @@ function UpstreamResult({ run, onRerun }) {
   const survivors = (st.gauntlet?.survivors || []).map((id) => items.find((c) => c.id === id)).filter(Boolean);
   const boring = a.verdict === "consensus_holds";
   const failed = run.status === "failed";
-  // One reason, stated once — never repeated on every card.
-  const researchFailed = failed && (st.dives || []).length > 0 && !(st.dives || []).some((d) => d.status === "ok");
+  // Any failed run that produced questions but no takes is "incomplete" — whether the
+  // dives ran and failed, or the run died before dives ever started. Basing this on
+  // dives existing hid the explanation entirely when the budget guard fired first.
+  const researchFailed = failed && (st.synthesis?.povs || []).length === 0;
 
   return (
     <>
@@ -361,9 +363,12 @@ function UpstreamResult({ run, onRerun }) {
           {researchFailed && (
             <Card style={{ marginBottom: 10, background: "color-mix(in srgb, var(--red) 6%, transparent)", border: "1px solid color-mix(in srgb, var(--red) 25%, transparent)" }}>
               <p style={{ margin: 0, fontSize: 13, lineHeight: 1.6 }}>
-                These cleared the gauntlet, but the research stage ran out of time before it could gather
-                evidence — so there are no takes yet. The questions themselves are real work and stand on
-                their own; re-run to get positions on them.
+                These three cleared the gauntlet, but the run stopped before it could research them, so
+                there are no positions yet. The questions are real work and stand on their own — re-run to
+                get takes on them.
+              </p>
+              <p style={{ margin: "8px 0 0", fontSize: 12, color: "var(--sub)", lineHeight: 1.55 }}>
+                <span style={{ color: "var(--faint)" }}>Reason: </span>{a.failure?.reason || run.error || "unknown"}
               </p>
               {onRerun && <Button kind="primary" size="md" style={{ marginTop: 10 }} onClick={onRerun}>Run this domain again</Button>}
             </Card>
@@ -399,6 +404,11 @@ function PredictionCard({ p, actions }) {
   const statusTone = { open: "var(--faint)", correct: "var(--green)", wrong: "var(--red)", void: "var(--faint)" };
   const yrs = days != null ? (days / 365).toFixed(1) : null;
   const closed = p.status && p.status !== "open";
+  const checkAge = (() => {
+    if (!last?.checked_at) return "";
+    const d = Math.floor((Date.now() - new Date(last.checked_at).getTime()) / 86400000);
+    return d <= 0 ? "today" : d === 1 ? "yesterday" : `${d}d ago`;
+  })();
 
   return (
     <Card pad="lg" style={{ marginBottom: 10, opacity: p.status === "void" ? 0.72 : 1 }}>
@@ -406,6 +416,11 @@ function PredictionCard({ p, actions }) {
         <Tag tone={p.kind === "bold" ? "var(--brass)" : "var(--green)"}>{p.kind === "bold" ? "bold call" : "consensus affirmed"}</Tag>
         {closed && <Tag tone={statusTone[p.status]}>{p.status}</Tag>}
         {last && <Tag tone={sigTone[last.signal]}>tell: {last.signal}</Tag>}
+        {!closed && (
+          <Tag tone={last ? "var(--faint)" : "var(--brass)"}>
+            {last ? `checked ${checkAge}` : "never checked"}
+          </Tag>
+        )}
         <span style={{ flex: 1 }} />
         <span className="t-num" style={{ fontSize: 12, color: "var(--sub)" }}>
           {p.resolution_date}{days != null && !closed && <span style={{ color: "var(--faint)" }}> · {days > 0 ? `${yrs}y` : `${-days}d overdue`}</span>}
@@ -464,9 +479,14 @@ function PredictionCard({ p, actions }) {
       {actions && !closed && (
         <div style={{ display: "flex", gap: 8, marginTop: 12, flexWrap: "wrap", alignItems: "center" }}>
           <Button kind="quiet" size="md" disabled={actions.checking === p.id} onClick={() => actions.onCheckTell(p.id)}>
-            {actions.checking === p.id ? <><Spinner size={12} /> checking…</> : "Check the tell"}
+            {actions.checking === p.id ? <><Spinner size={12} /> checking…</> : last ? "Re-check the tell" : "Check the tell"}
           </Button>
           <Button kind="quiet" size="md" onClick={() => setResolving(!resolving)}>Resolve…</Button>
+          <span style={{ flex: 1 }} />
+          {actions.onDelete && (
+            <Button kind="quiet" size="md" title="Delete this prediction" aria-label="Delete this prediction"
+              onClick={() => actions.onDelete(p)}><IcTrash size={12} /></Button>
+          )}
           {resolving && (
             <span style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" }}>
               <Field value={note} onChange={(e) => setNote(e.target.value)} placeholder="note (optional)" style={{ width: 150 }} />
@@ -480,11 +500,37 @@ function PredictionCard({ p, actions }) {
       {/* Nothing destructive without an undo. */}
       {actions && closed && (
         <div style={{ display: "flex", gap: 8, marginTop: 12, alignItems: "center", flexWrap: "wrap" }}>
-          {p.resolution_note && <span style={{ fontSize: 12.5, color: "var(--sub)", flex: 1 }}>{p.resolution_note}</span>}
+          {p.resolution_note && <span style={{ fontSize: 12.5, color: "var(--sub)" }}>{p.resolution_note}</span>}
+          <span style={{ flex: 1 }} />
           <Button kind="quiet" size="md" onClick={() => actions.onResolve(p, "open", null)}>Reopen</Button>
+          {actions.onDelete && (
+            <Button kind="quiet" size="md" title="Delete this prediction" aria-label="Delete this prediction"
+              onClick={() => actions.onDelete(p)}><IcTrash size={12} /></Button>
+          )}
         </div>
       )}
     </Card>
+  );
+}
+
+// The engine's subjects are a paragraph long. Show the first clause; the rest on demand.
+function SubjectHeader({ subject, count }) {
+  const [open, setOpen] = useState(false);
+  const short = String(subject).split(/\s+—\s+|\s+-\s+|:\s/)[0];
+  const truncated = short.length < String(subject).length - 5;
+  return (
+    <div style={{ marginBottom: 10 }}>
+      <span style={kLabel}>subject · {count} open call{count > 1 ? "s" : ""}</span>
+      <p style={{ fontSize: 13, color: "var(--sub)", margin: 0, lineHeight: 1.55 }}>
+        {open ? subject : short}
+        {truncated && (
+          <button onClick={() => setOpen(!open)} style={{
+            background: "none", border: "none", padding: "0 0 0 6px", cursor: "pointer",
+            color: "var(--brass)", fontSize: 12,
+          }}>{open ? "less" : "more"}</button>
+        )}
+      </p>
+    </div>
   );
 }
 
@@ -535,7 +581,7 @@ function NostradamusResult({ run }) {
 
 /* ══ run shell ══════════════════════════════════════════════════════════════ */
 
-export function RunView({ run, onRerun }) {
+export function RunView({ run, onRerun, onDelete }) {
   const a = run.artifact || { stages: {} };
   const isNos = run.surface === "nostradamus";
   const running = run.status === "running";
@@ -575,13 +621,21 @@ export function RunView({ run, onRerun }) {
             <Spinner size={12} /> Working on <b>{liveLabel}</b>. Takes 5–8 minutes; you can leave and come back.
           </p>
         )}
-        {a.usageTotal && (
-          <div className="t-num" style={{ display: "flex", gap: 14, flexWrap: "wrap", fontSize: 10.5, color: "var(--faint)", marginTop: 12 }}>
-            <span>{Math.round((a.durationMs || 0) / 1000)}s</span>
-            <span>{a.usageTotal.searches || 0} searches</span>
-            <span>${Number(a.usageTotal.estCostUsd || 0).toFixed(2)}</span>
-          </div>
-        )}
+        <div style={{ display: "flex", alignItems: "center", gap: 10, marginTop: 12, flexWrap: "wrap" }}>
+          {a.usageTotal && (
+            <div className="t-num" style={{ display: "flex", gap: 14, flexWrap: "wrap", fontSize: 10.5, color: "var(--faint)" }}>
+              <span>{Math.round((a.durationMs || 0) / 1000)}s</span>
+              <span>{a.usageTotal.searches || 0} searches</span>
+              <span>${Number(a.usageTotal.estCostUsd || 0).toFixed(2)}</span>
+            </div>
+          )}
+          <span style={{ flex: 1 }} />
+          {onDelete && !running && (
+            <Button kind="quiet" size="md" onClick={onDelete} aria-label="Delete this run" title="Delete this run">
+              <IcTrash size={13} />
+            </Button>
+          )}
+        </div>
       </Card>
       {isNos ? <NostradamusResult run={run} /> : <UpstreamResult run={run} onRerun={onRerun} />}
     </div>
@@ -640,6 +694,7 @@ function EngineTab() {
   const [launching, setLaunching] = useState(false);
   const [launchErr, setLaunchErr] = useState(null);
   const [showHistory, setShowHistory] = useState(false);
+  const [confirmEl, confirm] = useConfirm();
 
   const loadRuns = useCallback(() => {
     setListErr(null);
@@ -667,8 +722,25 @@ function EngineTab() {
     setLaunching(false);
   };
 
+  const removeRun = async (r) => {
+    const ok = await confirm({
+      title: "Delete this run?",
+      message: `“${r.domain}” and everything it produced. This can't be undone.`,
+      confirmLabel: "Delete", destructive: true,
+    });
+    if (!ok) return;
+    try {
+      await deleteRun(r.id);
+      if (r.id === selectedId) setSelectedId(null);
+      const rest = (runs || []).filter((x) => x.id !== r.id);
+      setRuns(rest);
+      if (r.id === selectedId) setSelectedId(rest[0]?.id || null);
+    } catch (e) { setListErr(e.message); }
+  };
+
   return (
     <>
+      {confirmEl}
       <Card pad="lg">
         <p style={{ margin: "0 0 4px", fontWeight: 700, fontSize: 15.5 }}>What should you actually be asking?</p>
         <p style={{ margin: "0 0 12px", fontSize: 13, color: "var(--sub)", lineHeight: 1.6 }}>
@@ -703,7 +775,11 @@ function EngineTab() {
         </Card>
       )}
 
-      {selectedRun && <RunView run={selectedRun} onRerun={active ? null : () => launch(selectedRun.domain)} />}
+      {selectedRun && (
+        <RunView run={selectedRun}
+          onRerun={active ? null : () => launch(selectedRun.domain)}
+          onDelete={() => removeRun(selectedRun)} />
+      )}
       {selectedId && !selectedRun && !listErr && (
         <Card pad="lg" style={{ marginTop: 12 }}><Spinner size={14} /> <span style={{ fontSize: 13, color: "var(--sub)" }}>loading…</span></Card>
       )}
@@ -722,7 +798,13 @@ function EngineTab() {
               {runs.filter((r) => r.id !== selectedId).map((r) => (
                 <Cell key={r.id} title={r.domain || "(run)"}
                   sub={`${fmtDuration(r.duration_ms)} · ${new Date(r.started_at).toLocaleDateString("en-US", { month: "short", day: "numeric" })}`}
-                  trailing={<RunBadge run={r} />} chevron
+                  trailing={
+                    <span style={{ display: "inline-flex", alignItems: "center", gap: 8 }}>
+                      <RunBadge run={r} />
+                      <Button kind="quiet" size="md" title="Delete this run" aria-label="Delete this run"
+                        onClick={(e) => { e.stopPropagation(); removeRun(r); }}><IcTrash size={12} /></Button>
+                    </span>
+                  }
                   onClick={() => { setSelectedId(r.id); window.scrollTo({ top: 0, behavior: "smooth" }); }} />
               ))}
             </CellGroup>
@@ -805,16 +887,34 @@ function NostradamusTab() {
   const open = (preds || []).filter((p) => p.status === "open");
   const closed = (preds || []).filter((p) => p.status !== "open");
 
+  // Unchecked tells first, then soonest to resolve — the ledger should tell you what to
+  // look at next, not just what exists.
   const grouped = useMemo(() => {
     const by = new Map();
-    for (const p of open) {
+    const ordered = [...open].sort((a, b) => {
+      const aChecked = (a.tellChecks || []).length > 0, bChecked = (b.tellChecks || []).length > 0;
+      if (aChecked !== bChecked) return aChecked ? 1 : -1;
+      return String(a.resolution_date).localeCompare(String(b.resolution_date));
+    });
+    for (const p of ordered) {
       if (!by.has(p.subject)) by.set(p.subject, []);
       by.get(p.subject).push(p);
     }
     return [...by.entries()];
   }, [open]);
 
-  const actions = { onCheckTell, onResolve, checking };
+  const removePrediction = async (p) => {
+    const ok = await confirm({
+      title: "Delete this prediction?",
+      message: `“${String(p.statement).slice(0, 110)}…” — removed from the record permanently, along with its tell checks.`,
+      confirmLabel: "Delete", destructive: true,
+    });
+    if (!ok) return;
+    try { await deletePrediction(p.id); setPreds((cur) => (cur || []).filter((x) => x.id !== p.id)); }
+    catch (e) { setErr(e.message); }
+  };
+
+  const actions = { onCheckTell, onResolve, checking, onDelete: removePrediction };
 
   return (
     <>
@@ -870,10 +970,7 @@ function NostradamusTab() {
 
       {grouped.map(([subject, list]) => (
         <div key={subject} style={{ marginTop: 18 }}>
-          <div style={{ marginBottom: 10 }}>
-            <span style={kLabel}>on the subject of</span>
-            <p style={{ fontSize: 12.5, color: "var(--sub)", margin: 0, lineHeight: 1.55 }}>{subject}</p>
-          </div>
+          <SubjectHeader subject={subject} count={list.length} />
           {list.map((p) => <PredictionCard key={p.id} p={p} actions={actions} />)}
         </div>
       ))}
@@ -884,6 +981,11 @@ function NostradamusTab() {
             <Button kind="quiet" size="md" onClick={() => setShowClosed(!showClosed)}>{showClosed ? "hide" : "show"}</Button>
           } />
           {showClosed && closed.map((p) => <PredictionCard key={p.id} p={p} actions={actions} />)}
+          {!showClosed && (
+            <p style={{ fontSize: 12.5, color: "var(--faint)", margin: "6px 0 0" }}>
+              Hidden from the ledger. Open to reopen or delete them.
+            </p>
+          )}
         </div>
       )}
 

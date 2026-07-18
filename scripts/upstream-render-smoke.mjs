@@ -150,9 +150,24 @@ check("nostradamus run renders predictions + tell", () => {
 // 5b. A failed run must explain itself ONCE, not once per question card.
 check("failed run states the reason once, not per card", () => {
   const html = render(baseballFailed);
-  const occurrences = (html.match(/research stage ran out of time/g) || []).length;
+  const occurrences = (html.match(/cleared the gauntlet, but the run stopped/g) || []).length;
   if (occurrences !== 1) throw new Error(`reason appears ${occurrences}x, expected exactly 1`);
   if (!html.includes("Questions found")) throw new Error("failed run should not promise 'what you should be asking'");
+  return html;
+});
+
+// 5c. The budget guard fires BEFORE dives exist — the failure must still be explained.
+// (This shipped broken once: the explanation was keyed on dives existing, so a run that
+// died at the pre-dive guard rendered three take-less cards with no reason given.)
+check("run that failed before dives still explains itself", () => {
+  const noDives = JSON.parse(JSON.stringify(baseballFailed));
+  delete noDives.artifact.stages.dives;
+  noDives.artifact.failure = { stage: "dives", reason: "pre-dive stages consumed 260s of the 600s budget", code: "TIME_BUDGET" };
+  noDives.error = noDives.artifact.failure.reason;
+  const html = render(noDives);
+  if (!html.includes("no positions yet")) throw new Error("no explanation rendered for a pre-dive failure");
+  if (!html.includes("260s")) throw new Error("the actual failure reason is not surfaced");
+  if (!html.includes("Questions found")) throw new Error("should not promise takes it does not have");
   return html;
 });
 

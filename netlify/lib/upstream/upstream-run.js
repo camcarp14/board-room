@@ -8,7 +8,7 @@ import { runGauntlet } from './scoring.js';
 import { deepDive } from './dive.js';
 import { synthesizePov, synthesizeSpine } from './synthesis.js';
 
-export const DEADLINE_MS = 480000;
+export const DEADLINE_MS = 600000;
 const nowIso = () => new Date().toISOString();
 
 export async function runUpstream({ runId, domain, store }) {

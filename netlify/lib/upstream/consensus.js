@@ -63,10 +63,10 @@ export async function buildConsensus({ domain, ledger, onEvent = () => {} }) {
   const searchP = (async () => {
     const res = await searchCall({
       model: MODELS.sonnet,
-      maxUses: 3,
+      maxUses: 2,
       maxTokens: 10000,
       effort: 'medium',
-      timeoutMs: 110000,
+      timeoutMs: 55000,
       ledger,
       system:
         'You map the consensus conversation about a topic by looking at what actually ranks: FAQs, explainers, "everything you need to know" pieces, People-Also-Ask-style questions. Search the web, then report the standard questions being asked (with the URL of a page asking or answering each) and the standard consensus positions. Be representative, not original. End your reply with a single JSON object: {"questions":[{"text":"...","url":"..."}],"positions":[{"topic":"...","position":"..."}]} and nothing after it.',

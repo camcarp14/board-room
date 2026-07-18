@@ -51,6 +51,17 @@ export async function fetchPredictions() {
   return (preds || []).map((p) => ({ ...p, tellChecks: byPred[p.id] || [] }));
 }
 
+// Deletes cascade in the DB: a run takes its events with it, a prediction its tell checks.
+export async function deleteRun(id) {
+  const { error } = await supabase.from("upstream_runs").delete().eq("id", id);
+  if (error) throw new Error(error.message);
+}
+
+export async function deletePrediction(id) {
+  const { error } = await supabase.from("upstream_predictions").delete().eq("id", id);
+  if (error) throw new Error(error.message);
+}
+
 export async function resolvePrediction(id, status, note) {
   const { error } = await supabase.from("upstream_predictions")
     .update({ status, resolved_at: status === "open" ? null : new Date().toISOString(), resolution_note: note || null })
