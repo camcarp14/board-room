@@ -7,7 +7,10 @@ export const NAV = [
   { key: "boardroom", label: "Mini Me", group: "The Firm" },
   { key: "assets", label: "Assets", group: "The Firm" },
   { key: "systems", label: "Systems", group: "The Firm" },
-  { key: "upstream", label: "Upstream", group: "The Firm" },
+  // Upstream is built and deployed but hidden from nav while the pipeline settles.
+  // To bring it back, uncomment this line — the page, route, HEADERS entry and the
+  // Supabase tables are all still wired.
+  // { key: "upstream", label: "Upstream", group: "The Firm" },
 ];
 
 const DATE_LINE = (d) =>
