@@ -1,134 +1,19 @@
-// ─── Page: Board Room (chat + seats + Mini Me + Learn) ───────────────────────
-// Desktop: split view — chat and the board are both visible, always, no
-// switching needed. Mobile (and desktop windows too narrow for the split): a
-// sub-tab toggle, since there's no room for both.
+// ─── Page: Mind (neural canvas · Mini Me delegate · Learn) ───────────────────
+// The board (chat + seats) was retired; this page now hosts the Mind neural
+// canvas as its home sub-tab, with the Mini Me delegate and Learn alongside.
 import { useState, useEffect } from "react";
-import { Card, SectionHeader, Segmented, Button, Dot } from "../../ui/kit.jsx";
-import { IcCheck, IcChevronRight, IcSeal } from "../../ui/icons.jsx";
-import { BOARD, callClaude } from "../../lib/claude.js";
+import { Segmented } from "../../ui/kit.jsx";
+import { callClaude } from "../../lib/claude.js";
 import { supabase } from "../../lib/supabase.js";
-import { tint } from "../../ui/styles.js";
 import LearnPanel from "../../LearnPanel.jsx";
 import { MiniMePage } from "./MiniMePage.jsx";
 import { MindPanel } from "./mind/MindPanel.jsx";
-
-// Seat notes modal stays importable from here as well as from its own file.
-export { SeatNotesModal } from "./SeatNotesModal.jsx";
-
-/* ── seat identity — one mark, no emoji: a tinted well carrying the seat's
-      color dot (the same dot the chat's consulted-chips wear) ─────────────── */
-function SeatMark({ color, size = 34 }) {
-  return (
-    <span style={{ width: size, height: size, borderRadius: Math.round(size * 0.3), background: tint(color, 14), display: "inline-flex", alignItems: "center", justifyContent: "center", flex: "none" }}>
-      <Dot tone={color} size={Math.max(8, Math.round(size * 0.27))} />
-    </span>
-  );
-}
-
-/* Context state — keyed off truthiness of seatNotes[key] (empty string = no
-   context). Check + text, not color alone. */
-function SeatStatus({ has }) {
-  return has ? (
-    <span className="t-cap" style={{ display: "inline-flex", alignItems: "center", gap: 4, color: "var(--green)", fontWeight: 600, flex: "none" }}>
-      <IcCheck size={11} /> Context loaded
-    </span>
-  ) : (
-    <span className="t-cap" style={{ color: "var(--faint)", flex: "none" }}>Tap to add context</span>
-  );
-}
-
-/* One SeatCard for every surface that shows a seat (page grid + desktop rail —
-   the three old treatments, unified). The whole card is the tap target. */
-function SeatCard({ seat, has, onClick, compact }) {
-  if (compact) {
-    return (
-      <Card pressable pad="sm" onClick={onClick} aria-label={`${seat.name} — edit context`}>
-        <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-          <SeatMark color={seat.color} size={30} />
-          <span style={{ display: "flex", flexDirection: "column", gap: 1, minWidth: 0, flex: 1 }}>
-            <span style={{ fontSize: 14, fontWeight: 600, letterSpacing: "-0.01em", color: "var(--ink)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{seat.name}</span>
-            <SeatStatus has={has} />
-          </span>
-          <IcChevronRight size={13} style={{ color: "var(--faint)", flex: "none" }} />
-        </div>
-        <div className="t-cap" style={{ color: "var(--sub)", fontWeight: 400, lineHeight: 1.5, marginTop: 8 }}>{seat.blurb}</div>
-      </Card>
-    );
-  }
-  return (
-    <Card pressable pad="md" onClick={onClick} aria-label={`${seat.name} — edit context`} style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10 }}>
-        <SeatMark color={seat.color} />
-        <SeatStatus has={has} />
-      </div>
-      <div style={{ minWidth: 0 }}>
-        <div className="t-head">{seat.name}</div>
-        <div className="t-foot" style={{ marginTop: 3, lineHeight: 1.55 }}>{seat.blurb}</div>
-      </div>
-    </Card>
-  );
-}
-
-/* The full seats page — the mobile "Seats" tab, and the standalone roster
-   when the desktop window is too narrow for the split view. */
-function BoardSeatsPage({ seatNotes, onEditSeat, onEnterRoom, isMobile }) {
-  return (
-    <div style={{ width: "100%", maxWidth: 920, margin: "0 auto", padding: isMobile ? "8px 16px 0" : "4px 0 0", display: "flex", flexDirection: "column", gap: isMobile ? 10 : 14 }}>
-      {!isMobile && (
-        <Card pad="md" style={{ display: "flex", alignItems: "center", gap: 16 }}>
-          <span style={{ width: 40, height: 40, borderRadius: 12, background: "var(--accent-a12)", color: "var(--accent)", display: "inline-flex", alignItems: "center", justifyContent: "center", flex: "none" }}>
-            <IcSeal size={22} />
-          </span>
-          <span style={{ display: "flex", flexDirection: "column", gap: 2, flex: 1, minWidth: 0 }}>
-            <span className="t-head">Chief of Staff</span>
-            <span className="t-foot" style={{ lineHeight: 1.5 }}>Your single point of contact. Routes every question to the seats below, synthesizes, and keeps the disagreements visible.</span>
-          </span>
-          <Button kind="tinted" size="md" onClick={onEnterRoom} style={{ flex: "none" }}>Enter the room</Button>
-        </Card>
-      )}
-      {isMobile && <div className="t-foot" style={{ color: "var(--faint)", lineHeight: 1.55 }}>Each seat treats its context as ground truth. Tap a seat to update what it knows.</div>}
-      <div className="stagger" style={{ display: "grid", gridTemplateColumns: isMobile ? "1fr 1fr" : "repeat(auto-fill, minmax(min(300px, 100%), 1fr))", gap: isMobile ? 10 : 14, alignItems: "stretch" }}>
-        {BOARD.map(b => (
-          <SeatCard key={b.key} seat={b} has={!!seatNotes[b.key]} onClick={() => onEditSeat(b.key)} />
-        ))}
-      </div>
-    </div>
-  );
-}
-
-// Compact single-column seat list for the desktop split view — the full
-// BoardSeatsPage (banner + card grid) is built for standalone/mobile use.
-function BoardSeatsRail({ seatNotes, onEditSeat }) {
-  return (
-    <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-      <SectionHeader title="The Board" />
-      {BOARD.map(b => (
-        <SeatCard key={b.key} compact seat={b} has={!!seatNotes[b.key]} onClick={() => onEditSeat(b.key)} />
-      ))}
-    </div>
-  );
-}
 
 /* ── sub-navigation ─────────────────────────────────────────────────────────── */
 // Keys are wired to jump.sub deep links (Summon, Brief). "neural" is the Mind
 // canvas (the tab's home); the old board keys ("chat"/"seats") are gone —
 // stale deep links to them fall through to the neural canvas.
 const BOARDROOM_SUBTABS = [{ key: "neural", label: "Mind" }, { key: "mini", label: "Mini Me" }, { key: "learn", label: "Learn" }];
-
-// The split view needs ~1160px of window for a usable chat column beside the
-// 300px seats rail (sidebar 300 + gutters + rail). Below that — iPad portrait,
-// narrow desktop windows — the rail folds into a fourth "Seats" tab, the same
-// grammar the phone uses, so the roster is never unreachable.
-function useSplitLayout() {
-  const [wide, setWide] = useState(() => window.matchMedia("(min-width: 1160px)").matches);
-  useEffect(() => {
-    const mq = window.matchMedia("(min-width: 1160px)");
-    const fn = (e) => setWide(e.matches);
-    mq.addEventListener("change", fn);
-    return () => mq.removeEventListener("change", fn);
-  }, []);
-  return wide;
-}
 
 export function BoardRoomPage({ settings, updateSetting, session, onWorkerRun, onSkillsChanged, jump, isMobile }) {
   // "neural" (the Mind canvas) is the tab's home; Mini Me (the delegate) and

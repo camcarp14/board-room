@@ -73,12 +73,12 @@ export function Summon({ onClose, onGo, onJot, onQueueTask, onAsk, isMobile }) {
       const cmds = [];
       if (noteCmd) cmds.push({ kind: "cmd", label: `Jot to Notes — “${noteCmd[1].trim()}”`, hint: "↵ files it", run: () => fileCmd("jot", noteCmd[1].trim()) });
       if (taskCmd) cmds.push({ kind: "cmd", label: `Queue for Mini Me — “${taskCmd[1].trim()}”`, hint: "↵ queues it", run: () => fileCmd("task", taskCmd[1].trim()) });
-      if (askCmd) cmds.push({ kind: "cmd", label: `Ask the board — “${askCmd[1].trim()}”`, hint: "convene ↵", run: () => onAsk?.(askCmd[1].trim()) });
+      if (askCmd) cmds.push({ kind: "cmd", label: `Ask the Mind — “${askCmd[1].trim()}”`, hint: "pulse ↵", run: () => onAsk?.(askCmd[1].trim()) });
       return cmds;
     }
     const actions = [
       { kind: "act", label: "Teach a skill", hint: "/learn", go: { page: "boardroom", sub: "learn" } },
-      { kind: "act", label: "Ask the board", hint: "open the chat", go: { page: "boardroom", sub: "chat" } },
+      { kind: "act", label: "Ask the Mind", hint: "open the mind", go: { page: "boardroom", sub: "neural" } },
     ].filter(a => !needle || hit(a.label) || hit(a.hint));
     const places = SUMMON_PLACES.filter(p => !needle || hit(p.label) || hit(p.hint))
       .map(p => ({ kind: "go", label: p.label, hint: p.hint, go: p }));
@@ -90,7 +90,7 @@ export function Summon({ onClose, onGo, onJot, onQueueTask, onAsk, isMobile }) {
     // already sent. Kept last so jump-to muscle memory ("cal" ↵) still wins;
     // when nothing else matches, asking IS the Enter action.
     const askRows = needle.length >= 3 && onAsk
-      ? [{ kind: "ask", label: `Ask the board — “${q.trim()}”`, hint: "convene ↵", run: () => onAsk(q.trim()) }]
+      ? [{ kind: "ask", label: `Ask the Mind — “${q.trim()}”`, hint: "pulse ↵", run: () => onAsk(q.trim()) }]
       : [];
     return [...actions, ...places, ...noteRows, ...skillRows, ...askRows];
   }, [q, needle, notes, skills]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -151,7 +151,7 @@ export function Summon({ onClose, onGo, onJot, onQueueTask, onAsk, isMobile }) {
             <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "6px 16px 0", flex: "none" }}>
               <IcSearch size={18} style={{ color: "var(--faint)", flex: "none" }} />
               <input ref={inputRef} value={q} onChange={e => setQ(e.target.value)} enterKeyHint="go"
-                placeholder={isMobile ? "Jump, search, or ask…" : "Jump, jot, search — or just ask the board…"}
+                placeholder={isMobile ? "Jump, search, or ask…" : "Jump, jot, search — or just ask the mind…"}
                 style={{ border: "none", outline: "none", background: "transparent", padding: "15px 0", fontSize: 16, color: "var(--ink)", fontFamily: "inherit", flex: 1, minWidth: 0 }} />
               {!isMobile && <kbd style={{ flex: "none" }}>esc</kbd>}
             </div>
