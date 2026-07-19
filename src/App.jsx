@@ -315,7 +315,9 @@ export default function App() {
   // Free text in Summon → the question lands in the Room already sent — the
   // board convenes while the page slides over. (send is defined below; it only
   // runs on click, well after initialization.)
-  const summonAsk = (q) => { setSummon(false); jumpTo({ page: "boardroom", sub: "chat" }); send(q); };
+  // Summon's free-text "ask" now goes to the Mind: open the neural canvas and
+  // hand the question to its Pulse (MindPanel fires it once off jump.ask).
+  const summonAsk = (q) => { setSummon(false); jumpTo({ page: "boardroom", sub: "neural", ask: q }); };
   const summonJot = async (text) => {
     await db.saveNote({ id: crypto.randomUUID(), title: "", body: text });
     queryClient.invalidateQueries({ queryKey: ["notes"] }); // jots show up in Notes surfaces immediately, not after the cache goes stale
@@ -413,7 +415,7 @@ export default function App() {
   const renderPageInner = (key) => {
     switch (key) {
       case "brief": return <MorningBriefPage btc={btc} isMobile={isMobile} settings={settings} updateSetting={updateSetting} onOpenCalendar={goToCalendar} onAddEvent={(date) => jumpTo({ page: "personal", sub: "calendar", newEventDate: date })} onOpenNotes={(noteId) => summonGo({ page: "personal", sub: "notes", noteId })} onOpenQueue={() => jumpTo({ page: "boardroom", sub: "mini" })} onOpenBirthdays={() => jumpTo({ page: "personal", sub: "birthdays" })} refreshSignal={briefRefreshSignal} />;
-      case "boardroom": return <BoardRoomPage messages={messages} thinking={thinking} loadingData={loadingData} input={input} setInput={setInput} onSend={send} onClearChat={clearChat} endRef={endRef} seatNotes={seatNotes} onEditSeat={setEditSeat} settings={settings} updateSetting={updateSetting} session={session} onWorkerRun={refreshData} onSkillsChanged={refreshSkills} jump={jump} isMobile={isMobile} />;
+      case "boardroom": return <BoardRoomPage settings={settings} updateSetting={updateSetting} session={session} onWorkerRun={refreshData} onSkillsChanged={refreshSkills} jump={jump} isMobile={isMobile} />;
       case "personal": return <PersonalPage isMobile={isMobile} jumpSignal={personalJumpTo} jump={jump} settings={settings} updateSetting={updateSetting} />;
       case "assets": return <PropertiesPage isMobile={isMobile} settings={settings} updateSetting={updateSetting} session={session} />;
       case "systems": return <SystemsPage settings={settings} updateSetting={updateSetting} session={session} btc={btc} isMobile={isMobile} />;

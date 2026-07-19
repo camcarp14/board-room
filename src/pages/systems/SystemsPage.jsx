@@ -395,11 +395,16 @@ export function SystemsPage({ settings, updateSetting, session, btc, isMobile })
 
   // ── Usage / Models ──
   const models = { ...DEFAULT_MODELS, ...(settings?.models || {}) };
-  const setModel = (layer, key) => updateSetting("models", { ...models, [layer]: key });
-  // Estimate: base cost per layer (router 0.006 / seats 0.018 / chief 0.012)
-  // times the model's MODEL_META mult; unknown keys fall back to mult 1.
+  // The board is gone; the Mind tab is the tool now. Two layers: the Mind's own
+  // reasoning/synthesis (Pulse, strategy) stored in settings.models.mind, and the
+  // Mini Me delegate's task runs — which live in settings.mini.model, so this row
+  // stays the single source of truth the delegate already reads.
+  const delegateModel = settings?.mini?.model || "haiku";
+  // Estimate: base cost per layer times the model's MODEL_META mult (mult 1 =
+  // Haiku). A mind pulse is one reasoning+synthesis call; a delegate run is one
+  // task execution.
   const mult = k => (MODEL_META.find(m => m.key === k) || {}).mult || 1;
-  const est = 0.006 * mult(models.router) + 0.018 * mult(models.seats) + 0.012 * mult(models.chief);
+  const est = 0.010 * mult(models.mind) + 0.008 * mult(delegateModel);
   // "Today" line reads obs — the per-browser localStorage tracker (see the
   // comment in telemetry.js). Distinct from the durable usage_log; never
   // merge the two.
@@ -408,9 +413,10 @@ export function SystemsPage({ settings, updateSetting, session, btc, isMobile })
   const cost = spendToday.reduce((s, l) => s + (l.cost || 0), 0);
   const fmtK = n => n > 999 ? Math.round(n / 1000) + "K" : String(n);
   const layers = [
-    { key: "router", name: "Router", desc: "picks which seats to wake" },
-    { key: "seats", name: "Board seats", desc: "the five specialist takes" },
-    { key: "chief", name: "Chief of staff", desc: "final synthesis" },
+    { key: "mind", name: "Mind", desc: "reasoning & synthesis — the neural mind thinking",
+      value: models.mind, onChange: (k) => updateSetting("models", { ...models, mind: k }) },
+    { key: "delegate", name: "Delegate", desc: "Mini Me — runs your queued tasks",
+      value: delegateModel, onChange: (k) => updateSetting("mini", { ...(settings?.mini || {}), model: k }) },
   ];
 
   const deployables = PROPERTIES.filter(p => !p.assetsOnly); // Runway/FFSR excluded on purpose
@@ -439,11 +445,11 @@ export function SystemsPage({ settings, updateSetting, session, btc, isMobile })
                         <span className="t-call" style={{ fontWeight: 600 }}>{r.name}</span>
                         <span className="t-cap" style={{ color: "var(--faint)", textAlign: "right" }}>{r.desc}</span>
                       </div>
-                      <ModelPicker value={models[r.key]} onChange={k => setModel(r.key, k)} />
+                      <ModelPicker value={r.value} onChange={r.onChange} />
                     </div>
                   ))}
                   <div style={{ marginTop: 14, background: "var(--surface-2)", borderRadius: 12, padding: "12px 14px", display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10 }}>
-                    <span className="t-foot" style={{ color: "var(--sub)" }}>Est. per convened question</span>
+                    <span className="t-foot" style={{ color: "var(--sub)" }}>Est. per pulse + delegate task</span>
                     <span className="t-num" style={{ fontSize: 15, fontWeight: 600, color: "var(--ink)" }}>${est.toFixed(3)}</span>
                   </div>
                   <div className="t-cap t-num" style={{ marginTop: 10, color: "var(--faint)" }}>Today · {fmtK(inTok)} in · {fmtK(outTok)} out · ${cost.toFixed(2)}</div>

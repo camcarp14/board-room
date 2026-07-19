@@ -9,8 +9,8 @@ import { BOARD, callClaude } from "../../lib/claude.js";
 import { supabase } from "../../lib/supabase.js";
 import { tint } from "../../ui/styles.js";
 import LearnPanel from "../../LearnPanel.jsx";
-import { ChatRoom } from "./ChatRoom.jsx";
 import { MiniMePage } from "./MiniMePage.jsx";
+import { MindPanel } from "./mind/MindPanel.jsx";
 
 // Seat notes modal stays importable from here as well as from its own file.
 export { SeatNotesModal } from "./SeatNotesModal.jsx";
@@ -110,9 +110,10 @@ function BoardSeatsRail({ seatNotes, onEditSeat }) {
 }
 
 /* ── sub-navigation ─────────────────────────────────────────────────────────── */
-// Keys are wired to jump.sub deep links (Summon, Brief) — never rename them.
-const BOARDROOM_SUBTABS = [{ key: "mini", label: "Mini Me" }, { key: "chat", label: "Chat" }, { key: "learn", label: "Learn" }, { key: "seats", label: "Seats" }];
-const SPLIT_SUBTABS = BOARDROOM_SUBTABS.filter(t => t.key !== "seats"); // seats live in the rail
+// Keys are wired to jump.sub deep links (Summon, Brief). "neural" is the Mind
+// canvas (the tab's home); the old board keys ("chat"/"seats") are gone —
+// stale deep links to them fall through to the neural canvas.
+const BOARDROOM_SUBTABS = [{ key: "neural", label: "Mind" }, { key: "mini", label: "Mini Me" }, { key: "learn", label: "Learn" }];
 
 // The split view needs ~1160px of window for a usable chat column beside the
 // 300px seats rail (sidebar 300 + gutters + rail). Below that — iPad portrait,
@@ -129,12 +130,14 @@ function useSplitLayout() {
   return wide;
 }
 
-export function BoardRoomPage({ messages, thinking, loadingData, input, setInput, onSend, onClearChat, endRef, seatNotes, onEditSeat, settings, updateSetting, session, onWorkerRun, onSkillsChanged, jump, isMobile }) {
-  const [sub, setSub] = useState("mini"); // Mini Me is the tab's home now; Chat (the board convenes), Learn, and Seats are one tap away
-  const wide = useSplitLayout();
-  const split = !isMobile && wide;
+export function BoardRoomPage({ settings, updateSetting, session, onWorkerRun, onSkillsChanged, jump, isMobile }) {
+  // "neural" (the Mind canvas) is the tab's home; Mini Me (the delegate) and
+  // Learn are one tap away. The board — chat + seats — was retired; the mind now
+  // compiles into how the delegate thinks.
+  const [sub, setSub] = useState("neural");
   useEffect(() => {
-    if (jump?.page === "boardroom" && jump.sub) setSub(jump.sub);
+    // Consume deep links; retired board sub-keys ("chat"/"seats") route to the mind.
+    if (jump?.page === "boardroom" && jump.sub) setSub(BOARDROOM_SUBTABS.some(t => t.key === jump.sub) ? jump.sub : "neural");
   }, [jump?.t]); // eslint-disable-line react-hooks/exhaustive-deps
   const skillSpotlight = jump?.page === "boardroom" && jump.skillId ? { id: jump.skillId, t: jump.t } : null;
 
@@ -150,37 +153,10 @@ export function BoardRoomPage({ messages, thinking, loadingData, input, setInput
       <MiniMePage settings={settings} updateSetting={updateSetting} session={session} onWorkerRun={onWorkerRun} onOpenLearn={() => setSub("learn")} isMobile={isMobile} />
     ) : key === "learn" ? (
       learnPanel
-    ) : key === "chat" ? (
-      <ChatRoom messages={messages} thinking={thinking} loadingData={loadingData} input={input} setInput={setInput} onSend={onSend} onClearChat={onClearChat} endRef={endRef} isMobile={isMobile} />
     ) : (
-      <BoardSeatsPage seatNotes={seatNotes} onEditSeat={onEditSeat} onEnterRoom={() => setSub("chat")} isMobile={isMobile} />
+      <MindPanel isMobile={isMobile} settings={settings} updateSetting={updateSetting} session={session} jump={jump} />
     )
   );
-
-  if (split) {
-    // sub "seats" falls through to chat here — a mobile- or narrow-set "seats"
-    // must never break the split layout, where seats are always on screen.
-    const value = sub === "seats" ? "chat" : sub;
-    return (
-      // Center the [main column · board rail] group in the shell so it isn't
-      // stranded left with a huge gap. The main column is snug (not flex:1), and
-      // the tabs are centered over it — so the tab bar lines up with the panel
-      // below instead of floating far to its left.
-      <div style={{ display: "flex", flex: 1, minHeight: 0, justifyContent: "center" }}>
-        <div style={{ flex: "0 1 720px", minWidth: 0, display: "flex", flexDirection: "column" }}>
-          <div style={{ flex: "none", paddingBottom: 16, display: "flex", justifyContent: "center" }}>
-            <Segmented options={SPLIT_SUBTABS} value={value} onChange={setSub} style={{ width: "100%", maxWidth: 440 }} />
-          </div>
-          {panel(value)}
-        </div>
-        <div style={{ flex: "0 0 320px", marginLeft: 24, paddingLeft: 24, borderLeft: "0.5px solid var(--line)" }}>
-          <div style={{ position: "sticky", top: 12 }}>
-            <BoardSeatsRail seatNotes={seatNotes} onEditSeat={onEditSeat} />
-          </div>
-        </div>
-      </div>
-    );
-  }
 
   return (
     <div style={{ display: "flex", flexDirection: "column", flex: 1, minHeight: 0 }}>

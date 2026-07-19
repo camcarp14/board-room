@@ -17,7 +17,13 @@ export const MODEL_META = [
 ];
 const PRICING = { haiku: { in: 1, out: 5 }, sonnet: { in: 3, out: 15 }, opus: { in: 15, out: 75 } };
 const estCost = (mk, i, o) => (i / 1e6) * (PRICING[mk]?.in || 1) + (o / 1e6) * (PRICING[mk]?.out || 5);
-export const DEFAULT_MODELS = { router: "haiku", seats: "haiku", chief: "haiku" };
+// Model layers, post-board: the Mind tab is the tool now. `mind` powers the
+// neural mind's reasoning/synthesis (Pulse, strategy); `delegate` is Mini Me's
+// task runs (it also reads settings.mini.model — the Systems row keeps them in
+// sync). The old router/seats/chief keys are gone with the board; convene()
+// still resolves undefined layers to Haiku, so nothing breaks if a stale
+// settings.models carries them.
+export const DEFAULT_MODELS = { mind: "haiku", delegate: "haiku" };
 
 export async function callClaude({ system, messages, modelKey = "haiku", maxTokens = 800, fn = "call" }) {
   const t0 = Date.now();

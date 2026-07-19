@@ -4,7 +4,7 @@
 export const NAV = [
   { key: "brief", label: "Brief", group: "Today" },
   { key: "personal", label: "Personal", group: "Today" },
-  { key: "boardroom", label: "Mini Me", group: "The Firm" },
+  { key: "boardroom", label: "Mind", group: "The Firm" },
   { key: "assets", label: "Assets", group: "The Firm" },
   { key: "systems", label: "Systems", group: "The Firm" },
   // Upstream is built and deployed but hidden from nav while the pipeline settles.
@@ -21,7 +21,7 @@ const DATE_LINE = (d) =>
 export const HEADERS = {
   brief: { title: "Brief", sub: (d) => DATE_LINE(d) },
   personal: { title: "Personal", sub: () => "Notes, calendar, and training" },
-  boardroom: { title: "Mini Me", sub: () => "Your delegate — queue, run, review" },
+  boardroom: { title: "Mind", sub: () => "The mind behind the delegate" },
   assets: { title: "Assets", sub: () => "Everything you run" },
   systems: { title: "Systems", sub: () => "Usage, status, and deploys" },
   upstream: { title: "Upstream", sub: () => "Non-consensus questions · NOSTRADAMUS" },
