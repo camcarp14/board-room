@@ -4,7 +4,7 @@
 // skills) — see getCompiledMind below — which lead both the task-execution and
 // briefing prompts. The worker (mini-worker) runs Claude against the queue,
 // writes deliverables onto tasks, and logs to mini_feed.
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { T } from "../../theme.js";
 import { Card, Button, Dot, Switch, Field, useConfirm } from "../../ui/kit.jsx";
 import { IcClose, IcChevronDown, IcChevronRight } from "../../ui/icons.jsx";
@@ -74,6 +74,44 @@ export function MiniMePage({ settings, updateSetting, session, onWorkerRun, onJu
   const [directiveSending, setDirectiveSending] = useState(false);
   const [skillCount, setSkillCount] = useState(null); // null loading · number · "teach" when table missing
   const [confirmEl, confirm] = useConfirm();
+
+  // ── Chat with the mind ──────────────────────────────────────────────────────
+  // The low-friction front door: no setup, just talk to it. Every turn runs
+  // against the compiled Neurons (doctrine + everything taught in Learn), so the
+  // reply is the same mind the delegate executes with. Persisted in settings so
+  // it survives reloads; capped so it can't grow unbounded; Reset wipes it.
+  const chat = settings?.mini_chat || [];
+  const setChat = (list) => updateSetting("mini_chat", list.slice(-40));
+  const [chatInput, setChatInput] = useState("");
+  const [chatBusy, setChatBusy] = useState(false);
+  const chatScrollRef = useRef(null);
+  useEffect(() => {
+    const el = chatScrollRef.current;
+    if (el) el.scrollTop = el.scrollHeight; // pin to newest on every turn
+  }, [chat.length, chatBusy]);
+
+  const sendChat = async () => {
+    const text = chatInput.trim();
+    if (!text || chatBusy) return;
+    const next = [...chat, { role: "user", text, ts: Date.now() }];
+    setChat(next);
+    setChatInput("");
+    setChatBusy(true);
+    // Lead with the compiled Neurons, then a light chat frame — MIND_CHARTER
+    // already establishes the identity, so this only sets the register (talking,
+    // not running a task). Send a short rolling window to keep tokens in check.
+    const system = `${getCompiledMind(skills).systemPrompt}
+
+You're talking with Cameron directly, in a chat — not running a queued task. Answer as this mind: think with the doctrine and learned skills above, be concrete and concise, pressure-test rather than flatter, and name conflicts instead of smoothing them. Only produce a full deliverable if he explicitly asks; otherwise just talk it through.`;
+    const reply = await callClaude({
+      system,
+      messages: next.slice(-12).map(m => ({ role: m.role, content: m.text })),
+      modelKey: mini.model || "haiku", maxTokens: 1000, fn: "mind_chat",
+    });
+    setChat([...next, { role: "assistant", text: reply || "Couldn't reach the model just now — check the API key in Systems, then try again.", ts: Date.now() }]);
+    setChatBusy(false);
+  };
+  const resetChat = () => { setChat([]); setChatInput(""); };
 
   const loadFeed = async () => {
     try {
@@ -276,7 +314,7 @@ Decide which of the two his message actually addresses — often just one. Outpu
                     <span className="t-cap" style={{ color: statusTone, fontWeight: 600 }}>{statusLabel}</span>
                   </span>
                 </span>
-                <span className="t-foot" style={{ lineHeight: 1.5 }}>Your mind at work — it runs on your Neurons and everything you've taught it. Set it up below, then queue work and hit Run; nothing runs until you say so.</span>
+                <span className="t-foot" style={{ lineHeight: 1.5 }}>Talk to your mind — it thinks with your Neurons and everything you've taught it. Queue background work in the Task Queue below.</span>
                 {goNeurons && skillCount !== null && (
                   <Button kind="plain" size="sm" onClick={goNeurons}
                     style={{ alignSelf: "flex-start", height: "auto", minHeight: 40, paddingLeft: 0, paddingRight: 0, gap: 4 }}>
@@ -293,44 +331,48 @@ Decide which of the two his message actually addresses — often just one. Outpu
                 <span className="t-cap" style={{ fontWeight: 600, color: mini.enabled === false ? "var(--faint)" : "var(--green)" }}>{mini.enabled === false ? "Off" : "On"}</span>
               </div>
             </div>
-            {configured ? (
-              /* Set up — one compact line of who it is and its mission, no
-                 big jargon labels. "Change" drops back to the picker. */
-              <div style={{ marginBottom: 10 }}>
-                <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", gap: 10, marginBottom: 6 }}>
-                  <span className="t-label">Set up as</span>
-                  <button onClick={resetIdentity} className="hoverable" style={{ background: "none", border: "none", cursor: "pointer", color: "var(--accent)", fontSize: 12.5, fontWeight: 600, padding: "2px 2px" }}>Change</button>
+            {/* Chat — the low-friction front door. No setup to wade through: just
+                talk to it, and every turn answers from the compiled Neurons. History
+                persists across reloads; Reset clears it so old threads don't linger. */}
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, marginBottom: 8 }}>
+              <span className="t-label">Chat</span>
+              {chat.length > 0 && (
+                <button onClick={resetChat} className="hoverable" aria-label="Reset chat"
+                  style={{ background: "none", border: "none", cursor: "pointer", color: "var(--sub)", fontSize: 12.5, fontWeight: 600, padding: "2px 2px" }}>
+                  Reset
+                </button>
+              )}
+            </div>
+            <div ref={chatScrollRef}
+              style={{ maxHeight: isMobile ? 320 : 380, minHeight: 92, overflowY: "auto", display: "flex", flexDirection: "column", gap: 8, marginBottom: 10 }}>
+              {chat.length === 0 && !chatBusy && (
+                <div className="t-foot" style={{ color: "var(--faint)", lineHeight: 1.55, textAlign: "center", padding: "20px 10px" }}>
+                  Ask your mind anything. It thinks with your Neurons — doctrine plus everything you've taught it.
                 </div>
-                <div style={{ background: "var(--surface-2)", borderRadius: 12, padding: "11px 13px" }}>
-                  {mini.role && <div className="t-call" style={{ lineHeight: 1.5 }}>{mini.role}</div>}
-                  {mini.directive && <div className="t-foot" style={{ lineHeight: 1.5, marginTop: mini.role ? 5 : 0, fontStyle: "italic", color: "var(--sub)" }}>"{mini.directive}"</div>}
+              )}
+              {chat.map((m, i) => (
+                <div key={i} style={{ display: "flex", justifyContent: m.role === "user" ? "flex-end" : "flex-start" }}>
+                  <div className="t-call" style={{
+                    maxWidth: "86%", padding: "9px 12px", borderRadius: 14, lineHeight: 1.55, whiteSpace: "pre-wrap", overflowWrap: "break-word",
+                    background: m.role === "user" ? "var(--accent)" : "var(--surface-2)",
+                    color: m.role === "user" ? "var(--on-accent)" : "var(--ink)",
+                    borderBottomRightRadius: m.role === "user" ? 4 : 14,
+                    borderBottomLeftRadius: m.role === "user" ? 14 : 4,
+                  }}>{m.text}</div>
                 </div>
-              </div>
-            ) : (
-              /* First run — plug-and-play: one tap fills the role + directive
-                 so it's ready to work, no jargon to decode. */
-              <div style={{ marginBottom: 10 }}>
-                <div className="t-foot" style={{ color: "var(--sub)", lineHeight: 1.5, marginBottom: 10 }}>
-                  New here? Tap a starting point — that's the whole setup. You can fine-tune it anytime.
+              ))}
+              {chatBusy && (
+                <div style={{ display: "flex", justifyContent: "flex-start" }}>
+                  <div className="t-foot" style={{ background: "var(--surface-2)", color: "var(--sub)", padding: "9px 12px", borderRadius: 14, borderBottomLeftRadius: 4 }}>thinking…</div>
                 </div>
-                <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
-                  {MINI_PRESETS.map(p => (
-                    <button key={p.label} onClick={() => applyPreset(p)} className="hoverable"
-                      style={{ padding: "9px 14px", minHeight: 40, borderRadius: 999, border: "0.5px solid var(--line-strong)", background: "var(--surface-2)", color: "var(--ink)", fontSize: 13, fontWeight: 600, cursor: "pointer" }}>
-                      {p.label}
-                    </button>
-                  ))}
-                </div>
-                <div className="t-cap" style={{ color: "var(--faint)", marginTop: 12 }}>or describe it in your own words below</div>
-              </div>
-            )}
-
+              )}
+            </div>
             <div style={{ display: "flex", gap: 8 }}>
-              <Field value={directiveInput} onChange={e => setDirectiveInput(e.target.value)}
-                onKeyDown={e => { if (e.key === "Enter") { e.preventDefault(); sendDirectiveUpdate(); } }}
-                placeholder={configured ? "Refine it — e.g. focus on the dental vertical this week" : "Or describe it — e.g. you're my SEO strategist for Zero To Secure"} disabled={directiveSending} style={{ flex: 1 }} />
-              <Button kind="quiet" size="md" onClick={sendDirectiveUpdate} disabled={directiveSending || !directiveInput.trim()} style={{ flex: "none" }}>
-                {directiveSending ? "…" : "Send"}
+              <Field value={chatInput} onChange={e => setChatInput(e.target.value)}
+                onKeyDown={e => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); sendChat(); } }}
+                placeholder="Talk to your mind…" disabled={chatBusy} style={{ flex: 1 }} />
+              <Button kind="primary" size="md" onClick={sendChat} disabled={chatBusy || !chatInput.trim()} style={{ flex: "none" }}>
+                {chatBusy ? "…" : "Send"}
               </Button>
             </div>
           </Card>
@@ -415,6 +457,46 @@ Decide which of the two his message actually addresses — often just one. Outpu
             </button>
             {showSettings && (
               <div style={{ marginTop: 14 }}>
+                {/* Role & directive — the persona the worker adopts on queued task
+                    runs. Moved out of the top so chat stays friction-free; still
+                    fully editable here, and the delegate reads it server-side. */}
+                <div className="t-label" style={{ marginBottom: 8 }}>Role &amp; directive</div>
+                <div className="t-cap" style={{ color: "var(--faint)", fontWeight: 400, marginBottom: 10 }}>Who the delegate becomes when it works the queue — chat always uses your full Neurons regardless.</div>
+                {configured ? (
+                  <div style={{ marginBottom: 10 }}>
+                    <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", gap: 10, marginBottom: 6 }}>
+                      <span className="t-cap" style={{ fontWeight: 600, color: "var(--sub)" }}>Set up as</span>
+                      <button onClick={resetIdentity} className="hoverable" style={{ background: "none", border: "none", cursor: "pointer", color: "var(--accent)", fontSize: 12.5, fontWeight: 600, padding: "2px 2px" }}>Change</button>
+                    </div>
+                    <div style={{ background: "var(--surface-2)", borderRadius: 12, padding: "11px 13px" }}>
+                      {mini.role && <div className="t-call" style={{ lineHeight: 1.5 }}>{mini.role}</div>}
+                      {mini.directive && <div className="t-foot" style={{ lineHeight: 1.5, marginTop: mini.role ? 5 : 0, fontStyle: "italic", color: "var(--sub)" }}>"{mini.directive}"</div>}
+                    </div>
+                  </div>
+                ) : (
+                  <div style={{ marginBottom: 10 }}>
+                    <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
+                      {MINI_PRESETS.map(p => (
+                        <button key={p.label} onClick={() => applyPreset(p)} className="hoverable"
+                          style={{ padding: "9px 14px", minHeight: 40, borderRadius: 999, border: "0.5px solid var(--line-strong)", background: "var(--surface-2)", color: "var(--ink)", fontSize: 13, fontWeight: 600, cursor: "pointer" }}>
+                          {p.label}
+                        </button>
+                      ))}
+                    </div>
+                    <div className="t-cap" style={{ color: "var(--faint)", marginTop: 12 }}>or describe it in your own words below</div>
+                  </div>
+                )}
+                <div style={{ display: "flex", gap: 8 }}>
+                  <Field value={directiveInput} onChange={e => setDirectiveInput(e.target.value)}
+                    onKeyDown={e => { if (e.key === "Enter") { e.preventDefault(); sendDirectiveUpdate(); } }}
+                    placeholder={configured ? "Refine it — e.g. focus on the dental vertical this week" : "Describe it — e.g. you're my SEO strategist for Zero To Secure"} disabled={directiveSending} style={{ flex: 1 }} />
+                  <Button kind="quiet" size="md" onClick={sendDirectiveUpdate} disabled={directiveSending || !directiveInput.trim()} style={{ flex: "none" }}>
+                    {directiveSending ? "…" : "Send"}
+                  </Button>
+                </div>
+
+                <Rule />
+
                 <div className="t-label" style={{ marginBottom: 8 }}>Daily budget</div>
                 <div className="t-cap" style={{ color: "var(--faint)", fontWeight: 400, marginBottom: 8 }}>Caps how many tasks run each time: $1→1 · $3→3 · $10→8</div>
                 <Chips options={["$1", "$3", "$10"]} value={mini.budget} onChange={b => setMini({ budget: b })} fmt={v => v + "/day"} />
@@ -443,7 +525,7 @@ Decide which of the two his message actually addresses — often just one. Outpu
                 <Rule />
 
                 <div className="t-label" style={{ marginBottom: 8 }}>Brain</div>
-                <div className="t-cap" style={{ color: "var(--faint)", fontWeight: 400, marginBottom: 8 }}>Model used for queued tasks</div>
+                <div className="t-cap" style={{ color: "var(--faint)", fontWeight: 400, marginBottom: 8 }}>Model used for chat and queued tasks</div>
                 <Segmented value={mini.model} onChange={k => setMini({ model: k })} />
               </div>
             )}
