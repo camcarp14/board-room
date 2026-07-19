@@ -7,8 +7,11 @@ import {
   compileGenome, loadGenome, saveGenome, resetGenome,
   addNode, updateNode, removeNode, addEdge, removeEdge,
   validateGenome, propagate, seedsForTask, dnaBus, genomeStats,
+  displayGenome, setLearnedLayout,
   REGIONS, MIND_CHARTER,
 } from "./mindGenome.js";
+import { makeSdb } from "../../../LearnPanel.jsx";
+import { supabase } from "../../../lib/supabase.js";
 
 // ════════════════════════════════════════════════════════════════════════════
 // MIND PANEL — the neural sub-tab inside the "Mind" tab. The canvas IS the page;
@@ -52,6 +55,15 @@ const VIEW_CSS = `
 .mind-panel-root input[type="range"] { cursor: pointer; accent-color: var(--accent); width: 100%; display: block; }
 .mind-conn { transition: background var(--dur-1) var(--ease-out); }
 .mind-conn:hover { background: var(--ink-a08); }
+/* Learned neurons wear a subtle dashed "taught" ring so they read distinct from
+   seeded doctrine on the canvas — done from here (not MindCanvas) by targeting
+   the stable learned_<skillId> data-id the canvas already stamps. stroke-dasharray
+   is unset everywhere else, so this never fights the fire/selection/droptar strokes. */
+.mind-panel-root .dna-canvas g[data-dna-node][data-id^="learned_"] .dna-core { stroke-dasharray: 3.2 2.4; stroke-width: 1.6px; }
+/* Spotlight-learned filter — a toggle in the legend dims everything that is NOT a
+   learned neuron, so the taught skills pop out of the doctrine. Tokens only. */
+.mind-panel-root.mind-spotlight-learned .dna-canvas g[data-dna-node]:not([data-id^="learned_"]) { opacity: 0.16 !important; }
+.mind-panel-root.mind-spotlight-learned .dna-canvas g[data-dna-edge] { opacity: 0.16 !important; }
 `;
 
 // The compile-level lens — a DISPLAY filter over compiled.sections for the pulse
@@ -91,6 +103,12 @@ function buildLensedPrompt(compiled, lens) {
     if (s.region === "tension") {
       if (lens === "primary") return;                 // commands-only view sheds the tensions narrative
       parts.push(`INTERNAL TENSIONS:\n${s.lines.map((l) => `- ${l}`).join("\n")}`);
+      return;
+    }
+    if (s.region === "learned") {                     // the taught-skills subsection — its own header, no REGIONS entry
+      const ls = lensLines(s.lines, lens);
+      if (!ls.length) return;
+      parts.push(`LEARNED SKILLS (taught via Learn):\n${ls.map((l) => `- ${l}`).join("\n")}`);
       return;
     }
     const ls = lensLines(s.lines, lens);
@@ -303,6 +321,129 @@ function NodeInspector({ genome, node, apply, onSelect, onDeleted, onFireSkill }
   );
 }
 
+// ─── Inspector: learned neuron ──────────────────────────────────────────────────
+// A skill taught in Learn shows here as a VIRTUAL neuron: its CONTENT is owned by
+// mini_skills (rendered READ-ONLY, "Taught in Learn"), while its weight, wiring, and
+// enabled state are tunable from the canvas. Weight persists via setLearnedLayout and
+// synapses via addEdge — both onto the RAW genome (never the merged display view, or
+// the virtual nodes would leak into genome.nodes). Enable/disable flips the skill row
+// itself via makeSdb, then bubbles onSkillsChanged so Learn and Neurons re-sync.
+function LearnedNodeInspector({ genome, dispNodes, node, skill, apply, onSelect, onOpenInLearn, onToggleEnabled }) {
+  const [w, setW] = useState(null);
+  const liveW = w != null ? w : Math.round((node.weight || 0) * 100);
+  const enabled = skill ? skill.enabled !== false : node.enabled !== false;
+
+  const conns = genome.edges.filter((e) => e.from === node.id || e.to === node.id);
+  const wired = new Set(genome.edges.filter((e) => e.from === node.id).map((e) => e.to));
+  const wireTargets = genome.nodes.filter((n) => n.id !== node.id && !wired.has(n.id)); // wire the taught skill INTO doctrine
+  const labelOf = (id) => (dispNodes.find((n) => n.id === id) || {}).label || id;
+
+  const commitW = () => { if (w == null) return; const nw = w / 100; if (nw !== node.weight) apply(setLearnedLayout(genome, node.skillId, { weight: nw })); setW(null); };
+
+  // Directive is READ-ONLY — content lives in Learn. node.text is
+  // "Use when: <desc>\n<content>"; split so the trigger reads as its own line.
+  const nlIdx = (node.text || "").indexOf("\n");
+  const useWhen = (nlIdx >= 0 ? node.text.slice(0, nlIdx) : (node.text || "")).replace(/^Use when:\s*/i, "").trim();
+  const content = nlIdx >= 0 ? node.text.slice(nlIdx + 1).trim() : "";
+
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 13 }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+        <span style={{ display: "inline-flex", alignItems: "center", gap: 6, padding: "3px 9px", borderRadius: 999, background: tint("var(--blue)", 14), border: `1px solid ${tint("var(--blue)", 40)}`, color: "var(--blue)", fontSize: 10.5, fontWeight: 700, fontFamily: "var(--font-display)" }}>
+          <span style={{ width: 6, height: 6, borderRadius: "50%", background: "var(--blue)", boxShadow: `0 0 0 2px ${tint("var(--blue)", 30)}` }} />Learned neuron
+        </span>
+        <span style={{ fontSize: 10.5, color: "var(--faint)" }}>Taught in Learn</span>
+      </div>
+
+      <div>
+        <div style={microLabel}>Skill</div>
+        <div style={{ fontSize: 14, fontWeight: 600, color: "var(--ink)", lineHeight: 1.4 }}>{node.label}</div>
+      </div>
+
+      {/* Weight — persists via setLearnedLayout into genome.learned. */}
+      <div>
+        <div style={{ ...microLabel, display: "flex", justifyContent: "space-between", alignItems: "baseline" }}>
+          <span>Weight</span>
+          <span className="t-num" style={{ fontSize: 12, color: "var(--accent)", letterSpacing: 0, textTransform: "none" }}>{liveW}%</span>
+        </div>
+        <input type="range" min={0} max={100} value={liveW} onChange={(e) => setW(Number(e.target.value))} onPointerUp={commitW} onKeyUp={commitW} onBlur={commitW} />
+        <div style={{ fontSize: 10.5, color: "var(--sub)", marginTop: 4 }}>{bandNote(liveW)}</div>
+      </div>
+
+      {/* Enable / disable — flips the skill row itself, then Learn + Neurons re-sync. */}
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10 }}>
+        <div style={{ minWidth: 0 }}>
+          <div style={{ fontSize: 13, fontWeight: 600, color: "var(--ink)" }}>Awake</div>
+          <div style={{ fontSize: 11, color: "var(--sub)" }}>{enabled ? "Compiling into the mind" : "Silenced — omitted from the prompt"}</div>
+        </div>
+        <Switch on={enabled} disabled={!skill} onToggle={() => skill && onToggleEnabled(skill)} aria-label="Awake" />
+      </div>
+
+      {/* Directive — READ-ONLY, owned by Learn. */}
+      <div>
+        <div style={microLabel}>Directive</div>
+        <div style={{ background: "var(--surface-2)", borderRadius: 12, padding: "11px 12px", display: "flex", flexDirection: "column", gap: 8 }}>
+          {useWhen && (
+            <div style={{ fontSize: 11.5, color: "var(--sub)", lineHeight: 1.5 }}>
+              <span style={{ color: "var(--faint)", fontWeight: 700 }}>Use when </span>{useWhen}
+            </div>
+          )}
+          {content && <div style={{ fontSize: 12.5, color: "var(--ink)", lineHeight: 1.6, whiteSpace: "pre-wrap", maxHeight: 168, overflowY: "auto" }}>{content}</div>}
+          <div style={{ fontSize: 10.5, color: "var(--faint)", lineHeight: 1.5 }}>Taught in Learn — edit the content there.</div>
+        </div>
+      </div>
+
+      <Button kind="tinted" size="md" full onClick={onOpenInLearn}>Open in Learn →</Button>
+
+      {/* Synapses — the same wiring model as any node; learned_<id> endpoints are allowed. */}
+      <div>
+        <div style={{ ...microLabel, display: "flex", justifyContent: "space-between", alignItems: "baseline" }}>
+          <span>Synapses</span>
+          <span className="t-num" style={{ fontSize: 10.5, color: "var(--faint)", letterSpacing: 0, textTransform: "none" }}>{conns.length}</span>
+        </div>
+        {conns.length === 0 ? (
+          <div style={{ fontSize: 11, color: "var(--sub)", lineHeight: 1.5 }}>No synapses yet — wire this taught skill into your doctrine below, or ⇧-drag from it on the canvas.</div>
+        ) : (
+          <div style={{ display: "flex", flexDirection: "column", gap: 5 }}>
+            {conns.map((e) => {
+              const out = e.from === node.id;
+              const otherId = out ? e.to : e.from;
+              return (
+                <div key={e.id} className="mind-conn" style={{ display: "flex", alignItems: "center", gap: 7, padding: "6px 9px", background: "var(--surface-2)", borderRadius: 9 }}>
+                  <span title={e.polarity === -1 ? "Tempers" : "Excites"} style={{ fontSize: 11, flexShrink: 0 }}>{e.polarity === -1 ? "⛔" : "⚡"}</span>
+                  <button onClick={() => onSelect({ type: "node", id: otherId })} title={`Jump to "${labelOf(otherId)}"`}
+                    style={{ flex: 1, minWidth: 0, textAlign: "left", background: "none", border: "none", cursor: "pointer", color: "var(--ink)", fontSize: 11.5, padding: 0, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+                    {out ? "→ " : "← "}{labelOf(otherId)}
+                  </button>
+                  <span className="t-num" style={{ fontSize: 10, color: "var(--sub)", flexShrink: 0 }}>{(e.weight || 0).toFixed(2)}</span>
+                  <button onClick={() => apply(removeEdge(genome, e.id))} title="Cut synapse"
+                    style={{ background: "none", border: "none", color: "var(--faint)", fontSize: 13, cursor: "pointer", lineHeight: 1, padding: "0 2px", flexShrink: 0 }}>✕</button>
+                </div>
+              );
+            })}
+          </div>
+        )}
+        {wireTargets.length > 0 && (
+          <select value="" aria-label="Wire a synapse to another node"
+            onChange={(e) => { if (e.target.value) apply(addEdge(genome, { from: node.id, to: e.target.value })); }}
+            style={{ ...selStyle, marginTop: 6, fontSize: 11.5 }}>
+            <option value="">＋ Wire a synapse to…</option>
+            {wireTargets.map((n) => (
+              <option key={n.id} value={n.id}>{n.label} · {(REGIONS[n.region] || REGIONS.knowledge).label}</option>
+            ))}
+          </select>
+        )}
+      </div>
+
+      <div style={{ display: "flex", alignItems: "flex-start", gap: 8, padding: "9px 11px", background: tint("var(--blue)", 8), border: `1px solid ${tint("var(--blue)", 22)}`, borderRadius: 10, fontSize: 11, color: "var(--blue)", lineHeight: 1.5 }}>
+        <span>◆</span><span>A taught skill — forget it in Learn to remove the neuron. Weight and wiring are yours to tune here.</span>
+      </div>
+
+      <div style={{ fontSize: 10.5, color: "var(--faint)", fontFamily: "var(--font-mono)" }}>learned · {node.id}</div>
+    </div>
+  );
+}
+
 // ─── Inspector: edge ──────────────────────────────────────────────────────────
 // Compact by design — the canvas can select a synapse, so the inspector answers
 // with its two endpoints (each a jump-to-select) and a cut. Editing weight/
@@ -342,10 +483,11 @@ function EdgeInspector({ genome, edge, apply, onSelect, onDeleted }) {
 }
 
 // ─── The panel ─────────────────────────────────────────────────────────────────
-export function MindPanel({ isMobile, settings, updateSetting, session, jump }) { // eslint-disable-line no-unused-vars -- updateSetting/session flow per contract; the panel reads settings.models.mind and persists via mindGenome's own localStorage
+export function MindPanel({ isMobile, settings, updateSetting, session, jump, onJump, skills = [], onSkillsChanged, focusSkillId }) { // eslint-disable-line no-unused-vars -- updateSetting/session flow per contract; the panel reads settings.models.mind and persists via mindGenome's own localStorage
   const [genome, setGenome] = useState(() => loadGenome());
   const [selection, setSelection] = useState(null);       // {type:"node"|"edge", id} | null
   const [regionFilter, setRegionFilter] = useState(null); // Set<regionKey> | null (null = all)
+  const [learnedSpotlight, setLearnedSpotlight] = useState(false); // dim doctrine, light the taught skills
   const [lens, setLens] = useState("full");               // compile-level display lens
   const [panel, setPanel] = useState(null);               // desktop popover: "pulse" | "menu" | null
   const [modal, setModal] = useState(null);               // Sheet modal: "compiled" | "history" | null
@@ -369,16 +511,29 @@ export function MindPanel({ isMobile, settings, updateSetting, session, jump }) 
   // its callback props must keep identity across renders.
   const genomeRef = useRef(genome);
   genomeRef.current = genome;
+  // Live skills, readable from stable callbacks (pulse, focus flash) the same way
+  // the genome is — so they never close over a stale skills array.
+  const skillsRef = useRef(skills);
+  skillsRef.current = skills;
 
   // THE seam: every edit is CRUD → saveGenome (history + bus) → state. mindGenome
   // refusals (locked delete, dupe edge…) return the same reference — a cheap no-op.
+  // Learned-node edits (setLearnedLayout / addEdge on a learned_<id>) route through
+  // here too, always mutating the RAW genome — never displayGen — so the virtual
+  // learned nodes are never persisted into genome.nodes.
   const apply = useCallback((next) => { if (next && next !== genomeRef.current) setGenome(saveGenome(next)); }, []);
 
-  const stats = genomeStats(genome);
-  const compiled = useMemo(() => compileGenome(genome), [genome]);
+  const stats = genomeStats(genome, skills);
+  // The render / propagate / compile VIEW — doctrine with the taught skills merged
+  // in as virtual neurons. With no skills this returns the SAME genome reference,
+  // so the canvas rebuilds nothing and behaves byte-identically to the pre-learned
+  // panel. compile folds skills into the prompt (and the hash), so teaching a skill
+  // visibly changes the mind here and downstream in the delegate.
+  const displayGen = useMemo(() => displayGenome(genome, skills), [genome, skills]);
+  const compiled = useMemo(() => compileGenome(genome, { skills }), [genome, skills]);
   const lensedPrompt = useMemo(() => buildLensedPrompt(compiled, lens), [compiled, lens]);
 
-  const selNode = selection && selection.type === "node" ? genome.nodes.find((n) => n.id === selection.id) : null;
+  const selNode = selection && selection.type === "node" ? displayGen.nodes.find((n) => n.id === selection.id) : null;
   const selEdge = selection && selection.type === "edge" ? genome.edges.find((e) => e.id === selection.id) : null;
   const inspectorOpen = !!(selNode || selEdge);
 
@@ -406,7 +561,15 @@ export function MindPanel({ isMobile, settings, updateSetting, session, jump }) 
   }, [panel, inspectorOpen, isMobile]);
 
   // ── Canvas callbacks — identity-stable (genome via ref). ──
-  const handleNodeMove = useCallback((id, x, y) => apply(updateNode(genomeRef.current, id, { x, y })), [apply]); // position-only: layout, not history
+  // A learned neuron's position lives in genome.learned (not genome.nodes), so its
+  // drag persists through setLearnedLayout; doctrine nodes go through updateNode.
+  // Both are position-only: layout, not history.
+  const handleNodeMove = useCallback((id, x, y) => {
+    if (typeof id === "string" && id.startsWith("learned_")) {
+      return apply(setLearnedLayout(genomeRef.current, id.slice("learned_".length), { x, y }));
+    }
+    return apply(updateNode(genomeRef.current, id, { x, y }));
+  }, [apply]);
   const handleAddNodeAt = useCallback(({ x, y }) => {
     const res = addNode(genomeRef.current, { label: "New node", region: "knowledge", text: "", x, y });
     setGenome(saveGenome(res.genome));
@@ -442,7 +605,9 @@ export function MindPanel({ isMobile, settings, updateSetting, session, jump }) 
   const runPulse = (raw) => {
     const q = (raw || "").trim();
     if (!q) return;
-    const g = genomeRef.current;
+    // Match + fire over the MERGED view so a query that lands on a taught skill
+    // lights its learned neuron too (already merged → propagate needs no skills arg).
+    const g = displayGenome(genomeRef.current, skillsRef.current);
     const words = [...new Set(q.toLowerCase().split(/[^a-z0-9]+/).filter((word) => word.length > 2 && !STOP.has(word)))];
     const scored = [];
     g.nodes.forEach((n) => {
@@ -463,8 +628,10 @@ export function MindPanel({ isMobile, settings, updateSetting, session, jump }) 
     const trace = propagate(g, seedIds);
     dnaBus.emit({ type: "activation", seeds: seedIds, trace, label: `Pulse — ${q.slice(0, 40)}` });
     const fired = new Set();
-    g.nodes.forEach((n) => { if ((trace.levels[n.id] || 0) > 0.05) fired.add(n.region); });
-    const excerpt = compileGenome(g).sections
+    g.nodes.forEach((n) => {
+      if ((trace.levels[n.id] || 0) > 0.05) { fired.add(n.region); if (n.source === "learned") fired.add("learned"); }
+    });
+    const excerpt = compileGenome(genomeRef.current, { skills: skillsRef.current }).sections
       .filter((s) => s.region !== "tension" && fired.has(s.region))
       .flatMap((s) => lensLines(s.lines, lens))
       .slice(0, 6);
@@ -477,7 +644,7 @@ export function MindPanel({ isMobile, settings, updateSetting, session, jump }) 
   // knowledge that argue FOR the move; propagate then adds the tempering
   // principles. A user-added skill (no known kind) just lights itself.
   const fireSkill = (node) => {
-    const g = genomeRef.current;
+    const g = displayGenome(genomeRef.current, skillsRef.current);
     const kind = node.id.replace(/^n_sk_/, "");
     let seeds = seedsForTask(g, kind);
     if (!seeds.length) seeds = [node.id];
@@ -491,7 +658,7 @@ export function MindPanel({ isMobile, settings, updateSetting, session, jump }) 
     // The compiled mind, verbatim — the exact string the delegate runs on, no
     // side prompt. Tweaking a node visibly changes the answer.
     const res = await callClaude({
-      system: compileGenome(genomeRef.current).systemPrompt,
+      system: compileGenome(genomeRef.current, { skills: skillsRef.current }).systemPrompt,
       messages: [{ role: "user", content: pulseRes.q }],
       modelKey: mindModel,
       maxTokens: 400,
@@ -516,6 +683,46 @@ export function MindPanel({ isMobile, settings, updateSetting, session, jump }) 
     runPulse(ask);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [jump && jump.t, jump && jump.ask]);
+
+  // ── Cross-nav to Learn — the learned-node inspector's "Open in Learn →". ──
+  const openInLearn = useCallback((skillId) => {
+    if (typeof onJump === "function") onJump({ page: "boardroom", sub: "learn", skillId });
+  }, [onJump]);
+
+  // Enable/disable a taught skill from the canvas — flips the skill row via makeSdb,
+  // then bubbles onSkillsChanged so Learn and the (Agent-E-refreshed) skills prop
+  // re-sync. Content stays owned by Learn; only the enabled flag is written here.
+  const toggleLearnedEnabled = useCallback(async (skill) => {
+    if (!skill) return;
+    if (!supabase) { setNotice({ kind: "err", text: "Not connected — manage this skill in Learn." }); return; }
+    try {
+      await makeSdb(supabase).save({ ...skill, enabled: !skill.enabled });
+      setNotice({ kind: "ok", text: `${skill.enabled ? "Silenced" : "Awakened"} "${skill.title}".` });
+      onSkillsChanged?.();
+    } catch (e) {
+      setNotice({ kind: "err", text: e?.message || "Couldn't update the skill — try Learn." });
+    }
+  }, [onSkillsChanged]);
+
+  // ── Focus handoff — a jump carrying a skillId (from Learn's "See in Neurons →")
+  //    selects that taught skill's neuron and flashes it once. Keyed by the skillId
+  //    value AND skills readiness: if the skill hasn't loaded into the merged view
+  //    yet, the effect no-ops and re-runs when the skills prop arrives. focusRef
+  //    guards against re-flashing on unrelated re-renders. ──
+  const focusRef = useRef(null);
+  useEffect(() => {
+    if (!focusSkillId) return;
+    if (focusRef.current === focusSkillId) return;
+    const id = "learned_" + focusSkillId;
+    const disp = displayGenome(genomeRef.current, skillsRef.current);
+    const target = disp.nodes.find((n) => n.id === id);
+    if (!target) return;                 // skill not merged in yet — wait for the skills prop
+    focusRef.current = focusSkillId;
+    setSelection({ type: "node", id });
+    setPanel(null);
+    dnaBus.emit({ type: "activation", seeds: [id], trace: propagate(disp, [id]), label: `Learned — ${target.label}` });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [focusSkillId, skills]);
 
   // ── ⋯ menu actions ──
   const copyMind = async () => {
@@ -607,8 +814,45 @@ export function MindPanel({ isMobile, settings, updateSetting, session, jump }) 
     );
   };
 
+  // Learned neurons aren't a REGION — they ride with Knowledge but are their own
+  // family, so the legend gets a dedicated control that SPOTLIGHTS them (dims the
+  // doctrine) rather than filtering by region. The dashed-ring dot mirrors the
+  // learned-neuron treatment on the canvas.
+  const learnedLegendRow = () => {
+    const has = stats.learned > 0;
+    return (
+      <button className="mind-legendrow" onClick={() => has && setLearnedSpotlight((v) => !v)} disabled={!has}
+        title={has ? "Skills taught in Learn — click to spotlight them" : "Teach a skill in Learn and it grows a neuron here"}
+        style={{ width: "100%", display: "flex", alignItems: "center", gap: 8, padding: "5px 7px", borderRadius: 8, cursor: has ? "pointer" : "default", opacity: has ? 1 : 0.5, background: learnedSpotlight ? "var(--accent-a10)" : "transparent" }}>
+        <span style={{ width: 8, height: 8, borderRadius: "50%", background: "transparent", border: "1.5px dashed var(--blue)", flexShrink: 0 }} />
+        <span style={{ flex: 1, textAlign: "left", fontSize: 12, fontWeight: 600, color: learnedSpotlight ? "var(--accent)" : "var(--ink)", fontFamily: "var(--font-display)" }}>Learned</span>
+        <span className="t-num" style={{ fontSize: 10.5, color: "var(--faint)" }}>{stats.learned}</span>
+      </button>
+    );
+  };
+
+  const learnedLegendChip = () => {
+    if (stats.learned === 0) return null;
+    return (
+      <button onClick={() => setLearnedSpotlight((v) => !v)}
+        style={{ ...glass, pointerEvents: "auto", display: "inline-flex", alignItems: "center", gap: 6, padding: "5px 11px", borderRadius: 999, cursor: "pointer", flexShrink: 0, border: learnedSpotlight ? "1px solid var(--accent-a40)" : "1px solid var(--line)", color: learnedSpotlight ? "var(--accent)" : "var(--ink)", fontSize: 11, fontWeight: 600, fontFamily: "var(--font-display)" }}>
+        <span style={{ width: 7, height: 7, borderRadius: "50%", background: "transparent", border: "1.5px dashed var(--blue)" }} />Learned
+        <span className="t-num" style={{ fontSize: 10, color: "var(--faint)" }}>{stats.learned}</span>
+      </button>
+    );
+  };
+
+  // A learned neuron gets its own inspector (read-only directive, weight, wiring,
+  // enable/disable, Open-in-Learn); seeded and skill nodes keep the untouched
+  // NodeInspector. The skill object is looked up so the toggle can flip its row.
+  const selLearned = !!(selNode && selNode.source === "learned");
+  const selSkill = selLearned ? skills.find((s) => String(s.id) === String(selNode.skillId)) : null;
+  const inspectorTitle = selNode ? (selLearned ? "Learned neuron" : "Node") : "Synapse";
   const inspectorBody = selNode
-    ? <NodeInspector key={selNode.id} genome={genome} node={selNode} apply={apply} onSelect={setSelection} onDeleted={() => setSelection(null)} onFireSkill={fireSkill} />
+    ? (selLearned
+      ? <LearnedNodeInspector key={selNode.id} genome={genome} dispNodes={displayGen.nodes} node={selNode} skill={selSkill}
+          apply={apply} onSelect={setSelection} onOpenInLearn={() => openInLearn(selNode.skillId)} onToggleEnabled={toggleLearnedEnabled} />
+      : <NodeInspector key={selNode.id} genome={genome} node={selNode} apply={apply} onSelect={setSelection} onDeleted={() => setSelection(null)} onFireSkill={fireSkill} />)
     : selEdge
       ? <EdgeInspector key={selEdge.id} genome={genome} edge={selEdge} apply={apply} onSelect={setSelection} onDeleted={() => setSelection(null)} />
       : null;
@@ -672,13 +916,14 @@ export function MindPanel({ isMobile, settings, updateSetting, session, jump }) 
   const headPad = isMobile ? "10px 12px 0" : "12px 16px 0";
 
   return (
-    <div className="mind-panel-root" style={{ position: "relative", width: "100%", height: "100%", flex: 1, minHeight: isMobile ? 440 : 520, overflow: "hidden", borderRadius: isMobile ? 0 : 16 }}>
+    <div className={`mind-panel-root${learnedSpotlight ? " mind-spotlight-learned" : ""}`} style={{ position: "relative", width: "100%", height: "100%", flex: 1, minHeight: isMobile ? 440 : 520, overflow: "hidden", borderRadius: isMobile ? 0 : 16 }}>
       <style>{VIEW_CSS}</style>
 
-      {/* The mind itself — full-bleed beneath every overlay. */}
+      {/* The mind itself — full-bleed beneath every overlay. displayGen merges the
+          learned neurons in (doctrine untouched when there are no skills). */}
       <div style={{ position: "absolute", inset: 0 }}>
         <MindCanvas
-          genome={genome}
+          genome={displayGen}
           selection={selection}
           onSelect={setSelection}
           onNodeMove={handleNodeMove}
@@ -696,14 +941,15 @@ export function MindPanel({ isMobile, settings, updateSetting, session, jump }) 
           <div style={{ display: "flex", alignItems: "center", gap: 11, pointerEvents: "auto" }}>
             <span aria-hidden style={{ display: "inline-flex", fontSize: 20, lineHeight: 1, color: "var(--accent)", textShadow: "0 0 14px var(--accent-a40)" }}>⌬</span>
             <div>
-              <div style={{ fontSize: 16, fontWeight: 700, color: "var(--ink)", fontFamily: "var(--font-display)", letterSpacing: "-0.01em" }}>Mind</div>
-              {!isMobile && <div className="t-foot" style={{ color: "var(--sub)", marginTop: 1 }}>How Cameron thinks — every node compiles into the prompt</div>}
+              <div style={{ fontSize: 16, fontWeight: 700, color: "var(--ink)", fontFamily: "var(--font-display)", letterSpacing: "-0.01em" }}>Neurons</div>
+              {!isMobile && <div className="t-foot" style={{ color: "var(--sub)", marginTop: 1 }}>The wiring of your mind — doctrine plus everything you've taught it.</div>}
             </div>
           </div>
           <div style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap", justifyContent: "flex-end", pointerEvents: "auto" }}>
             {!isMobile && (
               <>
-                <StatPill label="nodes" value={stats.nodes} title={`${stats.enabled} awake`} />
+                <StatPill label="nodes" value={displayGen.nodes.length} title={`${stats.enabled + stats.learnedEnabled} awake · ${stats.nodes} doctrine + ${stats.learned} learned`} />
+                {stats.learned > 0 && <StatPill label="learned" value={stats.learned} title={`${stats.learnedEnabled} awake — skills taught in Learn`} />}
                 <StatPill label="synapses" value={stats.edges} />
                 <StatPill label="mind" value={`#${compiled.hash.slice(0, 6)}`} brass title="Hash of the compiled system prompt — changes when the mind does" />
                 {lensPicker({ width: 210 })}
@@ -713,7 +959,7 @@ export function MindPanel({ isMobile, settings, updateSetting, session, jump }) 
               style={{ ...glass, borderRadius: 999, border: "1px solid var(--accent-a40)", padding: "6px 13px", color: "var(--accent)", fontFamily: "var(--font-display)", fontSize: 11.5, fontWeight: 700, cursor: "pointer" }}>
               ⚡ Pulse
             </button>
-            <button onClick={() => setPanel(panel === "menu" ? null : "menu")} title="Mind menu" aria-label="Mind menu"
+            <button onClick={() => setPanel(panel === "menu" ? null : "menu")} title="Neurons menu" aria-label="Neurons menu"
               style={{ ...glass, borderRadius: 999, padding: "6px 12px", color: "var(--sub)", fontSize: 14, fontWeight: 700, cursor: "pointer", lineHeight: 1 }}>
               ⋯
             </button>
@@ -724,7 +970,8 @@ export function MindPanel({ isMobile, settings, updateSetting, session, jump }) 
         {isMobile && (
           <>
             <div className="mind-scroll-x" style={{ display: "flex", gap: 6, overflowX: "auto", pointerEvents: "auto", paddingBottom: 2, alignItems: "center" }}>
-              <StatPill label="nodes" value={stats.nodes} />
+              <StatPill label="nodes" value={displayGen.nodes.length} />
+              {stats.learned > 0 && <StatPill label="learned" value={stats.learned} />}
               <StatPill label="synapses" value={stats.edges} />
               <StatPill label="mind" value={`#${compiled.hash.slice(0, 6)}`} brass />
               {lensPicker({ width: 200, flexShrink: 0 })}
@@ -734,6 +981,7 @@ export function MindPanel({ isMobile, settings, updateSetting, session, jump }) 
                 <button onClick={() => setRegionFilter(null)} style={{ ...glass, pointerEvents: "auto", flexShrink: 0, padding: "5px 11px", borderRadius: 999, cursor: "pointer", color: "var(--accent)", fontSize: 11, fontWeight: 700, fontFamily: "var(--font-display)" }}>All</button>
               )}
               {Object.keys(REGIONS).map(legendChip)}
+              {learnedLegendChip()}
               <button onClick={growNode} style={{ ...glass, pointerEvents: "auto", flexShrink: 0, padding: "5px 11px", borderRadius: 999, border: "1px solid var(--accent-a40)", cursor: "pointer", color: "var(--accent)", fontSize: 11, fontWeight: 700, fontFamily: "var(--font-display)" }}>＋ Node</button>
             </div>
           </>
@@ -750,7 +998,9 @@ export function MindPanel({ isMobile, settings, updateSetting, session, jump }) 
             )}
           </div>
           {Object.keys(REGIONS).map(legendRow)}
-          <div style={{ height: 1, background: "var(--line)", margin: "8px 0" }} />
+          <div style={{ height: 1, background: "var(--line)", margin: "7px 0" }} />
+          {learnedLegendRow()}
+          <div style={{ height: 1, background: "var(--line)", margin: "7px 0 8px" }} />
           <button onClick={growNode}
             style={{ width: "100%", padding: 8, background: "var(--accent-a10)", border: "1px solid var(--accent-a40)", borderRadius: 10, color: "var(--accent)", fontSize: 11.5, fontWeight: 700, cursor: "pointer", fontFamily: "var(--font-display)" }}>
             ＋ Node
@@ -794,7 +1044,7 @@ export function MindPanel({ isMobile, settings, updateSetting, session, jump }) 
         </div>
       )}
       {panel === "menu" && isMobile && (
-        <Sheet onClose={() => setPanel(null)} title="Mind">
+        <Sheet onClose={() => setPanel(null)} title="Neurons">
           <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
             {menuItems.map((it) => (
               <button key={it.label} className="mind-menuitem" onClick={it.run}
@@ -811,14 +1061,14 @@ export function MindPanel({ isMobile, settings, updateSetting, session, jump }) 
       {inspectorBody && !isMobile && (
         <div style={{ ...glass, position: "absolute", top: 78, right: 14, width: 322, maxHeight: "calc(100% - 104px)", zIndex: 9, display: "flex", flexDirection: "column", overflow: "hidden" }}>
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", padding: "12px 14px 0", flexShrink: 0 }}>
-            <span className="t-label" style={{ color: "var(--sub)" }}>{selNode ? "Node" : "Synapse"}</span>
+            <span className="t-label" style={{ color: "var(--sub)" }}>{inspectorTitle}</span>
             {closeBtn(() => setSelection(null))}
           </div>
           <div style={{ overflowY: "auto", padding: "9px 14px 14px" }}>{inspectorBody}</div>
         </div>
       )}
       {inspectorBody && isMobile && (
-        <Sheet onClose={() => setSelection(null)} title={selNode ? "Node" : "Synapse"}>
+        <Sheet onClose={() => setSelection(null)} title={inspectorTitle}>
           {inspectorBody}
         </Sheet>
       )}

@@ -76,6 +76,19 @@ const newId = (prefix) => `${prefix}_${Date.now().toString(36)}${(mutSeq++).toSt
 
 const slugify = (label) => String(label || "node").toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g, "").slice(0, 24) || "node";
 
+// A "learned_<skillId>" endpoint is a VIRTUAL neuron (a skill taught in Learn),
+// not a real genome node. addEdge/validateGenome recognize the prefix so a
+// synapse may be wired to one before the skill array is merged in for render.
+const isLearnedId = (id) => typeof id === "string" && id.startsWith("learned_");
+
+// Trim a skill's operating content to a compile-safe excerpt: collapse
+// whitespace, cut on a word boundary, add an ellipsis. Deterministic.
+const excerpt = (s, max = 200) => {
+  const t = String(s || "").replace(/\s+/g, " ").trim();
+  if (t.length <= max) return t;
+  return t.slice(0, max).replace(/\s+\S*$/, "").trim() + "…";
+};
+
 
 // ─── event bus — module-level singleton ──────────────────────────────────────
 // Declared early so persistence can emit into it without any temporal-dead-zone
@@ -308,6 +321,9 @@ export function seedGenome() {
     updated_at: now,
     nodes,
     edges: SEED_EDGES.map(e => ({ ...e })),
+    // Per-skill layout store for learned neurons: { [skillId]: { x, y, weight } }.
+    // Content stays in mini_skills; only layout/weight live here, seeded lazily.
+    learned: {},
     mutations: [],
   };
 }
@@ -404,7 +420,10 @@ const nodeLabel = (genome, id) => genome.nodes.find(n => n.id === id)?.label || 
 
 export function addEdge(genome, { from, to, weight = 0.6, polarity = 1 }) {
   if (!from || !to || from === to) return genome;                        // no self-loops
-  if (!genome.nodes.some(n => n.id === from) || !genome.nodes.some(n => n.id === to)) return genome; // no dangling
+  // Endpoint is valid if it's a real node OR a learned_<skillId> virtual neuron
+  // (wiring a taught skill into doctrine is allowed; it resolves once merged in).
+  const known = (id) => isLearnedId(id) || genome.nodes.some(n => n.id === id);
+  if (!known(from) || !known(to)) return genome;                         // no dangling
   if (genome.edges.some(e => e.from === from && e.to === to)) return genome; // one synapse per direction pair
   const base = `e_${from.replace(/^n_/, "")}_${to.replace(/^n_/, "")}`;
   let id = base, n = 2;
@@ -478,12 +497,115 @@ export function validateGenome(g) {
       if (pairs.has(pair)) errors.push(`edge ${e.id}: duplicate synapse ${pair}`);
       else pairs.add(pair);
     }
-    if (!ids.has(e.from)) errors.push(`edge ${e.id}: dangling from "${e.from}"`);
-    if (!ids.has(e.to)) errors.push(`edge ${e.id}: dangling to "${e.to}"`);
+    if (!ids.has(e.from) && !isLearnedId(e.from)) errors.push(`edge ${e.id}: dangling from "${e.from}"`);
+    if (!ids.has(e.to) && !isLearnedId(e.to)) errors.push(`edge ${e.id}: dangling to "${e.to}"`);
     if (typeof e.weight !== "number" || !Number.isFinite(e.weight) || e.weight < 0 || e.weight > 1) errors.push(`edge ${e.id}: weight out of 0..1`);
     if (e.polarity !== 1 && e.polarity !== -1) errors.push(`edge ${e.id}: polarity must be 1 or -1`);
   });
   return { ok: errors.length === 0, errors };
+}
+
+
+// ─── learned-skill neurons — virtual nodes backed by mini_skills ─────────────
+// A skill taught in Learn is a NODE the mind thinks with, but its CONTENT
+// (title / description / content) is owned by Supabase `mini_skills`; only its
+// LAYOUT / weight / wiring belong to the genome. So learned nodes are VIRTUAL:
+// synthesized on demand from the live skills array (displayGenome / propagate /
+// compile), never persisted into genome.nodes. Persisted per-skill layout lives
+// in genome.learned[skillId] = { x, y, weight } — seeded lazily, holding NO
+// content. Edges in genome.edges MAY reference a "learned_<id>" endpoint; addEdge
+// and validateGenome allow it, and the endpoint resolves once the skill merges in.
+const LEARNED_ID = (skillId) => "learned_" + skillId;
+const LEARNED_WEIGHT = 0.55; // default pull of a freshly-taught skill
+
+// Learned neurons cluster just BEYOND the knowledge ring — adjacent to "what he
+// knows" but visually their own family. Position is DETERMINISTIC in skill.id
+// (djb2 via jitter), so a taught skill lands in the same spot every render and
+// never jumps between paints; a manual drag (setLearnedLayout x/y) overrides it.
+const LEARNED_R = RING_R + 190;
+const LEARNED_SPREAD = 118;
+function learnedPosition(skillId) {
+  const rad = (RING_DEG.knowledge * Math.PI) / 180; // same bearing as the knowledge cluster
+  const cx = Math.cos(rad) * LEARNED_R;
+  const cy = Math.sin(rad) * LEARNED_R;
+  const deg = jitter(skillId, "learn_a") * 360;
+  const r = LEARNED_SPREAD * (0.55 + jitter(skillId, "learn_r") * 0.75);
+  return {
+    x: Math.round(cx + Math.cos((deg * Math.PI) / 180) * r),
+    y: Math.round(cy + Math.sin((deg * Math.PI) / 180) * r),
+  };
+}
+
+// skills → virtual node objects shaped EXACTLY like genome nodes, so the canvas,
+// propagate(), and compile treat them uniformly. Content stays in the skill; only
+// weight/position are read from genome.learned. Deduped by id, deterministic. A
+// skill with no persisted layout gets its stable djb2 position and weight 0.55.
+export function learnedNodes(skills, genome) {
+  const store = (genome && genome.learned) || {};
+  const out = [];
+  const seen = new Set();
+  (Array.isArray(skills) ? skills : []).forEach((s) => {
+    if (!s || s.id == null) return;
+    const id = LEARNED_ID(s.id);
+    if (seen.has(id)) return;                 // one neuron per skill, first wins — ids stay unique
+    seen.add(id);
+    const saved = store[s.id] || {};
+    const pos = (typeof saved.x === "number" && typeof saved.y === "number")
+      ? { x: saved.x, y: saved.y }            // manual drag persisted → honor it
+      : learnedPosition(String(s.id));        // else the deterministic home
+    out.push({
+      id,
+      label: s.title || "Learned skill",
+      region: "knowledge",
+      source: "learned",
+      enabled: s.enabled !== false,
+      weight: clamp01(saved.weight ?? LEARNED_WEIGHT),
+      x: pos.x,
+      y: pos.y,
+      text: "Use when: " + (s.description || "") + "\n" + (s.content || ""),
+      skillId: s.id,
+      locked: false,
+    });
+  });
+  return out;
+}
+
+// The render / propagate / compile VIEW: the doctrine genome with learned neurons
+// merged into `nodes`. Pure — returns a NEW object, or the SAME genome reference
+// when there is nothing to add (no skills). Idempotent: merging an already-merged
+// genome adds nothing (dedupe by id), so a caller may pass skills OR a pre-merged
+// genome to propagate/seedsForTask without ever doubling nodes.
+export function displayGenome(genome, skills) {
+  const learned = learnedNodes(skills, genome);
+  if (!learned.length) return genome;
+  const present = new Set(genome.nodes.map((n) => n.id));
+  const add = learned.filter((n) => !present.has(n.id));
+  if (!add.length) return genome;
+  return { ...genome, nodes: [...genome.nodes, ...add] };
+}
+
+// Per-skill layout write (x / y / weight) into genome.learned. Returns a NEW
+// genome (caller persists via saveGenome); a no-op returns the SAME reference so
+// callers can cheaply detect it. Position-only moves are layout, not thought, so
+// they skip the mutation log — mirroring updateNode. Learned nodes are never
+// added to or removed from genome.nodes here: delete the skill in Learn instead.
+export function setLearnedLayout(genome, skillId, patch = {}) {
+  if (skillId == null) return genome;
+  const key = String(skillId);
+  const prev = (genome.learned && genome.learned[key]) || {};
+  const next = { ...prev };
+  let moved = false, retuned = false;
+  if (patch.x !== undefined) { const x = Math.round(Number(patch.x)); if (Number.isFinite(x) && x !== prev.x) { next.x = x; moved = true; } }
+  if (patch.y !== undefined) { const y = Math.round(Number(patch.y)); if (Number.isFinite(y) && y !== prev.y) { next.y = y; moved = true; } }
+  if (patch.weight !== undefined) { const w = clamp01(patch.weight); if (w !== prev.weight) { next.weight = w; retuned = true; } }
+  if (!moved && !retuned) return genome;
+  const nextGenome = { ...genome, learned: { ...(genome.learned || {}), [key]: next } };
+  if (retuned) {
+    const from = prev.weight ?? LEARNED_WEIGHT;
+    return recordMutation(nextGenome, "learned_layout",
+      `${next.weight > from ? "Strengthened" : "Weakened"} learned skill ${from.toFixed(2)} → ${next.weight.toFixed(2)}`);
+  }
+  return nextGenome; // pure position move — no mutation entry (layout ≠ thought)
 }
 
 
@@ -496,8 +618,25 @@ export function validateGenome(g) {
 // informs, <0.4 barely whispers (Minor). Disabled nodes don't exist. Inhibitory
 // edges between enabled nodes become explicit conflict-resolution lines — the
 // model is TOLD which impulse wins, not left to average them.
-export function compileGenome(genome) {
+export function compileGenome(genome, { skills } = {}) {
   const byId = new Map(genome.nodes.map(n => [n.id, n]));
+
+  // Learned neurons compile into a SUBSECTION of KNOWLEDGE. They are virtual
+  // (content owned by mini_skills), read via learnedNodes and ordered
+  // DETERMINISTICALLY — weight desc, then skillId asc, the same discipline the
+  // region lines use. Only ENABLED learned skills compile. When no skills are
+  // passed this is empty and the output is byte-identical to the pre-learned mind.
+  const learnedLines = learnedNodes(skills, genome)
+    .filter(isAwake)
+    .sort((a, b) => (b.weight - a.weight) || (String(a.skillId) < String(b.skillId) ? -1 : String(a.skillId) > String(b.skillId) ? 1 : 0))
+    .map(n => {
+      const nl = n.text.indexOf("\n");
+      const useWhen = (nl >= 0 ? n.text.slice(0, nl) : n.text).trim();   // "Use when: <desc>"
+      const content = nl >= 0 ? n.text.slice(nl + 1) : "";
+      const body = `${n.label} — ${useWhen}${content.trim() ? ` — ${excerpt(content)}` : ""}`;
+      return n.weight >= 0.75 ? `PRIMARY — ${body}` : n.weight >= 0.4 ? body : `Minor — ${body}`;
+    });
+
   const sections = [];
   for (const region of REGION_ORDER) {
     const lines = genome.nodes
@@ -505,6 +644,9 @@ export function compileGenome(genome) {
       .sort((a, b) => (b.weight - a.weight) || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0))
       .map(n => (n.weight >= 0.75 ? `PRIMARY — ${n.text}` : n.weight >= 0.4 ? n.text : `Minor — ${n.text}`));
     if (lines.length) sections.push({ region, lines });
+    // Learned skills ride WITH knowledge — appended right after it as a pseudo-
+    // section so both the prompt and UIs read "what he knows" then "what he's taught".
+    if (region === "knowledge" && learnedLines.length) sections.push({ region: "learned", lines: learnedLines });
   }
   const tensions = genome.edges
     .filter(e => e.polarity === -1 && isAwake(byId.get(e.from)) && isAwake(byId.get(e.to)))
@@ -513,7 +655,11 @@ export function compileGenome(genome) {
 
   const parts = [MIND_CHARTER];
   sections.forEach(s => {
-    parts.push(`${REGIONS[s.region].label.toUpperCase()} — ${REGIONS[s.region].desc}:\n${s.lines.map(l => `- ${l}`).join("\n")}`);
+    if (s.region === "learned") {
+      parts.push(`LEARNED SKILLS (taught via Learn):\n${s.lines.map(l => `- ${l}`).join("\n")}`);
+    } else {
+      parts.push(`${REGIONS[s.region].label.toUpperCase()} — ${REGIONS[s.region].desc}:\n${s.lines.map(l => `- ${l}`).join("\n")}`);
+    }
   });
   if (tensions.length) {
     parts.push(`INTERNAL TENSIONS:\n${tensions.map(l => `- ${l}`).join("\n")}`);
@@ -524,10 +670,12 @@ export function compileGenome(genome) {
 }
 
 // The delegate hook — the Mini Me executor and any external caller read the mind
-// through this one door: compile whatever is persisted right now. Kept trivial
-// on purpose so tweaking a node in the panel visibly changes the delegate.
-export function getCompiledMind() {
-  return compileGenome(loadGenome());
+// through this one door: compile whatever is persisted right now, folding in the
+// live learned skills so a taught skill visibly changes the delegate. Back-compat:
+// getCompiledMind() with no arg → skills=[] → byte-identical to the doctrine-only
+// mind. Kept trivial on purpose so tweaking a node in the panel changes the delegate.
+export function getCompiledMind(skills = []) {
+  return compileGenome(loadGenome(), { skills });
 }
 
 
@@ -542,7 +690,11 @@ export function getCompiledMind() {
 // Disabled nodes never activate and never relay. max() + multiplicative decay
 // makes levels monotone-bounded, so the wave provably dies; we stop the moment a
 // step changes nothing, or at `steps`, whichever comes first.
-export function propagate(genome, seedIds, { steps = 4, decay = 0.55 } = {}) {
+export function propagate(genome, seedIds, { steps = 4, decay = 0.55, skills } = {}) {
+  // Learned neurons participate in the wave when skills are relevant. Merge them
+  // in here (or pass an already-merged displayGenome and omit skills) — either way
+  // stays pure and deterministic since displayGenome is.
+  if (skills && skills.length) genome = displayGenome(genome, skills);
   const EPS = 0.01; // below this a node is "dark" — keeps ripples finite and traces readable
   const enabled = new Set(genome.nodes.filter(n => isAwake(n)).map(n => n.id));
   const levels = {};
@@ -599,7 +751,10 @@ const TASK_SKILL = {
   grow: "n_sk_grow",
 };
 
-export function seedsForTask(genome, kind) {
+export function seedsForTask(genome, kind, skills) {
+  // Merge learned neurons so a synapse wired FROM a learned skill INTO a doctrine
+  // skill can seed the trace too (or pass a pre-merged displayGenome, skills omitted).
+  if (skills && skills.length) genome = displayGenome(genome, skills);
   const skillId = TASK_SKILL[kind];
   if (!skillId || !genome.nodes.some(n => n.id === skillId)) return [];
   const enabled = new Set(genome.nodes.filter(n => isAwake(n)).map(n => n.id));
@@ -613,7 +768,7 @@ export function seedsForTask(genome, kind) {
 
 
 // ─── stats — the header pills read this ──────────────────────────────────────
-export function genomeStats(genome) {
+export function genomeStats(genome, skills = []) {
   const byRegion = {};
   Object.keys(REGIONS).forEach(r => { byRegion[r] = 0; });
   let enabled = 0;
@@ -621,5 +776,12 @@ export function genomeStats(genome) {
     byRegion[n.region] = (byRegion[n.region] || 0) + 1;
     if (isAwake(n)) enabled++;
   });
-  return { nodes: genome.nodes.length, edges: genome.edges.length, enabled, byRegion };
+  // Learned neurons are counted separately (additive fields — the doctrine counts
+  // above are unchanged, so callers that pass no skills see identical numbers).
+  const learned = learnedNodes(skills, genome);
+  const learnedEnabled = learned.reduce((c, n) => c + (isAwake(n) ? 1 : 0), 0);
+  return {
+    nodes: genome.nodes.length, edges: genome.edges.length, enabled, byRegion,
+    learned: learned.length, learnedEnabled,
+  };
 }

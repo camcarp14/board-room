@@ -1,7 +1,9 @@
-// ─── Page: Mini Me ───────────────────────────────────────────────────────────
-// Mini Me is now real: on-demand only — you queue work and hit Run, nothing
-// fires on a schedule. The worker (mini-worker) runs Claude against the
-// queue, writes deliverables onto tasks, and logs to mini_feed.
+// ─── Page: Mind — the delegate (component export stays MiniMePage) ────────────
+// The "Mind" delegate: on-demand only — you queue work and hit Run, nothing
+// fires on a schedule. It thinks with the compiled Neurons (doctrine + learned
+// skills) — see getCompiledMind below — which lead both the task-execution and
+// briefing prompts. The worker (mini-worker) runs Claude against the queue,
+// writes deliverables onto tasks, and logs to mini_feed.
 import { useState, useEffect } from "react";
 import { T } from "../../theme.js";
 import { Card, Button, Dot, Switch, Field, useConfirm } from "../../ui/kit.jsx";
@@ -10,6 +12,7 @@ import { ToggleRow, Segmented, Chips } from "../../ui/primitives.jsx";
 import { pingFn } from "../../lib/functions.js";
 import { supabase } from "../../lib/supabase.js";
 import { callClaude } from "../../lib/claude.js";
+import { getCompiledMind } from "./mind/mindGenome.js";
 
 export const MINI_DEFAULTS = {
   model: "haiku", enabled: true, budget: "$3", oversight: true,
@@ -50,11 +53,14 @@ function Rule() {
 }
 
 
-export function MiniMePage({ settings, updateSetting, session, onWorkerRun, onOpenLearn, isMobile }) {
+export function MiniMePage({ settings, updateSetting, session, onWorkerRun, onJump, skills = [], isMobile }) {
   const mini = { ...MINI_DEFAULTS, ...(settings?.mini || {}) };
   const setMini = (patch) => updateSetting("mini", { ...mini, ...patch });
   const tasks = settings?.mini_tasks || [];
   const setTasks = (list) => updateSetting("mini_tasks", list);
+  // Cross-nav to the Neurons canvas — the wiring behind this delegate. Agent E
+  // supplies onJump; guarded so the affordance only shows when a jump exists.
+  const goNeurons = onJump ? () => onJump({ page: "boardroom", sub: "neural" }) : null;
 
   const [taskInput, setTaskInput] = useState("");
   const [feed, setFeed] = useState(null); // null = loading
@@ -115,7 +121,12 @@ export function MiniMePage({ settings, updateSetting, session, onWorkerRun, onOp
   const runNow = async () => {
     if (running) return;
     setRunning(true); setRunMsg(null);
-    const { ok, data, status } = await callWorker({ run: true });
+    // The compiled Neurons (doctrine + everything taught in Learn) are the
+    // operating context the delegate runs under. The genome lives in client
+    // storage, so the client hands the compiled mind to the worker to lead the
+    // task-execution prompt, ahead of role/directive/task — tune a Neuron or
+    // teach a skill and what the delegate produces shifts with it.
+    const { ok, data, status } = await callWorker({ run: true, mind: getCompiledMind(skills).systemPrompt });
     if (!ok || !data?.success) setRunMsg({ ok: false, text: data?.error || `worker failed (${status || "network"})` });
     else setRunMsg({ ok: true, text: data.message || `processed ${data.processed} task(s)` });
     await loadFeed();
@@ -150,7 +161,11 @@ export function MiniMePage({ settings, updateSetting, session, onWorkerRun, onOp
     setDirectiveSending(true);
     const log = mini.briefingLog || [];
     const recent = log.slice(-6).map(l => `${l.role === "user" ? "Cameron" : l.field === "role" ? "Role" : "Directive"}: ${l.text}`).join("\n");
-    const system = `You maintain two things for Cameron's autonomous assistant, Mini Me, from an ongoing conversation:
+    // Lead with the compiled Neurons (doctrine + learned skills) so the briefing
+    // reads Cameron's message through the same mind the delegate executes with.
+    const system = `${getCompiledMind(skills).systemPrompt}
+
+You maintain two things for Cameron's autonomous assistant, Mind, from an ongoing conversation:
 1. "directive" — a one-sentence overall mission that shapes every task.
 2. "role" — the identity/expertise it should adopt when doing work.
 
@@ -255,17 +270,17 @@ Decide which of the two his message actually addresses — often just one. Outpu
             <div style={{ display: "flex", alignItems: "flex-start", gap: 14, marginBottom: 12 }}>
               <span style={{ display: "flex", flexDirection: "column", gap: 4, flex: 1, minWidth: 0 }}>
                 <span style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10 }}>
-                  <span className="t-head">Mini Me</span>
+                  <span className="t-head">Mind</span>
                   <span style={{ display: "inline-flex", alignItems: "center", gap: 6, flex: "none" }}>
                     <Dot tone={statusTone} pulse={statusPulse} size={6} />
                     <span className="t-cap" style={{ color: statusTone, fontWeight: 600 }}>{statusLabel}</span>
                   </span>
                 </span>
-                <span className="t-foot" style={{ lineHeight: 1.5 }}>Your delegate. Set it up below, then queue work and hit Run — nothing runs until you say so.</span>
-                {onOpenLearn && skillCount !== null && (
-                  <Button kind="plain" size="sm" onClick={onOpenLearn}
+                <span className="t-foot" style={{ lineHeight: 1.5 }}>Your mind at work — it runs on your Neurons and everything you've taught it. Set it up below, then queue work and hit Run; nothing runs until you say so.</span>
+                {goNeurons && skillCount !== null && (
+                  <Button kind="plain" size="sm" onClick={goNeurons}
                     style={{ alignSelf: "flex-start", height: "auto", minHeight: 40, paddingLeft: 0, paddingRight: 0, gap: 4 }}>
-                    {typeof skillCount === "number" && skillCount > 0 ? `${skillCount} skill${skillCount > 1 ? "s" : ""} loaded` : "Teach it skills"}
+                    {typeof skillCount === "number" && skillCount > 0 ? `${skillCount} neuron${skillCount > 1 ? "s" : ""} taught · view` : "View your Neurons"}
                     <IcChevronRight size={11} />
                   </Button>
                 )}
@@ -274,7 +289,7 @@ Decide which of the two his message actually addresses — often just one. Outpu
                 )}
               </span>
               <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 4, flex: "none" }}>
-                <Switch on={mini.enabled !== false} onToggle={() => setMini({ enabled: mini.enabled === false })} aria-label="Mini Me enabled" />
+                <Switch on={mini.enabled !== false} onToggle={() => setMini({ enabled: mini.enabled === false })} aria-label="Mind enabled" />
                 <span className="t-cap" style={{ fontWeight: 600, color: mini.enabled === false ? "var(--faint)" : "var(--green)" }}>{mini.enabled === false ? "Off" : "On"}</span>
               </div>
             </div>
@@ -333,7 +348,7 @@ Decide which of the two his message actually addresses — often just one. Outpu
               <Button kind="quiet" size="md" onClick={addTask} style={{ flex: "none" }}>Queue</Button>
             </div>
             <Button kind="primary" size="lg" full disabled={running || worker.state === "off" || mini.enabled === false} onClick={runNow} style={{ marginBottom: 12 }}>
-              {running ? "Working the queue…" : mini.enabled === false ? "Mini Me is off" : `Run queue now${queuedCount ? ` (${queuedCount} queued)` : ""}`}
+              {running ? "Working the queue…" : mini.enabled === false ? "Mind is off" : `Run queue now${queuedCount ? ` (${queuedCount} queued)` : ""}`}
             </Button>
             {runMsg && (
               <div style={{ marginTop: -2, marginBottom: 12, display: "flex", alignItems: "flex-start", gap: 7 }}>

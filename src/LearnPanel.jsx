@@ -17,7 +17,7 @@
 //   SKILLS_SETUP_SQL      — one-time table + RLS, shown in-app if missing.
 import { useState, useEffect, useMemo, useRef } from "react";
 import { Card, CellGroup, SectionHeader, Button, Field, TextArea, Switch, Spinner, EmptyState, Dot, useConfirm, IcCheck } from "./ui/kit.jsx";
-import { IcBook, IcExternal, IcChevronDown } from "./ui/icons.jsx";
+import { IcBook, IcExternal, IcChevronDown, IcChevronRight } from "./ui/icons.jsx";
 
 // ─── one-time setup SQL ───────────────────────────────────────────────────────
 export const SKILLS_SETUP_SQL = `-- Board Room · Learn — one-time setup
@@ -180,6 +180,9 @@ export function buildSkillsBlock(skills, budget = 9000) {
 // Reset that lets a <button> wear the kit's .cell-body anatomy (rows keep a
 // separate Switch, so the whole cell can't be one <button> itself).
 const rowBtn = { background: "none", border: 0, padding: 0, margin: 0, font: "inherit", color: "inherit", textAlign: "left", cursor: "pointer", alignSelf: "stretch", justifyContent: "center" };
+// Cross-nav affordance → jumps to the neural canvas focused on this skill's neuron.
+// Typography comes from .t-cap; this only resets the button chrome + sets the link tone.
+const jumpLink = { background: "none", border: 0, margin: 0, padding: "10px 2px", color: "var(--blue)", cursor: "pointer", display: "inline-flex", alignItems: "center", gap: 3 };
 const sqlPre = { background: "var(--surface-2)", borderRadius: 12, padding: "12px 14px", fontSize: 11, fontFamily: "var(--font-mono)", lineHeight: 1.6, overflowX: "auto", whiteSpace: "pre", color: "var(--sub)", margin: 0 };
 
 function SetupCard({ isMobile }) {
@@ -200,7 +203,7 @@ function SetupCard({ isMobile }) {
   );
 }
 
-function SkillCard({ skill, isMobile, onToggle, onSave, onDelete, spotlight, first }) {
+function SkillCard({ skill, isMobile, onToggle, onSave, onDelete, onJump, spotlight, first }) {
   const [open, setOpen] = useState(false);
   const cardRef = useRef(null);
   useEffect(() => {
@@ -235,8 +238,15 @@ function SkillCard({ skill, isMobile, onToggle, onSave, onDelete, spotlight, fir
             {!editing ? (
               <>
                 <div className="t-call" style={{ background: "var(--surface-2)", borderRadius: 12, padding: "12px 14px", color: "var(--sub)", lineHeight: 1.65, whiteSpace: "pre-wrap", overflowWrap: "break-word" }}>{skill.content}</div>
-                <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
                   <Button kind="quiet" size="sm" onClick={startEdit} style={{ height: 38 }}>Edit</Button>
+                  {onJump && (
+                    <button type="button" className="t-cap" style={jumpLink}
+                      onClick={e => { e.stopPropagation(); onJump({ page: "boardroom", sub: "neural", skillId: skill.id }); }}
+                      title="See this skill's neuron on the canvas">
+                      in Neurons <IcChevronRight size={12} />
+                    </button>
+                  )}
                   {skill.source_url && (
                     <a href={skill.source_url} target="_blank" rel="noreferrer" onClick={e => e.stopPropagation()}
                       className="t-cap" style={{ display: "inline-flex", alignItems: "center", gap: 4, color: "var(--blue)", textDecoration: "none", padding: "10px 2px" }}>
@@ -266,7 +276,7 @@ function SkillCard({ skill, isMobile, onToggle, onSave, onDelete, spotlight, fir
 }
 
 // ─── the tab ──────────────────────────────────────────────────────────────────
-export default function LearnPanel({ isMobile, supabase, callClaude, session, modelKey = "haiku", onSkillsChanged, spotlight }) {
+export default function LearnPanel({ isMobile, supabase, callClaude, session, modelKey = "haiku", onSkillsChanged, onJump, spotlight }) {
   const sdb = useMemo(() => makeSdb(supabase), [supabase]);
   const [skills, setSkills] = useState(null); // null = loading
   const [missingTable, setMissingTable] = useState(false);
@@ -294,7 +304,7 @@ export default function LearnPanel({ isMobile, supabase, callClaude, session, mo
     if (result.error) { setNotice({ ok: false, text: result.error }); return; }
     setText("");
     const skippedNote = result.failedUrls?.length ? ` (couldn't read ${result.failedUrls.map(f => hostOf(f.url)).join(", ")} — learned from the rest)` : "";
-    setNotice({ ok: true, text: `Learned "${result.skill.title}"${skippedNote}` });
+    setNotice({ ok: true, text: `Learned "${result.skill.title}" — it's now a neuron${skippedNote}`, skillId: result.skill.id });
     refresh();
   };
 
@@ -326,11 +336,11 @@ export default function LearnPanel({ isMobile, supabase, callClaude, session, mo
       {/* teach it */}
       <Card pad={isMobile ? "md" : "lg"} style={{ display: "flex", flexDirection: "column", gap: 10 }}>
         <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", gap: 10, flexWrap: "wrap" }}>
-          <span className="t-head">Teach Mini Me</span>
+          <span className="t-head">Teach your mind</span>
           <span className="t-cap" style={{ color: "var(--faint)" }}>Also works as /learn in chat</span>
         </div>
         <span className="t-foot" style={{ lineHeight: 1.6 }}>
-          Drop in a URL, an article, a process, numbers that matter — it gets distilled into a skill and loaded into every chat and queue run.
+          Drop in a URL, an article, a process, numbers that matter — it's distilled into a skill. Every skill becomes a neuron and feeds the delegate.
         </span>
         <TextArea value={text} onChange={e => setText(e.target.value)}
           onKeyDown={e => { if ((e.metaKey || e.ctrlKey) && e.key === "Enter") learn(); }}
@@ -348,9 +358,15 @@ export default function LearnPanel({ isMobile, supabase, callClaude, session, mo
             </span>
           )}
           {!phase && notice && (
-            <span style={{ display: "inline-flex", alignItems: "center", gap: 7, minWidth: 0 }}>
+            <span style={{ display: "inline-flex", alignItems: "center", gap: 7, minWidth: 0, flexWrap: "wrap" }}>
               <Dot tone={notice.ok ? "var(--green)" : "var(--red)"} size={6} />
               <span className="t-foot" style={{ color: notice.ok ? "var(--green)" : "var(--red)", lineHeight: 1.5 }}>{notice.text}</span>
+              {notice.ok && notice.skillId && onJump && (
+                <button type="button" className="t-cap" style={{ ...jumpLink, padding: "2px 2px" }}
+                  onClick={() => onJump({ page: "boardroom", sub: "neural", skillId: notice.skillId })}>
+                  See in Neurons <IcChevronRight size={12} />
+                </button>
+              )}
             </span>
           )}
         </div>
@@ -383,7 +399,7 @@ export default function LearnPanel({ isMobile, supabase, callClaude, session, mo
             <CellGroup>
               {filtered.map((s, i) => (
                 <SkillCard key={s.id} skill={s} isMobile={isMobile} first={i === 0}
-                  onToggle={toggleSkill} onSave={saveSkill} onDelete={deleteSkill}
+                  onToggle={toggleSkill} onSave={saveSkill} onDelete={deleteSkill} onJump={onJump}
                   spotlight={spotlight?.id === s.id ? spotlight.t : null} />
               ))}
             </CellGroup>
