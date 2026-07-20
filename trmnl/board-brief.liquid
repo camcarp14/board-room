@@ -1,0 +1,80 @@
+{% comment %}
+  Board Room Brief — TRMNL Private Plugin (Polling) full-screen layout.
+  Paste this into the plugin's "Markup" editor for the Full layout. It renders
+  three columns from the JSON that /.netlify/functions/trmnl?view=json returns:
+  upcoming events, birthdays, and upkeep due. TRMNL's design-system classes
+  (view / columns / column / title_bar / etc.) are documented at
+  https://usetrmnl.com/framework — tweak freely.
+{% endcomment %}
+<div class="view view--full">
+  <div class="columns">
+
+    <div class="column">
+      <div class="markdown">
+        <span class="title">Calendar</span>
+      </div>
+      {% if events.size > 0 %}
+      <div class="flex flex--col gap--small">
+        {% for e in events limit: 6 %}
+        <div class="item">
+          <div class="meta"></div>
+          <div class="content">
+            <span class="title title--small">{{ e.title }}</span>
+            <span class="description clamp--1">{{ e.when }}{% if e.location != "" %} · {{ e.location }}{% endif %}</span>
+          </div>
+          <div class="value value--small">{{ e.rel }}</div>
+        </div>
+        {% endfor %}
+      </div>
+      {% else %}
+      <span class="label label--gray-out">Nothing on the calendar</span>
+      {% endif %}
+    </div>
+
+    <div class="column">
+      <div class="markdown">
+        <span class="title">Birthdays</span>
+      </div>
+      {% if birthdays.size > 0 %}
+      <div class="flex flex--col gap--small">
+        {% for b in birthdays limit: 6 %}
+        <div class="item">
+          <div class="content">
+            <span class="title title--small">{{ b.name }}{% if b.turning %} ({{ b.turning }}){% endif %}</span>
+            <span class="description">{{ b.when }}</span>
+          </div>
+          <div class="value value--small">{{ b.rel }}</div>
+        </div>
+        {% endfor %}
+      </div>
+      {% else %}
+      <span class="label label--gray-out">None coming up</span>
+      {% endif %}
+
+      <div class="markdown" style="margin-top: 16px;">
+        <span class="title">Upkeep due</span>
+      </div>
+      {% if upkeep.size > 0 %}
+      <div class="flex flex--col gap--small">
+        {% for u in upkeep limit: 5 %}
+        <div class="item">
+          <div class="content">
+            <span class="title title--small">{{ u.name }}</span>
+            <span class="description">{{ u.when }}</span>
+          </div>
+          <div class="value value--small">{% if u.overdue %}overdue{% else %}{{ u.rel }}{% endif %}</div>
+        </div>
+        {% endfor %}
+      </div>
+      {% else %}
+      <span class="label label--gray-out">Nothing due</span>
+      {% endif %}
+    </div>
+
+  </div>
+
+  <div class="title_bar">
+    <span class="title">Board Room</span>
+    <span class="instance">Updated {{ generated_at }}</span>
+  </div>
+</div>
