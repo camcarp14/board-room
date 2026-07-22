@@ -1,4 +1,5 @@
 import { supabase } from "../lib/supabase.js";
+import { todayISO } from "../lib/dates.js";
 
 // ─── db — Supabase-backed memory layer (unchanged contract) ──────────────────
 export const db = {
@@ -160,7 +161,9 @@ export const db = {
   async saveMovie(m) {
     const user_id = await db.uid();
     if (!user_id) throw new Error("Not signed in");
-    const row = { user_id, title: m.title, year: m.year || null, poster_url: m.poster_url || null, true_quality_score: m.true_quality_score ?? null, cameron_score: m.cameron_score ?? null, note: m.note || "", watched_date: m.watched_date || new Date().toISOString().slice(0, 10) };
+    // todayISO(), never toISOString().slice(0,10) — the UTC day is tomorrow
+    // every evening in the Americas (see lib/dates.js).
+    const row = { user_id, title: m.title, year: m.year || null, poster_url: m.poster_url || null, true_quality_score: m.true_quality_score ?? null, cameron_score: m.cameron_score ?? null, note: m.note || "", watched_date: m.watched_date || todayISO() };
     const { data, error } = await supabase.from("movies").insert(row).select().single();
     if (error) throw error;
     return data;

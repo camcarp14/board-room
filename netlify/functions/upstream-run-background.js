@@ -19,6 +19,10 @@ export default async (req) => {
 
   const userId = body?.accessToken ? await verifyUser(body.accessToken) : null;
   if (!userId) return json(401, { error: 'unauthorized' });
+  // Optional single-user pinning — a stranger who self-signs-up on the
+  // Supabase project must not be able to burn the engine's Anthropic budget.
+  const owner = process.env.OWNER_USER_ID;
+  if (owner && userId !== owner) return json(403, { error: 'this deployment is single-user' });
 
   const store = makeStore(userId);
   try {

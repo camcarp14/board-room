@@ -16,12 +16,21 @@ exports.handler = async (event) => {
   if (!token) return json(500, { error: "NETLIFY_API_TOKEN not set" });
 
   // Require a valid session before triggering builds with the Netlify token.
+  // Fail-closed when the verification pair is missing — this endpoint wields a
+  // real credential, so it must never run open because of env drift. Optional
+  // OWNER_USER_ID pins the caller to the owner's account.
   const supaUrl = process.env.SUPABASE_URL, service = process.env.SUPABASE_SERVICE_ROLE_KEY;
-  if (supaUrl && service) {
+  if (!supaUrl || !service) return json(500, { error: "auth backend not configured (SUPABASE_URL / SUPABASE_SERVICE_ROLE_KEY)" });
+  {
     const auth = (event.headers.authorization || event.headers.Authorization || "").replace(/^Bearer\s+/i, "");
     if (!auth) return json(401, { error: "sign in first" });
     const who = await fetch(`${supaUrl}/auth/v1/user`, { headers: { apikey: service, Authorization: `Bearer ${auth}` } });
     if (!who.ok) return json(401, { error: "session expired — refresh and try again" });
+    const owner = process.env.OWNER_USER_ID;
+    if (owner) {
+      const u = await who.json().catch(() => null);
+      if (u?.id !== owner) return json(403, { error: "this deployment is single-user" });
+    }
   }
 
   if (!body.site) return json(400, { error: "site is required" });

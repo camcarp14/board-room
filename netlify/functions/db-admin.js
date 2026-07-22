@@ -18,12 +18,18 @@ exports.handler = async (event) => {
 
   // Require a valid session before running service-role commands (which include
   // DELETEs against the shared brain). Unauthenticated, this exposed row counts
-  // and destructive maintenance to anyone who found the URL.
+  // and destructive maintenance to anyone who found the URL. The verified user
+  // id also scopes the destructive commands below to the caller's own rows.
+  let callerId = null;
   {
     const token = (event.headers.authorization || event.headers.Authorization || "").replace(/^Bearer\s+/i, "");
     if (!token) return json(401, { error: "sign in first" });
     const who = await fetch(`${url}/auth/v1/user`, { headers: { apikey: key, Authorization: `Bearer ${token}` } });
     if (!who.ok) return json(401, { error: "session expired — refresh and try again" });
+    const u = await who.json().catch(() => null);
+    callerId = u?.id || null;
+    const owner = process.env.OWNER_USER_ID;
+    if (owner && callerId !== owner) return json(403, { error: "this deployment is single-user" });
   }
 
   const rest = (path, opts = {}) => fetch(`${url}/rest/v1/${path}`, {
@@ -46,8 +52,11 @@ exports.handler = async (event) => {
       return json(200, { success: true, message: `seat_notes healthy — ${count} rows. (True VACUUM runs automatically via Postgres autovacuum on Supabase.)` });
     }
     if (cmd === "clear findings > 30d") {
+      if (!callerId) return json(401, { error: "couldn't resolve your user id" });
+      // Scoped to the caller's rows — a service-role DELETE must never sweep
+      // other users' data just because this caller asked for maintenance.
       const cutoff = new Date(Date.now() - 30 * 86400000).toISOString();
-      const res = await rest(`auditor_findings?created_at=lt.${cutoff}`, { method: "DELETE" });
+      const res = await rest(`auditor_findings?user_id=eq.${encodeURIComponent(callerId)}&created_at=lt.${cutoff}`, { method: "DELETE" });
       const count = res.headers.get("content-range")?.split("/")[1] || "0";
       return json(200, { success: true, message: `deleted ${count} findings older than 30 days` });
     }

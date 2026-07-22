@@ -2,9 +2,15 @@
 // Phase 1 upgrade: shares ONE memory with the web app via Supabase.
 // Reads Cameron's seat notes + recent chat history before answering, and writes
 // the exchange back — so /board in Discord and the web chat are one continuous mind.
+// Only accepts requests HMAC-signed by discord-board (x-board-sig) — the
+// request body carries the Discord webhook target, so unauthenticated this
+// endpoint let anyone read the chat memory INTO their own webhook (direct
+// exfiltration), poison chat_messages, and spend the Anthropic key.
 // Env: ANTHROPIC_API_KEY (required)
+//      DISCORD_PUBLIC_KEY or INTERNAL_FN_SECRET (dispatch verification, required)
 //      SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, BOARD_USER_ID (memory — server-side
 //      ONLY; the service-role key bypasses RLS and must never reach any client)
+import { createHmac, timingSafeEqual } from "node:crypto";
 
 const HAIKU = "claude-haiku-4-5-20251001";
 
@@ -49,7 +55,20 @@ async function sbInsert(cfg, table, rows) {
 }
 
 export default async (req) => {
-  const { question, application_id, token } = await req.json();
+  // Verify the dispatch signature before doing ANY work. Fail-closed: with no
+  // key configured the Discord flow can't have produced a signature anyway.
+  const raw = await req.text();
+  const sigKey = process.env.INTERNAL_FN_SECRET || process.env.DISCORD_PUBLIC_KEY;
+  if (!sigKey) return new Response("not configured", { status: 500 });
+  const given = req.headers.get("x-board-sig") || "";
+  const expected = createHmac("sha256", sigKey).update(raw).digest("hex");
+  const a = Buffer.from(given), b = Buffer.from(expected);
+  if (a.length !== b.length || !timingSafeEqual(a, b)) return new Response("bad signature", { status: 401 });
+
+  let question, application_id, token;
+  try { ({ question, application_id, token } = JSON.parse(raw)); } catch { return new Response("bad json", { status: 400 }); }
+  if (typeof question !== "string" || !application_id || !token) return new Response("bad request", { status: 400 });
+  question = question.slice(0, 4000);
   let answer;
   const cfg = sbConfig();
   let memoryOn = !!cfg;

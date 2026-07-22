@@ -51,14 +51,17 @@ export function makeStore(userId) {
         body: { id, user_id: userId, surface, domain: domain || null, status: 'running' },
       });
     },
+    // PATCHes are scoped by user_id as well as id — runIds are client-supplied,
+    // so a bare id filter would let one verified user's run write over another
+    // user's row of the same id. Belt-and-braces with unguessable UUIDs.
     async saveArtifact(runId, artifact) {
-      await rest(`upstream_runs?id=eq.${runId}`, {
+      await rest(`upstream_runs?id=eq.${runId}&user_id=eq.${userId}`, {
         method: 'PATCH',
         body: { artifact, domain: artifact.domain || null },
       });
     },
     async finishRun(runId, { status, verdict, error, finishedAt, durationMs, artifact }) {
-      await rest(`upstream_runs?id=eq.${runId}`, {
+      await rest(`upstream_runs?id=eq.${runId}&user_id=eq.${userId}`, {
         method: 'PATCH',
         body: {
           status, verdict: verdict || null, error: error || null,

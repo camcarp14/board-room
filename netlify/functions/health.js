@@ -3,7 +3,10 @@ exports.handler = async () => {
   const has = (k) => !!process.env[k];
   const services = {
     claude: { configured: has("ANTHROPIC_API_KEY"), needs: ["ANTHROPIC_API_KEY"] },
-    shopify: { configured: has("SHOPIFY_STORE_DOMAIN") && has("SHOPIFY_ADMIN_TOKEN"), needs: ["SHOPIFY_STORE_DOMAIN", "SHOPIFY_ADMIN_TOKEN"] },
+    // Keep in sync with shopify.js — it moved to the Client Credentials grant
+    // (SHOPIFY_SHOP + CLIENT_ID/SECRET) when Shopify retired static admin
+    // tokens; checking the old names reported "unconfigured" forever.
+    shopify: { configured: has("SHOPIFY_SHOP") && has("SHOPIFY_CLIENT_ID") && has("SHOPIFY_CLIENT_SECRET"), needs: ["SHOPIFY_SHOP", "SHOPIFY_CLIENT_ID", "SHOPIFY_CLIENT_SECRET"] },
     gsc: { configured: has("GSC_CLIENT_EMAIL") && has("GSC_PRIVATE_KEY"), needs: ["GSC_CLIENT_EMAIL", "GSC_PRIVATE_KEY"] },
     deploy: { configured: has("NETLIFY_API_TOKEN"), needs: ["NETLIFY_API_TOKEN"] },
     "db-admin": { configured: has("SUPABASE_URL") && has("SUPABASE_SERVICE_ROLE_KEY"), needs: ["SUPABASE_URL", "SUPABASE_SERVICE_ROLE_KEY"] },

@@ -23,6 +23,18 @@ exports.handler = async (event) => {
   try { body = JSON.parse(event.body || "{}"); } catch {}
   if (body.ping) return json(200, { success: true, service: "site-status", configured: true });
 
+  // Session-gated: unauthenticated this was a blind probe oracle (status +
+  // latency for arbitrary URLs via Netlify's IP). The app always sends the
+  // caller's token (callFn attaches it), so requiring it costs nothing.
+  const supaUrl = process.env.SUPABASE_URL, service = process.env.SUPABASE_SERVICE_ROLE_KEY;
+  if (!supaUrl || !service) return json(500, { error: "auth backend not configured (SUPABASE_URL / SUPABASE_SERVICE_ROLE_KEY)" });
+  {
+    const token = (event.headers.authorization || event.headers.Authorization || "").replace(/^Bearer\s+/i, "");
+    if (!token) return json(401, { error: "sign in first" });
+    const who = await fetch(`${supaUrl}/auth/v1/user`, { headers: { apikey: service, Authorization: `Bearer ${token}` } });
+    if (!who.ok) return json(401, { error: "session expired — refresh and try again" });
+  }
+
   const urls = Array.isArray(body.urls) ? body.urls.filter(Boolean).slice(0, 20) : [];
   if (!urls.length) return json(400, { error: "urls[] is required" });
 

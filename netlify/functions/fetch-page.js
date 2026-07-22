@@ -5,15 +5,39 @@
 // the service key is configured; degrades to open in local dev without it.
 const json = (statusCode, body) => ({ statusCode, headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
 
-const PRIVATE_HOST = /^(localhost|0\.0\.0\.0|127\.|10\.|192\.168\.|169\.254\.|172\.(1[6-9]|2\d|3[01])\.)/i;
+// Also catches hex (0x7f...), octal (0177...), bare-integer, and IPv6-mapped
+// (::ffff:127.0.0.1) spellings of private/loopback addresses. Keep in sync
+// with the inlined copies in audit.js / calendar-events.js (inlined, not
+// shared — see tmdb.js's esbuild/exports landmine comment).
+const PRIVATE_HOST = /^(localhost|0\.0\.0\.0|0x[0-9a-f]+$|0\d+\.|127\.|10\.|192\.168\.|169\.254\.|172\.(1[6-9]|2\d|3[01])\.|::1$|::ffff:127\.|::ffff:10\.|::ffff:192\.168\.|::ffff:169\.254\.)/i;
 
 function badUrl(raw) {
   let u;
   try { u = new URL(raw); } catch { return "that's not a valid URL"; }
   if (u.protocol !== "http:" && u.protocol !== "https:") return "only http(s) URLs";
   const host = u.hostname.replace(/^\[|\]$/g, "");
-  if (PRIVATE_HOST.test(host) || host === "::1" || host.endsWith(".local") || host.endsWith(".internal") || !host.includes(".")) return "that host isn't reachable from here";
+  if (PRIVATE_HOST.test(host) || host.endsWith(".local") || host.endsWith(".internal") || !host.includes(".") || /^\d+$/.test(host)) return "that host isn't reachable from here";
   return null;
+}
+
+// fetch that follows redirects MANUALLY, re-validating every hop against
+// badUrl — `redirect: "follow"` would happily follow a public URL that 302s
+// to 169.254.169.254 (cloud metadata) or an internal host.
+async function fetchGuarded(url, opts, maxHops = 5) {
+  let current = url;
+  for (let hop = 0; hop <= maxHops; hop++) {
+    const res = await fetch(current, { ...opts, redirect: "manual" });
+    if (res.status >= 300 && res.status < 400) {
+      const loc = res.headers.get("location");
+      if (!loc) return res;
+      const next = new URL(loc, current).href;
+      if (badUrl(next)) throw new Error("redirected to a host that isn't reachable from here");
+      current = next;
+      continue;
+    }
+    return res;
+  }
+  throw new Error("too many redirects");
 }
 
 // Cheap but effective HTML → text: drop non-content blocks, prefer
@@ -46,13 +70,21 @@ exports.handler = async (event) => {
 
   if (body.ping) return json(200, { success: true, service: "fetch-page", configured: true });
 
-  // Same auth posture as mini-worker: verify the caller's session when we can.
+  // Same auth posture as mini-worker, but fail-closed: this endpoint fetches
+  // arbitrary URLs server-side, so if the verification pair isn't configured
+  // it refuses rather than running open on a public domain.
   const supaUrl = process.env.SUPABASE_URL, service = process.env.SUPABASE_SERVICE_ROLE_KEY;
-  if (supaUrl && service) {
+  if (!supaUrl || !service) return json(500, { error: "auth backend not configured (SUPABASE_URL / SUPABASE_SERVICE_ROLE_KEY)" });
+  {
     const token = (event.headers.authorization || event.headers.Authorization || "").replace(/^Bearer\s+/i, "");
     if (!token) return json(401, { error: "sign in first" });
     const res = await fetch(`${supaUrl}/auth/v1/user`, { headers: { apikey: service, Authorization: `Bearer ${token}` } });
     if (!res.ok) return json(401, { error: "session expired — refresh and try again" });
+    const owner = process.env.OWNER_USER_ID;
+    if (owner) {
+      const u = await res.json().catch(() => null);
+      if (u?.id !== owner) return json(403, { error: "this deployment is single-user" });
+    }
   }
 
   const url = String(body.url || "").trim();
@@ -62,9 +94,8 @@ exports.handler = async (event) => {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), 10000);
   try {
-    const res = await fetch(url, {
+    const res = await fetchGuarded(url, {
       signal: controller.signal,
-      redirect: "follow",
       headers: { "User-Agent": "Mozilla/5.0 (compatible; BoardRoomLearn/1.0)", Accept: "text/html,application/xhtml+xml,text/plain;q=0.9,*/*;q=0.5" },
     });
     clearTimeout(timer);

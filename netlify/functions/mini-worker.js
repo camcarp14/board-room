@@ -42,11 +42,19 @@ async function verifyUser(cfg, token) {
 }
 async function claudeCall(cfg, modelKey, system, user, maxTokens, userId) {
   const t0 = Date.now();
-  const res = await fetch("https://api.anthropic.com/v1/messages", {
-    method: "POST",
-    headers: { "Content-Type": "application/json", "x-api-key": cfg.anthropic, "anthropic-version": "2023-06-01" },
-    body: JSON.stringify({ model: MODEL_IDS[modelKey] || MODEL_IDS.haiku, max_tokens: maxTokens, system, messages: [{ role: "user", content: user }] }),
-  });
+  // 25s abort so one hung upstream call fails ONE task loudly instead of
+  // riding the whole invocation to the platform kill with nothing recorded.
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 25000);
+  let res;
+  try {
+    res = await fetch("https://api.anthropic.com/v1/messages", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "x-api-key": cfg.anthropic, "anthropic-version": "2023-06-01" },
+      signal: controller.signal,
+      body: JSON.stringify({ model: MODEL_IDS[modelKey] || MODEL_IDS.haiku, max_tokens: maxTokens, system, messages: [{ role: "user", content: user }] }),
+    });
+  } finally { clearTimeout(timer); }
   const data = await res.json();
   const ok = res.ok;
   const inTok = data.usage?.input_tokens || 0, outTok = data.usage?.output_tokens || 0;
@@ -94,6 +102,19 @@ async function saveTasks(cfg, userId, tasks) {
     body: JSON.stringify({ setting_value: tasks, updated_at: new Date().toISOString() }),
   });
 }
+// The whole task list lives in one JSON setting, so a plain save is a
+// last-write-wins overwrite. Merge against a fresh read instead: rows this
+// run touched win, everything else (approvals, deletions, newly queued tasks
+// from another device) keeps the stored version.
+const taskKey = (t) => t.id || `${t.text}::${t.queued_at || ""}`;
+async function mergeSaveTasks(cfg, userId, touched) {
+  const byKey = new Map(touched.map(t => [taskKey(t), t]));
+  const fresh = await loadUserBundle(cfg, userId);
+  const stored = Array.isArray(fresh.mini_tasks) ? fresh.mini_tasks : [];
+  const merged = stored.map(t => byKey.get(taskKey(t)) || t);
+  await saveTasks(cfg, userId, merged);
+  return merged;
+}
 
 // The real agentic loop: generate, then optionally critique-and-revise up to
 // loopMax times. Stops early on an explicit DONE or two consecutive
@@ -133,11 +154,26 @@ async function processUser(cfg, userId) {
   if (mini.enabled === false) return { userId, processed: 0, skipped: "Mini Me is off" };
 
   const tasks = (Array.isArray(bundle.mini_tasks) ? bundle.mini_tasks : []).map(t => t.id ? t : { ...t, id: t.id || `${Date.now()}-${Math.random().toString(36).slice(2, 8)}` });
+  // Reclaim tasks stranded in "working" — a previous invocation the platform
+  // killed mid-task never got to write a terminal status.
+  const STALE_MS = 15 * 60 * 1000;
+  for (let i = 0; i < tasks.length; i++) {
+    const t = tasks[i];
+    if (t.status === "working" && (!t.working_at || Date.now() - new Date(t.working_at).getTime() > STALE_MS)) tasks[i] = { ...t, status: "queued", working_at: undefined };
+  }
   const queuedIdx = tasks.map((t, i) => (t.status === "queued" ? i : -1)).filter(i => i >= 0);
-  if (!queuedIdx.length) { await saveTasks(cfg, userId, tasks); return { userId, processed: 0, skipped: "no queued tasks" }; }
+  if (!queuedIdx.length) { await mergeSaveTasks(cfg, userId, tasks); return { userId, processed: 0, skipped: "no queued tasks" }; }
 
   const limit = BUDGET_TASK_LIMIT[mini.budget] || 3;
   const toRun = queuedIdx.slice(0, limit);
+
+  // Claim the batch up front: mark it "working" and persist BEFORE spending —
+  // a concurrent run (second device, approve-triggered reload) then skips
+  // these instead of double-spending on the same queue.
+  const claimStamp = new Date().toISOString();
+  for (const idx of toRun) tasks[idx] = { ...tasks[idx], status: "working", working_at: claimStamp };
+  await mergeSaveTasks(cfg, userId, toRun.map(i => tasks[i]));
+
   const directive = (mini.directive || "").trim();
   const role = (mini.role || "").trim();
   const skillsBlock = await loadSkillsBlock(cfg, userId);
@@ -150,16 +186,18 @@ async function processUser(cfg, userId) {
     try {
       const { draft, loops, outTok } = await runTask(cfg, mini, system, t.text, userId);
       const status = mini.approvalOn ? "review" : "delivered";
-      tasks[idx] = { ...t, status, output: draft, loops, delivered_at: new Date().toISOString() };
+      tasks[idx] = { ...t, status, working_at: undefined, output: draft, loops, delivered_at: new Date().toISOString() };
       feedRows.push({ user_id: userId, text: `${status === "review" ? "Drafted (awaiting your approval)" : "Delivered"} "${t.text.slice(0, 60)}${t.text.length > 60 ? "…" : ""}" — ${loops} loop(s), ~${outTok} tokens on ${mini.model}.` });
       processed++;
     } catch (e) {
-      tasks[idx] = { ...t, status: "failed", output: `Failed: ${e.message}`, delivered_at: new Date().toISOString() };
+      tasks[idx] = { ...t, status: "failed", working_at: undefined, output: `Failed: ${e.message}`, delivered_at: new Date().toISOString() };
       feedRows.push({ user_id: userId, text: `Task failed ("${t.text.slice(0, 50)}…"): ${e.message}` });
     }
+    // Checkpoint after EVERY task — if the platform kills this invocation on a
+    // later task, the money already spent has its output safely recorded.
+    await mergeSaveTasks(cfg, userId, [tasks[idx]]).catch(() => {});
   }
 
-  await saveTasks(cfg, userId, tasks);
   if (feedRows.length) await rest(cfg, "mini_feed", { method: "POST", body: JSON.stringify(feedRows) });
   return { userId, processed };
 }
@@ -176,7 +214,9 @@ async function approveOrReject(cfg, userId, taskId, approve) {
     tasks[idx] = { ...tasks[idx], status: "queued", output: null };
     await rest(cfg, "mini_feed", { method: "POST", body: JSON.stringify([{ user_id: userId, text: `You rejected a draft — requeued "${tasks[idx].text.slice(0, 60)}…".` }]) });
   }
-  await saveTasks(cfg, userId, tasks);
+  // Merge-save just the changed row — a plain whole-array save here while a
+  // queue run is in flight would revert its in-progress statuses.
+  await mergeSaveTasks(cfg, userId, [tasks[idx]]);
   return { success: true };
 }
 
@@ -195,6 +235,8 @@ exports.handler = async (event) => {
     if (!token) return json(401, { success: false, error: "sign-in token required" });
     const userId = await verifyUser(cfg, token);
     if (!userId) return json(401, { success: false, error: "invalid or expired session — sign in again" });
+    const owner = process.env.OWNER_USER_ID;
+    if (owner && userId !== owner) return json(403, { success: false, error: "this deployment is single-user" });
 
     if (body.approve || body.reject) {
       const result = await approveOrReject(cfg, userId, body.approve || body.reject, !!body.approve);

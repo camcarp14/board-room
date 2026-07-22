@@ -6,8 +6,11 @@
 import Anthropic from '@anthropic-ai/sdk';
 
 // Netlify function env: ANTHROPIC_API_KEY (same var board-work-background uses).
+// Deliberately NO VITE_ANTHROPIC_API_KEY fallback: Netlify builds run in this
+// same environment, and a VITE_-prefixed key would be inlined into the client
+// bundle by the next `vite build` — server code must never invite setting one.
 function requireApiKey() {
-  const key = process.env.ANTHROPIC_API_KEY || process.env.VITE_ANTHROPIC_API_KEY;
+  const key = process.env.ANTHROPIC_API_KEY;
   if (!key) {
     const err = new Error('UPSTREAM_ENV_MISSING: ANTHROPIC_API_KEY not set on this site');
     err.code = 'UPSTREAM_ENV_MISSING';

@@ -10,6 +10,15 @@
 const crypto = require("crypto");
 const json = (code, body) => ({ statusCode: code, headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
 
+// 7s abort per upstream call — a slow Google endpoint otherwise rides the
+// invocation to the platform kill and the client sees an opaque 502.
+async function fetchT(url, opts, ms = 7000) {
+  const c = new AbortController();
+  const t = setTimeout(() => c.abort(), ms);
+  try { return await fetch(url, { ...opts, signal: c.signal }); }
+  finally { clearTimeout(t); }
+}
+
 // Cleans up the ways a PEM key commonly gets mangled when copy-pasted
 // through a JSON file → terminal → browser text field round trip:
 // surrounding quotes accidentally included, literal \n vs real newlines,
@@ -65,7 +74,7 @@ async function getAccessToken(email, privateKey) {
   }
   const jwt = `${header}.${claims}.${sig}`;
 
-  const res = await fetch("https://oauth2.googleapis.com/token", {
+  const res = await fetchT("https://oauth2.googleapis.com/token", {
     method: "POST",
     headers: { "Content-Type": "application/x-www-form-urlencoded" },
     body: `grant_type=${encodeURIComponent("urn:ietf:params:oauth:grant-type:jwt-bearer")}&assertion=${jwt}`,
@@ -99,7 +108,7 @@ exports.handler = async (event) => {
   try {
     const token = await getAccessToken(email, privateKey);
     const query = async (startDaysAgo, endDaysAgo, byDate) => {
-      const res = await fetch(`https://www.googleapis.com/webmasters/v3/sites/${encodeURIComponent(site)}/searchAnalytics/query`, {
+      const res = await fetchT(`https://www.googleapis.com/webmasters/v3/sites/${encodeURIComponent(site)}/searchAnalytics/query`, {
         method: "POST",
         headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
         body: JSON.stringify({

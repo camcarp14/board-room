@@ -43,13 +43,21 @@ exports.handler = async (event) => {
 
   // Gate before touching GitHub: unauthenticated this endpoint would let anyone
   // commit arbitrary files to any repo the GITHUB_TOKEN can write (which then
-  // auto-deploys). Require a valid Supabase session, same as the other funcs.
+  // auto-deploys). Fail-closed if the verification pair is missing — env drift
+  // must never leave a repo-writing endpoint open. Optional OWNER_USER_ID pins
+  // the caller to the owner's account.
   const supaUrl = process.env.SUPABASE_URL, service = process.env.SUPABASE_SERVICE_ROLE_KEY;
-  if (supaUrl && service) {
+  if (!supaUrl || !service) return json(500, { error: "auth backend not configured (SUPABASE_URL / SUPABASE_SERVICE_ROLE_KEY)" });
+  {
     const token = (event.headers.authorization || event.headers.Authorization || "").replace(/^Bearer\s+/i, "");
     if (!token) return json(401, { error: "sign in first" });
     const who = await fetch(`${supaUrl}/auth/v1/user`, { headers: { apikey: service, Authorization: `Bearer ${token}` } });
     if (!who.ok) return json(401, { error: "session expired — refresh and try again" });
+    const owner = process.env.OWNER_USER_ID;
+    if (owner) {
+      const u = await who.json().catch(() => null);
+      if (u?.id !== owner) return json(403, { error: "this deployment is single-user" });
+    }
   }
 
   if (!body.repo) return json(400, { error: "repo is required" });
@@ -74,9 +82,11 @@ exports.handler = async (event) => {
 
     // action: "propose" (default) — read-only, drafts a fix, commits nothing
     if (!body.instruction) return json(400, { error: "instruction is required" });
+    // Parallel reads — 10 sequential GitHub round-trips regularly blew the
+    // sync-function time budget before the model call even started.
+    const results = await Promise.all(CANDIDATE_FILES.map(p => ghGet(body.repo, p, githubToken)));
     const found = [];
-    for (const p of CANDIDATE_FILES) {
-      const f = await ghGet(body.repo, p, githubToken);
+    for (const f of results) {
       if (f && !found.some(x => x.path === f.path)) found.push(f);
     }
     if (!found.length) return json(200, { success: false, error: `couldn't read any static template files from ${body.repo} — either GITHUB_TOKEN doesn't have access to this repo, or the fix needs a source-code change this tool can't make yet` });

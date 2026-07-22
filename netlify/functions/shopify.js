@@ -28,9 +28,18 @@ function normalizeShop(raw) {
   return (raw || "").trim().replace(/^https?:\/\//, "").replace(/\.myshopify\.com\/?$/, "").replace(/\/$/, "");
 }
 
+// 7s abort per upstream call — a slow Shopify endpoint otherwise rides the
+// invocation to the platform kill and the client sees an opaque 502.
+async function fetchT(url, opts, ms = 7000) {
+  const c = new AbortController();
+  const t = setTimeout(() => c.abort(), ms);
+  try { return await fetch(url, { ...opts, signal: c.signal }); }
+  finally { clearTimeout(t); }
+}
+
 async function getToken(shop, clientId, clientSecret) {
   if (cachedToken && Date.now() < tokenExpiresAt - 60_000) return cachedToken;
-  const res = await fetch(`https://${shop}.myshopify.com/admin/oauth/access_token`, {
+  const res = await fetchT(`https://${shop}.myshopify.com/admin/oauth/access_token`, {
     method: "POST",
     headers: { "Content-Type": "application/x-www-form-urlencoded" },
     body: new URLSearchParams({ grant_type: "client_credentials", client_id: clientId, client_secret: clientSecret }),
@@ -48,7 +57,7 @@ async function getToken(shop, clientId, clientSecret) {
 }
 
 async function shopifyGraphQL(shop, token, query, variables) {
-  const res = await fetch(`https://${shop}.myshopify.com/admin/api/2026-04/graphql.json`, {
+  const res = await fetchT(`https://${shop}.myshopify.com/admin/api/2026-04/graphql.json`, {
     method: "POST",
     headers: { "Content-Type": "application/json", "X-Shopify-Access-Token": token },
     body: JSON.stringify({ query, variables }),
