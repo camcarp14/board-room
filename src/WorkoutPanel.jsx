@@ -9,6 +9,7 @@ import {
 import {
   e1RM, consistency, weeklySetsByGroup, groupFreshness, warmupRamp,
   suggestNext, weeklyRecap, lifetimeVolume, recentPRs, GROUPS, isCardio, cardioMeta,
+  upNext, weeklyVolumeSeries, plateauRead,
 } from "./lib/workout-engine.js";
 
 // ════════════════════════════════════════════════════════════════════════════
@@ -80,7 +81,20 @@ create table if not exists public.workout_sessions (
 );
 alter table public.workout_sessions enable row level security;
 create policy "own workout_sessions" on public.workout_sessions
-  for all using (auth.uid() = user_id) with check (auth.uid() = user_id);`;
+  for all using (auth.uid() = user_id) with check (auth.uid() = user_id);
+
+create table if not exists public.body_weight_log (
+  id uuid primary key default gen_random_uuid(),
+  user_id uuid not null references auth.users(id) on delete cascade,
+  weight numeric not null check (weight > 0 and weight < 1500),
+  unit text not null default 'lb' check (unit in ('lb','kg')),
+  logged_at timestamptz not null default now(),
+  created_at timestamptz not null default now()
+);
+alter table public.body_weight_log enable row level security;
+create policy "own body_weight_log" on public.body_weight_log
+  for all using (auth.uid() = user_id) with check (auth.uid() = user_id);
+create index if not exists body_weight_log_user_time on public.body_weight_log (user_id, logged_at desc);`;
 
 // ─── db layer (client passed in from App.jsx — same contract style as db.*) ──
 function makeWdb(sb) {
@@ -118,6 +132,26 @@ function makeWdb(sb) {
     },
     async deleteSession(id) {
       const { error } = await sb.from("workout_sessions").delete().eq("id", id);
+      if (error) throw error;
+    },
+    // body-weight log — table ships via migration; a missing table degrades
+    // to { error } so the card can say so instead of pretending emptiness
+    async loadBodyWeight(limit = 120) {
+      const { data, error } = await sb.from("body_weight_log")
+        .select("id,weight,unit,logged_at").order("logged_at", { ascending: false }).limit(limit);
+      if (error) return { error: error.message };
+      return { rows: data || [] };
+    },
+    async addBodyWeight(weight, unit) {
+      const user_id = await this.uid();
+      if (!user_id) throw new Error("Not signed in");
+      const { data, error } = await sb.from("body_weight_log")
+        .insert({ user_id, weight, unit }).select().single();
+      if (error) throw error;
+      return data;
+    },
+    async deleteBodyWeight(id) {
+      const { error } = await sb.from("body_weight_log").delete().eq("id", id);
       if (error) throw error;
     },
   };
@@ -217,7 +251,7 @@ export default function WorkoutPanel({ isMobile, supabase, settings, updateSetti
   const [active, setActive] = useState(() => loadActive());
   const [view, setView] = useState(() => (loadActive() ? "session" : "train"));
   const [editingTpl, setEditingTpl] = useState(null); // template object being edited, or "new"
-  const [savedFlash, setSavedFlash] = useState(null); // brief confirmation after finishing
+  const [receipt, setReceipt] = useState(null); // post-save summary sheet ("the shareable moment")
 
   const missingTables = (e) => /does not exist|relation|schema cache|42P01/i.test(e?.message || "");
   const refreshAll = () => {
@@ -307,13 +341,18 @@ export default function WorkoutPanel({ isMobile, supabase, settings, updateSetti
   const finishWorkout = async ({ notes, updateTemplate }) => {
     const a = active;
     const done = [];
+    const prSets = [];
     let volume = 0, setCount = 0, prCount = 0;
     for (const ex of a.exercises) {
       const sets = ex.sets.filter((s) => s.done).map((s) => ({ weight: s.weight, reps: s.reps, ...(s.kind && s.kind !== "working" ? { kind: s.kind } : {}), ...(s.pr ? { pr: true } : {}) }));
       if (!sets.length) continue;
       done.push({ name: ex.name, sets });
       // warm-ups are saved (they're what happened) but never counted
-      for (const s of sets) { if (isWU(s)) continue; volume += (s.weight || 0) * (s.reps || 0); setCount++; if (s.pr) prCount++; }
+      for (const s of sets) {
+        if (isWU(s)) continue;
+        volume += (s.weight || 0) * (s.reps || 0); setCount++;
+        if (s.pr) { prCount++; prSets.push({ name: ex.name, weight: s.weight, reps: s.reps }); }
+      }
     }
     const durationSec = Math.max(1, Math.round((Date.now() - a.startedAt) / 1000));
     const row = {
@@ -323,6 +362,9 @@ export default function WorkoutPanel({ isMobile, supabase, settings, updateSetti
       total_volume: Math.round(volume), total_sets: setCount, pr_count: prCount,
     };
     await wdb.saveSession(row);
+    // Past this point the session IS saved — a routine write-back hiccup
+    // must not fail the finish (retrying Save would hit the same id).
+    try {
     if (updateTemplate && a.templateId) {
       const src = (templates || []).find((t) => t.id === a.templateId);
       if (src) {
@@ -341,10 +383,22 @@ export default function WorkoutPanel({ isMobile, supabase, settings, updateSetti
         await wdb.saveTemplate({ ...src, unit: a.unit, exercises });
       }
     }
+    } catch { /* routine update failed — the workout itself is safe */ }
     setActive(null);
     setView("train");
-    setSavedFlash({ volume, setCount, prCount, durationSec, unit: a.unit });
-    setTimeout(() => setSavedFlash(null), 5000);
+    // streak read before/after THIS session so the receipt can say whether
+    // it kept the week alive — computed, never guessed
+    const goal = Number(ws.goal) > 0 ? Math.round(Number(ws.goal)) : 3;
+    // sessions === null means history never loaded — a streak computed from
+    // an empty list would be a confident lie, so the receipt omits it
+    const canStreak = sessions != null;
+    const streakBefore = canStreak ? consistency(sessions, { goalPerWeek: goal }).streakWeeks : null;
+    const after = canStreak ? consistency([{ started_at: row.started_at }, ...sessions], { goalPerWeek: goal }) : null;
+    setReceipt({
+      volume, setCount, prCount, prSets, durationSec, unit: a.unit,
+      streak: after?.streakWeeks ?? null, streakUp: after != null && after.streakWeeks > streakBefore,
+      weekCount: after?.thisWeekCount ?? null, goal,
+    });
     refreshAll();
   };
 
@@ -360,6 +414,17 @@ export default function WorkoutPanel({ isMobile, supabase, settings, updateSetti
           buildSessionExercise={buildSessionExercise}
           vibrate={ws.vibrate !== false}
           exNotes={ws.exNotes || {}}
+          historyFor={(name) => {
+            const rows = [];
+            for (const s of sessions || []) {
+              if (isCardio(s)) continue;
+              const sets = [];
+              for (const ex of s.exercises || []) if (norm(ex.name) === norm(name)) sets.push(...(ex.sets || []).filter((x) => !isWU(x)));
+              if (sets.length) rows.push({ date: s.started_at, unit: s.unit || "lb", sets });
+              if (rows.length >= 3) break;
+            }
+            return rows;
+          }}
           onSaveNote={(name, text) => {
             const next = { ...(ws.exNotes || {}) };
             if (text.trim()) next[norm(name)] = text.trim(); else delete next[norm(name)];
@@ -391,7 +456,7 @@ export default function WorkoutPanel({ isMobile, supabase, settings, updateSetti
         />
       )}
       {view === "progress" && (
-        <ProgressView isMobile={isMobile} sessions={sessions} unit={unit} goal={Number(ws.goal) > 0 ? Number(ws.goal) : 3} />
+        <ProgressView isMobile={isMobile} sessions={sessions} unit={unit} goal={Number(ws.goal) > 0 ? Number(ws.goal) : 3} wdb={wdb} />
       )}
       {view === "routines" && (
         editingTpl ? (
@@ -411,18 +476,8 @@ export default function WorkoutPanel({ isMobile, supabase, settings, updateSetti
         <HistoryView isMobile={isMobile} sessions={sessions} unit={unit}
           onDelete={async (id) => { await wdb.deleteSession(id); refreshAll(); }} />
       )}
-      {/* Saved confirmation rides the toast layer — fixed, so nothing below it shifts mid-tap */}
-      {savedFlash && (
-        <div className="toasts" aria-live="polite">
-          <div className="toast">
-            <span className="tdot" />
-            <span>Workout saved</span>
-            <span className="t-num" style={{ fontSize: 12, color: "var(--sub)" }}>
-              {fmtDur(savedFlash.durationSec)} · {savedFlash.setCount} sets · {fmtVol(savedFlash.volume)} {savedFlash.unit}{savedFlash.prCount ? ` · ◆ ${savedFlash.prCount} PR${savedFlash.prCount > 1 ? "s" : ""}` : ""}
-            </span>
-          </div>
-        </div>
-      )}
+      {/* The receipt — the earned moment after saving. Dismiss and move on. */}
+      {receipt && <ReceiptSheet r={receipt} onClose={() => setReceipt(null)} />}
       {confirmEl}
     </div>
   );
@@ -514,6 +569,14 @@ function TrainHome({ isMobile, templates, sessions, active, unit, onResume, onSt
   }, [sessions]);
   const [watchOpen, setWatchOpen] = useState(false);
   const watchCount = useMemo(() => (sessions || []).filter((s) => isCardio(s) && cardioMeta(s)?.source === "watch").length, [sessions]);
+  // the coach line: which routine does today want? (ranked by days-since +
+  // muscle-group freshness — transparent score, facts in the reason)
+  const pick = useMemo(() => {
+    if (!templates?.length || sessions == null) return null;
+    const ranked = upNext(templates, sessions);
+    // never pitch a routine that already ran today — done is done
+    return ranked[0]?.daysAgo === 0 ? null : ranked[0] ?? null;
+  }, [templates, sessions]);
 
   return (
     <>
@@ -563,6 +626,17 @@ function TrainHome({ isMobile, templates, sessions, active, unit, onResume, onSt
                 action={<Button kind={active ? "tinted" : "primary"} size="md" onClick={onManage}>Build your first routine</Button>} />
             </Card>
           ) : (
+            <>
+            {pick && (
+              <Card pad="md" style={{ marginBottom: 10, display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12 }}>
+                <div style={{ minWidth: 0 }}>
+                  <span className="t-label" style={{ color: "var(--accent)" }}>Up next</span>
+                  <div className="t-head" style={{ marginTop: 2, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{pick.template.name}</div>
+                  <div className="t-foot" style={{ marginTop: 1, color: "var(--sub)" }}>{pick.reason}</div>
+                </div>
+                <Button kind="primary" size="md" onClick={() => onStart(pick.template)} style={{ flex: "none" }}>Start</Button>
+              </Card>
+            )}
             <CellGroup>
               {templates.map((t) => {
                 const sets = (t.exercises || []).reduce((n, e) => n + (e.targetSets || 0), 0);
@@ -576,6 +650,7 @@ function TrainHome({ isMobile, templates, sessions, active, unit, onResume, onSt
                 trailing={<span className="cell-chevron" style={{ display: "inline-flex" }}><IcPlus size={16} /></span>} />
               <Cell title="Manage routines" chevron onClick={onManage} />
             </CellGroup>
+            </>
           )}
         </section>
 
@@ -707,7 +782,7 @@ function ConsistencyHeatmap({ days }) {
 }
 
 // ─── Active session — the room where it happens ──────────────────────────────
-function ActiveSession({ isMobile, active, setActive, bar, bestByEx, prevByEx, defaultRest, buildSessionExercise, vibrate, exNotes, onSaveNote, onBack, onFinish, onDiscard }) {
+function ActiveSession({ isMobile, active, setActive, bar, bestByEx, prevByEx, defaultRest, buildSessionExercise, vibrate, exNotes, onSaveNote, historyFor, onBack, onFinish, onDiscard }) {
   const [now, setNow] = useState(Date.now());
   const [pickerOpen, setPickerOpen] = useState(false);
   const [finishOpen, setFinishOpen] = useState(false);
@@ -734,6 +809,31 @@ function ActiveSession({ isMobile, active, setActive, bar, bestByEx, prevByEx, d
   // flip resets the prefs bar to 20/45 in the NEW unit, which must not feed
   // plate math or the ramp for weights recorded in this session's unit
   const sessionBar = Number(active.bar) > 0 ? Number(active.bar) : bar;
+
+  // ── supersets: PAIRS, not chains. ex.link means "pair with whatever sits
+  // directly below". Pairs resolve left-to-right, first link in a run wins,
+  // so reorders/removals can never create chains or asymmetric partners —
+  // the chips always show the pair that's actually in effect.
+  const exRefs = useRef({});
+  const pairMap = useMemo(() => {
+    const m = new Map();
+    const arr = active.exercises;
+    for (let i = 0; i < arr.length - 1; i++) {
+      if (arr[i]?.link && !m.has(arr[i].id)) {
+        m.set(arr[i].id, arr[i + 1].id);
+        m.set(arr[i + 1].id, arr[i].id);
+        i++; // the paired exercise's own stale link (if any) is inert
+      }
+    }
+    return m;
+  }, [active.exercises]);
+  const partnerOf = (exId) => {
+    const pid = pairMap.get(exId);
+    return pid ? active.exercises.find((e) => e.id === pid) ?? null : null;
+  };
+  const toggleLink = (i) => upd((a) => ({
+    exercises: a.exercises.map((e, idx) => (idx === i ? { ...e, link: !e.link } : e)),
+  }));
 
   const elapsed = Math.floor((now - active.startedAt) / 1000);
   const doneSets = active.exercises.reduce((n, e) => n + e.sets.filter((s) => s.done && !isWU(s)).length, 0);
@@ -765,6 +865,18 @@ function ActiveSession({ isMobile, active, setActive, bar, bestByEx, prevByEx, d
     const pr = !isWU(set) && hasHistory && set.weight > 0 && epley(inLb(set.weight), set.reps) > best;
     buzz(vibrate, pr ? [30, 40, 60] : 15);
     updEx(ex.id, (e) => ({ sets: e.sets.map((s) => (s.id === set.id ? { ...s, done: true, pr } : s)) }));
+    // superset flow — rest per ROUND, not per set: A1 → glide to B, no rest;
+    // B1 closes the round → rest fires (and we glide back for A2). Only
+    // undone WORKING sets count — a skipped warm-up row on the partner must
+    // never starve the rest timer forever.
+    const partner = !isWU(set) ? partnerOf(ex.id) : null;
+    if (partner) {
+      const myDone = ex.sets.filter((s) => s.done && !isWU(s) && s.id !== set.id).length + 1;
+      const theirDone = partner.sets.filter((s) => s.done && !isWU(s)).length;
+      const theirUndone = partner.sets.some((s) => !s.done && !isWU(s));
+      if (theirUndone) requestAnimationFrame(() => exRefs.current[partner.id]?.scrollIntoView({ behavior: "smooth", block: "start" }));
+      if (theirUndone && theirDone < myDone) return; // mid-round: hold the rest
+    }
     if (ex.restSec > 0) upd(() => ({ rest: { until: Date.now() + ex.restSec * 1000, total: ex.restSec, label: ex.name } }));
   };
 
@@ -842,9 +954,20 @@ function ActiveSession({ isMobile, active, setActive, bar, bestByEx, prevByEx, d
         ) : null;
         const firstWork = ex.sets.find((s) => !isWU(s) && s.weight > 0);
         const canRamp = !ex.sets.some(isWU) && !!firstWork && firstWork.weight > sessionBar;
+        const linked = pairMap.has(ex.id);
+        // pairs only: offer a link when neither this card nor the next is
+        // already in an effective pair
+        const canLink = i < active.exercises.length - 1
+          && !pairMap.has(ex.id)
+          && !pairMap.has(active.exercises[i + 1].id);
+        // the tinted state reflects the pair actually in effect, not a stale flag
+        const linkOn = !!ex.link && pairMap.get(ex.id) === active.exercises[i + 1]?.id;
         return (
-          <ExerciseCard key={ex.id} isMobile={isMobile} ex={ex} index={i} count={active.exercises.length}
+          <div key={ex.id} ref={(el) => { exRefs.current[ex.id] = el; }} style={{ scrollMarginTop: 8 }}>
+          <ExerciseCard isMobile={isMobile} ex={ex} index={i} count={active.exercises.length}
             unit={active.unit} bar={sessionBar}
+            linked={linked} canLink={canLink} linkOn={linkOn} onToggleLink={() => toggleLink(i)}
+            history={historyFor ? historyFor(ex.name) : []}
             suggestion={suggestion}
             note={exNotes[norm(ex.name)] || ""}
             onSaveNote={(text) => onSaveNote(ex.name, text)}
@@ -870,6 +993,7 @@ function ActiveSession({ isMobile, active, setActive, bar, bestByEx, prevByEx, d
             onAddSet={() => addSet(ex)} onRemoveSet={(setId) => removeSet(ex, setId)}
             onCycleRest={() => cycleRest(ex)} onMove={(d) => moveEx(ex.id, d)} onRemove={() => removeEx(ex.id)}
           />
+          </div>
         );
       })}
       <Button kind="quiet" size="md" full onClick={() => setPickerOpen(true)}><IcPlus size={16} /> Add exercise</Button>
@@ -1000,8 +1124,9 @@ function RestBar({ rest, restRemain, onExtend, onClear, mobile }) {
   );
 }
 
-function ExerciseCard({ isMobile, ex, index, count, unit, bar, suggestion, note, onSaveNote, canRamp, onAddRamp, onCycleKind, onToggleSet, onSetChange, onAddSet, onRemoveSet, onCycleRest, onMove, onRemove }) {
+function ExerciseCard({ isMobile, ex, index, count, unit, bar, suggestion, note, onSaveNote, canRamp, onAddRamp, linked, canLink, linkOn, onToggleLink, history, onCycleKind, onToggleSet, onSetChange, onAddSet, onRemoveSet, onCycleRest, onMove, onRemove }) {
   const [showPlates, setShowPlates] = useState(false);
+  const [showHist, setShowHist] = useState(false);
   // Plate math uses the next undone set (or last set if all done) as its weight source
   const nextSet = ex.sets.find((s) => !s.done) || ex.sets[ex.sets.length - 1];
   const plates = nextSet ? plateBreakdown(nextSet.weight, unit, bar) : null;
@@ -1012,6 +1137,7 @@ function ExerciseCard({ isMobile, ex, index, count, unit, bar, suggestion, note,
     <Card pad={isMobile ? "sm" : "md"}>
       <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
         <span className="t-head" style={{ flex: 1, minWidth: 0, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{ex.name}</span>
+        {linked && <span className="t-cap" style={{ color: "var(--blue)", fontWeight: 600, flex: "none" }}>⧉ superset</span>}
         <button onClick={onRemove} aria-label="remove exercise" style={{
           width: 44, height: 44, flex: "none", margin: "-8px -10px -8px 0", display: "inline-flex", alignItems: "center",
           justifyContent: "center", background: "none", border: "none", color: "var(--faint)", cursor: "pointer", padding: 0,
@@ -1031,6 +1157,16 @@ function ExerciseCard({ isMobile, ex, index, count, unit, bar, suggestion, note,
         </Button>
         <Button kind={showPlates ? "tinted" : "quiet"} size="md" onClick={() => setShowPlates((v) => !v)} style={{ padding: "0 12px" }}>Plates</Button>
         {canRamp && <Button kind="quiet" size="md" onClick={onAddRamp} title="Insert bar→55→70→85% warm-up sets" style={{ padding: "0 12px" }}>Ramp</Button>}
+        {(canLink || ex.link) && (
+          <Button kind={linkOn ? "tinted" : "quiet"} size="md" onClick={onToggleLink}
+            title={linkOn ? "Unlink superset" : "Superset with the exercise below — logging a set glides to it, rest waits for the round"}
+            style={{ padding: "0 12px" }}>
+            {linkOn ? "⧉ Linked" : "⧉ Link"}
+          </Button>
+        )}
+        {history.length > 0 && (
+          <Button kind={showHist ? "tinted" : "quiet"} size="md" onClick={() => setShowHist((v) => !v)} style={{ padding: "0 12px" }}>History</Button>
+        )}
         <span style={{ flex: 1 }} />
         <Button kind="quiet" size="md" onClick={() => onMove(-1)} disabled={index === 0} aria-label="move up" style={{ width: 44, padding: 0 }}>
           <IcChevronDown size={15} style={{ transform: "rotate(180deg)" }} />
@@ -1045,6 +1181,20 @@ function ExerciseCard({ isMobile, ex, index, count, unit, bar, suggestion, note,
           <span style={{ color: "var(--sub)" }}>{fmtW(nextSet.weight)} {unit} → </span>
           <span style={{ color: "var(--ink)", fontWeight: 600 }}>{plates.text}</span>
           <span style={{ color: "var(--faint)", fontSize: 11 }}> ({fmtW(bar)} bar)</span>
+        </div>
+      )}
+
+      {/* the mid-set history drawer — all of the last three visits, one glance */}
+      {showHist && history.length > 0 && (
+        <div style={{ background: "var(--surface-2)", borderRadius: 12, padding: "9px 12px", margin: "8px 0 2px", display: "flex", flexDirection: "column", gap: 4 }}>
+          {history.map((h, i) => (
+            <div key={i} style={{ display: "flex", gap: 8, alignItems: "baseline" }}>
+              <span className="t-cap" style={{ color: "var(--faint)", flex: "none", minWidth: 78 }}>{fmtDate(h.date)}</span>
+              <span className="t-num" style={{ fontSize: 12, color: "var(--sub)" }}>
+                {h.sets.map((x, j) => `${j ? " · " : ""}${fmtW(conv(x.weight, h.unit, unit))}×${x.reps}${x.pr ? "◆" : ""}`).join("")}
+              </span>
+            </div>
+          ))}
         </div>
       )}
 
@@ -1391,8 +1541,38 @@ function WatchSheet({ ws, setWs, watchCount, onClose }) {
   );
 }
 
+// ─── receipt — the earned moment after a save ────────────────────────────────
+function ReceiptSheet({ r, onClose }) {
+  return (
+    <Sheet onClose={onClose} title="Workout saved" z={330}
+      footer={<Button kind="primary" size="lg" full onClick={onClose}>Done</Button>}>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(2, 1fr)", gap: 8 }}>
+        <StatTile value={fmtDur(r.durationSec)} label="Time" />
+        <StatTile value={r.setCount} label="Sets" />
+        <StatTile value={`${fmtVol(r.volume)} ${r.unit}`} label="Volume" />
+        <StatTile value={r.prCount ? `◆ ${r.prCount}` : "—"} label="PRs" valueTone={r.prCount ? "var(--accent)" : "var(--faint)"} />
+      </div>
+      {r.prSets?.length > 0 && (
+        <div style={{ display: "flex", flexDirection: "column", gap: 6, marginTop: 12 }}>
+          {r.prSets.map((p, i) => (
+            <div key={i} className="t-call" style={{ background: "var(--surface-2)", borderRadius: 12, padding: "9px 12px" }}>
+              <span style={{ color: "var(--accent)" }}>◆</span> <b>{p.name}</b> — {fmtW(p.weight)}×{p.reps} {r.unit}, a lifetime best
+            </div>
+          ))}
+        </div>
+      )}
+      {r.weekCount != null && (
+        <div className="t-call" style={{ marginTop: 12, color: "var(--sub)" }}>
+          {r.weekCount}/{r.goal} this week
+          {r.streak > 0 && <> · <b style={{ color: r.streakUp ? "var(--accent)" : "var(--ink)" }}>{r.streak}-week streak{r.streakUp ? " — extended" : " — alive"}</b></>}
+        </div>
+      )}
+    </Sheet>
+  );
+}
+
 // ─── Progress — trend, PR wall, weekly muscle sets, recap ────────────────────
-function ProgressView({ isMobile, sessions, unit, goal }) {
+function ProgressView({ isMobile, sessions, unit, goal, wdb }) {
   const [trendEx, setTrendEx] = useState("");
 
   const strength = useMemo(() => (sessions || []).filter((s) => !isCardio(s)), [sessions]);
@@ -1462,6 +1642,11 @@ function ProgressView({ isMobile, sessions, unit, goal }) {
             Log {trendEx || "a lift"} twice and the trend line appears here.
           </div>
         )}
+        {(() => { const plat = plateauRead(trend); return plat ? (
+          <div className="t-foot" style={{ color: "var(--amber)", marginTop: 8 }}>
+            No new best across the last {plat.sessions} sessions of this lift — a lighter week or a rep-range change often unsticks it. (A nudge, not a diagnosis.)
+          </div>
+        ) : null; })()}
         <div className="t-cap" style={{ color: "var(--faint)", marginTop: 10 }}>
           Epley estimate from working sets ≤ 12 reps — a trend-reading tool, not a max-attempt promise.
         </div>
@@ -1531,7 +1716,109 @@ function ProgressView({ isMobile, sessions, unit, goal }) {
           <StatTile value={totalPRs ? `◆ ${totalPRs}` : "—"} label="Lifetime PRs" valueTone={totalPRs ? "var(--accent)" : "var(--faint)"} />
         </div>
       </Card>
+
+      <Card pad="md" style={{ minWidth: 0 }}>
+        <span className="t-head">Volume — last 8 weeks</span>
+        <WeeklyVolumeBars rows={weeklyVolumeSeries(sessions || [], { weeks: 8, unit })} unit={unit} />
+        <div className="t-cap" style={{ color: "var(--faint)", marginTop: 8 }}>
+          Working-set tonnage per Monday-week, mixed units converted · cardio isn't tonnage.
+        </div>
+      </Card>
+
+      <BodyWeightCard wdb={wdb} unit={unit} />
     </Grid>
+  );
+}
+
+// Eight quiet bars — the newest carries its number. Data blue; gold stays reserved.
+function WeeklyVolumeBars({ rows, unit }) {
+  if (!rows.length) return null;
+  const max = Math.max(1, ...rows.map((r) => r.volume));
+  const W = 300, H = 96, PAD = 2, bw = (W - PAD * 2) / rows.length;
+  const last = rows[rows.length - 1];
+  return (
+    <div style={{ marginTop: 10 }}>
+      <svg viewBox={`0 0 ${W} ${H}`} preserveAspectRatio="none" style={{ width: "100%", height: H, display: "block" }} aria-hidden>
+        {rows.map((r, i) => {
+          const h = r.volume > 0 ? Math.max(3, (r.volume / max) * (H - 18)) : 2;
+          return <rect key={r.weekStart} x={PAD + i * bw + bw * 0.18} y={H - h} width={bw * 0.64} height={h} rx="3"
+            fill={i === rows.length - 1 ? "var(--blue)" : "color-mix(in srgb, var(--blue) 45%, transparent)"} />;
+        })}
+      </svg>
+      <div style={{ display: "flex", justifyContent: "space-between", marginTop: 4 }}>
+        <span className="t-cap" style={{ color: "var(--faint)" }}>{rows[0].weekStart.slice(5)}</span>
+        <span className="t-num" style={{ fontSize: 12, fontWeight: 600 }}>{fmtVol(last.volume)} {unit} · {last.sets} sets this wk</span>
+      </div>
+    </div>
+  );
+}
+
+// ─── body weight — the other trend line that matters ─────────────────────────
+function BodyWeightCard({ wdb, unit }) {
+  const [state, setState] = useState(null); // null loading | {error} | {rows}
+  const [val, setVal] = useState(0);
+  const [busy, setBusy] = useState(false);
+  const [confirmEl, confirm] = useConfirm();
+  const load = () => wdb.loadBodyWeight().then(setState).catch((e) => setState({ error: e.message }));
+  useEffect(() => { load(); /* eslint-disable-next-line */ }, []);
+
+  const rows = state?.rows || [];
+  const pts = [...rows].reverse().map((r) => ({ t: new Date(r.logged_at).getTime(), v: conv(r.weight, r.unit || "lb", unit) }));
+  const latest = rows[0] ? conv(rows[0].weight, rows[0].unit || "lb", unit) : null;
+  const monthAgo = Date.now() - 30 * 86400000;
+  const oldest30 = [...rows].reverse().find((r) => new Date(r.logged_at).getTime() >= monthAgo);
+  const delta = latest != null && oldest30 && oldest30.id !== rows[0].id ? latest - conv(oldest30.weight, oldest30.unit || "lb", unit) : null;
+
+  // write failures are SHOWN — a swallowed insert error looks exactly like
+  // success to someone who just weighed in
+  const [actionErr, setActionErr] = useState(null);
+  const add = async () => {
+    if (!(val > 0)) return;
+    setBusy(true); setActionErr(null);
+    try { await wdb.addBodyWeight(Math.round(val * 10) / 10, unit); setVal(0); await load(); }
+    catch (e) { setActionErr(`Couldn't log it: ${e.message || "unknown error"}`); }
+    setBusy(false);
+  };
+  const removeLatest = async () => {
+    if (!rows[0]) return;
+    if (!(await confirm({ title: "Remove latest entry?", confirmLabel: "Remove", destructive: true }))) return;
+    setBusy(true); setActionErr(null);
+    try { await wdb.deleteBodyWeight(rows[0].id); await load(); }
+    catch (e) { setActionErr(`Couldn't remove it: ${e.message || "unknown error"}`); }
+    setBusy(false);
+  };
+
+  return (
+    <Card pad="md" style={{ minWidth: 0 }}>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10 }}>
+        <span className="t-head">Body weight</span>
+        {rows.length > 0 && <Button kind="quiet" size="md" disabled={busy} onClick={removeLatest}>Undo last</Button>}
+      </div>
+      {state?.error ? (
+        <div className="t-foot" style={{ color: "var(--faint)", padding: "10px 0" }}>
+          Couldn't load the body-weight log ({state.error}). If this install predates the Train tab,
+          re-run the one-time Train setup SQL (Routines → it appears when tables are missing) — it now includes this table.
+        </div>
+      ) : (
+        <>
+          {pts.length >= 2
+            ? <div style={{ marginTop: 8 }}><TrendLine points={pts} unit={unit} /></div>
+            : <div className="t-foot" style={{ color: "var(--faint)", padding: "8px 0" }}>Two entries make a trend line. Log it after the same morning routine for a signal, not noise.</div>}
+          <div style={{ display: "flex", gap: 8, alignItems: "center", marginTop: 10 }}>
+            <NumField value={val || ""} decimals width={92} onChange={setVal} />
+            <span className="t-cap" style={{ color: "var(--faint)" }}>{unit}</span>
+            <Button kind="tinted" size="md" disabled={busy || !(val > 0)} onClick={add}>{busy ? "…" : "Log weight"}</Button>
+            {delta != null && (
+              <span className="t-num" style={{ marginLeft: "auto", fontSize: 12.5, color: "var(--sub)" }}>
+                {delta >= 0 ? "+" : ""}{fmtW(delta)} {unit} / 30d
+              </span>
+            )}
+          </div>
+          {actionErr && <div className="t-foot" style={{ color: "var(--red)", marginTop: 8 }}>{actionErr}</div>}
+        </>
+      )}
+      {confirmEl}
+    </Card>
   );
 }
 

@@ -10,10 +10,15 @@
 //   2. Once logged in: Settings → API → request a free "API Read Access Token" (v4 auth) or classic API key (v3)
 //   3. Netlify → Site configuration → Environment variables → add TMDB_API_KEY
 
-const { json, error, methodGuard } = require("./_shared/response");
+// Self-contained on purpose: under this repo's "type":"module" + esbuild
+// bundling, requiring _shared/response (CJS module.exports) clobbers the
+// bundle's exports before exports.handler is assigned — the function
+// deploys with NO handler. Same fix as workout-import.js.
+const json = (statusCode, data) => ({ statusCode, headers: { "Content-Type": "application/json" }, body: JSON.stringify(data) });
+const error = (statusCode, message) => json(statusCode, { error: message });
 
 exports.handler = async (event) => {
-  const guard = methodGuard(event, "POST");
+  const guard = event.httpMethod !== "POST" ? { statusCode: 405, body: "Method not allowed" } : null;
   if (guard) return guard;
 
   let body = {};

@@ -4,6 +4,7 @@ import {
   epley1RM, e1RM, convW, sessionVolume, countedSets, isCardio,
   weekStartOf, consistency, muscleGroupOf, weeklySetsByGroup, groupFreshness,
   warmupRamp, suggestNext, weeklyRecap, lifetimeVolume, recentPRs,
+  upNext, weeklyVolumeSeries, plateauRead,
 } from "../src/lib/workout-engine.js";
 
 let failed = 0;
@@ -100,6 +101,31 @@ check("PR wall: only pr-flagged sets surface", prs.length === 1 && prs[0].weight
 
 // 11 — unit conversion round trip
 check("convW: lb↔kg round trip lossless", Math.abs(convW(convW(137.5, "lb", "kg"), "kg", "lb") - 137.5) < 1e-9);
+
+// 12 — up next: a template done today ranks below one untouched for a week
+const tplPush = { id: "tp", name: "Push", exercises: [{ name: "Barbell Bench Press" }, { name: "Overhead Press (Barbell)" }] };
+const tplPull = { id: "tl", name: "Pull", exercises: [{ name: "Barbell Row" }, { name: "Lat Pulldown" }] };
+const pushedToday = session("2026-07-22", [["Barbell Bench Press", [[185, 8]]]], { template_id: "tp", started_at: new Date(NOW - 3 * 3600e3).toISOString() });
+const ranked = upNext([tplPush, tplPull], [pushedToday], { now: NOW });
+check("upNext: untouched Pull outranks done-today Push, reasons carry facts",
+  ranked[0].template.id === "tl" && ranked[0].reason.includes("never run") && ranked[1].reason.includes("done today"),
+  JSON.stringify(ranked.map((r) => [r.template.id, r.reason])));
+
+// 13 — weekly volume series: buckets + mixed-unit conversion
+const wv = weeklyVolumeSeries([
+  session("2026-07-21", [["Back Squat", [[100, 5]]]], { unit: "kg" }),
+  session("2026-07-14", [["Back Squat", [[225, 5]]]]),
+  cardio("2026-07-20"),
+], { now: NOW, weeks: 2, unit: "lb" });
+check("weeklyVolumeSeries: kg week converts (~1102 lb), prior week exact, cardio counts sessions only",
+  Math.abs(wv[1].volume - 500 * 2.20462) < 0.5 && wv[0].volume === 1125 && wv[1].sessions === 2 && wv[1].sets === 1,
+  JSON.stringify(wv));
+
+// 14 — plateau: flat last-3 fires, a rising max stays silent, short history stays silent
+const flat = [95, 100, 102, 101, 102, 100].map((v) => ({ v }));
+const rising = [95, 100, 102, 101, 104, 106].map((v) => ({ v }));
+check("plateauRead: flat fires, rising silent, 4 points silent",
+  plateauRead(flat) !== null && plateauRead(rising) === null && plateauRead(flat.slice(0, 4)) === null);
 
 if (failed > 0) { console.error(`\nWORKOUT SMOKE: ${failed} FAILURE(S)`); process.exit(1); }
 console.log("\nWORKOUT SMOKE: ALL CLEAN");

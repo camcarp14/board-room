@@ -271,6 +271,70 @@ export function lifetimeVolume(sessions, unit = "lb") {
   return v;
 }
 
+// ─── "up next" — which routine should today be? ─────────────────────────────
+/** Rank templates by (a) how long since they last ran (never-run ranks like
+ *  14d+), and (b) how recovered their muscle groups read on the freshness
+ *  clock. Transparent score, reason string carries the facts. */
+export function upNext(templates, sessions, { now = Date.now() } = {}) {
+  if (!Array.isArray(templates) || !templates.length) return [];
+  const fresh = new Map(groupFreshness(sessions, now).map((f) => [f.group, f]));
+  const lastByTpl = new Map();
+  for (const s of sessions || []) {
+    if (!s?.template_id) continue;
+    const t = Date.parse(s.started_at || "");
+    if (!Number.isNaN(t) && t > (lastByTpl.get(s.template_id) ?? -Infinity)) lastByTpl.set(s.template_id, t);
+  }
+  const rows = templates.map((tpl) => {
+    const groups = [...new Set((tpl.exercises || []).map((e) => muscleGroupOf(e.name)).filter((g) => g !== "Other"))];
+    const pcts = groups.map((g) => fresh.get(g)?.pct ?? 100);
+    const freshPct = pcts.length ? Math.round(pcts.reduce((a, b) => a + b, 0) / pcts.length) : 100;
+    const last = lastByTpl.get(tpl.id) ?? null;
+    const daysAgo = last == null ? null : Math.max(0, Math.floor((now - last) / 86400000));
+    const score = (daysAgo == null ? 14 : Math.min(daysAgo, 14)) + freshPct / 25;
+    const reason = [
+      daysAgo == null ? "never run" : daysAgo === 0 ? "done today" : `last done ${daysAgo}d ago`,
+      groups.length ? `${groups.slice(0, 2).join(" & ").toLowerCase()} ${freshPct >= 85 ? "fresh" : freshPct >= 50 ? "recovering" : "still worked"}` : null,
+    ].filter(Boolean).join(" · ");
+    return { template: tpl, daysAgo, freshPct, score, reason };
+  });
+  return rows.sort((a, b) => b.score - a.score);
+}
+
+/** Total volume/sets/sessions per Monday-week, oldest→newest, mixed units
+ *  converted into `unit`. Cardio counts sessions only. */
+export function weeklyVolumeSeries(sessions, { now = Date.now(), weeks = 8, unit = "lb" } = {}) {
+  const thisWeekStart = weekStartOf(localDateStr(now));
+  if (!thisWeekStart || !Number.isInteger(weeks) || weeks < 1) return [];
+  const startNum = dayNum(thisWeekStart) - 7 * (weeks - 1);
+  const rows = Array.from({ length: weeks }, (_, i) => ({ weekStart: dateOfDayNum(startNum + i * 7), volume: 0, sets: 0, sessions: 0 }));
+  for (const s of sessions || []) {
+    const d = sessionDate(s);
+    const n = d ? dayNum(d) : null;
+    if (n == null) continue;
+    const idx = Math.floor((n - startNum) / 7);
+    if (idx < 0 || idx >= weeks) continue;
+    rows[idx].sessions++;
+    if (isCardio(s)) continue;
+    rows[idx].volume += convW(sessionVolume(s), s.unit || "lb", unit) || 0;
+    for (const ex of s.exercises || []) rows[idx].sets += countedSets(ex.sets).length;
+  }
+  return rows;
+}
+
+/** Plateau read on an est-1RM series (oldest→newest). Fires only with 5+
+ *  points and when the best of the last 3 hasn't beaten the best of the 3
+ *  before them. A labeled heuristic — a nudge, never a diagnosis. */
+export function plateauRead(points) {
+  const vs = (points || []).map((p) => p?.v).filter(Number.isFinite);
+  if (vs.length < 5) return null;
+  const recent = vs.slice(-3), before = vs.slice(-6, -3);
+  if (before.length < 2) return null;
+  if (Math.max(...recent) <= Math.max(...before) + 1e-9) {
+    return { sessions: recent.length + before.length };
+  }
+  return null;
+}
+
 /** Recent PR sets across history, newest first: [{ name, weight, reps, unit, date, e1: number|null }]. */
 export function recentPRs(sessions, limit = 8) {
   const out = [];
