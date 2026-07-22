@@ -15,7 +15,7 @@ const SUMMON_PLACES = [
   { label: "Brief", page: "brief", hint: "markets · wires · stores" },
   { label: "Notes", page: "personal", sub: "notes", hint: "personal" },
   { label: "Calendar", page: "personal", sub: "calendar", hint: "personal" },
-  { label: "Workout", page: "personal", sub: "workout", hint: "training" },
+  { label: "Train", page: "train", hint: "log a workout · routines · progress" },
   { label: "Upkeep", page: "personal", sub: "upkeep", hint: "oil · filters · renewals" },
   { label: "Creed", page: "personal", sub: "creed", hint: "ground yourself" },
   { label: "Birthdays", page: "personal", sub: "birthdays", hint: "personal" },

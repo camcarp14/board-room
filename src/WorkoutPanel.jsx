@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo } from "react";
+import { useState, useEffect, useMemo, useRef } from "react";
 import {
   Card, SectionHeader, CellGroup, Cell, StatTile, Button, PillRow, Segmented,
   Sheet, useConfirm, Field, TextArea, SwitchRow, EmptyState, Dot, Grid,
@@ -6,22 +6,44 @@ import {
 import {
   IcPlus, IcClose, IcCheck, IcClock, IcChevronLeft, IcChevronRight, IcChevronDown, IcDumbbell,
 } from "./ui/icons.jsx";
+import {
+  e1RM, consistency, weeklySetsByGroup, groupFreshness, warmupRamp,
+  suggestNext, weeklyRecap, lifetimeVolume, recentPRs, GROUPS, isCardio, cardioMeta,
+} from "./lib/workout-engine.js";
 
 // ════════════════════════════════════════════════════════════════════════════
-// WORKOUT — the Personal tab's training room.
+// WORKOUT — the Train tab (graduated from Personal to its own dock slot).
 // Built around the things every fitness app gets wrong:
 //   · logging a set takes one tap — values pre-filled from last time
 //   · no keyboard hunting mid-set: big − / + steppers (inputs still editable)
-//   · last session's numbers sit right under each set number
-//   · rest timer starts itself when you log, and is one tap to skip or extend
+//   · last session's numbers sit right under each set number (WORKING sets
+//     only — a saved warm-up ramp never becomes a ghost value)
+//   · rest timer starts itself when you log; vibrates at zero; the screen
+//     stays awake mid-session (wake lock)
+//   · set types: tap the set marker to cycle working → warm-up → failure →
+//     drop. Warm-ups are saved but NEVER count toward volume, PRs, or
+//     weekly sets
+//   · "Ramp" inserts bar→55→70→85% warm-up sets from the working weight
+//   · a double-progression cue per lift, stated with its numbers
+//   · per-lift sticky notes ("seat 4, cues") that show up every session
+//   · PRs judged only against your own history (est-1RM Epley, ≤12 reps —
+//     beyond that the formula lies, so it estimates nothing); first-ever
+//     lift is a baseline, not a PR
+//   · This week card: sessions vs goal, weekly streak (an in-progress week
+//     can join it, never break it), 20-week heatmap
+//   · Progress: est-1RM trend, PR wall, sets-per-muscle-group vs the 10–20
+//     band, week-vs-week recap, lifetime tonnage
+//   · Apple Watch: a Shortcuts automation POSTs finished workouts to
+//     /.netlify/functions/workout-import (token-gated, idempotent) — runs
+//     and rides land in History with kcal + avg HR
 //   · a workout in progress survives the app closing — resumes where you left it
-//   · mid-session edits are free: add/remove sets & exercises, reorder, adjust
 //   · finishing can write today's numbers back into the routine (one toggle)
-//   · tap "Plates" on any exercise for the per-side plate math
-//   · history shows volume, duration, PRs, and a per-lift est-1RM trend
 //   · your data, your Supabase — CSV export lives in History
 // Supabase is the brain (workout_templates + workout_sessions, RLS like every
-// other table); localStorage only checkpoints the in-progress session.
+// other table, cardio imports ride the same rows — zero schema migration);
+// localStorage only checkpoints the in-progress session, shape-guarded.
+// Every derived number comes from src/lib/workout-engine.js (smoke-tested in
+// scripts/workout-smoke.mjs, wired into `npm run verify`).
 // ════════════════════════════════════════════════════════════════════════════
 
 // ─── One-time Supabase setup (shown in-app if the tables don't exist yet) ────
@@ -103,7 +125,15 @@ function makeWdb(sb) {
 
 // ─── in-progress checkpoint — localStorage only, Supabase stays the brain ────
 const ACTIVE_KEY = "br_workout_active";
-const loadActive = () => { try { return JSON.parse(localStorage.getItem(ACTIVE_KEY)); } catch { return null; } };
+// Shape-guarded: a drifted/corrupted checkpoint must never white-screen the
+// tab — anything that isn't a plausible session reads as "no session".
+const loadActive = () => {
+  try {
+    const a = JSON.parse(localStorage.getItem(ACTIVE_KEY));
+    if (!a || typeof a !== "object" || !Array.isArray(a.exercises) || !Number.isFinite(a.startedAt)) return null;
+    return a;
+  } catch { return null; }
+};
 const saveActive = (a) => { try { localStorage.setItem(ACTIVE_KEY, JSON.stringify(a)); } catch {} };
 const clearActive = () => { try { localStorage.removeItem(ACTIVE_KEY); } catch {} };
 
@@ -114,7 +144,15 @@ const norm = (s) => (s || "").trim().toLowerCase();
 // arabic reads faster mid-set) — helper kept for compatibility.
 const ROMAN = ["", "I", "II", "III", "IV", "V", "VI", "VII", "VIII", "IX", "X", "XI", "XII"];
 const roman = (n) => ROMAN[n] || String(n); // eslint-disable-line no-unused-vars
-const epley = (w, r) => (w > 0 && r > 0 ? w * (1 + r / 30) : 0); // est. 1RM
+// est-1RM comes from the engine: Epley, capped at 12 reps — a 20-rep set
+// returns null and can neither chart nor set a "PR". 0 here = no estimate.
+const epley = (w, r) => (w > 0 ? e1RM(w, r) ?? 0 : 0);
+// Set kinds: undefined/absent = working. Warm-ups never count toward
+// volume, PRs, or weekly sets; failure/drop are working sets with a badge.
+const KIND_NEXT = { working: "warmup", warmup: "failure", failure: "drop", drop: "working" };
+const KIND_BADGE = { warmup: { label: "WU", tone: "var(--amber)" }, failure: { label: "F", tone: "var(--red)" }, drop: { label: "D", tone: "var(--blue)" } };
+const isWU = (s) => s?.kind === "warmup";
+const buzz = (enabled, pattern) => { if (enabled) try { navigator.vibrate?.(pattern); } catch { /* unsupported */ } };
 const conv = (w, from, to) => (w == null || from === to ? w : from === "lb" ? w / 2.20462 : w * 2.20462);
 const fmtW = (w) => (w == null ? "—" : (Math.round(w * 10) / 10).toString().replace(/\.0$/, ""));
 const fmtVol = (v) => (v >= 10000 ? `${(v / 1000).toFixed(1)}k` : Math.round(v).toLocaleString());
@@ -184,41 +222,51 @@ export default function WorkoutPanel({ isMobile, supabase, settings, updateSetti
   useEffect(() => { if (active) saveActive(active); else clearActive(); }, [active]);
 
   // ─── history lookups: "what did I do last time" + all-time best per lift ───
+  // WORKING sets only on both maps: a saved warm-up ramp must never become a
+  // ghost value on a working row, and a 45-lb bar warm-up is not a "best".
   const { prevByEx, bestByEx } = useMemo(() => {
     const prev = new Map(), best = new Map();
     for (const s of sessions || []) { // already newest-first
+      if (isCardio(s)) continue;
+      // aggregate duplicate entries of the same lift WITHIN a session first —
+      // "bench, accessories, bench again" is legal, and last-time must mean
+      // ALL of last time's working sets, not just the first block
+      const inSession = new Map();
       for (const ex of s.exercises || []) {
         const k = norm(ex.name);
         if (!k) continue;
-        const sets = (ex.sets || []).filter((x) => x.weight != null && x.reps != null);
-        if (sets.length && !prev.has(k)) prev.set(k, { sets, unit: s.unit || "lb" });
+        const sets = (ex.sets || []).filter((x) => x.weight != null && x.reps != null && !isWU(x));
+        if (sets.length) inSession.set(k, [...(inSession.get(k) || []), ...sets]);
         for (const x of sets) {
-          const e1 = epley(conv(x.weight, s.unit || "lb", "lb"), x.reps); // compare in lb
+          const e1 = epley(conv(x.weight, s.unit || "lb", "lb"), x.reps); // compare in lb; >12-rep sets estimate 0
           if (e1 > (best.get(k) || 0)) best.set(k, e1);
         }
       }
+      for (const [k, sets] of inSession) if (!prev.has(k)) prev.set(k, { sets, unit: s.unit || "lb" });
     }
     return { prevByEx: prev, bestByEx: best };
   }, [sessions]);
 
   // build a session exercise: sets prefilled from the last time you did this
-  // lift (per-set where possible), falling back to the routine's targets
-  const buildSessionExercise = (name, tpl = {}) => {
-    const hist = prevByEx.get(norm(name));
+  // lift (per-set where possible), falling back to the routine's targets.
+  // targetUnit: the ACTIVE SESSION's unit — mid-session additions must land
+  // in the unit the session started with, not whatever prefs say now.
+  const buildSessionExercise = (name, tpl = {}, targetUnit = unit) => {
+    const hist = prevByEx.get(norm(name)); // working sets only — warmups never ghost
     const count = Math.max(1, tpl.targetSets || hist?.sets.length || 3);
     const sets = [];
     for (let i = 0; i < count; i++) {
       const h = hist ? hist.sets[Math.min(i, hist.sets.length - 1)] : null;
-      const w = h ? conv(h.weight, hist.unit, unit) : conv(tpl.weight ?? 0, tpl.unit || unit, unit);
+      const w = h ? conv(h.weight, hist.unit, targetUnit) : conv(tpl.weight ?? 0, tpl.unit || targetUnit, targetUnit);
       sets.push({
         id: uuid(),
         weight: Math.round((w || 0) * 10) / 10,
         reps: h?.reps ?? tpl.targetReps ?? 8,
         done: false,
-        prev: h ? `${fmtW(conv(h.weight, hist.unit, unit))}×${h.reps}` : null,
+        prev: h ? `${fmtW(conv(h.weight, hist.unit, targetUnit))}×${h.reps}` : null,
       });
     }
-    return { id: uuid(), name, restSec: tpl.restSec ?? defaultRest, sets };
+    return { id: uuid(), name, restSec: tpl.restSec ?? defaultRest, targetReps: tpl.targetReps ?? null, sets };
   };
 
   const startWorkout = async (tpl) => {
@@ -249,10 +297,11 @@ export default function WorkoutPanel({ isMobile, supabase, settings, updateSetti
     const done = [];
     let volume = 0, setCount = 0, prCount = 0;
     for (const ex of a.exercises) {
-      const sets = ex.sets.filter((s) => s.done).map((s) => ({ weight: s.weight, reps: s.reps, ...(s.pr ? { pr: true } : {}) }));
+      const sets = ex.sets.filter((s) => s.done).map((s) => ({ weight: s.weight, reps: s.reps, ...(s.kind && s.kind !== "working" ? { kind: s.kind } : {}), ...(s.pr ? { pr: true } : {}) }));
       if (!sets.length) continue;
       done.push({ name: ex.name, sets });
-      for (const s of sets) { volume += (s.weight || 0) * (s.reps || 0); setCount++; if (s.pr) prCount++; }
+      // warm-ups are saved (they're what happened) but never counted
+      for (const s of sets) { if (isWU(s)) continue; volume += (s.weight || 0) * (s.reps || 0); setCount++; if (s.pr) prCount++; }
     }
     const durationSec = Math.max(1, Math.round((Date.now() - a.startedAt) / 1000));
     const row = {
@@ -268,8 +317,11 @@ export default function WorkoutPanel({ isMobile, supabase, settings, updateSetti
         const exercises = a.exercises
           .filter((ex) => ex.sets.length)
           .map((ex) => {
-            const dsets = ex.sets.filter((s) => s.done);
-            const ref = dsets.length ? dsets : ex.sets;
+            // write-back reads WORKING sets — a warm-up ramp must not inflate
+            // the routine to 7 sets or reset its weight to the empty bar
+            const working = ex.sets.filter((s) => !isWU(s));
+            const dsets = working.filter((s) => s.done);
+            const ref = dsets.length ? dsets : working.length ? working : ex.sets;
             const last = ref[ref.length - 1];
             return { id: uuid(), name: ex.name, targetSets: ref.length, targetReps: last.reps, weight: last.weight, restSec: ex.restSec };
           });
@@ -293,6 +345,13 @@ export default function WorkoutPanel({ isMobile, supabase, settings, updateSetti
           isMobile={isMobile} active={active} setActive={setActive}
           bar={bar} bestByEx={bestByEx} prevByEx={prevByEx} defaultRest={defaultRest}
           buildSessionExercise={buildSessionExercise}
+          vibrate={ws.vibrate !== false}
+          exNotes={ws.exNotes || {}}
+          onSaveNote={(name, text) => {
+            const next = { ...(ws.exNotes || {}) };
+            if (text.trim()) next[norm(name)] = text.trim(); else delete next[norm(name)];
+            setWs({ exNotes: next });
+          }}
           onBack={() => setView("train")} onFinish={finishWorkout} onDiscard={discardWorkout}
         />
         {confirmEl}
@@ -303,9 +362,9 @@ export default function WorkoutPanel({ isMobile, supabase, settings, updateSetti
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 12, minWidth: 0 }}>
       <Segmented
-        options={[{ key: "train", label: "Train" }, { key: "routines", label: "Routines" }, { key: "history", label: "History" }]}
+        options={[{ key: "train", label: "Train" }, { key: "routines", label: "Routines" }, { key: "progress", label: "Progress" }, { key: "history", label: "History" }]}
         value={view} onChange={setView}
-        style={isMobile ? undefined : { maxWidth: 380 }}
+        style={isMobile ? undefined : { maxWidth: 480 }}
       />
       {loadErr && <Card pad="md"><span className="t-call" style={{ color: "var(--red)" }}>{loadErr}</span></Card>}
       {view === "train" && (
@@ -315,8 +374,11 @@ export default function WorkoutPanel({ isMobile, supabase, settings, updateSetti
           onResume={() => setView("session")} onStart={startWorkout}
           onQuickStart={() => startWorkout(null)}
           onManage={() => setView("routines")} onHistory={() => setView("history")}
-          ws={{ unit, bar, defaultRest }} setWs={setWs}
+          ws={{ ...ws, unit, bar, defaultRest }} setWs={setWs}
         />
+      )}
+      {view === "progress" && (
+        <ProgressView isMobile={isMobile} sessions={sessions} unit={unit} goal={Number(ws.goal) > 0 ? Number(ws.goal) : 3} />
       )}
       {view === "routines" && (
         editingTpl ? (
@@ -424,11 +486,21 @@ function SetupCard({ onRetry }) {
   );
 }
 
-// ─── Train home — resume, start, recent, preferences ─────────────────────────
+// ─── Train home — resume, this week, start, recent, recovery, preferences ────
 function TrainHome({ isMobile, templates, sessions, active, unit, onResume, onStart, onQuickStart, onManage, onHistory, ws, setWs }) {
-  const doneSets = active ? active.exercises.reduce((n, e) => n + e.sets.filter((s) => s.done).length, 0) : 0;
+  const doneSets = active ? active.exercises.reduce((n, e) => n + e.sets.filter((s) => s.done && !isWU(s)).length, 0) : 0;
   const mins = active ? Math.max(1, Math.round((Date.now() - active.startedAt) / 60000)) : 0;
   const recent = (sessions || []).slice(0, 3);
+  const goal = Number(ws.goal) > 0 ? Math.round(Number(ws.goal)) : 3;
+  const cons = useMemo(() => consistency(sessions || [], { goalPerWeek: goal, weeks: 20 }), [sessions, goal]);
+  const recap = useMemo(() => weeklyRecap(sessions || [], { unit }), [sessions, unit]);
+  const fresh = useMemo(() => {
+    const rows = groupFreshness(sessions || []);
+    const trained = rows.filter((r) => r.lastAt != null).sort((a, b) => a.pct - b.pct);
+    return trained.length ? trained : null; // no history → no fake recovery talk
+  }, [sessions]);
+  const [watchOpen, setWatchOpen] = useState(false);
+  const watchCount = useMemo(() => (sessions || []).filter((s) => isCardio(s) && cardioMeta(s)?.source === "watch").length, [sessions]);
 
   return (
     <>
@@ -445,6 +517,26 @@ function TrainHome({ isMobile, templates, sessions, active, unit, onResume, onSt
           <Button kind="primary" size="md" onClick={onResume} style={{ flex: "none" }}>Resume</Button>
         </Card>
       )}
+
+      {/* This week — the scoreboard that gets you back in the door */}
+      <Card pad="md">
+        <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", gap: 10 }}>
+          <span className="t-head">This week</span>
+          <span className="t-cap" style={{ color: cons.streakWeeks > 0 ? "var(--accent)" : "var(--faint)", fontWeight: 600 }}>
+            {cons.streakWeeks > 0 ? `${cons.streakWeeks}-week streak` : "streak starts at " + goal + "/wk"}
+          </span>
+        </div>
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 8, marginTop: 10 }}>
+          <StatTile value={`${cons.thisWeekCount}/${goal}`} label="Workouts" valueTone={cons.thisWeekCount >= goal ? "var(--green)" : undefined} />
+          <StatTile value={fmtVol(recap?.thisWeek.volume || 0)} label={`Volume (${unit})`} />
+          <StatTile value={recap?.thisWeek.sets || 0} label="Sets" />
+          <StatTile value={recap?.thisWeek.cardioMin ? fmtDur(recap.thisWeek.cardioMin * 60) : "—"} label="Cardio" valueTone={recap?.thisWeek.cardioMin ? undefined : "var(--faint)"} />
+        </div>
+        <ConsistencyHeatmap days={cons.days} />
+        <div className="t-cap" style={{ color: "var(--faint)", marginTop: 6 }}>
+          Last 20 weeks · streak counts weeks with ≥{goal} sessions — this week can join it, never break it.
+        </div>
+      </Card>
 
       <Grid min={340} gap={12}>
         <section style={{ minWidth: 0 }}>
@@ -492,6 +584,30 @@ function TrainHome({ isMobile, templates, sessions, active, unit, onResume, onSt
           </section>
         )}
 
+        {fresh && (
+          <section style={{ minWidth: 0 }}>
+            <SectionHeader title="Recovery clock" />
+            <Card pad="md">
+              <div style={{ display: "flex", flexDirection: "column", gap: 9 }}>
+                {fresh.map((f) => (
+                  <div key={f.group} style={{ display: "grid", gridTemplateColumns: "92px 1fr 58px", gap: 10, alignItems: "center" }}>
+                    <span className="t-call" style={{ fontWeight: 600 }}>{f.group}</span>
+                    <div style={{ height: 5, borderRadius: 99, background: "var(--ink-a06)", overflow: "hidden" }}>
+                      <div style={{ width: `${f.pct}%`, height: "100%", borderRadius: 99, background: f.state === "fresh" ? "var(--green)" : f.state === "recovering" ? "var(--blue)" : "var(--amber)" }} />
+                    </div>
+                    <span className="t-cap" style={{ color: "var(--faint)", textAlign: "right" }}>
+                      {f.state === "fresh" ? "fresh" : f.hoursAgo < 48 ? `${f.hoursAgo}h ago` : `${Math.round(f.hoursAgo / 24)}d ago`}
+                    </span>
+                  </div>
+                ))}
+              </div>
+              <div className="t-cap" style={{ color: "var(--faint)", marginTop: 10 }}>
+                A rule-of-thumb clock (big movers ~72h, small ~48h) — not a measurement of anything.
+              </div>
+            </Card>
+          </section>
+        )}
+
         <section style={{ minWidth: 0 }}>
           <SectionHeader title="Preferences" />
           <CellGroup>
@@ -516,15 +632,67 @@ function TrainHome({ isMobile, templates, sessions, active, unit, onResume, onSt
                   <span className="t-cap" style={{ color: "var(--faint)", minWidth: 18 }}>sec</span>
                 </span>
               } />
+            <Cell title="Weekly goal" sub="Drives the streak and the heatmap bar"
+              trailing={
+                <span style={{ display: "inline-flex", alignItems: "center", gap: 8, flex: "none" }}>
+                  <NumField value={goal} width={64} onChange={(v) => setWs({ goal: Math.max(1, Math.min(14, Math.round(v || 0))) })} />
+                  <span className="t-cap" style={{ color: "var(--faint)", minWidth: 30 }}>/ wk</span>
+                </span>
+              } />
+            <SwitchRow title="Vibrate" sub="On set log and when rest hits zero (phones that support it)"
+              on={ws.vibrate !== false} onToggle={() => setWs({ vibrate: ws.vibrate === false })} />
+          </CellGroup>
+        </section>
+
+        <section style={{ minWidth: 0 }}>
+          <SectionHeader title="Apple Watch" />
+          <CellGroup>
+            <Cell title="Auto-import workouts" chevron onClick={() => setWatchOpen(true)}
+              sub={watchCount > 0 ? `${watchCount} imported so far — runs, rides, rows land in History` : "Not receiving yet — one-time Shortcuts setup"}
+              trailing={watchCount > 0 ? <Dot tone="var(--green)" size={7} /> : undefined} />
           </CellGroup>
         </section>
       </Grid>
+      {watchOpen && <WatchSheet ws={ws} setWs={setWs} watchCount={watchCount} onClose={() => setWatchOpen(false)} />}
     </>
   );
 }
 
+// GitHub-style consistency grid — columns are Monday-weeks, tone is the
+// data blue (gold stays reserved). Zero-days are faint ink; future days
+// nearly invisible. Pure SVG, horizontally scrollable on narrow phones.
+function ConsistencyHeatmap({ days }) {
+  if (!days?.length) return null;
+  const weeks = Math.floor(days.length / 7);
+  const cell = 11, gap = 3;
+  const w = weeks * (cell + gap) + 2;
+  const h = 7 * (cell + gap) + 14;
+  const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+  const labels = [];
+  for (let wk = 0; wk < weeks; wk++) {
+    const first = days[wk * 7].date;
+    const prev = wk > 0 ? days[(wk - 1) * 7].date : null;
+    if (!prev || first.slice(5, 7) !== prev.slice(5, 7)) labels.push({ x: wk * (cell + gap), label: MONTHS[+first.slice(5, 7) - 1] });
+  }
+  const fill = (d) => d.future ? "transparent" : d.count === 0 ? "var(--ink-a06)" : d.count === 1 ? "color-mix(in srgb, var(--blue) 55%, transparent)" : "var(--blue)";
+  return (
+    // scrolled to the newest weeks when it overflows a phone; plain left-aligned when it fits
+    <div ref={(el) => { if (el) el.scrollLeft = el.scrollWidth; }} style={{ overflowX: "auto", marginTop: 12 }}>
+      <svg width={w} height={h} style={{ display: "block" }} role="img" aria-label={`Training heatmap, last ${weeks} weeks`}>
+        {labels.map((m, i) => <text key={i} x={m.x} y={9} fill="var(--faint)" fontSize="9">{m.label}</text>)}
+        {days.map((d, i) => {
+          const wk = Math.floor(i / 7), day = i % 7;
+          return <rect key={d.date} x={wk * (cell + gap)} y={14 + day * (cell + gap)} width={cell} height={cell} rx="2.5" fill={fill(d)}>
+            <title>{`${d.date}: ${d.count} workout${d.count === 1 ? "" : "s"}`}</title>
+          </rect>;
+        })}
+      </svg>
+    </div>
+  );
+}
+
 // ─── Active session — the room where it happens ──────────────────────────────
-function ActiveSession({ isMobile, active, setActive, bar, bestByEx, prevByEx, defaultRest, buildSessionExercise, onBack, onFinish, onDiscard }) {
+function ActiveSession({ isMobile, active, setActive, bar, bestByEx, prevByEx, defaultRest, buildSessionExercise, vibrate, exNotes, onSaveNote, onBack, onFinish, onDiscard }) {
   const [now, setNow] = useState(Date.now());
   const [pickerOpen, setPickerOpen] = useState(false);
   const [finishOpen, setFinishOpen] = useState(false);
@@ -548,10 +716,22 @@ function ActiveSession({ isMobile, active, setActive, bar, bestByEx, prevByEx, d
   const updEx = (exId, fn) => upd((a) => ({ exercises: a.exercises.map((e) => (e.id === exId ? { ...e, ...fn(e) } : e)) }));
 
   const elapsed = Math.floor((now - active.startedAt) / 1000);
-  const doneSets = active.exercises.reduce((n, e) => n + e.sets.filter((s) => s.done).length, 0);
-  const volume = active.exercises.reduce((v, e) => v + e.sets.reduce((x, s) => x + (s.done ? (s.weight || 0) * (s.reps || 0) : 0), 0), 0);
+  const doneSets = active.exercises.reduce((n, e) => n + e.sets.filter((s) => s.done && !isWU(s)).length, 0);
+  const volume = active.exercises.reduce((v, e) => v + e.sets.reduce((x, s) => x + (s.done && !isWU(s) ? (s.weight || 0) * (s.reps || 0) : 0), 0), 0);
 
-  // one tap logs the set — and PR detection happens right here, live
+  // keep the screen awake mid-session — a dark phone between sets is a
+  // re-auth ritual; best-effort, silently absent where unsupported
+  useEffect(() => {
+    let lock = null;
+    const acquire = async () => { try { lock = await navigator.wakeLock?.request("screen"); } catch { /* denied — fine */ } };
+    acquire();
+    const onVis = () => { if (document.visibilityState === "visible") acquire(); };
+    document.addEventListener("visibilitychange", onVis);
+    return () => { document.removeEventListener("visibilitychange", onVis); try { lock?.release(); } catch { /* released */ } };
+  }, []);
+
+  // one tap logs the set — and PR detection happens right here, live.
+  // Warm-up sets log and start the timer, but can never flag a PR.
   const toggleSet = (ex, set) => {
     if (set.done) { // undo a mis-tap, keep the numbers
       updEx(ex.id, (e) => ({ sets: e.sets.map((s) => (s.id === set.id ? { ...s, done: false, pr: false } : s)) }));
@@ -561,8 +741,9 @@ function ActiveSession({ isMobile, active, setActive, bar, bestByEx, prevByEx, d
     const hasHistory = bestByEx.has(norm(ex.name)); // first-ever session of a lift is a baseline, not a PR
     let best = bestByEx.get(norm(ex.name)) || 0;
     for (const e of active.exercises) if (norm(e.name) === norm(ex.name))
-      for (const s of e.sets) if (s.done && s.id !== set.id) best = Math.max(best, epley(inLb(s.weight), s.reps));
-    const pr = hasHistory && set.weight > 0 && epley(inLb(set.weight), set.reps) > best;
+      for (const s of e.sets) if (s.done && !isWU(s) && s.id !== set.id) best = Math.max(best, epley(inLb(s.weight), s.reps));
+    const pr = !isWU(set) && hasHistory && set.weight > 0 && epley(inLb(set.weight), set.reps) > best;
+    buzz(vibrate, pr ? [30, 40, 60] : 15);
     updEx(ex.id, (e) => ({ sets: e.sets.map((s) => (s.id === set.id ? { ...s, done: true, pr } : s)) }));
     if (ex.restSec > 0) upd(() => ({ rest: { until: Date.now() + ex.restSec * 1000, total: ex.restSec, label: ex.name } }));
   };
@@ -588,10 +769,21 @@ function ActiveSession({ isMobile, active, setActive, bar, bestByEx, prevByEx, d
     if (!(await confirm({ title: "Remove exercise?", message: `${name} comes off today's session. History is untouched.`, confirmLabel: "Remove", destructive: true }))) return;
     upd((a) => ({ exercises: a.exercises.filter((e) => e.id !== exId) }));
   };
-  const addExercise = (name) => { upd((a) => ({ exercises: [...a.exercises, buildSessionExercise(name)] })); setPickerOpen(false); };
+  // mid-session additions land in the SESSION's unit — prefs may have moved
+  const addExercise = (name) => { upd((a) => ({ exercises: [...a.exercises, buildSessionExercise(name, {}, a.unit)] })); setPickerOpen(false); };
 
   const restRemain = active.rest ? Math.ceil((active.rest.until - now) / 1000) : null;
   const resting = restRemain != null && restRemain > -5; // linger 5s in "GO" state
+
+  // one buzz the moment rest hits zero — the phone is face-up on the bench
+  const restDoneRef = useRef(null);
+  useEffect(() => {
+    if (restRemain == null) { restDoneRef.current = null; return; }
+    if (restRemain <= 0 && restDoneRef.current !== active.rest?.until) {
+      restDoneRef.current = active.rest?.until ?? null;
+      buzz(vibrate, [80, 60, 80]);
+    }
+  }, [restRemain, active.rest?.until, vibrate]);
   const prCount = active.exercises.reduce((n, e) => n + e.sets.filter((s) => s.done && s.pr).length, 0);
 
   const doFinish = async (opts) => {
@@ -620,15 +812,38 @@ function ActiveSession({ isMobile, active, setActive, bar, bestByEx, prevByEx, d
           <EmptyState icon={<IcDumbbell size={26} />} title="Empty session" sub="Add an exercise below to start logging." />
         </Card>
       )}
-      {active.exercises.map((ex, i) => (
-        <ExerciseCard key={ex.id} isMobile={isMobile} ex={ex} index={i} count={active.exercises.length}
-          unit={active.unit} bar={bar}
-          onToggleSet={(s) => toggleSet(ex, s)}
-          onSetChange={(setId, patch) => updEx(ex.id, (e) => ({ sets: e.sets.map((s) => (s.id === setId ? { ...s, ...patch } : s)) }))}
-          onAddSet={() => addSet(ex)} onRemoveSet={(setId) => removeSet(ex, setId)}
-          onCycleRest={() => cycleRest(ex)} onMove={(d) => moveEx(ex.id, d)} onRemove={() => removeEx(ex.id)}
-        />
-      ))}
+      {active.exercises.map((ex, i) => {
+        const hist = prevByEx.get(norm(ex.name));
+        const suggestion = hist ? suggestNext(
+          hist.sets.map((s) => ({ weight: conv(s.weight, hist.unit, active.unit), reps: s.reps })),
+          { targetReps: ex.targetReps || 8, increment: active.unit === "kg" ? 2.5 : 5 },
+        ) : null;
+        const firstWork = ex.sets.find((s) => !isWU(s) && s.weight > 0);
+        const canRamp = !ex.sets.some(isWU) && !!firstWork && firstWork.weight > bar;
+        return (
+          <ExerciseCard key={ex.id} isMobile={isMobile} ex={ex} index={i} count={active.exercises.length}
+            unit={active.unit} bar={bar}
+            suggestion={suggestion}
+            note={exNotes[norm(ex.name)] || ""}
+            onSaveNote={(text) => onSaveNote(ex.name, text)}
+            canRamp={canRamp}
+            onAddRamp={() => {
+              const ramp = warmupRamp(firstWork.weight, { barWeight: bar, step: active.unit === "kg" ? 2.5 : 5 });
+              if (!ramp.length) return;
+              updEx(ex.id, (e) => ({
+                sets: [...ramp.map((r) => ({ id: uuid(), weight: r.weight, reps: r.reps, done: false, prev: null, kind: "warmup" })), ...e.sets],
+              }));
+            }}
+            onCycleKind={(setId) => updEx(ex.id, (e) => ({
+              sets: e.sets.map((s) => (s.id === setId ? { ...s, kind: KIND_NEXT[s.kind || "working"], pr: false } : s)),
+            }))}
+            onToggleSet={(s) => toggleSet(ex, s)}
+            onSetChange={(setId, patch) => updEx(ex.id, (e) => ({ sets: e.sets.map((s) => (s.id === setId ? { ...s, ...patch } : s)) }))}
+            onAddSet={() => addSet(ex)} onRemoveSet={(setId) => removeSet(ex, setId)}
+            onCycleRest={() => cycleRest(ex)} onMove={(d) => moveEx(ex.id, d)} onRemove={() => removeEx(ex.id)}
+          />
+        );
+      })}
       <Button kind="quiet" size="md" full onClick={() => setPickerOpen(true)}><IcPlus size={16} /> Add exercise</Button>
     </div>
   );
@@ -757,7 +972,7 @@ function RestBar({ rest, restRemain, onExtend, onClear, mobile }) {
   );
 }
 
-function ExerciseCard({ isMobile, ex, index, count, unit, bar, onToggleSet, onSetChange, onAddSet, onRemoveSet, onCycleRest, onMove, onRemove }) {
+function ExerciseCard({ isMobile, ex, index, count, unit, bar, suggestion, note, onSaveNote, canRamp, onAddRamp, onCycleKind, onToggleSet, onSetChange, onAddSet, onRemoveSet, onCycleRest, onMove, onRemove }) {
   const [showPlates, setShowPlates] = useState(false);
   // Plate math uses the next undone set (or last set if all done) as its weight source
   const nextSet = ex.sets.find((s) => !s.done) || ex.sets[ex.sets.length - 1];
@@ -776,13 +991,18 @@ function ExerciseCard({ isMobile, ex, index, count, unit, bar, onToggleSet, onSe
           <IcClose size={17} />
         </button>
       </div>
+      {/* double-progression cue — stated with its numbers, from real history only */}
+      {suggestion && (
+        <div className="t-cap" style={{ color: "var(--sub)", marginTop: 2 }}>→ {suggestion.reason}</div>
+      )}
 
-      <div style={{ display: "flex", alignItems: "center", gap: 8, margin: "6px 0 2px" }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 8, margin: "6px 0 2px", flexWrap: "wrap" }}>
         <Button kind="quiet" size="md" onClick={onCycleRest} title="Tap to change rest for this exercise" style={{ padding: "0 12px", gap: 6 }}>
           <IcClock size={15} />
           <span className="t-num" style={{ fontSize: 13 }}>{ex.restSec > 0 ? `${ex.restSec}s rest` : "no rest"}</span>
         </Button>
         <Button kind={showPlates ? "tinted" : "quiet"} size="md" onClick={() => setShowPlates((v) => !v)} style={{ padding: "0 12px" }}>Plates</Button>
+        {canRamp && <Button kind="quiet" size="md" onClick={onAddRamp} title="Insert bar→55→70→85% warm-up sets" style={{ padding: "0 12px" }}>Ramp</Button>}
         <span style={{ flex: 1 }} />
         <Button kind="quiet" size="md" onClick={() => onMove(-1)} disabled={index === 0} aria-label="move up" style={{ width: 44, padding: 0 }}>
           <IcChevronDown size={15} style={{ transform: "rotate(180deg)" }} />
@@ -810,10 +1030,16 @@ function ExerciseCard({ isMobile, ex, index, count, unit, bar, onToggleSet, onSe
       )}
 
       <div style={{ display: "flex", flexDirection: "column" }}>
-        {ex.sets.map((set, i) => {
+        {(() => { let workNo = 0; return ex.sets.map((set, i) => {
+          const badge = KIND_BADGE[set.kind];
+          const label = badge ? badge.label : String(++workNo);
           const meta = set.pr
             ? <span className="t-num" style={{ fontSize: 11, fontWeight: 600, color: "var(--accent)", whiteSpace: "nowrap" }}>◆ PR</span>
-            : <span className="t-num" style={{ fontSize: 11, color: "var(--faint)", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{set.prev ? `last ${set.prev}` : "new"}</span>;
+            : isWU(set)
+              ? <span className="t-num" style={{ fontSize: 11, color: "var(--amber)", whiteSpace: "nowrap" }}>warm-up · no credit</span>
+              : set.kind === "failure" || set.kind === "drop"
+                ? <span className="t-num" style={{ fontSize: 11, color: badge.tone, whiteSpace: "nowrap" }}>{set.kind === "failure" ? "to failure" : "drop set"}</span>
+                : <span className="t-num" style={{ fontSize: 11, color: "var(--faint)", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{set.prev ? `last ${set.prev}` : "new"}</span>;
           const weightStepper = <Stepper value={set.weight} step={unit === "kg" ? 2.5 : 5} decimals onChange={(v) => onSetChange(set.id, { weight: v })} style={wFlex} />;
           const repsStepper = <Stepper value={set.reps} step={1} onChange={(v) => onSetChange(set.id, { reps: v })} style={rFlex} />;
           const logBtn = (
@@ -838,7 +1064,17 @@ function ExerciseCard({ isMobile, ex, index, count, unit, bar, onToggleSet, onSe
           return (
             <div key={set.id} style={{ opacity: set.done ? 0.92 : 1, display: "flex", flexDirection: "column", gap: 8, ...sep }}>
               <div style={{ display: "flex", alignItems: "center", gap: 8, minHeight: 32 }}>
-                <span className="t-num" style={{ fontSize: 14, fontWeight: 600, color: set.done ? "var(--green)" : "var(--sub)", flex: "none", minWidth: 16 }}>{i + 1}</span>
+                {/* tap the set marker to cycle working → warm-up → failure → drop */}
+                <button onClick={() => onCycleKind(set.id)} aria-label={`set type: ${set.kind || "working"} — tap to change`}
+                  title="Tap to change set type" className="t-num" style={{
+                    minWidth: 34, height: 34, flex: "none", margin: "-1px 0", padding: "0 6px",
+                    display: "inline-flex", alignItems: "center", justifyContent: "center",
+                    background: badge ? "var(--surface-2)" : "transparent", border: "none", borderRadius: 9, cursor: "pointer",
+                    fontSize: badge ? 12 : 14, fontWeight: 600,
+                    color: set.done && !badge ? "var(--green)" : badge ? badge.tone : "var(--sub)",
+                  }}>
+                  {label}
+                </button>
                 {meta}
                 {removeBtn({ margin: "-6px -8px -6px auto" })}
               </div>
@@ -849,10 +1085,22 @@ function ExerciseCard({ isMobile, ex, index, count, unit, bar, onToggleSet, onSe
               </div>
             </div>
           );
-        })}
+        }); })()}
       </div>
 
       <Button kind="quiet" size="md" full onClick={onAddSet} style={{ marginTop: 12 }}><IcPlus size={15} /> Add set</Button>
+
+      {/* the sticky note — persists per lift, shows up every session ("seat 4, cues") */}
+      <input
+        key={`note-${ex.id}`}
+        className="field t-call"
+        defaultValue={note}
+        placeholder="Note to future you — seat height, grip, cues…"
+        maxLength={200}
+        onBlur={(e) => { if (e.target.value !== note) onSaveNote(e.target.value); }}
+        style={{ marginTop: 10, background: "var(--surface-2)", fontSize: 13, minHeight: 40 }}
+        aria-label={`Sticky note for ${ex.name}`}
+      />
     </Card>
   );
 }
@@ -1056,38 +1304,229 @@ function RoutineEditor({ isMobile, unit, defaultRest, initial, nextPosition, onS
   );
 }
 
-// ─── History — sessions, per-lift trend, CSV export ──────────────────────────
-function HistoryView({ isMobile, sessions, unit, onDelete }) {
-  const [openId, setOpenId] = useState(null);
-  const [trendEx, setTrendEx] = useState("");
-  const [showAll, setShowAll] = useState(false);
-  const [confirmEl, confirm] = useConfirm();
+// ─── Watch sheet — the honest Apple Watch hookup ──────────────────────────────
+// A web app cannot touch HealthKit; the working path is an iOS Shortcuts
+// automation ("When I finish a workout" → POST here). The only status shown
+// is how many workouts actually arrived — no fake "connected" state.
+function WatchSheet({ ws, setWs, watchCount, onClose }) {
+  const [copied, setCopied] = useState(null);
+  const endpoint = `${window.location.origin}/.netlify/functions/workout-import`;
+  const token = ws.importToken || "";
+  const copy = (label, text) => { navigator.clipboard?.writeText(text).then(() => { setCopied(label); setTimeout(() => setCopied(null), 1800); }); };
+  const genToken = () => setWs({ importToken: uuid() });
+  return (
+    <Sheet onClose={onClose} title="Apple Watch · auto-import" z={320}>
+      <div className="t-call" style={{ color: "var(--sub)", lineHeight: 1.6 }}>
+        Finish a workout on the watch → an iPhone Shortcuts automation posts it here → it lands in
+        History with calories and average heart rate. Re-sends are skipped, never duplicated.
+        {watchCount > 0 ? ` ${watchCount} imported so far.` : " Nothing has arrived yet."}
+      </div>
 
+      <div className="t-label" style={{ margin: "16px 0 8px" }}>Your import token</div>
+      {token ? (
+        <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+          <code className="t-num" style={{ flex: 1, minWidth: 0, background: "var(--surface-2)", borderRadius: 10, padding: "10px 12px", fontSize: 12, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{token}</code>
+          <Button kind="quiet" size="md" onClick={() => copy("token", token)}>{copied === "token" ? "Copied" : "Copy"}</Button>
+        </div>
+      ) : (
+        <Button kind="primary" size="md" onClick={genToken}>Generate token</Button>
+      )}
+      {token && (
+        <div className="t-foot" style={{ color: "var(--faint)", marginTop: 6 }}>
+          The token is the only key to this door — treat it like a password.{" "}
+          <button className="sec-link" style={{ font: "inherit" }} onClick={genToken}>Regenerate</button> to revoke the old one.
+        </div>
+      )}
+
+      <div className="t-label" style={{ margin: "16px 0 8px" }}>One-time setup (iPhone)</div>
+      <ol className="t-call" style={{ color: "var(--sub)", lineHeight: 1.7, margin: 0, paddingLeft: 20 }}>
+        <li>Shortcuts → Automation → <b>+</b> → <b>When I finish a workout</b> → Run Immediately.</li>
+        <li>Add action <b>Get Contents of URL</b>:&nbsp;
+          <code className="t-num" style={{ fontSize: 11.5, background: "var(--surface-2)", borderRadius: 6, padding: "2px 6px", wordBreak: "break-all" }}>{endpoint}</code>
+          <Button kind="quiet" size="md" onClick={() => copy("url", endpoint)} style={{ marginLeft: 6, padding: "0 10px", height: 30, minHeight: 30 }}>{copied === "url" ? "Copied" : "Copy"}</Button>
+        </li>
+        <li>Method <b>POST</b> · Request Body <b>JSON</b> with fields from the automation's workout:
+          <pre className="t-num" style={{ background: "var(--surface-2)", borderRadius: 10, padding: "10px 12px", fontSize: 11, lineHeight: 1.55, overflowX: "auto", margin: "8px 0 0" }}>
+{`{ "token": "<your token>",
+  "workouts": [{
+    "type":        <Workout Type>,
+    "start":       <Start Date (ISO 8601)>,
+    "durationMin": <Duration (minutes)>,
+    "calories":    <Active Energy>,
+    "avgHeartRate":<Average Heart Rate>,
+    "distanceKm":  <Distance (km)>
+  }] }`}</pre>
+          Only type, start, and duration are required. The <b>Health Auto Export</b> app's REST automation pointed at the same URL works too.
+        </li>
+      </ol>
+    </Sheet>
+  );
+}
+
+// ─── Progress — trend, PR wall, weekly muscle sets, recap ────────────────────
+function ProgressView({ isMobile, sessions, unit, goal }) {
+  const [trendEx, setTrendEx] = useState("");
+
+  const strength = useMemo(() => (sessions || []).filter((s) => !isCardio(s)), [sessions]);
   const exNames = useMemo(() => {
     const freq = new Map();
-    for (const s of sessions || []) for (const ex of s.exercises || []) freq.set(ex.name, (freq.get(ex.name) || 0) + 1);
+    for (const s of strength) for (const ex of s.exercises || []) if (ex.name) freq.set(ex.name, (freq.get(ex.name) || 0) + 1);
     return [...freq.entries()].sort((a, b) => b[1] - a[1]).map(([n]) => n);
-  }, [sessions]);
+  }, [strength]);
   useEffect(() => { if (!trendEx && exNames.length) setTrendEx(exNames[0]); }, [exNames, trendEx]);
 
+  // est-1RM per day for the picked lift — WORKING sets only, and sets over
+  // 12 reps return no estimate at all (engine cap), so they leave a gap
+  // instead of a flattering spike.
   const trend = useMemo(() => {
     if (!trendEx) return [];
     const pts = [];
-    for (const s of [...(sessions || [])].reverse()) { // oldest first
+    for (const s of [...strength].reverse()) { // oldest first
       let best = 0;
       for (const ex of s.exercises || []) if (norm(ex.name) === norm(trendEx))
-        for (const x of ex.sets || []) best = Math.max(best, epley(conv(x.weight, s.unit || "lb", unit), x.reps));
+        for (const x of ex.sets || []) if (!isWU(x)) best = Math.max(best, epley(conv(x.weight, s.unit || "lb", unit), x.reps));
       if (best > 0) pts.push({ t: new Date(s.started_at).getTime(), v: best });
     }
     return pts;
-  }, [sessions, trendEx, unit]);
+  }, [strength, trendEx, unit]);
+
+  const prs = useMemo(() => recentPRs(sessions || [], 8), [sessions]);
+  const week = useMemo(() => weeklySetsByGroup(sessions || [], { weeks: 1 })[0] || null, [sessions]);
+  const recap = useMemo(() => weeklyRecap(sessions || [], { unit }), [sessions, unit]);
+  const lifetime = useMemo(() => lifetimeVolume(sessions || [], unit), [sessions, unit]);
+  const totalPRs = useMemo(() => (sessions || []).reduce((n, s) => n + (s.pr_count || 0), 0), [sessions]);
+
+  if (sessions === null) return <Card pad="md"><div className="sk" style={{ height: 140, borderRadius: 12 }} /></Card>;
+  if (!sessions.length) {
+    return <Card pad="md"><EmptyState icon={<IcDumbbell size={26} />} title="No data yet" sub="Progress builds itself from finished workouts." /></Card>;
+  }
+
+  const bestPt = trend.reduce((m, p) => (p.v > m ? p.v : m), 0);
+  const groupsShown = week ? GROUPS.filter((g) => g !== "Other" || week.byGroup.Other > 0) : [];
+  const d = (a, b) => (a === b ? "—" : `${a > b ? "+" : ""}${fmtVol(a - b)}`);
+
+  return (
+    <Grid min={340} gap={12}>
+      <Card pad="md" style={{ minWidth: 0 }}>
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, marginBottom: 8 }}>
+          <span className="t-head">Est. 1RM trend</span>
+          {exNames.length > 4 && (
+            <select className="field t-num" value={trendEx} onChange={(e) => setTrendEx(e.target.value)}
+              style={{ width: "auto", maxWidth: isMobile ? 185 : 260, fontSize: 13, padding: "8px 12px" }}>
+              {exNames.map((n) => <option key={n} value={n}>{n}</option>)}
+            </select>
+          )}
+        </div>
+        {exNames.length > 0 && exNames.length <= 4 && (
+          <PillRow options={exNames} value={trendEx} onChange={setTrendEx} style={{ padding: "0 0 10px" }} />
+        )}
+        {trend.length >= 2 ? (
+          <>
+            <TrendLine points={trend} unit={unit} />
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 8, marginTop: 12 }}>
+              <StatTile value={`${fmtW(bestPt)} ${unit}`} label="Best est 1RM" />
+              <StatTile value={`${fmtW(trend[trend.length - 1].v)} ${unit}`} label="Latest" />
+              <StatTile value={trend.length} label="Sessions" />
+            </div>
+          </>
+        ) : (
+          <div className="t-foot" style={{ color: "var(--faint)", padding: "10px 0" }}>
+            Log {trendEx || "a lift"} twice and the trend line appears here.
+          </div>
+        )}
+        <div className="t-cap" style={{ color: "var(--faint)", marginTop: 10 }}>
+          Epley estimate from working sets ≤ 12 reps — a trend-reading tool, not a max-attempt promise.
+        </div>
+      </Card>
+
+      <Card pad="md" style={{ minWidth: 0 }}>
+        <span className="t-head">Recent PRs</span>
+        {prs.length === 0 ? (
+          <div className="t-foot" style={{ color: "var(--faint)", padding: "10px 0" }}>
+            PRs land here — each judged against your own history only. A first-ever lift is a baseline, not a PR.
+          </div>
+        ) : (
+          <div style={{ display: "flex", flexDirection: "column", gap: 8, marginTop: 10 }}>
+            {prs.map((p, i) => (
+              <div key={i} style={{ display: "flex", alignItems: "baseline", gap: 8, background: "var(--surface-2)", borderRadius: 12, padding: "9px 12px" }}>
+                <span style={{ color: "var(--accent)", flex: "none" }}>◆</span>
+                <span className="t-call" style={{ fontWeight: 600, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{p.name}</span>
+                <span className="t-num" style={{ fontSize: 12.5, color: "var(--sub)", marginLeft: "auto", flex: "none" }}>
+                  {fmtW(p.weight)}×{p.reps} {p.unit} · {fmtDate(new Date(p.t).toISOString())}
+                </span>
+              </div>
+            ))}
+          </div>
+        )}
+      </Card>
+
+      <Card pad="md" style={{ minWidth: 0 }}>
+        <span className="t-head">Working sets by muscle group — this week</span>
+        {week && (
+          <div style={{ display: "flex", flexDirection: "column", gap: 9, marginTop: 10 }}>
+            {groupsShown.map((g) => {
+              const v = week.byGroup[g] || 0;
+              const inBand = v >= 10 && v <= 20;
+              return (
+                <div key={g} style={{ display: "grid", gridTemplateColumns: "92px 1fr 34px", gap: 10, alignItems: "center" }}>
+                  <span className="t-call" style={{ fontWeight: 600 }}>{g}</span>
+                  <div style={{ position: "relative", height: 5, borderRadius: 99, background: "var(--ink-a06)", overflow: "hidden" }}>
+                    <div style={{ width: `${Math.min(100, (v / 20) * 100)}%`, height: "100%", borderRadius: 99, background: inBand ? "var(--green)" : v > 20 ? "var(--amber)" : "var(--blue)" }} />
+                  </div>
+                  <span className="t-num" style={{ fontSize: 12.5, textAlign: "right" }}>{v}</span>
+                </div>
+              );
+            })}
+          </div>
+        )}
+        <div className="t-cap" style={{ color: "var(--faint)", marginTop: 10 }}>
+          Warm-ups excluded · grouped by exercise name (unknowns read "Other") · 10–20/wk is the common hypertrophy guideline, not a law.
+        </div>
+      </Card>
+
+      <Card pad="md" style={{ minWidth: 0 }}>
+        <span className="t-head">This week vs last</span>
+        {recap && (
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 8, marginTop: 10 }}>
+            <StatTile value={recap.thisWeek.sessions} label="Workouts" />
+            <StatTile value={fmtVol(recap.thisWeek.volume)} label={`Volume (${unit})`} />
+            <StatTile value={recap.thisWeek.sets} label="Sets" />
+          </div>
+        )}
+        {recap && (
+          <div className="t-foot" style={{ color: "var(--faint)", marginTop: 8 }}>
+            vs last week: {recap.thisWeek.sessions - recap.lastWeek.sessions >= 0 ? "+" : ""}{recap.thisWeek.sessions - recap.lastWeek.sessions} workouts · {d(Math.round(recap.thisWeek.volume), Math.round(recap.lastWeek.volume))} {unit} · Mon–Sun weeks
+          </div>
+        )}
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(2, 1fr)", gap: 8, marginTop: 12 }}>
+          <StatTile value={fmtVol(lifetime)} label={`Lifetime volume (${unit})`} />
+          <StatTile value={totalPRs ? `◆ ${totalPRs}` : "—"} label="Lifetime PRs" valueTone={totalPRs ? "var(--accent)" : "var(--faint)"} />
+        </div>
+      </Card>
+    </Grid>
+  );
+}
+
+// ─── History — sessions + CSV export ─────────────────────────────────────────
+function HistoryView({ isMobile, sessions, unit, onDelete }) {
+  const [openId, setOpenId] = useState(null);
+  const [showAll, setShowAll] = useState(false);
+  const [confirmEl, confirm] = useConfirm();
 
   const exportCsv = () => {
     // naive CSV escaping: commas are stripped from name fields, never emitted raw
-    const rows = [["date", "routine", "exercise", "set", "weight", "unit", "reps", "est_1rm"]];
-    for (const s of sessions || []) for (const ex of s.exercises || []) (ex.sets || []).forEach((x, i) => {
-      rows.push([s.started_at, (s.template_name || "Quick session").replace(/,/g, " "), ex.name.replace(/,/g, " "), i + 1, x.weight, s.unit || "lb", x.reps, Math.round(epley(x.weight, x.reps))]);
-    });
+    const rows = [["date", "routine", "exercise", "set", "kind", "weight", "unit", "reps", "est_1rm"]];
+    for (const s of sessions || []) {
+      if (isCardio(s)) {
+        const c = cardioMeta(s);
+        rows.push([s.started_at, (c.activity || "Cardio").replace(/,/g, " "), "cardio", 1, "cardio", "", "", "", ""]);
+        continue;
+      }
+      for (const ex of s.exercises || []) (ex.sets || []).forEach((x, i) => {
+        const e1 = isWU(x) ? null : e1RM(x.weight, x.reps);
+        rows.push([s.started_at, (s.template_name || "Quick session").replace(/,/g, " "), ex.name.replace(/,/g, " "), i + 1, x.kind || "working", x.weight, s.unit || "lb", x.reps, e1 == null ? "" : Math.round(e1)]);
+      });
+    }
     const blob = new Blob([rows.map((r) => r.join(",")).join("\n")], { type: "text/csv" });
     const a = document.createElement("a");
     a.href = URL.createObjectURL(blob);
@@ -1113,40 +1552,10 @@ function HistoryView({ isMobile, sessions, unit, onDelete }) {
     );
   }
 
-  const bestPt = trend.reduce((m, p) => (p.v > m ? p.v : m), 0);
   const visible = showAll || sessions.length <= 12 ? sessions : sessions.slice(0, 10);
 
   return (
     <Grid min={340} gap={12}>
-      <Card pad="md" style={{ minWidth: 0 }}>
-        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, marginBottom: 8 }}>
-          <span className="t-head">Progress</span>
-          {exNames.length > 4 && (
-            <select className="field t-num" value={trendEx} onChange={(e) => setTrendEx(e.target.value)}
-              style={{ width: "auto", maxWidth: isMobile ? 185 : 260, fontSize: 13, padding: "8px 12px" }}>
-              {exNames.map((n) => <option key={n} value={n}>{n}</option>)}
-            </select>
-          )}
-        </div>
-        {exNames.length > 0 && exNames.length <= 4 && (
-          <PillRow options={exNames} value={trendEx} onChange={setTrendEx} style={{ padding: "0 0 10px" }} />
-        )}
-        {trend.length >= 2 ? (
-          <>
-            <TrendLine points={trend} unit={unit} />
-            <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 8, marginTop: 12 }}>
-              <StatTile value={`${fmtW(bestPt)} ${unit}`} label="Best est 1RM" />
-              <StatTile value={`${fmtW(trend[trend.length - 1].v)} ${unit}`} label="Latest" />
-              <StatTile value={trend.length} label="Sessions" />
-            </div>
-          </>
-        ) : (
-          <div className="t-foot" style={{ color: "var(--faint)", padding: "10px 0" }}>
-            Log {trendEx || "a lift"} twice and the trend line appears here.
-          </div>
-        )}
-      </Card>
-
       <Card style={{ padding: 0, overflow: "hidden", minWidth: 0 }}>
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, padding: "12px 12px 4px 16px" }}>
           <span className="t-head">Sessions</span>
@@ -1161,11 +1570,21 @@ function HistoryView({ isMobile, sessions, unit, onDelete }) {
                 <button className="cell tappable" onClick={() => setOpenId(open ? null : s.id)} style={{ width: "100%" }}>
                   <span className="cell-body">
                     <span className="cell-title">
-                      {s.template_name || "Quick session"}
+                      {isCardio(s) ? (cardioMeta(s).activity || "Cardio") : (s.template_name || "Quick session")}
+                      {isCardio(s) && cardioMeta(s).source === "watch" && <span className="t-cap" style={{ color: "var(--green)", fontWeight: 600 }}> · watch</span>}
                       {s.pr_count ? <span className="t-num" style={{ color: "var(--accent)", fontWeight: 600, fontSize: 12.5 }}> ◆{s.pr_count}</span> : null}
                     </span>
                     <span className="cell-sub t-num" style={{ fontSize: 11.5 }}>
-                      {fmtDate(s.started_at)} · {s.duration_sec ? fmtDur(s.duration_sec) : "—"} · {s.total_sets || 0} sets · {fmtVol(s.total_volume || 0)} {s.unit}
+                      {isCardio(s) ? (
+                        <>
+                          {fmtDate(s.started_at)} · {s.duration_sec ? fmtDur(s.duration_sec) : "—"}
+                          {Number.isFinite(cardioMeta(s).distanceKm) && <> · {Math.round(cardioMeta(s).distanceKm * 10) / 10} km</>}
+                          {Number.isFinite(cardioMeta(s).avgHr) && <> · {Math.round(cardioMeta(s).avgHr)} bpm</>}
+                          {Number.isFinite(cardioMeta(s).kcal) && <> · {Math.round(cardioMeta(s).kcal)} kcal</>}
+                        </>
+                      ) : (
+                        <>{fmtDate(s.started_at)} · {s.duration_sec ? fmtDur(s.duration_sec) : "—"} · {s.total_sets || 0} sets · {fmtVol(s.total_volume || 0)} {s.unit}</>
+                      )}
                     </span>
                   </span>
                   <span className="cell-chevron" style={{ transform: open ? "rotate(90deg)" : "none", transition: "transform var(--dur-2) var(--ease-out)" }}>
@@ -1175,12 +1594,17 @@ function HistoryView({ isMobile, sessions, unit, onDelete }) {
                 <div className={`expand${open ? " open" : ""}`}>
                   <div>
                     <div style={{ padding: "2px 16px 14px", display: "flex", flexDirection: "column", gap: 6 }}>
-                      {(s.exercises || []).map((ex, i) => (
+                      {isCardio(s) && (
+                        <div className="t-foot" style={{ color: "var(--sub)" }}>
+                          {cardioMeta(s).source === "watch" ? "Imported from Apple Watch." : "Logged cardio."}
+                        </div>
+                      )}
+                      {!isCardio(s) && (s.exercises || []).map((ex, i) => (
                         <div key={i} style={{ display: "flex", gap: 8, alignItems: "baseline" }}>
                           <span className="t-call" style={{ fontWeight: 600, flex: "none", minWidth: 0 }}>{ex.name}</span>
                           <span className="t-num" style={{ fontSize: 12, color: "var(--sub)" }}>
                             {(ex.sets || []).map((x, j) => (
-                              <span key={j}>{j > 0 ? ", " : ""}{fmtW(x.weight)}×{x.reps}{x.pr ? <span style={{ color: "var(--accent)" }}>◆</span> : ""}</span>
+                              <span key={j}>{j > 0 ? ", " : ""}{isWU(x) ? "wu " : x.kind === "failure" ? "F " : x.kind === "drop" ? "D " : ""}{fmtW(x.weight)}×{x.reps}{x.pr ? <span style={{ color: "var(--accent)" }}>◆</span> : ""}</span>
                             ))}
                           </span>
                         </div>

@@ -4,6 +4,7 @@
 export const NAV = [
   { key: "brief", label: "Brief", group: "Today" },
   { key: "personal", label: "Personal", group: "Today" },
+  { key: "train", label: "Train", group: "Today" },
   { key: "boardroom", label: "Mind", group: "The Firm" },
   { key: "assets", label: "Assets", group: "The Firm" },
   { key: "systems", label: "Systems", group: "The Firm" },
@@ -20,7 +21,8 @@ const DATE_LINE = (d) =>
 // carry the day itself — the calmest possible subtitle.
 export const HEADERS = {
   brief: { title: "Brief", sub: (d) => DATE_LINE(d) },
-  personal: { title: "Personal", sub: () => "Notes, calendar, and training" },
+  personal: { title: "Personal", sub: () => "Notes, calendar, and life admin" },
+  train: { title: "Train", sub: () => "Log it. Beat last time." },
   boardroom: { title: "Mind", sub: () => "The mind behind the delegate" },
   assets: { title: "Assets", sub: () => "Everything you run" },
   systems: { title: "Systems", sub: () => "Usage, status, and deploys" },

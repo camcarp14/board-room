@@ -19,6 +19,7 @@ import { Sheet, Button, useConfirm } from "./ui/kit.jsx";
 import { MorningBriefPage } from "./pages/brief/BriefPage.jsx";
 import { SeatNotesModal } from "./pages/board/SeatNotesModal.jsx";
 const PersonalPage = lazy(() => import("./pages/personal/PersonalPage.jsx").then(m => ({ default: m.PersonalPage })));
+const TrainPage = lazy(() => import("./pages/train/TrainPage.jsx").then(m => ({ default: m.TrainPage })));
 const BoardRoomPage = lazy(() => import("./pages/board/BoardPage.jsx").then(m => ({ default: m.BoardRoomPage })));
 const PropertiesPage = lazy(() => import("./pages/assets/AssetsPage.jsx").then(m => ({ default: m.PropertiesPage })));
 const SystemsPage = lazy(() => import("./pages/systems/SystemsPage.jsx").then(m => ({ default: m.SystemsPage })));
@@ -310,7 +311,13 @@ export default function App() {
   useEffect(() => { if (!session) setSummon(false); }, [session]);
   // One deep-link primitive: page + optional sub-tab/entity, used by Summon and
   // by anything on a page that wants to point somewhere (e.g. the Word's chips).
-  const jumpTo = (target) => { goToPage(target.page); setJump({ t: Date.now(), ...target }); };
+  const jumpTo = (target) => {
+    // Workout graduated from Personal to its own Train tab — old deep links
+    // (Brief chips, saved Summon muscle memory) land on the new page.
+    const t = target.page === "personal" && target.sub === "workout" ? { ...target, page: "train", sub: undefined } : target;
+    goToPage(t.page);
+    setJump({ t: Date.now(), ...t });
+  };
   const summonGo = (target) => { setSummon(false); jumpTo(target); };
   // Free text in Summon → the question lands in the Room already sent — the
   // board convenes while the page slides over. (send is defined below; it only
@@ -417,6 +424,7 @@ export default function App() {
       case "brief": return <MorningBriefPage btc={btc} isMobile={isMobile} settings={settings} updateSetting={updateSetting} onOpenCalendar={goToCalendar} onAddEvent={(date) => jumpTo({ page: "personal", sub: "calendar", newEventDate: date })} onOpenNotes={(noteId) => summonGo({ page: "personal", sub: "notes", noteId })} onOpenQueue={() => jumpTo({ page: "boardroom", sub: "mini" })} onOpenBirthdays={() => jumpTo({ page: "personal", sub: "birthdays" })} refreshSignal={briefRefreshSignal} />;
       case "boardroom": return <BoardRoomPage settings={settings} updateSetting={updateSetting} session={session} onWorkerRun={refreshData} onSkillsChanged={refreshSkills} jump={jump} isMobile={isMobile} skills={skills} />;
       case "personal": return <PersonalPage isMobile={isMobile} jumpSignal={personalJumpTo} jump={jump} settings={settings} updateSetting={updateSetting} />;
+      case "train": return <TrainPage isMobile={isMobile} settings={settings} updateSetting={updateSetting} jump={jump} />;
       case "assets": return <PropertiesPage isMobile={isMobile} settings={settings} updateSetting={updateSetting} session={session} />;
       case "systems": return <SystemsPage settings={settings} updateSetting={updateSetting} session={session} btc={btc} isMobile={isMobile} />;
       case "upstream": return <UpstreamPage isMobile={isMobile} />;

@@ -5,8 +5,6 @@
 
 import { useState, useEffect } from "react";
 import { PillRow } from "../../ui/kit.jsx";
-import { supabase } from "../../lib/supabase.js";
-import WorkoutPanel from "../../WorkoutPanel.jsx";
 import { UpkeepPanel } from "../../features/upkeep/UpkeepPanel.jsx";
 import { CreedPanel } from "../../features/creed/CreedPanel.jsx";
 import { BirthdaysPanel } from "../../features/birthdays/BirthdaysPanel.jsx";
@@ -18,7 +16,9 @@ import { CalendarPanel } from "./CalendarPanel.jsx";
 // Section keys are wired to jump.sub values coming from other parts of the app
 // (Summon, Brief) — renaming a key breaks deep links.
 // One list everywhere — Notes and Calendar ride together on every width now.
-const PERSONAL_SUBTABS = [{ key: "notescal", label: "Notes & Calendar" }, { key: "workout", label: "Workout" }, { key: "upkeep", label: "Upkeep" }, { key: "creed", label: "Creed" }, { key: "birthdays", label: "Birthdays" }, { key: "movies", label: "Movies" }, { key: "food", label: "Food" }];
+// Workout graduated to its own tab (Train) — jump.sub "workout" is remapped in
+// App.jsx so old deep links still land somewhere sensible.
+const PERSONAL_SUBTABS = [{ key: "notescal", label: "Notes & Calendar" }, { key: "upkeep", label: "Upkeep" }, { key: "creed", label: "Creed" }, { key: "birthdays", label: "Birthdays" }, { key: "movies", label: "Movies" }, { key: "food", label: "Food" }];
 
 export function PersonalPage({ isMobile, jumpSignal, jump, settings, updateSetting }) {
   const [sub, setSub] = useState("notescal");
@@ -57,7 +57,6 @@ export function PersonalPage({ isMobile, jumpSignal, jump, settings, updateSetti
               <NotesPanel isMobile={isMobile} openSignal={noteSignal} />
             </>
           )}
-          {sub === "workout" && <WorkoutPanel isMobile={isMobile} supabase={supabase} settings={settings} updateSetting={updateSetting} />}
           {sub === "upkeep" && <UpkeepPanel isMobile={isMobile} />}
           {sub === "creed" && <CreedPanel isMobile={isMobile} />}
           {sub === "birthdays" && <BirthdaysPanel isMobile={isMobile} />}
