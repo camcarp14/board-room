@@ -37,8 +37,11 @@ export default function BtcChartModal({ isMobile, onClose, callFnFull, title = "
     setCandleErr(null);
     callFnFull(fn, { interval, ...(fnArgs || {}) }).then(({ ok, data }) => {
       if (cancelled) return;
-      if (ok && data?.success) setCandles(data.candles);
-      else setCandleErr(data?.error || "Couldn't load candles — try again in a moment.");
+      // A "successful" response with no candles must land in the error state,
+      // not leave the skeleton up forever (undefined) or render a blank sheet
+      // body ([] — the chart effect bails on empty arrays).
+      if (ok && data?.success && Array.isArray(data.candles) && data.candles.length) setCandles(data.candles);
+      else setCandleErr(data?.error || (ok && data?.success ? "No data for this interval — try another." : "Couldn't load candles — try again in a moment."));
     });
     return () => { cancelled = true; };
   }, [interval, retryNonce]);

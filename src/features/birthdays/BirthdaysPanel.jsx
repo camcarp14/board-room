@@ -33,7 +33,10 @@ export function BirthdaysPanel({ isMobile }) {
   };
   const openEdit = (b) => {
     setSaveErr(null);
-    const y = b.year || new Date().getFullYear();
+    // Unknown-year placeholder must be a LEAP year: a Feb-29 birthday built as
+    // "2026-02-29" is invalid to <input type="date">, which renders empty and
+    // silently rewrites the stored date when the user re-picks.
+    const y = b.year || (b.month === 2 && b.day === 29 ? 2024 : new Date().getFullYear());
     const mm = String(b.month).padStart(2, "0"), dd = String(b.day).padStart(2, "0");
     setForm({ id: b.id, name: b.name, date: `${y}-${mm}-${dd}`, unknownYear: !b.year, notes: b.notes || "" });
   };
@@ -66,7 +69,10 @@ export function BirthdaysPanel({ isMobile }) {
       const cleaned = text.trim().replace(/^```(json)?/i, "").replace(/```$/, "").trim();
       const parsed = JSON.parse(cleaned);
       if (!Array.isArray(parsed)) throw new Error("not an array");
-      const valid = parsed.filter(r => r && typeof r.name === "string" && r.name.trim() && Number(r.month) >= 1 && Number(r.month) <= 12 && Number(r.day) >= 1 && Number(r.day) <= 31);
+      // Per-month day bound (leap Feb allowed) — a "Feb 31" would store fine
+      // and then silently roll into March in nextBirthdayOccurrence.
+      const daysIn = (m) => [31, 29, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31][m - 1] || 0;
+      const valid = parsed.filter(r => r && typeof r.name === "string" && r.name.trim() && Number(r.month) >= 1 && Number(r.month) <= 12 && Number(r.day) >= 1 && Number(r.day) <= daysIn(Number(r.month)));
       if (!valid.length) { setBulkErr("Didn't find any birthdays in that text — try a clearer format, e.g. one per line: \"Name — Month Day\"."); return; }
       setBulkPreview(valid.map(r => ({ tempId: crypto.randomUUID(), name: r.name.trim(), month: Number(r.month), day: Number(r.day), year: r.year ? Number(r.year) : null })));
     } catch {

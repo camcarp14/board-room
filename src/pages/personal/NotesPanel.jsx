@@ -99,6 +99,12 @@ export function NotesPanel({ isMobile, openSignal }) {
       (sealFilter === null || (sealFilter === "none" ? !n.color : n.color === sealFilter)));
   }, [sorted, query, sealFilter]);
   const usedSeals = useMemo(() => NOTE_SEALS.filter(s => (notes || []).some(n => n.color === s.key)), [notes]);
+  // If the filtered seal disappears (its last note was cleared/deleted), the
+  // filter row hides — reset the filter too, or the list wedges on a
+  // permanent "Nothing matches" with no visible control to clear it.
+  useEffect(() => {
+    if (sealFilter && sealFilter !== "none" && notes && !usedSeals.some(s => s.key === sealFilter)) setSealFilter(null);
+  }, [usedSeals, sealFilter, notes]);
   const selectedNotes = (notes || []).filter(n => selected.has(n.id));
 
   // ─── undo plumbing ───
@@ -155,8 +161,11 @@ export function NotesPanel({ isMobile, openSignal }) {
   const flushSave = () => {
     if (!activeId) return;
     clearTimeout(saveTimer.current);
-    if (saveState === "saving" && (draft.title.trim() || draft.body.trim()))
-      db.saveNote(noteRow()).then(refresh).catch(() => {});
+    // Flush on ANY unsaved state, not just "saving": a failed autosave leaves
+    // saveState === "error", and closing then used to silently discard the
+    // typed text. A failed flush complains instead of vanishing the draft.
+    if (saveState !== "saved" && (draft.title.trim() || draft.body.trim()))
+      db.saveNote(noteRow()).then(refresh).catch((e) => complain(`Couldn't save "${(draft.title || draft.body).slice(0, 40)}" — ${e.message || "check the connection"}.`));
   };
   const closeEditor = () => { flushSave(); setActiveId(null); setDraft({ title: "", body: "", pinned: false, color: null }); };
   // pinned/color are spread ONLY when the schema has them — sending those fields
@@ -240,9 +249,9 @@ export function NotesPanel({ isMobile, openSignal }) {
   const words = draft.body.trim() ? draft.body.trim().split(/\s+/).length : 0;
   const activeNote = (notes || []).find(n => n.id === activeId);
 
-  // Seal picker — a row of color dots on ≥38pt targets; tapping the active
+  // Seal picker — a row of color dots on 44pt targets; tapping the active
   // color again clears it (onPick(null)).
-  const sealDots = (value, onPick, dotSize = 14, btn = 38) => (
+  const sealDots = (value, onPick, dotSize = 14, btn = 44) => (
     <span style={{ display: "inline-flex", alignItems: "center" }}>
       {NOTE_SEALS.map(s => (
         <button key={s.key} onClick={() => onPick(value === s.key ? null : s.key)} aria-label={`Seal ${s.key}`}
@@ -411,7 +420,8 @@ export function NotesPanel({ isMobile, openSignal }) {
       </Card>
 
       {loadErr && (
-        <Card pad="md"><EmptyState icon={<IcNote size={26} />} title="Couldn't load notes" sub={loadErr} /></Card>
+        <Card pad="md"><EmptyState icon={<IcNote size={26} />} title="Couldn't load notes" sub={loadErr}
+          action={<Button kind="tinted" size="md" onClick={refresh}>Retry</Button>} /></Card>
       )}
       {!loadErr && notes === null && (
         // mirror the loaded layout: 2-col masonry on tablet, single column on phone

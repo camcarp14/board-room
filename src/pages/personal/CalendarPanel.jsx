@@ -111,7 +111,16 @@ Only extract entries you can read with real confidence — skip anything blurry,
 
     // Cross-reference against what's already tracked, so re-importing your
     // old calendar doesn't create duplicate birthdays or duplicate events.
-    const reviewed = merged.map(item => {
+    // Model output is untrusted: validate date/time shapes HERE, before they
+    // can reach `new Date(...).toISOString()` in confirmBulkImport — one
+    // malformed "24:00" used to throw there and wedge the sheet in "Saving…".
+    const badRows = [];
+    const reviewed = merged.filter(item => {
+      const okDate = /^\d{4}-\d{2}-\d{2}$/.test(String(item.date)) && !isNaN(new Date(`${item.date}T00:00:00`).getTime());
+      const okTime = item.time == null || item.time === "" || /^([01]\d|2[0-3]):[0-5]\d$/.test(String(item.time));
+      if (!okDate || !okTime) { badRows.push(item.title || "(untitled)"); return false; }
+      return true;
+    }).map(item => {
       const [y, m, d] = item.date.split("-").map(Number);
       if (item.kind === "possible_birthday") {
         const match = birthdaysList.find(b => normName(b.name) === normName(item.title) && b.month === m && b.day === d);
@@ -123,13 +132,18 @@ Only extract entries you can read with real confidence — skip anything blurry,
           month: m, day: d, year: y,
         };
       }
-      const dupEvent = eventsList.find(e => normName(e.title) === normName(item.title) && e.start_time.slice(0, 10) === item.date);
+      // Compare the LOCAL day of the stored event to the screenshot's literal
+      // date — slice(0,10) is the UTC day and never matched evening events,
+      // so re-imports duplicated every 8pm event (the lib/dates.js bug class).
+      const dupEvent = eventsList.find(e => normName(e.title) === normName(item.title) && localDayKey(e.start_time) === item.date);
       return {
         tempId: crypto.randomUUID(), title: item.title, date: item.date, time: item.time, allDay: !!item.all_day,
         kind: dupEvent ? "duplicate_event" : "event",
         action: dupEvent ? "skip" : "calendar",
       };
     });
+    if (badRows.length) errors.push(`unusable date/time on: ${badRows.join(", ")}`);
+    if (!reviewed.length) { setBulkErr(`Couldn't extract anything usable. ${errors.join("; ")}`); return; }
 
     if (errors.length) setBulkErr(`Imported what I could. Skipped: ${errors.join("; ")}`);
     setBulkPreview(reviewed);
@@ -140,14 +154,23 @@ Only extract entries you can read with real confidence — skip anything blurry,
   const confirmBulkImport = () => {
     if (!bulkPreview?.length) return;
     setBulkSaving(true);
-    const toCalendar = bulkPreview.filter(r => r.action === "calendar").map(r => ({
-      id: crypto.randomUUID(), title: r.title, notes: "Imported from calendar screenshot",
-      start_time: r.allDay || !r.time ? new Date(`${r.date}T00:00:00`).toISOString() : new Date(`${r.date}T${r.time}:00`).toISOString(),
-      all_day: r.allDay || !r.time,
-    }));
-    const toBirthdays = bulkPreview.filter(r => r.action === "birthday").map(r => ({
-      id: crypto.randomUUID(), name: r.title.replace(/'s birthday|birthday|bday/gi, "").trim() || r.title, month: r.month, day: r.day, year: r.year || null,
-    }));
+    // Rows are pre-validated at preview time, but belt-and-braces: a throw
+    // here must land in bulkErr, never escape after setBulkSaving(true) and
+    // freeze the Confirm button at "Saving…" forever.
+    let toCalendar, toBirthdays;
+    try {
+      toCalendar = bulkPreview.filter(r => r.action === "calendar").map(r => ({
+        id: crypto.randomUUID(), title: r.title, notes: "Imported from calendar screenshot",
+        start_time: r.allDay || !r.time ? new Date(`${r.date}T00:00:00`).toISOString() : new Date(`${r.date}T${r.time}:00`).toISOString(),
+        all_day: r.allDay || !r.time,
+      }));
+      toBirthdays = bulkPreview.filter(r => r.action === "birthday").map(r => ({
+        id: crypto.randomUUID(), name: r.title.replace(/'s birthday|birthday|bday/gi, "").trim() || r.title, month: r.month, day: r.day, year: r.year || null,
+      }));
+    } catch (e) {
+      setBulkSaving(false); setBulkErr(e.message || "A row has an unusable date — deselect it and try again.");
+      return;
+    }
     Promise.all([
       toCalendar.length ? db.saveEventsBulk(toCalendar) : Promise.resolve(),
       toBirthdays.length ? db.saveBirthdaysBulk(toBirthdays) : Promise.resolve(),
@@ -200,6 +223,12 @@ Only extract entries you can read with real confidence — skip anything blurry,
 
   const save = () => {
     if (!form.title.trim()) { setSaveErr("Give it a title."); return; }
+    // Date/time inputs can legitimately be cleared to "" — without these
+    // guards `new Date("T09:00:00").toISOString()` throws BEFORE the mutation
+    // and Save just silently does nothing.
+    if (!form.date) { setSaveErr("Pick a date."); return; }
+    if (!form.allDay && !form.time) { setSaveErr("Pick a time (or make it all-day)."); return; }
+    if (!form.allDay && form.endTime && form.endTime <= form.time) { setSaveErr("End time has to be after the start."); return; }
     const start_time = form.allDay
       ? new Date(`${form.date}T00:00:00`).toISOString()
       : new Date(`${form.date}T${form.time}:00`).toISOString();
@@ -215,7 +244,11 @@ Only extract entries you can read with real confidence — skip anything blurry,
   const removeEvent = async (id, e) => {
     e?.stopPropagation();
     if (!(await confirm({ title: "Delete this event?", confirmLabel: "Delete", destructive: true }))) return;
-    delMut.mutate(id, { onSuccess: () => { if (form?.id === id) closeForm(); } });
+    delMut.mutate(id, {
+      onSuccess: () => { if (form?.id === id) closeForm(); },
+      // A silently failed delete just reappears on the next refetch — say why.
+      onError: (err) => confirm({ title: "Couldn't delete", message: err.message || "Try again in a moment.", confirmLabel: "OK", cancelLabel: false }),
+    });
   };
 
   const dayLabel = (iso) => {
@@ -240,7 +273,10 @@ Only extract entries you can read with real confidence — skip anything blurry,
   (events || []).forEach(ev => {
     // Local day-key so an evening event lands on the day the user sees on the
     // clock, matching dateKey()/isToday() below (start_time is stored UTC).
-    const key = ev.all_day ? String(ev.start_time).slice(0, 10) : localDayKey(ev.start_time);
+    // All-day too: they're saved as LOCAL midnight → UTC ISO, so the UTC
+    // slice only matched the intended date in UTC-negative timezones —
+    // localDayKey round-trips correctly (and matches DocketCard's keying).
+    const key = localDayKey(ev.start_time);
     (eventsByDay[key] = eventsByDay[key] || []).push(ev);
   });
   const dateKey = (day) => `${gridYear}-${String(gridMonth + 1).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
@@ -281,28 +317,30 @@ Only extract entries you can read with real confidence — skip anything blurry,
   const previewRows = bulkPreview ? (bulkShowAll ? bulkPreview : bulkPreview.slice(0, 8)) : [];
 
   // ─── Agenda row (day view) ───
+  // Not a <Cell onClick> — that renders a <button>, and nesting the delete
+  // control inside it is invalid HTML/ARIA (screen readers collapse it to one
+  // control). A plain .cell wrapper with two SIBLING buttons instead, same
+  // pattern MoviesPanel uses.
   const renderEvent = (ev) => (
-    <Cell
-      key={ev.id}
-      onClick={() => openEdit(ev)}
-      leading={<Dot tone={catColor(ev.category)} size={8} />}
-      title={ev.title}
-      sub={[dayLabel(ev.start_time), ev.location, ev.notes].filter(Boolean).join(" · ")}
-      value={
-        <span className="t-num" style={{ fontSize: 12 }}>
-          {timeLabel(ev.start_time, ev.all_day)}
-          {ev.end_time && !ev.all_day ? `–${new Date(ev.end_time).toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" })}` : ""}
+    <div key={ev.id} className="cell has-leading" style={{ padding: 0 }}>
+      <button onClick={() => openEdit(ev)} className="hoverable"
+        style={{ flex: 1, minWidth: 0, display: "flex", alignItems: "center", gap: 12, background: "none", border: "none", font: "inherit", color: "inherit", textAlign: "left", cursor: "pointer", padding: "10px 0 10px 16px", minHeight: 46, borderRadius: 0 }}>
+        <span className="cell-leading" style={{ color: "var(--sub)" }}><Dot tone={catColor(ev.category)} size={8} /></span>
+        <span className="cell-body">
+          <span className="cell-title">{ev.title}</span>
+          <span className="cell-sub">{[dayLabel(ev.start_time), ev.location, ev.notes].filter(Boolean).join(" · ")}</span>
         </span>
-      }
-      trailing={
-        <span role="button" tabIndex={0} aria-label="Delete event" className="icon-btn"
-          onClick={(e) => removeEvent(ev.id, e)}
-          onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); removeEvent(ev.id, e); } }}
-          style={{ width: 38, height: 38, marginRight: -8, color: "var(--faint)" }}>
-          <IcTrash size={16} />
+        <span className="cell-value">
+          <span className="t-num" style={{ fontSize: 12 }}>
+            {timeLabel(ev.start_time, ev.all_day)}
+            {ev.end_time && !ev.all_day ? `–${new Date(ev.end_time).toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" })}` : ""}
+          </span>
         </span>
-      }
-    />
+      </button>
+      <button className="icon-btn" aria-label="Delete event" onClick={(e) => removeEvent(ev.id, e)} style={{ marginRight: 8, color: "var(--faint)" }}>
+        <IcTrash size={16} />
+      </button>
+    </div>
   );
 
   return (
@@ -395,7 +433,8 @@ Only extract entries you can read with real confidence — skip anything blurry,
       )}
 
       {loadErr && (
-        <Card pad="md"><EmptyState icon={<IcCalendar size={26} />} title="Couldn't load your calendar" sub={loadErr} /></Card>
+        <Card pad="md"><EmptyState icon={<IcCalendar size={26} />} title="Couldn't load your calendar" sub={loadErr}
+          action={<Button kind="tinted" size="md" onClick={() => queryClient.invalidateQueries({ queryKey: ["events"] })}>Retry</Button>} /></Card>
       )}
       {!loadErr && events === null && (
         <Card pad="md">
@@ -462,7 +501,7 @@ Only extract entries you can read with real confidence — skip anything blurry,
                         }}>{ev.title}</span>
                       ))}
                       {dayEvents.length > 2 && (
-                        <span className="t-num" style={{ fontSize: 10, lineHeight: 1.2, color: "var(--faint)", textAlign: "left", paddingLeft: 3 }}>+{dayEvents.length - 2}</span>
+                        <span className="t-num" style={{ fontSize: 10.5, lineHeight: 1.2, color: "var(--faint)", textAlign: "left", paddingLeft: 3 }}>+{dayEvents.length - 2}</span>
                       )}
                     </span>
                   )}

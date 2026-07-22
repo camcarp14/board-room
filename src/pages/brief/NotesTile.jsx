@@ -101,18 +101,28 @@ export function NotesTile({ isMobile, refreshSignal, onOpenNotes }) {
       </div>
 
       <div style={{ display: "flex", flexDirection: "column", minWidth: 0 }}>
-        {notes === null && !err && !loadErr ? (
+        {/* a failed quick-save complains ABOVE the list — it must never hide
+            the notes that loaded fine (Dismiss clears it; the text is kept
+            in the capture field, so nothing is lost) */}
+        {err && (
+          <div style={{ background: "var(--surface-2)", borderRadius: 12, display: "flex", alignItems: "center", gap: 10, padding: "8px 12px", minHeight: 52, marginBottom: 6 }}>
+            <Dot tone="var(--red)" />
+            <span className="t-foot" style={{ flex: 1, minWidth: 0 }}>{err}</span>
+            <Button kind="quiet" size="sm" style={{ height: 44, flex: "none" }} onClick={() => setErr(null)}>Dismiss</Button>
+          </div>
+        )}
+        {notes === null && !loadErr ? (
           <div style={{ display: "flex", flexDirection: "column", gap: 8, paddingTop: 4 }}>
             <div className="sk" style={{ height: 44, borderRadius: 12 }} />
             <div className="sk" style={{ height: 44, borderRadius: 12 }} />
             <div className="sk" style={{ height: 44, borderRadius: 12 }} />
           </div>
-        ) : (err || loadErr) ? (
+        ) : loadErr ? (
           <div style={{ background: "var(--surface-2)", borderRadius: 12, display: "flex", alignItems: "center", gap: 10, padding: "8px 12px", minHeight: 52, marginTop: 4 }}>
             <Dot tone="var(--red)" />
-            <span className="t-foot" style={{ flex: 1, minWidth: 0 }}>{err || loadErr}</span>
+            <span className="t-foot" style={{ flex: 1, minWidth: 0 }}>{loadErr}</span>
             <Button kind="quiet" size="sm" style={{ height: 44, flex: "none" }}
-              onClick={() => { setErr(null); queryClient.invalidateQueries({ queryKey: ["notes"] }); }}>Retry</Button>
+              onClick={() => queryClient.invalidateQueries({ queryKey: ["notes"] })}>Retry</Button>
           </div>
         ) : sorted.length === 0 ? (
           <EmptyState icon={<IcNote size={26} />} title="A blank ledger"

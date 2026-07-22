@@ -11,7 +11,7 @@ import { useUpkeep, useMarkUpkeepDone } from "../../data/upkeep.js";
 import { upkeepDue } from "../../lib/upkeep.js";
 import { nextBirthdayOccurrence, todayISO } from "../../lib/dates.js";
 
-export function DocketCard({ isMobile, birthdays, macroEvents, settings, onOpenCalendar, onOpenQueue, onOpenBirthdays }) {
+export function DocketCard({ isMobile, birthdays, birthdaysErr, macroEvents, settings, onOpenCalendar, onOpenQueue, onOpenBirthdays }) {
   // Shares the same cached events/upkeep the Calendar and Upkeep tabs read, so
   // the Docket refetches with the header Refresh and never double-fetches. On
   // error each section just stays quiet (empty), as before.
@@ -55,7 +55,8 @@ export function DocketCard({ isMobile, birthdays, macroEvents, settings, onOpenC
     if (nextMacro) rows.push({ c: T.blue, tag: nextMacro.time, text: nextMacro.text });
     (upkeepDueItems || []).forEach(it => rows.push({
       c: it.meta.never || it.meta.dueIn <= 0 ? T.red : T.amber,
-      tag: it.meta.never ? "Start" : it.meta.dueIn <= 0 ? "Overdue" : "Due soon",
+      // dueIn === 0 is due TODAY, not overdue — the tag and the row text agree now
+      tag: it.meta.never ? "Start" : it.meta.dueIn < 0 ? "Overdue" : it.meta.dueIn === 0 ? "Due today" : "Due soon",
       text: it.name + (it.meta.dueIn < 0 ? ` — ${Math.abs(it.meta.dueIn)} days past due` : it.meta.dueIn > 0 ? ` — due in ${it.meta.dueIn}d` : " — due today"),
       onDone: () => logUpkeepDone(it),
     }));
@@ -70,8 +71,12 @@ export function DocketCard({ isMobile, birthdays, macroEvents, settings, onOpenC
     if (od) summaryBits.push(`${od} upkeep item${od === 1 ? "" : "s"} due`);
     if (bdays.length) summaryBits.push(`${bdays.length} birthday${bdays.length === 1 ? "" : "s"} this week`);
   }
+  // A failed fetch must not read as an authoritative "clear slate" — say we
+  // couldn't check rather than confidently asserting an empty day.
+  const anyErr = eventsErr || upkeepErr || birthdaysErr;
   const summary = loading ? "Pulling the day together…"
     : summaryBits.length ? `${summaryBits.join(" · ")}.`
+    : anyErr ? "Couldn't check part of the day — refresh to retry."
     : "Clear slate — nothing on the books. Set the agenda yourself.";
 
   return (
@@ -96,7 +101,7 @@ export function DocketCard({ isMobile, birthdays, macroEvents, settings, onOpenC
               <Tag key={i} onClick={action} className={action ? "hoverable" : undefined}
                 aria-label={r.onDone ? `Log done — ${r.text}` : undefined}
                 style={{
-                  display: "flex", alignItems: "center", gap: 10, width: "100%", minHeight: action ? 40 : 34,
+                  display: "flex", alignItems: "center", gap: 10, width: "100%", minHeight: action ? 44 : 34,
                   padding: "3px 0", background: "none", border: "none",
                   borderTop: i === 0 ? "none" : "0.5px solid var(--line)",
                   textAlign: "left", color: "inherit", font: "inherit", borderRadius: 0,

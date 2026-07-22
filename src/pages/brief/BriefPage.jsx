@@ -3,7 +3,7 @@
 // No fabricated fallback numbers anywhere on this page. Each card is either
 // live (real data), not connected (with exact setup instructions), or error
 // (with the actual failure). Empty dashes beat plausible-looking fake data.
-import { useState, useEffect, useCallback, lazy, Suspense } from "react";
+import { useState, useEffect, useCallback, useRef, lazy, Suspense } from "react";
 import { T } from "../../theme.js";
 import { Card, StatTile, Button, Dot, Delta } from "../../ui/kit.jsx";
 import { IcChevronRight } from "../../ui/icons.jsx";
@@ -115,6 +115,9 @@ export function MorningBriefPage({ btc, isMobile, settings, updateSetting, onOpe
   const [btcChartOpen, setBtcChartOpen] = useState(false);
   const [tickerChart, setTickerChart] = useState(null); // {key,label} of the watchlist ticker whose chart is open
   const [meetingsAll, setMeetingsAll] = useState(false);
+  const briefGenRef = useRef(0); // refresh generation — see refreshBrief
+  const [calEditing, setCalEditing] = useState(false); // meetings card .ics link editor
+  const [calDraft, setCalDraft] = useState("");
 
   // Auto-generates a single, tidy one-sentence take (Bitcoin + stocks
   // together, not separate lines) for every Watch This Week event as soon
@@ -172,7 +175,13 @@ export function MorningBriefPage({ btc, isMobile, settings, updateSetting, onOpe
   // reusable function — called on mount, on a shared interval below, and
   // when you switch back to this tab after it's been hidden a while.
   const refreshBrief = useCallback(async () => {
-    let alive = true;
+    // Generation counter, not a local flag: the old `let alive = true` here
+    // was dead code (its cleanup was returned as the promise's RESOLUTION
+    // value — nothing ever called it), so overlapping refreshes raced and an
+    // older response could overwrite a newer one and get stamped fresh. Any
+    // newer run (or unmount) bumps the counter and orphans this one.
+    const gen = ++briefGenRef.current;
+    const alive = () => gen === briefGenRef.current;
     // On a failed refresh, if the card is already showing good data (seeded from
     // the snapshot or from a prior successful load), keep it and just flag it
     // stale — don't yank real numbers for an "unreachable" row. Only show the
@@ -189,11 +198,11 @@ export function MorningBriefPage({ btc, isMobile, settings, updateSetting, onOpe
     const liveStatus = (stale) => (prev) => ({ state: "live", stale, at: stale ? (prev?.at ?? boot.updatedAt ?? Date.now()) : Date.now() });
     const loadCredentialed = async (fn, payload, setData, setStatus, hint) => {
       const ping = await callFnFull(fn, { ping: true });
-      if (!alive) return;
+      if (!alive()) return;
       if (ping.status === 404) return setStatus({ state: "nofn", detail: `push netlify/functions/${fn}.js and redeploy` });
       if (ping.data?.configured === false) return setStatus({ state: "notconfigured", detail: hint(ping.data.missing) });
       const res = await callFnFull(fn, payload);
-      if (!alive) return;
+      if (!alive()) return;
       // A backend can answer 200 with its last-good value when the upstream
       // failed (stale/cached flags) — surface that instead of stamping it fresh.
       if (res.ok && res.data?.success) { setData(res.data); setStatus(liveStatus(!!(res.data.stale || res.data.cached))); }
@@ -201,7 +210,7 @@ export function MorningBriefPage({ btc, isMobile, settings, updateSetting, onOpe
     };
     const loadOpen = async (fn, apply, setStatus) => {
       const res = await callFnFull(fn, {});
-      if (!alive) return;
+      if (!alive()) return;
       if (res.status === 404) return setStatus({ state: "nofn", detail: `push netlify/functions/${fn}.js and redeploy` });
       if (res.ok && res.data?.success) { apply(res.data); setStatus(liveStatus(!!(res.data.stale || res.data.cached))); }
       else setStatus(keepIfLive(res));
@@ -220,32 +229,32 @@ export function MorningBriefPage({ btc, isMobile, settings, updateSetting, onOpe
       loadCredentialed("shopify", { days: 14 }, (d) => { setShopify(d); updateSnapshot({ shopify: d }); }, setShopifyStatus,
         (m) => `Add ${m || "SHOPIFY_SHOP + SHOPIFY_CLIENT_ID + SHOPIFY_CLIENT_SECRET"} in Netlify env vars, then redeploy.`),
       db.loadBirthdays().then(rows => {
-        if (!alive) return;
+        if (!alive()) return;
         setBirthdays(rows);
         const soon = (rows || []).map(b => ({ name: b.name, ...nextBirthdayOccurrence(b.month, b.day) })).filter(b => b.daysUntil <= 14).sort((a, b) => a.daysUntil - b.daysUntil);
         updateSnapshot({ todayBirthdays: soon });
-      }).catch(e => { if (alive) setBirthdaysErr(/fetch/i.test(e?.message || "") ? "Couldn't reach Supabase — check the connection and refresh." : e?.message || "Couldn't load birthdays."); }),
+      }).catch(e => { if (alive()) setBirthdaysErr(/fetch/i.test(e?.message || "") ? "Couldn't reach Supabase — check the connection and refresh." : e?.message || "Couldn't load birthdays."); }),
       db.loadEvents().then(rows => {
-        if (!alive) return;
+        if (!alive()) return;
         setMiniEvents(rows);
         const soon = (rows || []).filter(ev => { const days = (new Date(ev.start_time) - new Date()) / 86400000; return days >= -0.5 && days <= 3; }).map(ev => ({ title: ev.title }));
         updateSnapshot({ todayEvents: soon });
-      }).catch(() => { if (alive) setMiniEvents([]); }),
+      }).catch(() => { if (alive()) setMiniEvents([]); }),
       loadOpen("calendar", (d) => setEvents(d.events || []), setEventsStatus),
       (async () => {
-        if (!settings?.calendar_url) { if (alive) setMeetingsStatus({ state: "notconfigured", detail: "Link a calendar (iCal / .ics URL) in the sidebar to see meetings here." }); return; }
+        if (!settings?.calendar_url) { if (alive()) setMeetingsStatus({ state: "notconfigured", detail: "Link a calendar below — paste an iCal (.ics) URL and meetings show up here." }); return; }
         const res = await callFnFull("calendar-events", { url: settings.calendar_url });
-        if (!alive) return;
+        if (!alive()) return;
         if (res.ok && res.data?.success) { setMeetings(res.data.events || []); setMeetingsStatus(liveStatus(!!(res.data.stale || res.data.cached))); }
         else setMeetingsStatus(keepIfLive(res));
       })(),
     ]);
-    if (alive) setBriefRefreshedAt(Date.now());
-    return () => { alive = false; };
+    if (alive()) setBriefRefreshedAt(Date.now());
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [settings?.calendar_url]);
 
   useEffect(() => { refreshBrief(); }, [refreshBrief]);
+  useEffect(() => () => { briefGenRef.current++; }, []); // unmount orphans any in-flight refresh
 
   useEffect(() => {
     if (refreshSignal) refreshBrief();
@@ -371,7 +380,7 @@ export function MorningBriefPage({ btc, isMobile, settings, updateSetting, onOpe
               // line; the event title gets the full width below it (aligned
               // under the time), then the one-line take. Reads cleanly on a
               // phone instead of wrapping the title into a narrow middle column.
-              <div key={i} style={{ background: released ? "var(--green-a06)" : "var(--surface-2)", borderRadius: 12, padding: "11px 13px", display: "flex", flexDirection: "column", gap: 5, flexShrink: 0 }}>
+              <div key={takeKey(e)} style={{ background: released ? "var(--green-a06)" : "var(--surface-2)", borderRadius: 12, padding: "11px 13px", display: "flex", flexDirection: "column", gap: 5, flexShrink: 0 }}>
                 <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
                   <Dot tone={e.color} />
                   <span className="t-cap t-num" style={{ color: "var(--faint)", whiteSpace: "nowrap" }}>{e.time}</span>
@@ -511,7 +520,7 @@ export function MorningBriefPage({ btc, isMobile, settings, updateSetting, onOpe
               {dayEvents.length > 0 && (
                 // title pill — wraps to two lines so the name is readable, not a
                 // 4-character stub; minWidth:0 keeps it from widening the column
-                <span style={{ fontSize: 9.5, fontWeight: 600, color: "var(--chip-ink)", background: miniCatColor(dayEvents[0].category), borderRadius: 4, padding: "1px 3px", lineHeight: 1.2, minWidth: 0, maxWidth: "100%", display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical", overflow: "hidden", wordBreak: "break-word" }}>{dayEvents.length > 1 ? `${dayEvents[0].title} +${dayEvents.length - 1}` : dayEvents[0].title}</span>
+                <span style={{ fontSize: 10.5, fontWeight: 600, color: "var(--chip-ink)", background: miniCatColor(dayEvents[0].category), borderRadius: 4, padding: "1px 3px", lineHeight: 1.2, minWidth: 0, maxWidth: "100%", display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical", overflow: "hidden", wordBreak: "break-word" }}>{dayEvents.length > 1 ? `${dayEvents[0].title} +${dayEvents.length - 1}` : dayEvents[0].title}</span>
               )}
             </button>
           );
@@ -524,16 +533,34 @@ export function MorningBriefPage({ btc, isMobile, settings, updateSetting, onOpe
   // The `birthdays` state is still loaded above so the Docket can read it.
 
   /* ── Business meetings (external iCal) ─────────────────────────────────── */
+  // The .ics link editor lives HERE, on the card that uses it — the old copy
+  // pointed at a sidebar field that no longer exists (and never existed on
+  // the phone), which made linking a calendar impossible from the app at all.
   const visibleMeetings = meetingsAll ? meetings : meetings.slice(0, ROW_CAP);
+  const calEditor = (
+    <form onSubmit={(e) => { e.preventDefault(); const v = calDraft.trim(); if (!v) return; updateSetting("calendar_url", v); setCalEditing(false); setMeetingsStatus({ state: "loading" }); }}
+      style={{ display: "flex", gap: 8, padding: "8px 0 2px" }}>
+      <input value={calDraft} onChange={(e) => setCalDraft(e.target.value)} type="url" required
+        placeholder="Paste an iCal / .ics URL (Google Calendar → Settings → Secret address)"
+        aria-label="Calendar feed URL" className="field" style={{ flex: 1, minWidth: 0 }} />
+      <Button kind="tinted" size="md" type="submit" style={{ flex: "none" }}>Link</Button>
+      {settings?.calendar_url && <Button kind="quiet" size="md" style={{ flex: "none" }} onClick={() => setCalEditing(false)}>Cancel</Button>}
+    </form>
+  );
   const card_meetings = (
     <Card pad={pad} style={{ minWidth: 0 }}>
-      <CardHead tight title="Business Meetings" trailing={<StatusTag status={meetingsStatus} />} />
+      <CardHead tight title="Business Meetings"
+        trailing={<>
+          {settings?.calendar_url && !calEditing && <button className="sec-link" onClick={() => { setCalDraft(settings.calendar_url); setCalEditing(true); }}>Change</button>}
+          <StatusTag status={meetingsStatus} />
+        </>} />
       <div style={{ display: "flex", flexDirection: "column" }}>
-        {meetingsStatus.state === "live" ? (
+        {calEditing || meetingsStatus.state === "notconfigured" ? calEditor
+        : meetingsStatus.state === "live" ? (
           meetings.length ? (
             <>
               {visibleMeetings.map((m, i) => (
-                <div key={i} style={{ display: "flex", alignItems: "center", gap: 10, minHeight: 44, padding: "5px 0", borderTop: i === 0 ? "none" : "0.5px solid var(--line)" }}>
+                <div key={`${m.when}|${m.title}|${i}`} style={{ display: "flex", alignItems: "center", gap: 10, minHeight: 44, padding: "5px 0", borderTop: i === 0 ? "none" : "0.5px solid var(--line)" }}>
                   <Dot tone={T.blue} />
                   <span style={{ display: "flex", flexDirection: "column", gap: 1, flex: 1, minWidth: 0 }}>
                     <span className="t-call" style={{ lineHeight: 1.4 }}>{m.title}</span>
@@ -559,10 +586,10 @@ export function MorningBriefPage({ btc, isMobile, settings, updateSetting, onOpe
             {wire.map((w, i) => {
               const Row = w.link ? "a" : "div";
               return (
-                <Row key={i} {...(w.link ? { href: w.link, target: "_blank", rel: "noreferrer" } : {})}
+                <Row key={w.link || `${w.time}|${w.text}`} {...(w.link ? { href: w.link, target: "_blank", rel: "noreferrer" } : {})}
                   className={w.link ? "hoverable" : undefined}
                   title={w.tag ? `${w.tag} · ${w.text}` : w.text}
-                  style={{ display: "flex", alignItems: "baseline", gap: 8, textDecoration: "none", color: "inherit", minHeight: 34, flexShrink: 0, padding: "6px 0", borderTop: i === 0 ? "none" : "0.5px solid var(--line)" }}>
+                  style={{ display: "flex", alignItems: "baseline", gap: 8, textDecoration: "none", color: "inherit", minHeight: w.link ? 44 : 34, flexShrink: 0, padding: "6px 0", borderTop: i === 0 ? "none" : "0.5px solid var(--line)" }}>
                   {/* Category is now just the colored dot next to the time — the
                       text label (WIRE/REGULATORY/…) is dropped so each headline
                       gets the full remaining width and wraps to fewer lines. */}
@@ -581,7 +608,7 @@ export function MorningBriefPage({ btc, isMobile, settings, updateSetting, onOpe
     </Card>
   );
 
-  const card_docket =<DocketCard isMobile={isMobile} birthdays={birthdays} macroEvents={eventsStatus.state === "live" ? events : []} settings={settings} onOpenCalendar={onOpenCalendar} onOpenQueue={onOpenQueue} onOpenBirthdays={onOpenBirthdays} />;
+  const card_docket =<DocketCard isMobile={isMobile} birthdays={birthdays} birthdaysErr={birthdaysErr} macroEvents={eventsStatus.state === "live" ? events : []} settings={settings} onOpenCalendar={onOpenCalendar} onOpenQueue={onOpenQueue} onOpenBirthdays={onOpenBirthdays} />;
   const card_notes = <NotesTile isMobile={isMobile} refreshSignal={refreshSignal} onOpenNotes={onOpenNotes} />;
 
   // Column count + container width scale with the viewport so a wide desktop

@@ -56,7 +56,9 @@ export function MoviesPanel({ isMobile }) {
   };
   const removeMovie = async (m) => {
     if (!(await confirm({ title: `Delete "${m.title}"?`, confirmLabel: "Delete", destructive: true }))) return;
-    delMut.mutate(m.id);
+    delMut.mutate(m.id, {
+      onError: (e) => confirm({ title: "Couldn't delete", message: e.message || "Try again in a moment.", confirmLabel: "OK", cancelLabel: false }),
+    });
   };
   const scoreColor = (s) => s == null ? "var(--faint)" : s >= 70 ? "var(--green)" : s >= 40 ? "var(--amber)" : "var(--red)";
   const hasBothScores = trueScore !== "" && cameronScore !== "";
@@ -85,11 +87,14 @@ export function MoviesPanel({ isMobile }) {
     );
   };
 
-  const MovieRow = ({ m }) => {
+  // A plain render helper, NOT a component: defining a component inside the
+  // render gives it a new type every render, so React remounted every row
+  // (DOM + <img> recreated) on each form keystroke.
+  const movieRow = (m) => {
     const editing = editingId === m.id;
     const scored = m.true_quality_score != null || m.cameron_score != null;
     return (
-      <div className="cell" style={{ paddingRight: 8, ...(editing ? { boxShadow: "inset 0 0 0 1.5px var(--accent)" } : null) }}>
+      <div key={m.id} className="cell" style={{ paddingRight: 8, ...(editing ? { boxShadow: "inset 0 0 0 1.5px var(--accent)" } : null) }}>
         {m.poster_url && <img src={m.poster_url} alt="" style={{ width: 32, height: 48, borderRadius: 4, objectFit: "cover", flex: "none" }} />}
         <button className="cell-body" onClick={() => startEdit(m)} style={rowBtn}>
           <span className="cell-title">{m.title}{m.year ? ` (${m.year})` : ""}</span>
@@ -125,13 +130,13 @@ export function MoviesPanel({ isMobile }) {
           {watchlist.length > 0 && (
             <div>
               <SectionHeader title="Watchlist" trailing={String(watchlist.length)} />
-              <CellGroup>{watchlist.map(m => <MovieRow key={m.id} m={m} />)}</CellGroup>
+              <CellGroup>{watchlist.map(movieRow)}</CellGroup>
             </div>
           )}
           <div>
             <SectionHeader title="Reviewed" trailing={String(reviewed.length)} />
             {reviewed.length ? (
-              <CellGroup>{reviewed.map(m => <MovieRow key={m.id} m={m} />)}</CellGroup>
+              <CellGroup>{reviewed.map(movieRow)}</CellGroup>
             ) : (
               <Card pad="md">
                 <EmptyState icon={<IcFilm size={24} />} title="Nothing reviewed yet" sub="Tap a movie in the watchlist to score it once you've seen it." />

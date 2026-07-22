@@ -156,6 +156,8 @@ export default function GscLineChart({ rows = [], metric = "impressions" }) {
           <svg
             width={w}
             height={H}
+            role="img"
+            aria-label={primary && pts.length ? `${(SERIES[primaryKey] || SERIES.impressions).label} trend, ${pts.length} days, latest ${(METRICS[primaryKey] || METRICS.impressions).format(pts[pts.length - 1].value)}` : "Search Console trend chart"}
             style={{ display: "block", touchAction: "manipulation" /* kills iOS double-tap zoom delay */ }}
             onMouseLeave={() => setActiveIdx(null)}
             onClick={() => setActiveIdx(null)} // background tap dismisses (touch)

@@ -4,12 +4,14 @@ import { db } from "./db.js";
 const GROCERIES = ["groceries"];
 const RECIPES = ["recipes"];
 
-// Both lists degrade to empty on error (matching the panel's original behaviour).
+// Errors PROPAGATE — swallowing them into [] made an outage render as the
+// designed empty state ("List's empty."), which on a flaky connection reads
+// as "my items are gone". The panel shows an error row + Retry instead.
 export function useGroceries() {
-  return useQuery({ queryKey: GROCERIES, queryFn: () => db.loadGroceryItems().catch(() => []) });
+  return useQuery({ queryKey: GROCERIES, queryFn: () => db.loadGroceryItems() });
 }
 export function useSavedRecipes() {
-  return useQuery({ queryKey: RECIPES, queryFn: () => db.loadSavedRecipes().catch(() => []) });
+  return useQuery({ queryKey: RECIPES, queryFn: () => db.loadSavedRecipes() });
 }
 
 function useInvalidatingMutation(key, mutationFn) {

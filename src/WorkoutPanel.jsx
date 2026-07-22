@@ -126,7 +126,11 @@ function makeWdb(sb) {
     async saveSession(row) {
       const user_id = await this.uid();
       if (!user_id) throw new Error("Not signed in");
-      const { data, error } = await sb.from("workout_sessions").insert({ ...row, user_id }).select().single();
+      // upsert, not insert: the id is client-generated and stable, so Finish
+      // is idempotent. A plain insert meant "request committed, response
+      // lost" left every retry hitting the duplicate-key error — the workout
+      // was saved but the user could never leave the session view via Save.
+      const { data, error } = await sb.from("workout_sessions").upsert({ ...row, user_id }, { onConflict: "id" }).select().single();
       if (error) throw error;
       return data;
     },
@@ -444,7 +448,12 @@ export default function WorkoutPanel({ isMobile, supabase, settings, updateSetti
         value={view} onChange={setView}
         style={isMobile ? undefined : { maxWidth: 480 }}
       />
-      {loadErr && <Card pad="md"><span className="t-call" style={{ color: "var(--red)" }}>{loadErr}</span></Card>}
+      {loadErr && (
+        <Card pad="md">
+          <EmptyState icon={<IcDumbbell size={26} />} title="Couldn't load your training" sub={loadErr}
+            action={<Button kind="tinted" size="md" onClick={refreshAll}>Retry</Button>} />
+        </Card>
+      )}
       {view === "train" && (
         <TrainHome
           isMobile={isMobile} templates={templates} sessions={sessions}
@@ -766,10 +775,12 @@ function ConsistencyHeatmap({ days }) {
   }
   const fill = (d) => d.future ? "transparent" : d.count === 0 ? "var(--ink-a06)" : d.count === 1 ? "color-mix(in srgb, var(--blue) 55%, transparent)" : "var(--blue)";
   return (
-    // scrolled to the newest weeks when it overflows a phone; plain left-aligned when it fits
-    <div ref={(el) => { if (el) el.scrollLeft = el.scrollWidth; }} style={{ overflowX: "auto", marginTop: 12 }}>
+    // Scrolled to the newest weeks ONCE on mount — the old inline ref callback
+    // re-ran on every parent re-render (each preference keystroke) and yanked
+    // the strip back while the user was looking at older weeks.
+    <div ref={(el) => { if (el && !el.dataset.scrolled) { el.dataset.scrolled = "1"; el.scrollLeft = el.scrollWidth; } }} style={{ overflowX: "auto", marginTop: 12 }}>
       <svg width={w} height={h} style={{ display: "block" }} role="img" aria-label={`Training heatmap, last ${weeks} weeks`}>
-        {labels.map((m, i) => <text key={i} x={m.x} y={9} fill="var(--faint)" fontSize="9">{m.label}</text>)}
+        {labels.map((m, i) => <text key={i} x={m.x} y={9} fill="var(--faint)" fontSize="10.5">{m.label}</text>)}
         {days.map((d, i) => {
           const wk = Math.floor(i / 7), day = i % 7;
           return <rect key={d.date} x={wk * (cell + gap)} y={14 + day * (cell + gap)} width={cell} height={cell} rx="2.5" fill={fill(d)}>

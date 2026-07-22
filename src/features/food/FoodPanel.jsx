@@ -16,8 +16,8 @@ export function FoodPanel({ isMobile, settings, updateSetting }) {
   const prefs = settings?.food_preferences || { likes: [], dislikes: [] };
   const [newLike, setNewLike] = useState("");
   const [newDislike, setNewDislike] = useState("");
-  const { data: groceries = null } = useGroceries();
-  const { data: savedRecipes = null } = useSavedRecipes();
+  const { data: groceries = null, error: groceriesErr, refetch: refetchGroceries } = useGroceries();
+  const { data: savedRecipes = null, error: recipesErr, refetch: refetchRecipes } = useSavedRecipes();
   const addGroceryMut = useAddGrocery();
   const toggleMut = useToggleGrocery();
   const delGroceryMut = useDeleteGrocery();
@@ -31,16 +31,23 @@ export function FoodPanel({ isMobile, settings, updateSetting }) {
   const [reasonOpen, setReasonOpen] = useState(false); // inline "not my taste" flow (replaces window.prompt)
   const [reason, setReason] = useState("");
   const [confirmEl, confirm] = useConfirm();
+  // Mutations were silent on failure — the row just reappeared on the next
+  // refetch with no explanation. One quiet complaint sheet for all of them.
+  const complain = (e) => confirm({ title: "That didn't save", message: e?.message || "Check the connection and try again.", confirmLabel: "OK", cancelLabel: false });
 
-  const addLike = () => { if (!newLike.trim()) return; updateSetting("food_preferences", { ...prefs, likes: [...prefs.likes, newLike.trim()] }); setNewLike(""); };
-  const addDislike = () => { if (!newDislike.trim()) return; updateSetting("food_preferences", { ...prefs, dislikes: [...prefs.dislikes, newDislike.trim()] }); setNewDislike(""); };
-  const removeLike = (i) => updateSetting("food_preferences", { ...prefs, likes: prefs.likes.filter((_, idx) => idx !== i) });
-  const removeDislike = (i) => updateSetting("food_preferences", { ...prefs, dislikes: prefs.dislikes.filter((_, idx) => idx !== i) });
+  // Boot guard (same hazard WorkoutPanel documents for its key): before
+  // settings resolve, `prefs` is the empty default — a write in that window
+  // would upsert the whole value and clobber every stored taste with one row.
+  const prefsReady = settings != null;
+  const addLike = () => { if (!prefsReady || !newLike.trim()) return; updateSetting("food_preferences", { ...prefs, likes: [...prefs.likes, newLike.trim()] }); setNewLike(""); };
+  const addDislike = () => { if (!prefsReady || !newDislike.trim()) return; updateSetting("food_preferences", { ...prefs, dislikes: [...prefs.dislikes, newDislike.trim()] }); setNewDislike(""); };
+  const removeLike = (i) => { if (prefsReady) updateSetting("food_preferences", { ...prefs, likes: prefs.likes.filter((_, idx) => idx !== i) }); };
+  const removeDislike = (i) => { if (prefsReady) updateSetting("food_preferences", { ...prefs, dislikes: prefs.dislikes.filter((_, idx) => idx !== i) }); };
 
-  const addGroceryItem = () => { if (!newItem.trim()) return; addGroceryMut.mutate(newItem.trim(), { onSuccess: () => setNewItem("") }); };
-  const toggleItem = (it) => { toggleMut.mutate({ id: it.id, checked: !it.checked }); };
-  const removeItem = (id) => delGroceryMut.mutate(id);
-  const clearChecked = () => { clearMut.mutate((groceries || []).filter(g => g.checked)); };
+  const addGroceryItem = () => { if (!newItem.trim()) return; addGroceryMut.mutate(newItem.trim(), { onSuccess: () => setNewItem(""), onError: complain }); };
+  const toggleItem = (it) => { toggleMut.mutate({ id: it.id, checked: !it.checked }, { onError: complain }); };
+  const removeItem = (id) => delGroceryMut.mutate(id, { onError: complain });
+  const clearChecked = () => { clearMut.mutate((groceries || []).filter(g => g.checked), { onError: complain }); };
 
   const generateIdea = async () => {
     setGenerating(true); setIdeaErr(null); setIdea(null); setReasonOpen(false); setReason("");
@@ -53,17 +60,17 @@ export function FoodPanel({ isMobile, settings, updateSetting }) {
   const saveIdea = () => {
     if (!idea) return;
     const title = idea.split("\n")[0].replace(/^#+\s*/, "").slice(0, 80);
-    saveRecipeMut.mutate({ title, body: idea }, { onSuccess: () => setIdea(null) });
+    saveRecipeMut.mutate({ title, body: idea }, { onSuccess: () => setIdea(null), onError: complain });
   };
   // Optionally files the reason under dislikes, then clears the idea —
   // same semantics as the old window.prompt (blank/skip adds nothing).
   const dismissIdea = (addReason) => {
-    if (addReason && reason.trim()) updateSetting("food_preferences", { ...prefs, dislikes: [...prefs.dislikes, reason.trim()] });
+    if (addReason && reason.trim() && prefsReady) updateSetting("food_preferences", { ...prefs, dislikes: [...prefs.dislikes, reason.trim()] });
     setIdea(null); setReasonOpen(false); setReason("");
   };
   const removeRecipe = async (r) => {
     if (!(await confirm({ title: `Delete "${r.title}"?`, message: "The saved recipe is gone for good.", confirmLabel: "Delete", destructive: true }))) return;
-    delRecipeMut.mutate(r.id);
+    delRecipeMut.mutate(r.id, { onError: complain });
   };
 
   const tagRow = (items, onRemove, color, emptyText) => (
@@ -109,7 +116,12 @@ export function FoodPanel({ isMobile, settings, updateSetting }) {
           <Field value={newItem} onChange={e => setNewItem(e.target.value)} onKeyDown={e => { if (e.key === "Enter") addGroceryItem(); }} placeholder="Add an item…" style={{ flex: 1, minWidth: 0 }} />
           <Button kind="quiet" size="md" onClick={addGroceryItem} style={{ flex: "none" }}>Add</Button>
         </div>
-        {groceries === null ? (
+        {groceriesErr ? (
+          <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "4px 0" }}>
+            <span className="t-foot" style={{ color: "var(--red)", flex: 1 }}>Couldn't load the list — your items are still there.</span>
+            <Button kind="tinted" size="sm" onClick={() => refetchGroceries()} style={{ flex: "none" }}>Retry</Button>
+          </div>
+        ) : groceries === null ? (
           <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
             {[0, 1].map(i => <div key={i} className="sk sk-line w60" style={{ margin: 0, height: 26, borderRadius: 8 }} />)}
           </div>
@@ -160,6 +172,12 @@ export function FoodPanel({ isMobile, settings, updateSetting }) {
                 </div>
               </div>
             )}
+          </div>
+        )}
+        {recipesErr && (
+          <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+            <span className="t-foot" style={{ color: "var(--red)", flex: 1 }}>Couldn't load saved recipes.</span>
+            <Button kind="tinted" size="sm" onClick={() => refetchRecipes()} style={{ flex: "none" }}>Retry</Button>
           </div>
         )}
         {(savedRecipes || []).length > 0 && (
