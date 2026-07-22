@@ -120,18 +120,22 @@ export function Pill({ active, onClick, children, style, ...rest }) {
 
 export function PillRow({ options, value, onChange, fmt = (o) => o.label ?? String(o), keyOf = (o) => o.key ?? String(o), style }) {
   const rowRef = useRef(null);
-  // keep the active pill in view when it changes (thumb-driven navigation)
+  // Keep the active pill in view when it changes (thumb-driven navigation).
+  // Scroll ONLY the row — scrollIntoView walks every scrollable ancestor, so
+  // a PillRow below the fold used to vertically yank the whole page on mount.
   useEffect(() => {
     const row = rowRef.current;
     if (!row) return;
     const el = row.querySelector(".pill.active");
-    if (el) el.scrollIntoView({ block: "nearest", inline: "center", behavior: "smooth" });
+    if (!el) return;
+    const reduce = window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
+    row.scrollTo({ left: Math.max(0, el.offsetLeft - (row.clientWidth - el.offsetWidth) / 2), behavior: reduce ? "auto" : "smooth" });
   }, [value]);
   return (
-    <div className="pillrow" ref={rowRef} style={style} role="tablist">
+    <div className="pillrow" ref={rowRef} style={style}>
       {options.map((o) => {
         const k = keyOf(o);
-        return <Pill key={k} active={value === k} onClick={() => onChange(k)}>{fmt(o)}</Pill>;
+        return <Pill key={k} active={value === k} aria-pressed={value === k} onClick={() => onChange(k)}>{fmt(o)}</Pill>;
       })}
     </div>
   );
@@ -140,15 +144,17 @@ export function PillRow({ options, value, onChange, fmt = (o) => o.label ?? Stri
 export function Segmented({ options, value, onChange, style }) {
   // options: [{ key, label, sub? }] — ≤4, equal width; thumb glides, no measuring
   const idx = Math.max(0, options.findIndex((o) => (o.key ?? o) === value));
-  const w = 100 / options.length;
+  // Thumb geometry in the CONTENT box: the flex options divide (100% − 4px of
+  // padding), so `idx * (100%/n)` drifted up to ~2px on middle segments.
+  const n = options.length;
   return (
-    <div className="seg" style={style}>
-      <span className="seg-thumb" style={{ left: `calc(${idx * w}% + 2px)`, width: `calc(${w}% - 4px)` }} />
+    <div className="seg" style={style} role="radiogroup">
+      <span className="seg-thumb" style={{ width: `calc((100% - 4px) / ${n})`, transform: `translateX(${idx * 100}%)` }} />
       {options.map((o) => {
         const k = o.key ?? o;
         const active = k === value;
         return (
-          <button key={k} className={`seg-opt${active ? " active" : ""}`} onClick={() => onChange(k)} aria-pressed={active}>
+          <button key={k} className={`seg-opt${active ? " active" : ""}`} onClick={() => onChange(k)} role="radio" aria-checked={active}>
             <span style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 1, minWidth: 0 }}>
               <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", maxWidth: "100%" }}>{o.label ?? k}</span>
               {o.sub && <span className="t-num" style={{ fontSize: 10.5, color: "var(--sub)" }}>{o.sub}</span>}
@@ -210,19 +216,36 @@ export function Sheet({ onClose, title, headTrailing, footer, children, z = 300,
   // registered once (stable stack order) without re-pushing on every rerender.
   const cbRef = useRef();
   cbRef.current = { onClose, dismissible };
+  const panelRef = useRef(null);
   useEffect(() => {
     const id = idRef.current;
     sheetStack.push(id);
+    // Focus management: aria-modal promises assistive tech the background
+    // doesn't exist, so make it true — move focus in on open, keep Tab cycling
+    // inside the top-most sheet, and hand focus back on close.
+    const prevFocus = document.activeElement;
+    panelRef.current?.focus({ preventScroll: true });
     const onKey = (e) => {
-      if (e.key !== "Escape") return;
-      const { onClose, dismissible } = cbRef.current;
-      if (dismissible && sheetStack[sheetStack.length - 1] === id) onClose?.();
+      const top = sheetStack[sheetStack.length - 1] === id;
+      if (e.key === "Escape") {
+        const { onClose, dismissible } = cbRef.current;
+        if (dismissible && top) onClose?.();
+        return;
+      }
+      if (e.key !== "Tab" || !top || !panelRef.current) return;
+      const focusables = panelRef.current.querySelectorAll('button:not([disabled]), [href], input:not([disabled]), textarea:not([disabled]), select:not([disabled]), [tabindex]:not([tabindex="-1"])');
+      if (!focusables.length) { e.preventDefault(); return; }
+      const first = focusables[0], last = focusables[focusables.length - 1];
+      const cur = document.activeElement;
+      if (e.shiftKey && (cur === first || cur === panelRef.current || !panelRef.current.contains(cur))) { e.preventDefault(); last.focus(); }
+      else if (!e.shiftKey && (cur === last || !panelRef.current.contains(cur))) { e.preventDefault(); first.focus(); }
     };
     window.addEventListener("keydown", onKey);
     return () => {
       window.removeEventListener("keydown", onKey);
       const i = sheetStack.indexOf(id);
       if (i >= 0) sheetStack.splice(i, 1);
+      if (prevFocus && typeof prevFocus.focus === "function" && document.contains(prevFocus)) prevFocus.focus({ preventScroll: true });
     };
   }, []);
   // Portaled to <body>: page wrappers animate with transform, which makes
@@ -232,7 +255,7 @@ export function Sheet({ onClose, title, headTrailing, footer, children, z = 300,
   return createPortal(
     <>
       <div className="sheet-scrim" style={{ zIndex: z }} onClick={dismissible ? onClose : undefined} />
-      <div className="sheet" style={{ zIndex: z + 1 }} role="dialog" aria-modal="true" aria-label={typeof title === "string" ? title : undefined}>
+      <div className="sheet" ref={panelRef} tabIndex={-1} style={{ zIndex: z + 1, outline: "none" }} role="dialog" aria-modal="true" aria-label={typeof title === "string" ? title : undefined}>
         <div className="sheet-grab" />
         {(title != null || headTrailing != null) && (
           <div className="sheet-head">
@@ -283,7 +306,7 @@ export function LargeTitle({ title, sub, trailing, onTitleTap }) {
   return (
     <div className="lt-block" style={{ alignItems: "flex-start" }}>
       <div style={{ minWidth: 0, flex: 1 }}>
-        <h1 className="t-ltitle" style={{ margin: 0, cursor: onTitleTap ? "default" : undefined, WebkitUserSelect: "none", userSelect: "none" }} data-lt-sentinel onClick={onTitleTap}>{title}</h1>
+        <h1 className="t-ltitle" style={{ margin: 0, cursor: onTitleTap ? "default" : undefined, WebkitUserSelect: "none", userSelect: "none" }} onClick={onTitleTap}>{title}</h1>
         {sub && <div className="lt-sub">{sub}</div>}
       </div>
       {trailing && <div style={{ flex: "none", display: "flex", alignItems: "center", marginTop: -2 }}>{trailing}</div>}

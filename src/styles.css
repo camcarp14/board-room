@@ -34,11 +34,15 @@ button, a, input, textarea {
   transition: opacity var(--dur-1) ease,
     transform var(--dur-1) var(--ease-out), box-shadow var(--dur-2) var(--ease-out);
 }
-button:focus-visible, input:focus-visible, textarea:focus-visible { outline: none; box-shadow: var(--focus-ring); }
+/* [role=button] covers pressable Cards — they're focusable and need the same
+   house ring a real button gets, not the UA default outline. */
+button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-visible, [role="button"]:focus-visible { outline: none; box-shadow: var(--focus-ring); }
 input::placeholder, textarea::placeholder { color: var(--faint); }
 textarea:focus, input:focus { outline: none; }
-/* iOS zooms the page when a focused input is under 16px — never let it */
-@media (max-width: 760px) { input, textarea, select { font-size: 16px !important; } }
+/* iOS zooms the page when a focused input is under 16px — never let it.
+   Keyed on coarse pointer as well as width: iPad Safari (≥761px viewport,
+   SidebarShell) zooms exactly the same way. */
+@media (max-width: 760px), (pointer: coarse) { input, textarea, select { font-size: 16px !important; } }
 
 /* numbers behave like instruments — nothing jiggles on update */
 .mono, .num, table td, kbd { font-variant-numeric: tabular-nums; }

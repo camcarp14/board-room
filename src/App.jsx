@@ -1,10 +1,9 @@
-import { useState, useEffect, useRef, lazy, Suspense } from "react";
+import { useState, useEffect, lazy, Suspense } from "react";
 import { supabase } from "./lib/supabase.js";
 import { sm, obs } from "./lib/storage.js";
 import { db } from "./data/db.js";
 import { queryClient } from "./lib/queryClient.js";
-import { callClaude, convene, DEFAULT_MODELS } from "./lib/claude.js";
-import { parseLearnCommand, learnFromInput, makeSdb as makeSkillsDb } from "./LearnPanel.jsx";
+import { makeSdb as makeSkillsDb } from "./LearnPanel.jsx";
 import { useThemeController, useIsMobile, useBitcoinPrice } from "./hooks/index.js";
 import { NAV } from "./shell/nav.js";
 import { MobileShell } from "./shell/MobileShell.jsx";
@@ -12,12 +11,11 @@ import { SidebarShell } from "./shell/SidebarShell.jsx";
 import { Summon } from "./shell/Summon.jsx";
 import { BootScreen, LoginScreen, SetupNotice } from "./shell/Boot.jsx";
 import { ErrorBoundary } from "./shell/ErrorBoundary.jsx";
-import { Sheet, Button, useConfirm } from "./ui/kit.jsx";
+import { Sheet, Button } from "./ui/kit.jsx";
 // The Brief is the landing tab — keep it in the main chunk so first paint is
 // immediate. The other four pages (and their heavier panels) split into their
 // own chunks and load the first time you open that tab.
 import { MorningBriefPage } from "./pages/brief/BriefPage.jsx";
-import { SeatNotesModal } from "./pages/board/SeatNotesModal.jsx";
 const PersonalPage = lazy(() => import("./pages/personal/PersonalPage.jsx").then(m => ({ default: m.PersonalPage })));
 const TrainPage = lazy(() => import("./pages/train/TrainPage.jsx").then(m => ({ default: m.TrainPage })));
 const BoardRoomPage = lazy(() => import("./pages/board/BoardPage.jsx").then(m => ({ default: m.BoardRoomPage })));
@@ -27,10 +25,13 @@ const UpstreamPage = lazy(() => import("./pages/upstream/UpstreamPage.jsx").then
 
 // ════════════════════════════════════════════════════════════════════════════
 // THE BOARD ROOM — SESSION edition.
-// This file is the brain only: auth, data, chat/oversight, navigation state,
-// and the deep-link primitive. Chrome lives in shell/, pages in pages/, the
-// design system in design/ + ui/. Supabase remains the shared memory; no page
-// shows fabricated data.
+// This file is the brain only: auth, settings, navigation state, and the
+// deep-link primitive. Chrome lives in shell/, pages in pages/, the design
+// system in design/ + ui/. Supabase remains the shared memory; no page shows
+// fabricated data. (The retired board-chat pipeline — send/convene/oversight/
+// seat-notes modal — was stripped once BoardPage stopped consuming it; the
+// chat table itself stays live for the Discord /board flow and the one-time
+// local→account migration below.)
 // ════════════════════════════════════════════════════════════════════════════
 
 // Dev-only design preview: `vite` + VITE_PREVIEW=1 renders the shell with no
@@ -65,25 +66,17 @@ export default function App() {
   const theme = useThemeController();
   const isMobile = useIsMobile();
   const [navDir, setNavDir] = useState(null); // "l" | "r" | null — drives the page slide direction
-  const [confirmEl, confirm] = useConfirm(); // the house confirm — replaces window.confirm
   const btc = useBitcoinPrice();
 
   const [session, setSession] = useState(null);
   const [authChecked, setAuthChecked] = useState(false);
-  const [messages, setMessages] = useState([]);
-  const [seatNotes, setSeatNotes] = useState({});
   const [settings, setSettings] = useState(null);
-  const [input, setInput] = useState("");
-  const [thinking, setThinking] = useState(false);
-  const [editSeat, setEditSeat] = useState(null);
   const [migration, setMigration] = useState(null);
   const [importing, setImporting] = useState(false);
-  const [loadingData, setLoadingData] = useState(false);
   const [page, setPage] = useState(() => previewParam("p") || "brief"); // single nav state — same source of truth on mobile and desktop
   const [dataStamp, setDataStamp] = useState(null);
   const [refreshing, setRefreshing] = useState(false);
   const [now, setNow] = useState(Date.now());
-  const endRef = useRef(null);
 
   // Tick every 30s so the clock and freshness pill stay current.
   useEffect(() => {
@@ -99,8 +92,7 @@ export default function App() {
     queryClient.invalidateQueries(); // one call refetches every cached query (Movies today; more as features migrate)
     setBriefRefreshSignal(Date.now()); // legacy per-page signal — retired as each card moves onto the query cache
     try {
-      const [chat, notes, sets] = await Promise.all([db.loadChat(), db.loadSeatNotes(), db.loadSettings()]);
-      setMessages(chat); setSeatNotes(notes); setSettings(sets);
+      setSettings(await db.loadSettings());
     } catch {}
     setDataStamp(Date.now());
     setNow(Date.now());
@@ -128,52 +120,44 @@ export default function App() {
 
   useEffect(() => {
     if (!supabase) return;
-    if (!session?.user) { setMessages([]); setSeatNotes({}); setSettings(null); return; }
+    if (!session?.user) { setSettings(null); return; }
     let alive = true;
-    setLoadingData(true);
     (async () => {
-      let chat, notes, sets;
+      let sets;
       try {
-        [chat, notes, sets] = await Promise.all([db.loadChat(), db.loadSeatNotes(), db.loadSettings()]);
+        sets = await db.loadSettings();
       } catch {
-        // A load failed (offline, RLS blip). Don't clobber whatever we already
-        // have, and don't get stuck on skeletons — just drop the loading state
-        // so the persisted query cache / prior state shows through.
-        if (alive) setLoadingData(false);
+        // Load failed (offline, RLS blip). Don't clobber whatever we already
+        // have — the persisted query cache / prior state shows through.
         return;
       }
       if (!alive) return;
-      setMessages(chat); setSeatNotes(notes); setSettings(sets);
+      setSettings(sets);
       setDataStamp(Date.now());
-      setLoadingData(false);
+      // One-time local→account migration check. Chat is only loaded here, on
+      // the unmigrated path — the retired board chat has no other reader, so
+      // migrated accounts skip the round-trip entirely. The chat table itself
+      // stays live: the Discord /board flow reads and writes it server-side.
       if (!sm.get("migrated")) {
         const localChat = sm.get("chat") || [];
         const localNotes = sm.get("seat_notes") || {};
         const nNotes = Object.keys(localNotes).filter(k => localNotes[k]).length;
-        if (chat.length === 0 && (localChat.length > 0 || nNotes > 0)) setMigration({ chat: localChat.length, notes: nNotes });
-        else sm.set("migrated", true);
+        if (localChat.length > 0 || nNotes > 0) {
+          try {
+            const chat = await db.loadChat();
+            if (!alive) return;
+            if (chat.length === 0) setMigration({ chat: localChat.length, notes: nNotes });
+            else sm.set("migrated", true);
+          } catch { /* retry next launch */ }
+        } else sm.set("migrated", true);
       }
     })();
     return () => { alive = false; };
   }, [session?.user?.id]);
 
-  useEffect(() => {
-    // Pin the chat to the newest message. endRef's immediate parent is a
-    // non-scrolling flex column — the real scroller is the shell's #page-scroll
-    // (same id in both shells), so scrolling the parent did nothing. Only acts
-    // when the chat is mounted (endRef attached), so other tabs are untouched.
-    if (!endRef.current) return;
-    const scroller = document.getElementById("page-scroll");
-    if (scroller) scroller.scrollTop = scroller.scrollHeight;
-  }, [messages, thinking, page]);
-
   const updateSetting = (key, value) => {
     setSettings(prev => ({ ...(prev || {}), [key]: value }));
     db.saveSetting(key, value);
-  };
-  const saveSeatNote = async (key, notes) => {
-    setSeatNotes(prev => ({ ...prev, [key]: notes }));
-    await db.saveSeatNote(key, notes);
   };
 
   const runImport = async () => {
@@ -187,9 +171,6 @@ export default function App() {
       const localNotes = sm.get("seat_notes") || {};
       for (const [k, v] of Object.entries(localNotes)) { if (v) await db.saveSeatNote(k, v); }
       sm.set("migrated", true);
-      const chat = await db.loadChat();
-      setMessages(chat);
-      setSeatNotes(prev => ({ ...prev, ...localNotes }));
     } catch {}
     setImporting(false);
     setMigration(null);
@@ -319,10 +300,7 @@ export default function App() {
     setJump({ t: Date.now(), ...t });
   };
   const summonGo = (target) => { setSummon(false); jumpTo(target); };
-  // Free text in Summon → the question lands in the Room already sent — the
-  // board convenes while the page slides over. (send is defined below; it only
-  // runs on click, well after initialization.)
-  // Summon's free-text "ask" now goes to the Mind: open the neural canvas and
+  // Summon's free-text "ask" goes to the Mind: open the neural canvas and
   // hand the question to its Pulse (MindPanel fires it once off jump.ask).
   const summonAsk = (q) => { setSummon(false); jumpTo({ page: "boardroom", sub: "neural", ask: q }); };
   const summonJot = async (text) => {
@@ -331,83 +309,18 @@ export default function App() {
   };
   const summonQueueTask = async (text) => {
     const t = { id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`, text, status: "queued", queued_at: Date.now() };
-    updateSetting("mini_tasks", [t, ...(settings?.mini_tasks || [])]);
+    // Functional update — Summon can sit open across a settings reload, and a
+    // read-modify-write from that stale closure would drop tasks queued in
+    // between. The save runs inside the updater so it always writes the list
+    // it just built (no StrictMode double-invoke here — see main.jsx).
+    setSettings(prev => {
+      const list = [t, ...(prev?.mini_tasks || [])];
+      db.saveSetting("mini_tasks", list);
+      return { ...(prev || {}), mini_tasks: list };
+    });
   };
   const summonEl = summon ? <Summon onClose={() => setSummon(false)} onGo={summonGo} onJot={summonJot} onQueueTask={summonQueueTask} onAsk={summonAsk} isMobile={isMobile} /> : null;
   const goToCalendar = () => { setPersonalJumpTo(Date.now()); goToPage("personal"); }; // timestamp so re-tapping still re-triggers even if already on Personal
-
-  const send = async (textOverride) => {
-    // Composer passes a click/key event here — only a real string overrides the box.
-    const q = (typeof textOverride === "string" ? textOverride : input).trim();
-    if (!q || thinking) return;
-    setInput("");
-    const userMsg = { role: "user", content: q, ts: Date.now() };
-    const next = [...messages, userMsg];
-    setMessages(next);
-    db.saveMessage({ role: "user", content: q });
-    setThinking(true);
-
-    // "/learn <url or anything>" — teach a skill right from the chat instead
-    // of convening the board. Mirrors the Learn tab pipeline exactly.
-    const learnCmd = parseLearnCommand(q);
-    if (learnCmd) {
-      let reply;
-      if (learnCmd.open) {
-        reply = "Give me something to learn — `/learn <url or pasted text>` — or use the Learn tab up top, which also shows everything I've been taught.";
-      } else {
-        const result = await learnFromInput({
-          text: learnCmd.text, supabase, callClaude,
-          modelKey: (settings?.mini || {}).model || "haiku",
-          accessToken: session?.access_token || "",
-        });
-        if (result.error === "missing_table") reply = "The skills table isn't set up yet — open the Learn tab and it'll hand you the one-time SQL to paste into Supabase.";
-        else if (result.error) reply = `Couldn't learn that: ${result.error}`;
-        else {
-          const skipped = result.failedUrls?.length ? `\n\n(Couldn't read ${result.failedUrls.map(f => f.url).join(", ")} — learned from the rest.)` : "";
-          reply = `◆ Learned "${result.skill.title}" — ${result.skill.description}${skipped}\n\nIt's loaded into every chat and queue run from here on. It lives in the Learn tab if you want to edit or disable it.`;
-          refreshSkills();
-        }
-      }
-      setThinking(false);
-      const asstMsg = { role: "assistant", content: reply, ts: Date.now() };
-      setMessages([...next, asstMsg]);
-      db.saveMessage({ role: "assistant", content: reply });
-      return;
-    }
-
-    const models = { ...DEFAULT_MODELS, ...(settings?.models || {}) };
-    const result = await convene(q, next, { models, seatNotes, skills });
-    setThinking(false);
-    const asstMsg = { role: "assistant", content: result.answer, consulted: result.consulted, ts: Date.now() };
-    setMessages([...next, asstMsg]);
-    db.saveMessage({ role: "assistant", content: result.answer, consulted: result.consulted });
-    runOversight(q, result); // fire-and-forget — never blocks the chat
-  };
-
-  const clearChat = async () => {
-    const ok = await confirm({ title: "Clear the whole chat?", message: "Every message in the room is deleted for good. This can't be undone.", confirmLabel: "Clear chat", destructive: true });
-    if (!ok) return;
-    try { await db.clearChat(); setMessages([]); }
-    catch (e) { await confirm({ title: "Couldn't clear chat", message: e.message || "Try again in a moment.", confirmLabel: "OK", cancelLabel: false }); }
-  };
-
-  // Real oversight: if the user has it on and 2+ seats were consulted, ask a
-  // fresh Claude call to actually check whether the Chief's synthesis
-  // represented every seat's take fairly, or quietly smoothed over dissent.
-  // Only writes to the feed when it finds something — silence otherwise.
-  const runOversight = async (question, result) => {
-    const mini = settings?.mini || {};
-    if (mini.enabled === false || !mini.oversight) return;
-    if (!result.consulted || result.consulted.length < 2) return;
-    try {
-      const seatBlock = result.consulted.map(c => `[${c.name}]: ${c.take}`).join("\n\n");
-      const system = `You audit a "Chief of Staff" AI's synthesis for whether it fairly represented disagreement between specialist seats, or smoothed it over. Question: "${question}"\n\nSeat takes:\n${seatBlock}\n\nChief's synthesized answer:\n${result.answer}\n\nIf the seats meaningfully disagreed and the Chief's answer glossed over, hid, or flattened that disagreement, respond with ONLY a one-sentence description of what was smoothed over. If the Chief fairly represented any disagreement (or the seats didn't meaningfully disagree), respond with exactly: OK`;
-      const verdict = await callClaude({ system, messages: [{ role: "user", content: "Audit this exchange." }], modelKey: mini.model || "haiku", maxTokens: 150, fn: "oversight" });
-      if (verdict && verdict.trim() !== "OK" && !verdict.trim().startsWith("OK")) {
-        await supabase.from("mini_feed").insert({ user_id: (await supabase.auth.getUser()).data?.user?.id, text: `Oversight: ${verdict.trim()}` });
-      }
-    } catch { /* best-effort — never surface oversight failures to the user */ }
-  };
 
   if (previewParam("view") === "setup") return <SetupNotice />;
   if (previewParam("view") === "login") return <LoginScreen />;
@@ -416,7 +329,6 @@ export default function App() {
   if (!authChecked && !PREVIEW) return <BootScreen />;
   if (!session && !PREVIEW) return <LoginScreen />;
 
-  const calUrl = settings?.calendar_url || "";
   const totalSpend = obs.all().reduce((s, l) => s + (l.cost || 0), 0);
 
   const renderPageInner = (key) => {
@@ -448,9 +360,7 @@ export default function App() {
   const shellProps = { page, theme, onNavigate: goToPage, onSummon: () => setSummon(true), now, dataStamp, refreshing, onRefresh: refreshData };
   const overlays = (
     <>
-      {confirmEl}
       {summonEl}
-      {editSeat && <SeatNotesModal seatKey={editSeat} initial={seatNotes[editSeat]} onSave={saveSeatNote} onClose={() => setEditSeat(null)} isMobile={isMobile} />}
       {migration && <MigrationModal counts={migration} onImport={runImport} onSkip={skipImport} importing={importing} />}
     </>
   );
@@ -469,8 +379,6 @@ export default function App() {
         {...shellProps}
         btc={btc}
         session={session}
-        calUrl={calUrl}
-        onSaveCalUrl={(v) => updateSetting("calendar_url", v)}
         totalSpend={totalSpend}
         callCount={obs.all().length}
       >

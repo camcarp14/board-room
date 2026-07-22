@@ -10,6 +10,9 @@ import { Button, Delta } from "../ui/kit.jsx";
 import { supabase } from "../lib/supabase.js";
 
 const GROUPS = [...new Set(NAV.map(n => n.group))];
+// The binding is ⌘K on Apple platforms, Ctrl+K everywhere else — say the one
+// that actually works on this machine.
+const IS_APPLE = /Mac|iP(hone|ad|od)/.test(navigator.platform || navigator.userAgent || "");
 
 export function SidebarShell({ page, theme, onNavigate, onSummon, btc, session, totalSpend, callCount, now, dataStamp, refreshing, onRefresh, children }) {
   const head = HEADERS[page];
@@ -69,7 +72,7 @@ export function SidebarShell({ page, theme, onNavigate, onSummon, btc, session, 
         </div>
       </aside>
 
-      <div style={{ display: "flex", flexDirection: "column", height: "100vh", minWidth: 0 }}>
+      <div className="content-col" style={{ display: "flex", flexDirection: "column", minWidth: 0 }}>
         <div className="content-head">
           <div className="head-title">
             <h1 className="t-title1" style={{ margin: 0 }}>{head.title}</h1>
@@ -78,7 +81,7 @@ export function SidebarShell({ page, theme, onNavigate, onSummon, btc, session, 
           <div style={{ display: "flex", alignItems: "center", gap: 14, flex: "none", paddingBottom: 2 }}>
             <button onClick={onSummon} aria-label="Summon — search everything"
               style={{ display: "inline-flex", alignItems: "center", gap: 8, height: 36, padding: "0 12px", background: "var(--ink-a05)", border: "none", borderRadius: 10, color: "var(--sub)", fontSize: 13, cursor: "pointer" }}>
-              <IcSearch size={15} /> Summon <kbd>⌘K</kbd>
+              <IcSearch size={15} /> Summon <kbd>{IS_APPLE ? "⌘K" : "Ctrl K"}</kbd>
             </button>
             <span className="t-cap head-spend" style={{ color: "var(--faint)" }} title="Model spend this session">
               ${totalSpend.toFixed(3)} · {callCount} calls

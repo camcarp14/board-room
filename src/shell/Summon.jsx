@@ -2,7 +2,7 @@
 // One keystroke — or one thumb — to anywhere: pages, notes, skills, and quick
 // actions (jot a note, queue a Mini Me task) without leaving what you're doing.
 // Keyboard grammar preserved exactly: "n:" files a note, "t:" queues a task,
-// "a:" convenes the board; ↑↓ + ↵ navigate. Touch gets the same power as
+// "a:" asks the Mind; ↑↓ + ↵ navigate. Touch gets the same power as
 // visible controls: quick-action buttons up top, 44pt rows below.
 import { useState, useEffect, useRef, useMemo } from "react";
 import { db } from "../data/db.js";
@@ -21,10 +21,11 @@ const SUMMON_PLACES = [
   { label: "Birthdays", page: "personal", sub: "birthdays", hint: "personal" },
   { label: "Movies", page: "personal", sub: "movies", hint: "watchlist" },
   { label: "Food", page: "personal", sub: "food", hint: "meals" },
-  { label: "Mini Me", page: "boardroom", sub: "mini", hint: "queue · run" },
+  // Mind-era destinations — the retired "Board chat"/"Seats" rows landed on
+  // Mind anyway (BoardPage maps stale subs there), so say where you're going.
+  { label: "Mind", page: "boardroom", sub: "mini", hint: "delegate · queue · run" },
+  { label: "Neurons", page: "boardroom", sub: "neural", hint: "the wiring" },
   { label: "Learn", page: "boardroom", sub: "learn", hint: "skills" },
-  { label: "Board chat", page: "boardroom", sub: "chat", hint: "ask the seats" },
-  { label: "Seats", page: "boardroom", sub: "seats", hint: "the five" },
   { label: "Assets", page: "assets", hint: "properties · auditor" },
   { label: "Systems", page: "systems", hint: "usage · status · deploy" },
 ];
@@ -118,7 +119,10 @@ export function Summon({ onClose, onGo, onJot, onQueueTask, onAsk, isMobile }) {
   };
 
   const onKey = (e) => {
-    if (e.key === "Escape") { e.preventDefault(); mode ? (setMode(null), setFlash(null)) : onClose(); return; }
+    // stopPropagation is load-bearing: App's window-level Escape handler
+    // closes the whole palette — without it, Escape in jot/task mode stepped
+    // back AND unmounted Summon, discarding everything typed.
+    if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); mode ? (setMode(null), setFlash(null)) : onClose(); return; }
     if (mode) { if (e.key === "Enter") { e.preventDefault(); commitMode(); } return; }
     if (e.key === "ArrowDown") { e.preventDefault(); setIdx(i => Math.min(i + 1, rows.length - 1)); }
     else if (e.key === "ArrowUp") { e.preventDefault(); setIdx(i => Math.max(i - 1, 0)); }
@@ -130,7 +134,7 @@ export function Summon({ onClose, onGo, onJot, onQueueTask, onAsk, isMobile }) {
 
   return (
     <div onClick={onClose} style={{ position: "fixed", inset: 0, background: "var(--scrim)", zIndex: 600, display: "flex", alignItems: "flex-start", justifyContent: "center", padding: isMobile ? "calc(env(safe-area-inset-top) + 54px) 12px 0" : "14vh 20px 0", animation: "fadein 0.14s ease" }}>
-      <div onClick={e => e.stopPropagation()} onKeyDown={onKey}
+      <div onClick={e => e.stopPropagation()} onKeyDown={onKey} role="dialog" aria-modal="true" aria-label="Summon"
         style={{ width: "100%", maxWidth: 580, background: "var(--surface)", border: "none", borderRadius: 18, boxShadow: "var(--shadow-deep)", overflow: "hidden", display: "flex", flexDirection: "column", maxHeight: isMobile ? "72dvh" : "62vh" }}>
 
         {mode ? (

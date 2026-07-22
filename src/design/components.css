@@ -24,12 +24,13 @@
 button:active:not(:disabled) { transform: scale(0.97); }
 .press { transition: transform var(--dur-1) var(--ease-out), opacity var(--dur-1) ease; }
 .press:active { transform: scale(0.97); }
-.hoverable { transition: background var(--dur-1) ease; }
+/* No background transition here — an always-on color transition with a var()
+   endpoint is the documented Chromium theme-flip wedge (see styles.css). */
 @media (hover: hover) { .hoverable:hover { background: var(--ink-a03); } }
 
 /* ── entrances — quiet, brief, only on arrival ─────────────────────────────── */
 .pagefade { animation: pagein var(--dur-3) var(--ease-out) both; }
-@keyframes pagein { from { opacity: 0; transform: translateY(5px); } to { opacity: 1; transform: none; } }
+@keyframes pagein { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: none; } }
 .pageslide-l { animation: slidel var(--dur-3) var(--ease-out) both; }
 .pageslide-r { animation: slider var(--dur-3) var(--ease-out) both; }
 @keyframes slidel { from { opacity: 0; transform: translateX(16px); } to { opacity: 1; transform: none; } }
@@ -46,7 +47,6 @@ button:active:not(:disabled) { transform: scale(0.97); }
 @keyframes shimmer { 100% { transform: translateX(100%); } }
 .sk-line { height: 12px; margin: 8px 0; }
 .sk-line.w40 { width: 40%; } .sk-line.w60 { width: 60%; } .sk-line.w80 { width: 80%; }
-.sk-big { height: 28px; width: 55%; margin: 10px 0 6px; }
 
 /* ── height:auto expansion, zero measuring, zero jank ──────────────────────── */
 .expand { display: grid; grid-template-rows: 0fr; transition: grid-template-rows var(--dur-3) var(--ease-out); }
@@ -56,13 +56,8 @@ button:active:not(:disabled) { transform: scale(0.97); }
 /* ── shared keyframes (legacy names kept — call sites reference them) ──────── */
 @keyframes fadein { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: none; } }
 @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.35; } }
-@keyframes sheetup { from { opacity: 0; transform: translateY(40px); } to { opacity: 1; transform: none; } }
 @keyframes breathe { 0%, 100% { opacity: 1; } 50% { opacity: 0.75; } }
 @keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
-@keyframes shake {
-  10%, 90% { transform: translateX(-2px); } 20%, 80% { transform: translateX(4px); }
-  30%, 50%, 70% { transform: translateX(-8px); } 40%, 60% { transform: translateX(8px); }
-}
 
 /* ── convening — three quiet dots, one thought ─────────────────────────────── */
 .convene { display: inline-flex; align-items: center; gap: 7px; }
@@ -72,26 +67,9 @@ button:active:not(:disabled) { transform: scale(0.97); }
 @keyframes convene { 0%, 100% { opacity: 0.25; transform: scale(0.75); } 40% { opacity: 1; transform: scale(1); } }
 
 /* ═══ CHROME — phone ═════════════════════════════════════════════════════════ */
-
-/* Nav bar: glass, compact. The page's large title lives in content and
-   scrolls away; the bar title fades in only once it's gone (.scrolled). */
-.nav-bar {
-  flex: none; position: relative; z-index: 20;
-  display: flex; align-items: center; justify-content: space-between;
-  padding: env(safe-area-inset-top) 10px 0 16px;
-  height: calc(44px + env(safe-area-inset-top));
-  background: var(--glass);
-  -webkit-backdrop-filter: blur(20px) saturate(1.8); backdrop-filter: blur(20px) saturate(1.8);
-}
-.nav-bar::after { content: ''; position: absolute; left: 0; right: 0; bottom: -0.5px; height: 0.5px; background: var(--line); opacity: 0; transition: opacity var(--dur-2) ease; }
-.nav-bar.scrolled::after { opacity: 1; }
-.nav-bar-title {
-  position: absolute; left: 50%; bottom: 14px; transform: translateX(-50%) translateY(4px);
-  font-size: 16px; font-weight: 600; letter-spacing: -0.01em; color: var(--ink);
-  opacity: 0; transition: opacity var(--dur-2) ease, transform var(--dur-2) var(--ease-out);
-  pointer-events: none; white-space: nowrap;
-}
-.nav-bar.scrolled .nav-bar-title { opacity: 1; transform: translateX(-50%) translateY(0); }
+/* (The pinned .nav-bar block is gone: MobileShell deliberately ships no
+   header bar — the title + controls live in the scroller and scroll away.
+   DESIGN.md §7 was updated to match; the orphaned CSS was dead weight.) */
 .nav-actions { display: flex; align-items: center; gap: 6px; }
 .icon-btn {
   width: 38px; height: 38px; display: inline-flex; align-items: center; justify-content: center;
@@ -125,6 +103,9 @@ button:active:not(:disabled) { transform: scale(0.97); }
   color: var(--faint);
   -webkit-user-select: none; user-select: none;
 }
+/* Porcelain: --faint over the light glass is ~2.3:1 — below the 3:1 UI
+   minimum at a 10px label. --sub keeps the quiet grammar and passes. */
+[data-theme="day"] .dock-tab:not(.active) { color: var(--sub); }
 .dock-tab.active { color: var(--accent); }
 .dock-tab:active:not(:disabled) { transform: none; } /* tabs don't shrink — the icon nudges instead */
 .dock-tab:active .dock-icon { transform: scale(0.88); }
@@ -150,7 +131,7 @@ button:active:not(:disabled) { transform: scale(0.97); }
 .side-group-label { padding: 0 12px 6px; }
 .side-item {
   display: flex; align-items: center; gap: 11px; width: 100%;
-  padding: 0 12px; height: 42px; border-radius: 12px; border: none;
+  padding: 0 12px; height: 44px; border-radius: 12px; border: none;
   background: transparent; cursor: pointer; color: var(--sub);
   font-size: 15px; font-weight: 500; text-align: left;
 }
@@ -170,6 +151,9 @@ button:active:not(:disabled) { transform: scale(0.97); }
 .content-head .head-title .t-foot { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 @media (max-width: 1023px) { .head-spend { display: none; } }
 .content-scroll { flex: 1; min-height: 0; overflow-y: auto; display: flex; flex-direction: column; }
+/* dvh with vh fallback — same iPad-Safari toolbar bug the sidebar fixes above;
+   the content column had only 100vh and its bottom strip sat behind the bar. */
+.content-col { height: 100vh; height: 100dvh; }
 /* Outer bound for page content in the desktop/tablet shell. Wide enough for the
    Brief's 3-column layout to breathe on a large monitor; every other page sets
    its own narrower inner max-width, so they stay centered and unaffected. */
@@ -207,7 +191,7 @@ button:active:not(:disabled) { transform: scale(0.97); }
 .cell.tappable { cursor: pointer; }
 @media (hover: hover) { .cell.tappable:hover { background: var(--ink-a03); } }
 .cell.tappable:active { background: var(--ink-a05); }
-.cell + .cell::before, .cell-sep {
+.cell + .cell::before {
   content: ''; position: absolute; top: 0; right: 0; height: 0.5px;
   left: 16px; background: var(--line);
 }
@@ -248,7 +232,10 @@ button:active:not(:disabled) { transform: scale(0.97); }
 .btn:disabled { opacity: 0.45; cursor: default; }
 .btn.lg { height: 50px; padding: 0 22px; font-size: 16px; }
 .btn.md { height: 44px; padding: 0 18px; font-size: 15px; }
+.btn { position: relative; }
 .btn.sm { height: 34px; padding: 0 14px; font-size: 13px; border-radius: 10px; }
+/* small buttons keep their 34px look but answer a 44pt thumb */
+.btn.sm::after { content: ''; position: absolute; inset: -5px 0; }
 .btn.full { width: 100%; }
 .btn.primary { background: var(--accent); color: var(--on-accent); }
 .btn.tinted { background: var(--accent-a12); color: var(--accent); }
@@ -263,7 +250,10 @@ button:active:not(:disabled) { transform: scale(0.97); }
   border-radius: 999px; border: none; background: var(--ink-a05); color: var(--sub);
   font-size: 13px; font-weight: 500; cursor: pointer; white-space: nowrap; flex: none;
   transition: transform var(--dur-1) var(--ease-out);
+  position: relative;
 }
+/* visual box stays 34px; the touch target reaches 44pt (same trick as .icon-btn) */
+.pill::after { content: ''; position: absolute; inset: -5px 0; }
 .pill.active { background: var(--ink); color: var(--bg); font-weight: 600; }
 .pillrow { display: flex; gap: 8px; overflow-x: auto; padding: 2px 16px 10px; scrollbar-width: none; -ms-overflow-style: none; }
 .pillrow::-webkit-scrollbar { display: none; }
@@ -276,11 +266,16 @@ button:active:not(:disabled) { transform: scale(0.97); }
   display: inline-flex; align-items: center; justify-content: center; gap: 6px;
   padding: 4px 4px; min-width: 0;
 }
+/* visual box stays 32px; the touch target reaches 44pt */
+.seg-opt::after { content: ''; position: absolute; inset: -6px 0; }
 .seg-opt.active { color: var(--ink); font-weight: 600; }
+/* Thumb glides on transform only (left/width are layout properties — janky on
+   low-end phones and against the styles.css motion mandate). kit.jsx sets the
+   width and translateX inline. */
 .seg-thumb {
-  position: absolute; top: 2px; bottom: 2px; border-radius: 8px; background: var(--seg-thumb);
+  position: absolute; top: 2px; bottom: 2px; left: 2px; border-radius: 8px; background: var(--seg-thumb);
   box-shadow: 0 1px 4px rgba(0, 0, 0, 0.12), 0 3px 8px rgba(0, 0, 0, 0.06);
-  transition: left var(--dur-2) var(--ease-out), width var(--dur-2) var(--ease-out);
+  transition: transform var(--dur-2) var(--ease-out);
 }
 .seg-opt:active:not(:disabled) { transform: none; }
 
@@ -294,14 +289,19 @@ button:active:not(:disabled) { transform: scale(0.97); }
 .field:focus-visible { box-shadow: var(--focus-ring); }
 .field.on-well { background: var(--surface); }
 
-/* switch — iOS proportions */
-.switch { width: 51px; height: 31px; border-radius: 999px; background: var(--ink-a12); position: relative; cursor: pointer; display: inline-block; flex: none; border: none; padding: 0; transition: background var(--dur-2) ease; }
-.switch.on { background: var(--green); }
-.switch-knob { position: absolute; top: 2px; left: 2px; width: 27px; height: 27px; border-radius: 50%; background: #FFFFFF; box-shadow: 0 1px 1px rgba(0,0,0,0.12), 0 3px 8px rgba(0,0,0,0.15); transition: left var(--dur-2) var(--ease-out); }
-.switch.on .switch-knob { left: 22px; }
+/* switch — iOS proportions. The track color change rides an ::before overlay's
+   OPACITY (allowed) — a background transition here was the documented Chromium
+   theme-flip wedge (styles.css); the knob glides on transform, not left. */
+.switch { width: 51px; height: 31px; border-radius: 999px; background: var(--ink-a12); position: relative; cursor: pointer; display: inline-block; flex: none; border: none; padding: 0; }
+.switch::before { content: ''; position: absolute; inset: 0; border-radius: 999px; background: var(--green); opacity: 0; transition: opacity var(--dur-2) ease; }
+.switch.on::before { opacity: 1; }
+/* visual box stays 31px; the touch target reaches 45pt */
+.switch::after { content: ''; position: absolute; inset: -7px 0; }
+.switch-knob { position: absolute; top: 2px; left: 2px; width: 27px; height: 27px; border-radius: 50%; background: #FFFFFF; box-shadow: 0 1px 1px rgba(0,0,0,0.12), 0 3px 8px rgba(0,0,0,0.15); transition: transform var(--dur-2) var(--ease-out); }
+.switch.on .switch-knob { transform: translateX(20px); }
 .switch.small { width: 40px; height: 25px; }
 .switch.small .switch-knob { width: 21px; height: 21px; }
-.switch.small.on .switch-knob { left: 17px; }
+.switch.small.on .switch-knob { transform: translateX(15px); }
 
 /* status dot */
 .dotstatus { width: 7px; height: 7px; border-radius: 50%; flex: none; display: inline-block; }
@@ -335,6 +335,9 @@ button:active:not(:disabled) { transform: scale(0.97); }
 .sheet-head { flex: none; display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 6px 18px 10px; }
 .sheet-body { flex: 1; min-height: 0; overflow-y: auto; padding: 4px 18px 16px; }
 .sheet-foot { flex: none; padding: 10px 18px calc(14px + env(safe-area-inset-bottom)); display: flex; gap: 10px; }
+/* the container inset is for FOOTER-LESS sheets — with a footer both applied
+   and every confirm showed ~34px of dead space under its buttons */
+.sheet:has(.sheet-foot) { padding-bottom: 0; }
 @media (min-width: 761px) {
   .sheet {
     left: 50%; right: auto; bottom: auto; top: 50%;
@@ -427,8 +430,18 @@ kbd {
 
 /* ── the mandate: motion is optional to the user's nervous system ──────────── */
 @media (prefers-reduced-motion: reduce) {
-  *, *::before, *::after { animation-duration: 0.01ms !important; animation-delay: 0s !important; transition-duration: 0.01ms !important; }
+  /* iteration-count 1 is load-bearing: without it, infinite animations
+     (spinner, pulsing dots) loop a 0.01ms cycle and each painted frame
+     samples a random point — a flicker worse than the motion it replaced. */
+  *, *::before, *::after { animation-duration: 0.01ms !important; animation-delay: 0s !important; animation-iteration-count: 1 !important; transition-duration: 0.01ms !important; }
   .pagefade, .pageslide-l, .pageslide-r, .stagger > *, .toast, .sheet { animation: none !important; }
   .expand, .seg-thumb, .switch-knob { transition: none; }
   .sk::after { animation: none; }
+  .spinner { border-top-color: var(--ink-a10); } /* a frozen spinner shouldn't pretend to spin */
+}
+
+/* ── increased contrast — tone-only separation needs real lines ────────────── */
+@media (prefers-contrast: more) {
+  :root, [data-theme="day"], [data-theme="night"] { --line: var(--line-strong); --faint: var(--sub); }
+  .card, .cellgroup { box-shadow: var(--shadow-card), 0 0 0 1px var(--line-strong); }
 }

@@ -90,18 +90,21 @@ export function LoginScreen() {
         </div>
       </div>
       <div className="entrance-card">
-        <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-          <Field value={email} onChange={e => setEmail(e.target.value)} placeholder="Email" type="email" autoComplete="email" />
+        {/* A real form: Enter submits from EITHER field (the email field and
+            magic-link mode previously had no Enter path at all). */}
+        <form onSubmit={e => { e.preventDefault(); if (!disabled) (mode === "password" ? signIn() : sendMagic()); }}
+          style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+          <Field value={email} onChange={e => setEmail(e.target.value)} placeholder="Email" type="email" autoComplete="email" aria-label="Email" />
           {mode === "password" && (
-            <Field value={password} onChange={e => setPassword(e.target.value)} onKeyDown={e => { if (e.key === "Enter") signIn(); }}
-              placeholder="Password" type="password" autoComplete="current-password" />
+            <Field value={password} onChange={e => setPassword(e.target.value)}
+              placeholder="Password" type="password" autoComplete="current-password" aria-label="Password" />
           )}
           {err && <div className="t-foot" style={{ color: "var(--red)" }}>{err}</div>}
           {sent && <div className="t-foot" style={{ color: "var(--green)" }}>Login link sent — check your email.</div>}
-          <Button kind="primary" size="lg" full disabled={disabled} onClick={mode === "password" ? signIn : sendMagic}>
+          <Button kind="primary" size="lg" full disabled={disabled} type="submit">
             {busy ? (mode === "password" ? "Signing in…" : "Sending…") : (mode === "password" ? "Enter the room" : "Email me a login link")}
           </Button>
-        </div>
+        </form>
         <button onClick={() => { setMode(mode === "password" ? "magic" : "password"); setErr(null); setSent(false); }}
           style={{ display: "block", width: "100%", background: "none", border: "none", fontSize: 12.5, color: "var(--sub)", textAlign: "center", marginTop: 16, cursor: "pointer", padding: 6 }}>
           {mode === "password" ? "Use a magic link instead" : "Use a password instead"}

@@ -143,13 +143,22 @@ export function useTween(target, dur = 700) {
   const fromRef = useRef(target ?? 0);
   useEffect(() => {
     if (target == null) return;
+    // Reduced motion: numbers snap — a counting metric is still motion.
+    if (window.matchMedia?.("(prefers-reduced-motion: reduce)").matches) {
+      fromRef.current = target; setV(target); return;
+    }
     const from = fromRef.current ?? 0;
     if (from === target) { setV(target); return; }
     let raf;
     const t0 = performance.now();
     const step = (now) => {
       const p = Math.min(1, (now - t0) / dur);
-      setV(from + (target - from) * (1 - Math.pow(1 - p, 3)));
+      const next = from + (target - from) * (1 - Math.pow(1 - p, 3));
+      // Track the displayed value every frame, not just on completion — a
+      // retarget mid-flight then continues from where the number IS, instead
+      // of visibly jumping back to the previous resting value.
+      fromRef.current = next;
+      setV(next);
       if (p < 1) raf = requestAnimationFrame(step);
       else fromRef.current = target;
     };

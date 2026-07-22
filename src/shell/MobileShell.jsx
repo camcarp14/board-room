@@ -28,8 +28,14 @@ export function MobileShell({ page, navDir, theme, onNavigate, onSummon, now, da
   };
 
   // When the keyboard eats most of the viewport, slide the tab bar away
-  // instead of letting it hover mid-screen.
-  const keyboardOpen = vvh != null && window.screen?.height ? vvh < window.screen.height * 0.72 : false;
+  // instead of letting it hover mid-screen. screen.height is orientation-FIXED
+  // on iOS (always the portrait value), so compare against the dimension that
+  // matches the current orientation — the raw value made this condition
+  // permanently true in landscape on small iPhones (vvh ≈ 370 < 0.72 × 667)
+  // and hid the tab bar with no keyboard anywhere in sight.
+  const sw = window.screen?.width || 0, sh = window.screen?.height || 0;
+  const screenH = window.matchMedia?.("(orientation: landscape)").matches ? Math.min(sw, sh) : Math.max(sw, sh);
+  const keyboardOpen = vvh != null && screenH ? vvh < screenH * 0.72 : false;
   // visualViewport is the ONLY height this window can actually render.
   // Field-proven on device (day-theme letterbox showed WHITE under a beige
   // canvas): 100vh/100lvh report the full screen, but iOS standalone clips
@@ -41,7 +47,7 @@ export function MobileShell({ page, navDir, theme, onNavigate, onSummon, now, da
   // the reported env(bottom) is dead space — collapse the tab bar to its
   // tight browser-mode geometry. A healthy below-status-bar window
   // (envTop 0) keeps the native inset even though vvh < screen.height.
-  const letterboxed = IS_STANDALONE && vvh != null && window.screen?.height ? (window.screen.height - vvh >= 20 && envTop > 0) : false;
+  const letterboxed = IS_STANDALONE && vvh != null && screenH ? (screenH - vvh >= 20 && envTop > 0) : false;
 
   const head = HEADERS[page];
   const sub = head.sub(new Date(now));
