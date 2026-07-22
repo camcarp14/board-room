@@ -39,6 +39,24 @@ export const IcPersonalFill = (p = {}) => (
     <path d="M12 13.6c-3.9 0-7 2.4-7.8 6.1-.1.7.4 1.3 1.1 1.3h13.4c.7 0 1.2-.6 1.1-1.3-.8-3.7-3.9-6.1-7.8-6.1z" />
   </svg>
 );
+export const IcTrain = (p = {}) => ( // dumbbell — the training room
+  <svg {...base(p)}>
+    <rect x="2.5" y="9.2" width="3.2" height="5.6" rx="1.1" />
+    <rect x="6.6" y="7" width="3.2" height="10" rx="1.1" />
+    <rect x="18.3" y="9.2" width="3.2" height="5.6" rx="1.1" />
+    <rect x="14.2" y="7" width="3.2" height="10" rx="1.1" />
+    <line x1="9.8" y1="12" x2="14.2" y2="12" />
+  </svg>
+);
+export const IcTrainFill = (p = {}) => (
+  <svg {...solid(p)}>
+    <rect x="2.2" y="9" width="3.4" height="6" rx="1.2" />
+    <rect x="6.4" y="6.7" width="3.6" height="10.6" rx="1.3" />
+    <rect x="18.4" y="9" width="3.4" height="6" rx="1.2" />
+    <rect x="14" y="6.7" width="3.6" height="10.6" rx="1.3" />
+    <rect x="9.6" y="10.9" width="4.8" height="2.2" rx="1.1" />
+  </svg>
+);
 export const IcBoard = (p = {}) => ( // Mini Me — your delegate, a small stand-in
   <svg {...base(p)}>
     <line x1="12" y1="3.7" x2="12" y2="5.9" />
@@ -138,6 +156,7 @@ export const IcUpstreamFill = (p = {}) => (
 export const NAV_ICONS = {
   brief: { line: IcBrief, fill: IcBriefFill },
   personal: { line: IcPersonal, fill: IcPersonalFill },
+  train: { line: IcTrain, fill: IcTrainFill },
   boardroom: { line: IcBoard, fill: IcBoardFill },
   assets: { line: IcAssets, fill: IcAssetsFill },
   systems: { line: IcSystems, fill: IcSystemsFill },
