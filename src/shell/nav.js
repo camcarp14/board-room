@@ -6,8 +6,10 @@ export const NAV = [
   { key: "personal", label: "Personal", group: "Today" },
   { key: "train", label: "Train", group: "Today" },
   { key: "boardroom", label: "Mind", group: "The Firm" },
+  // Systems was folded into Assets — its Usage/Status/Deploy/Supabase/Miner
+  // panels are now sub-tabs of the Assets page (App.jsx redirects any stray
+  // "systems" deep link to "assets").
   { key: "assets", label: "Assets", group: "The Firm" },
-  { key: "systems", label: "Systems", group: "The Firm" },
   // Upstream is built and deployed but hidden from nav while the pipeline settles.
   // To bring it back, uncomment this line — the page, route, HEADERS entry and the
   // Supabase tables are all still wired.
@@ -24,7 +26,9 @@ export const HEADERS = {
   personal: { title: "Personal", sub: () => "Notes, calendar, and life admin" },
   train: { title: "Train", sub: () => "Log it. Beat last time." },
   boardroom: { title: "Mind", sub: () => "The mind behind the delegate" },
-  assets: { title: "Assets", sub: () => "Everything you run" },
-  systems: { title: "Systems", sub: () => "Usage, status, and deploys" },
+  assets: { title: "Assets", sub: () => "Everything you own, and what runs it" },
+  // Kept as a defensive fallback: App.jsx redirects "systems" → "assets", so the
+  // shell should never actually read this — but a header lookup must never crash.
+  systems: { title: "Assets", sub: () => "Everything you own, and what runs it" },
   upstream: { title: "Upstream", sub: () => "Non-consensus questions · NOSTRADAMUS" },
 };

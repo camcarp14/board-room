@@ -1,38 +1,35 @@
-// ─── Assets — the properties, and the auditor that watches them ──────────────
-// One CellGroup of live-checked properties, one group of command-center links,
-// and the site auditor (audit + propose-a-fix) below. Data/behavior unchanged
-// from the pre-SESSION PropertiesPage/AuditorCard; anatomy re-voiced.
+// ─── Assets — the ventures, and the machine room that runs them ──────────────
+// One page, six tabs. "Properties" is the venture roll-up (live-checked sites,
+// command-center links, and the AI site auditor). The rest — Usage, Status,
+// Deploy, Supabase, Miner — used to be a separate Systems tab; they were folded
+// in here so everything you own and everything that runs it live in one place.
+// The connections hook is hosted at the page level so Status results survive a
+// hop to another tab and back.
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import {
   Card, SectionHeader, CellGroup, Cell, Button, Pill, Field, Dot, Switch,
-  EmptyState, Grid,
+  EmptyState, Grid, PillRow,
 } from "../../ui/kit.jsx";
 import { IcExternal, IcChevronDown, IcSearch } from "../../ui/icons.jsx";
 import { callFn } from "../../lib/functions.js";
 import { db } from "../../data/db.js";
+import { PROPERTIES } from "./properties.js";
+import {
+  SYSTEMS_SUBTABS, useConnections, UsageTab, StatusTab, DeployTab, SupabaseTab, MinerPanel,
+} from "../systems/SystemsPage.jsx";
 
-// The ventures — shared by the auditor below and by SystemsPage's Deploy and
-// Replace-a-File controls (which import PROPERTIES from here). The array shape
-// (name/desc/url/appUrl/color/repo/site/assetsOnly/cta) is load-bearing.
-export const PROPERTIES = [
-  { name: "Zero To Secure", desc: "Premium seed phrase backup", url: "https://zerotosecure.com", appUrl: "https://zts-command-center.netlify.app", color: "var(--green)", repo: "camcarp14/zts-command-center", site: "zero-to-secure" },
-  { name: "Clarify Paid Search", desc: "Boutique Google Ads agency", url: "https://clarifypaidsearch.com", appUrl: "https://clarify-outreach.netlify.app/", color: "var(--amber)", repo: "camcarp14/clarify-outreach", site: "clarify-paid-search" },
-  { name: "Clarify SaaS", desc: "Google Ads auditing tool", url: null, appUrl: "https://clarify-saas.netlify.app/", color: "var(--pink)", repo: "camcarp14/clarify-saas", site: "clarify-saas" },
-  { name: "Macro Command Center", desc: "Markets, portfolio, thesis", url: null, appUrl: "https://macro-command-center.netlify.app/", color: "var(--blue)", repo: "camcarp14/macro-command-center", site: "macro-command-center" },
-  // assetsOnly: shown as reference cards on Assets (link + live status) but kept
-  // out of the Systems deploy/replace controls, since their Netlify slugs and
-  // repos aren't wired up here and FFSR's two views share one site.
-  { name: "Runway", desc: "Runway command center", url: null, appUrl: "https://runway-command-center.netlify.app/", color: "var(--purple)", repo: null, site: null, assetsOnly: true },
-  // FFSR: one card, two links — main site + the /team management view, the same
-  // Site ›/Command Center › two-button layout Zero To Secure uses.
-  { name: "FFSR", desc: "Main site & team management", url: "https://ffsr.netlify.app/#/", appUrl: "https://ffsr.netlify.app/#/team", color: "var(--pink)", repo: null, site: null, assetsOnly: true, cta: "Management Center ›" },
-];
+// Re-exported for any older importers — PROPERTIES now lives in ./properties.js.
+export { PROPERTIES } from "./properties.js";
 
 const hostOf = (u) => { try { return new URL(u).hostname; } catch { return u || ""; } };
 // window.open with the "noopener" feature is the programmatic twin of the old
 // <a target="_blank" rel="noopener"> links — keep the noopener.
 const openExternal = (u) => window.open(u, "_blank", "noopener");
+
+// Assets is now a tabbed page: Properties first, then the folded-in systems
+// tabs. Keys are stable — Summon and muscle memory point at them.
+const ASSETS_SUBTABS = [{ key: "properties", label: "Properties" }, ...SYSTEMS_SUBTABS];
 
 /* Trailing status for a property row: response code in mono + a semantic dot.
    States: checking (pulse) → live/down once site-status answers, or an honest
@@ -65,7 +62,8 @@ function SiteStatus({ s, failed }) {
   );
 }
 
-export function PropertiesPage({ isMobile, settings, updateSetting, session }) {
+// ─── Properties tab — the ventures + the auditor ─────────────────────────────
+function PropertiesTab({ isMobile, settings, updateSetting, session }) {
   const [status, setStatus] = useState({});
   const [checkFailed, setCheckFailed] = useState(false);
   useEffect(() => {
@@ -92,58 +90,100 @@ export function PropertiesPage({ isMobile, settings, updateSetting, session }) {
   };
 
   return (
-    <div style={{ flex: 1, display: "flex", flexDirection: "column", padding: isMobile ? "4px 16px 24px" : "6px 0 40px" }}>
-      <div className="stagger" style={{ width: "100%", maxWidth: 960, margin: "0 auto", display: "flex", flexDirection: "column", minWidth: 0 }}>
-        <Grid min={340} gap={12}>
-          <div>
-            <SectionHeader title="Properties" />
-            <CellGroup>
-              {PROPERTIES.map(p => {
-                // Status is keyed by p.url || p.appUrl — the fetch list above
-                // and this lookup must use the same expression.
-                const key = p.url || p.appUrl;
-                const s = status[key];
-                return (
-                  <Cell
-                    key={p.name}
-                    leading={<span style={{ fontSize: 13.5, fontWeight: 700 }}>{p.name.charAt(0)}</span>}
-                    leadingTone={p.color}
-                    title={p.name}
-                    sub={`${hostOf(key)} · ${p.desc}`}
-                    trailing={
-                      <span style={{ display: "inline-flex", alignItems: "center", gap: 9, flex: "none" }}>
-                        <SiteStatus s={s} failed={checkFailed} />
-                        <IcExternal size={15} style={{ color: "var(--faint)" }} />
-                      </span>
-                    }
-                    onClick={() => openExternal(key)}
-                  />
-                );
-              })}
-            </CellGroup>
-          </div>
-
-          <div>
-            <SectionHeader title="Command Centers" />
-            <CellGroup>
-              {managed.map(p => (
+    <div className="stagger" style={{ display: "flex", flexDirection: "column", minWidth: 0 }}>
+      <Grid min={340} gap={12}>
+        <div>
+          <SectionHeader title="Properties" />
+          <CellGroup>
+            {PROPERTIES.map(p => {
+              // Status is keyed by p.url || p.appUrl — the fetch list above
+              // and this lookup must use the same expression.
+              const key = p.url || p.appUrl;
+              const s = status[key];
+              return (
                 <Cell
                   key={p.name}
                   leading={<span style={{ fontSize: 13.5, fontWeight: 700 }}>{p.name.charAt(0)}</span>}
                   leadingTone={p.color}
                   title={p.name}
-                  sub={`${ctaLabel(p)} · ${hostOf(p.appUrl)}`}
-                  chevron
-                  onClick={() => openExternal(p.appUrl)}
+                  sub={`${hostOf(key)} · ${p.desc}`}
+                  trailing={
+                    <span style={{ display: "inline-flex", alignItems: "center", gap: 9, flex: "none" }}>
+                      <SiteStatus s={s} failed={checkFailed} />
+                      <IcExternal size={15} style={{ color: "var(--faint)" }} />
+                    </span>
+                  }
+                  onClick={() => openExternal(key)}
                 />
-              ))}
-            </CellGroup>
-          </div>
-        </Grid>
+              );
+            })}
+          </CellGroup>
+        </div>
 
-        <div style={{ marginTop: 16 }}>
-          <SectionHeader title="Auditor" />
-          <AuditorCard settings={settings} updateSetting={updateSetting} session={session} isMobile={isMobile} />
+        <div>
+          <SectionHeader title="Command Centers" />
+          <CellGroup>
+            {managed.map(p => (
+              <Cell
+                key={p.name}
+                leading={<span style={{ fontSize: 13.5, fontWeight: 700 }}>{p.name.charAt(0)}</span>}
+                leadingTone={p.color}
+                title={p.name}
+                sub={`${ctaLabel(p)} · ${hostOf(p.appUrl)}`}
+                chevron
+                onClick={() => openExternal(p.appUrl)}
+              />
+            ))}
+          </CellGroup>
+        </div>
+      </Grid>
+
+      <div style={{ marginTop: 16 }}>
+        <SectionHeader title="Auditor" />
+        <AuditorCard settings={settings} updateSetting={updateSetting} session={session} isMobile={isMobile} />
+      </div>
+    </div>
+  );
+}
+
+// ─── The page ─────────────────────────────────────────────────────────────────
+// Named PropertiesPage for the App.jsx route it has always answered to.
+export function PropertiesPage({ isMobile, settings, updateSetting, session, btc, jump }) {
+  const [sub, setSub] = useState("properties");
+  // Summon / deep links can open straight onto a systems sub-tab.
+  useEffect(() => {
+    if (jump?.sub && ASSETS_SUBTABS.some(t => t.key === jump.sub)) setSub(jump.sub);
+  }, [jump]);
+
+  // Connections hook hosted here (not inside StatusTab) so results survive a
+  // hop to another sub-tab and back. Lazy-started the first time Status shows —
+  // it fires ~25 network calls incl. a paid Anthropic ping, so it must not run
+  // just because the page mounted on another tab.
+  const conn = useConnections({ session, btc });
+  const statusStarted = useRef(false);
+  useEffect(() => {
+    if (sub !== "status" || statusStarted.current) return;
+    statusStarted.current = true;
+    conn.runAll();
+  }, [sub]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  return (
+    <div style={{ flex: 1, display: "flex", flexDirection: "column", padding: isMobile ? "4px 16px 24px" : "6px 0 40px" }}>
+      <div style={{ width: "100%", maxWidth: 1020, margin: "0 auto", display: "flex", flexDirection: "column", minWidth: 0 }}>
+        {/* PillRow, not Segmented: six sub-tabs is well past Segmented's ≤4
+            equal-width ceiling (DESIGN.md §6). PillRow scrolls and keeps the
+            active pill centered. */}
+        <PillRow options={ASSETS_SUBTABS} value={sub} onChange={setSub} style={{ marginBottom: 14 }} />
+
+        {/* key={sub} re-mounts and animates the content on every tab switch. */}
+        <div key={sub} className="pagefade" style={{ display: "flex", flexDirection: "column", minWidth: 0 }}>
+          {sub === "properties" && <PropertiesTab isMobile={isMobile} settings={settings} updateSetting={updateSetting} session={session} />}
+          {sub === "usage" && <UsageTab settings={settings} updateSetting={updateSetting} isMobile={isMobile} />}
+          {sub === "status" && <StatusTab checks={conn.checks} lastRun={conn.lastRun} running={conn.running} runAll={conn.runAll} isMobile={isMobile} />}
+          {sub === "deploy" && <DeployTab isMobile={isMobile} />}
+          {sub === "supabase" && <SupabaseTab />}
+          {/* `active` gates the 5s poll — it stops the moment you leave the sub-tab. */}
+          {sub === "miner" && <MinerPanel active={sub === "miner"} isMobile={isMobile} />}
         </div>
       </div>
     </div>

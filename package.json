@@ -9,7 +9,8 @@
     "preview": "vite preview",
     "smoke:upstream": "node scripts/render-smoke.mjs",
     "smoke:workout": "node scripts/workout-smoke.mjs",
-    "verify": "npm run smoke:upstream && npm run smoke:workout && npm run build"
+    "smoke:library": "node scripts/workout-library-smoke.mjs",
+    "verify": "npm run smoke:upstream && npm run smoke:workout && npm run smoke:library && npm run build"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.110.0",

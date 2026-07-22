@@ -11,6 +11,7 @@ import {
   suggestNext, weeklyRecap, lifetimeVolume, recentPRs, GROUPS, isCardio, cardioMeta,
   upNext, weeklyVolumeSeries, plateauRead,
 } from "./lib/workout-engine.js";
+import { FindWorkout } from "./pages/train/PerfectWorkout.jsx";
 
 // ════════════════════════════════════════════════════════════════════════════
 // WORKOUT — the Train tab (graduated from Personal to its own dock slot).
@@ -338,6 +339,26 @@ export default function WorkoutPanel({ isMobile, supabase, settings, updateSetti
 
   const discardWorkout = () => { setActive(null); setView("train"); };
 
+  // "Find your workout" can save a recommended session as a reusable routine —
+  // written in the current prefs unit, weights left at 0 (they fill from your
+  // history the first time you run it, same as any new routine).
+  const saveAsRoutine = async (w) => {
+    const tpl = {
+      id: uuid(),
+      name: w.name,
+      unit,
+      exercises: (w.exercises || []).map((e) => ({
+        id: uuid(), name: e.name,
+        targetSets: e.targetSets ?? 3, targetReps: e.targetReps ?? 8,
+        weight: 0, restSec: e.restSec ?? defaultRest,
+      })),
+      position: (templates || []).length,
+    };
+    await wdb.saveTemplate(tpl);
+    refreshAll();
+    return tpl;
+  };
+
   const finishWorkout = async ({ notes, updateTemplate }) => {
     const a = active;
     const done = [];
@@ -450,7 +471,7 @@ export default function WorkoutPanel({ isMobile, supabase, settings, updateSetti
           isMobile={isMobile} templates={templates} sessions={sessions}
           active={active} unit={unit}
           onResume={() => setView("session")} onStart={startWorkout}
-          onQuickStart={() => startWorkout(null)}
+          onQuickStart={() => startWorkout(null)} onSaveRoutine={saveAsRoutine}
           onManage={() => setView("routines")} onHistory={() => setView("history")}
           ws={{ ...ws, unit, bar, defaultRest }} setWs={setWs}
         />
@@ -555,7 +576,7 @@ function SetupCard({ onRetry }) {
 }
 
 // ─── Train home — resume, this week, start, recent, recovery, preferences ────
-function TrainHome({ isMobile, templates, sessions, active, unit, onResume, onStart, onQuickStart, onManage, onHistory, ws, setWs }) {
+function TrainHome({ isMobile, templates, sessions, active, unit, onResume, onStart, onQuickStart, onSaveRoutine, onManage, onHistory, ws, setWs }) {
   const doneSets = active ? active.exercises.reduce((n, e) => n + e.sets.filter((s) => s.done && !isWU(s)).length, 0) : 0;
   const mins = active ? Math.max(1, Math.round((Date.now() - active.startedAt) / 60000)) : 0;
   const recent = (sessions || []).slice(0, 3);
@@ -617,6 +638,14 @@ function TrainHome({ isMobile, templates, sessions, active, unit, onResume, onSt
       <Grid min={340} gap={12}>
         <section style={{ minWidth: 0 }}>
           <SectionHeader title="Start training" />
+          {/* The zero-friction path: tap a few answers, start a fitting workout
+              in one tap — no routine required. Sits above your routines so
+              "I don't know what to do" never stalls a session. */}
+          <FindWorkout
+            isMobile={isMobile} sessions={sessions} unit={unit}
+            onStart={onStart} onSaveRoutine={onSaveRoutine}
+            style={{ marginBottom: 10 }}
+          />
           {templates === null ? (
             <div className="sk" style={{ height: 140, borderRadius: 18 }} />
           ) : templates.length === 0 ? (

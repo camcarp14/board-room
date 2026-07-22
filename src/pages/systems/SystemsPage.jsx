@@ -1,11 +1,16 @@
-// ─── Systems — everything technical in one place ──────────────────────────────
-// Behind sub-tabs so mobile isn't a wall of unrelated cards: spend/usage, live
-// status of every data pipe, deploy triggers, and the Supabase console. The
-// site auditor lives on Assets, next to the properties it actually audits.
+// ─── Systems — the technical machine room, now living under Assets ───────────
+// Everything technical, split into tabs so mobile isn't a wall of unrelated
+// cards: spend/usage, live status of every data pipe, deploy triggers, the
+// Supabase console, and the miner. These used to be their own top-level tab;
+// they now mount as sub-tabs of the Assets page (the site auditor already lived
+// on Assets, next to the properties it audits — this finishes the merge).
+// Each tab is exported on its own so the Assets page can compose them beside
+// the Properties tab; `useConnections` is hosted by that parent so Status
+// results survive sub-tab switches.
 
 import { useState, useEffect, useRef } from "react";
 import {
-  Card, SectionHeader, CellGroup, Cell, StatTile, Button, Pill, PillRow,
+  Card, SectionHeader, CellGroup, Cell, StatTile, Button, Pill,
   Segmented, Field, Dot, Grid, EmptyState,
 } from "../../ui/kit.jsx";
 import { Segmented as ModelPicker } from "../../ui/primitives.jsx"; // the MODEL_META picker
@@ -14,8 +19,18 @@ import { supabase, ANTHROPIC_API_KEY } from "../../lib/supabase.js";
 import { pingFn, callFn } from "../../lib/functions.js";
 import { callClaude, DEFAULT_MODELS, MODEL_META } from "../../lib/claude.js";
 import { obs } from "../../lib/storage.js";
-import { PROPERTIES } from "../assets/AssetsPage.jsx";
+import { PROPERTIES } from "../assets/properties.js";
 import { MinerPanel } from "./MinerPanel.jsx";
+
+// Keys are stable (Summon and muscle memory point at them). Consumed by the
+// Assets page, which prepends its own "Properties" pill.
+export const SYSTEMS_SUBTABS = [
+  { key: "usage", label: "Usage" },
+  { key: "status", label: "Status" },
+  { key: "deploy", label: "Deploy" },
+  { key: "supabase", label: "Supabase" },
+  { key: "miner", label: "Miner" },
+];
 
 /* ═══ Usage ════════════════════════════════════════════════════════════════ */
 
@@ -148,6 +163,61 @@ function UsageCard({ isMobile }) {
   );
 }
 
+// Usage sub-tab — Model Control (per-layer model picker + cost estimate) beside
+// the durable usage log.
+export function UsageTab({ settings, updateSetting, isMobile }) {
+  const models = { ...DEFAULT_MODELS, ...(settings?.models || {}) };
+  // The board is gone; the Mind tab is the tool now. Two layers: the Mind's own
+  // reasoning/synthesis (Pulse, strategy) stored in settings.models.mind, and the
+  // Mini Me delegate's task runs — which live in settings.mini.model, so this row
+  // stays the single source of truth the delegate already reads.
+  const delegateModel = settings?.mini?.model || "haiku";
+  // Estimate: base cost per layer times the model's MODEL_META mult (mult 1 =
+  // Haiku). A mind pulse is one reasoning+synthesis call; a delegate run is one
+  // task execution.
+  const mult = k => (MODEL_META.find(m => m.key === k) || {}).mult || 1;
+  const est = 0.010 * mult(models.mind) + 0.008 * mult(delegateModel);
+  // "Today" line reads obs — the per-browser localStorage tracker (see the
+  // comment in telemetry.js). Distinct from the durable usage_log; never
+  // merge the two.
+  const spendToday = obs.all().filter(l => new Date(l.ts).toDateString() === new Date().toDateString());
+  const inTok = spendToday.reduce((s, l) => s + (l.inTok || 0), 0), outTok = spendToday.reduce((s, l) => s + (l.outTok || 0), 0);
+  const cost = spendToday.reduce((s, l) => s + (l.cost || 0), 0);
+  const fmtK = n => n > 999 ? Math.round(n / 1000) + "K" : String(n);
+  const layers = [
+    { key: "mind", name: "Mind", desc: "reasoning & synthesis — the neural mind thinking",
+      value: models.mind, onChange: (k) => updateSetting("models", { ...models, mind: k }) },
+    { key: "delegate", name: "Delegate", desc: "Mini Me — runs your queued tasks",
+      value: delegateModel, onChange: (k) => updateSetting("mini", { ...(settings?.mini || {}), model: k }) },
+  ];
+
+  return (
+    <Grid min={isMobile ? 320 : 380} gap={12}>
+      <div>
+        <SectionHeader title="Model Control" trailing="Tokens" />
+        <Card pad="md">
+          <div className="t-foot" style={{ color: "var(--sub)" }}>Start cheap. Escalate a layer only when the answers need it.</div>
+          {layers.map(r => (
+            <div key={r.key} style={{ display: "flex", flexDirection: "column", gap: 8, marginTop: 14 }}>
+              <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", gap: 10 }}>
+                <span className="t-call" style={{ fontWeight: 600 }}>{r.name}</span>
+                <span className="t-cap" style={{ color: "var(--faint)", textAlign: "right" }}>{r.desc}</span>
+              </div>
+              <ModelPicker value={r.value} onChange={r.onChange} />
+            </div>
+          ))}
+          <div style={{ marginTop: 14, background: "var(--surface-2)", borderRadius: 12, padding: "12px 14px", display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10 }}>
+            <span className="t-foot" style={{ color: "var(--sub)" }}>Est. per pulse + delegate task</span>
+            <span className="t-num" style={{ fontSize: 15, fontWeight: 600, color: "var(--ink)" }}>${est.toFixed(3)}</span>
+          </div>
+          <div className="t-cap t-num" style={{ marginTop: 10, color: "var(--faint)" }}>Today · {fmtK(inTok)} in · {fmtK(outTok)} out · ${cost.toFixed(2)}</div>
+        </Card>
+      </div>
+      <UsageCard isMobile={isMobile} />
+    </Grid>
+  );
+}
+
 /* ═══ Status — connection health machinery ═════════════════════════════════ */
 
 const IS_DEPLOYED = typeof window !== "undefined" && window.location.hostname !== "localhost";
@@ -197,7 +267,7 @@ const CONN_STATUS = {
 // Ping protocol lives in lib/functions.js — one copy for every health pill.
 export { pingFn } from "../../lib/functions.js";
 
-function useConnections({ session, btc }) {
+export function useConnections({ session, btc }) {
   const [checks, setChecks] = useState({});
   const [lastRun, setLastRun] = useState(null);
   const [running, setRunning] = useState(false);
@@ -290,37 +360,10 @@ function ConnStatus({ check }) {
   );
 }
 
-/* ═══ The page ═════════════════════════════════════════════════════════════ */
-
-// Keys are stable (Summon and muscle memory point at them).
-const SYSTEMS_SUBTABS = [
-  { key: "usage", label: "Usage" },
-  { key: "status", label: "Status" },
-  { key: "deploy", label: "Deploy" },
-  { key: "supabase", label: "Supabase" },
-  { key: "miner", label: "Miner" },
-];
-
-const REPLACE_ACCEPT = ".html,.htm,.js,.mjs,.css,.svg,.txt,.xml,.json,.webmanifest,image/*"; // matches the hint: HTML, JS, CSS, images
-
-export function SystemsPage({ settings, updateSetting, session, btc, isMobile }) {
-  // Sub-tab state is deliberately local — not persisted, not deep-linked
-  // (unlike Personal/Boardroom jumps); every visit starts on Usage.
-  const [sub, setSub] = useState("usage");
-
-  // ── Status (formerly the standalone Connections page) ──
-  const { checks, lastRun, running, runAll } = useConnections({ session, btc });
-  // Lazy per-sub-tab: checks used to fire on page mount even while the Usage
-  // tab was showing — ~25 network calls (including a paid Anthropic ping) the
-  // user might never look at. They now start the first time Status is shown;
-  // results persist across sub-tab switches, and "Run checks" re-runs on
-  // demand as before.
-  const statusStarted = useRef(false);
-  useEffect(() => {
-    if (sub !== "status" || statusStarted.current) return;
-    statusStarted.current = true;
-    runAll();
-  }, [sub]); // eslint-disable-line react-hooks/exhaustive-deps
+// Status sub-tab — connection roll-up + per-pipe health. The connections hook
+// lives in the parent (Assets page) so results persist across sub-tab switches;
+// this tab is pure presentation over the passed-in state.
+export function StatusTab({ checks, lastRun, running, runAll, isMobile }) {
   const vals = Object.values(checks);
   const counts = {
     ok: vals.filter(c => c?.status === "ok").length,
@@ -330,7 +373,58 @@ export function SystemsPage({ settings, updateSetting, session, btc, isMobile })
   };
   const agoCheck = (ts) => { if (!ts) return "—"; const s = Math.floor((Date.now() - ts) / 1000); return s < 60 ? `${s}s ago` : `${Math.floor(s / 60)}m ago`; };
 
-  // ── Deploy — build triggers, plus a safe single-file replace ──
+  return (
+    <>
+      <Card pad="md">
+        <div style={{ display: "grid", gridTemplateColumns: isMobile ? "1fr 1fr" : "repeat(4, 1fr)", gap: 8 }}>
+          <StatTile value={counts.ok} label="Live" valueTone="var(--green)" />
+          <StatTile value={counts.warn} label="Partial" valueTone="var(--amber)" />
+          <StatTile value={counts.down} label="Down" valueTone="var(--red)" />
+          <StatTile value={counts.off} label="Not set" valueTone="var(--faint)" />
+        </div>
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, marginTop: 12 }}>
+          <span className="t-cap t-num" style={{ color: "var(--faint)" }}>Last check {agoCheck(lastRun)}</span>
+          <Button kind="tinted" size="md" onClick={runAll} disabled={running}>{running ? "Checking…" : "Run checks"}</Button>
+        </div>
+      </Card>
+
+      <Grid min={320} gap={12} style={{ marginTop: 12 }}>
+        {CONN_GROUPS.map(g => (
+          // The long functions group spans the full row on tablet;
+          // the small groups sit side by side.
+          <div key={g.title} style={g.keys.length > 6 ? { gridColumn: "1 / -1" } : undefined}>
+            <SectionHeader title={g.title} />
+            <CellGroup>
+              {g.keys.map(k => {
+                const meta = CONN_META[k];
+                const check = checks[k];
+                return (
+                  <Cell
+                    key={k}
+                    title={meta.name}
+                    sub={check?.detail || meta.desc}
+                    trailing={
+                      <span style={{ display: "inline-flex", alignItems: "center", gap: 8, flex: "none" }}>
+                        {typeof check?.ms === "number" && <span className="t-num" style={{ fontSize: 11, color: "var(--faint)" }}>{check.ms}ms</span>}
+                        <ConnStatus check={check} />
+                      </span>
+                    }
+                  />
+                );
+              })}
+            </CellGroup>
+          </div>
+        ))}
+      </Grid>
+    </>
+  );
+}
+
+/* ═══ Deploy — build triggers + a safe single-file replace ═════════════════ */
+
+const REPLACE_ACCEPT = ".html,.htm,.js,.mjs,.css,.svg,.txt,.xml,.json,.webmanifest,image/*"; // matches the hint: HTML, JS, CSS, images
+
+export function DeployTab({ isMobile }) {
   const [deploys, setDeploys] = useState({});
   const redeploy = async (p) => {
     setDeploys(d => ({ ...d, [p.name]: { busy: true } }));
@@ -367,7 +461,91 @@ export function SystemsPage({ settings, updateSetting, session, btc, isMobile })
     setReplaceBusy(false);
   };
 
-  // ── Supabase — which project the console commands target ──
+  const deployables = PROPERTIES.filter(p => !p.assetsOnly); // Runway/FFSR excluded on purpose
+
+  return (
+    <Grid min={isMobile ? 320 : 380} gap={12}>
+      <div>
+        <SectionHeader title="Deployments" trailing="Netlify" />
+        <CellGroup>
+          {deployables.map(p => {
+            const d = deploys[p.name] || {};
+            const line = d.busy ? "Triggering build…" : d.when ? (d.ok ? `Build triggered · ${d.when}` : "Trigger failed — check deploy function") : `netlify · ${p.site}`;
+            return (
+              <Cell
+                key={p.name}
+                leading={<Dot tone={d.busy ? "var(--amber)" : d.when ? (d.ok ? "var(--green)" : "var(--red)") : "var(--faint)"} size={7} pulse={d.busy} />}
+                title={p.name}
+                sub={<span className="t-num" style={{ fontSize: 11.5, color: d.busy ? "var(--amber)" : "var(--sub)" }}>{line}</span>}
+                trailing={
+                  <Button kind="quiet" size="md" disabled={d.busy} onClick={() => redeploy(p)} style={{ flex: "none" }}>
+                    {d.busy ? "Deploying…" : "Redeploy"}
+                  </Button>
+                }
+              />
+            );
+          })}
+        </CellGroup>
+        <div className="t-foot" style={{ color: "var(--faint)", padding: "8px 16px 0" }}>
+          Each redeploy triggers a fresh Netlify build from the site's connected repo. Live/down state lives under the Status tab.
+        </div>
+      </div>
+
+      <div>
+        <SectionHeader title="Replace a File" trailing="Single-file swap" />
+        <Card pad="md">
+          <div className="t-foot" style={{ color: "var(--sub)" }}>
+            Swaps one file on the sites you pick — every other file on the live site is left exactly as it is. For a full rebuild, use Deployments instead.
+          </div>
+          <input
+            ref={fileRef} type="file" accept={REPLACE_ACCEPT} style={{ display: "none" }}
+            onChange={e => { const f = e.target.files?.[0] || null; setReplaceFile(f); setReplaceResults({}); if (f && !replacePath) setReplacePath("/" + f.name); }}
+          />
+          <Cell
+            title={replaceFile ? replaceFile.name : "No file chosen"}
+            sub={replaceFile ? "set the path below, pick sites, then replace" : "HTML, JS, CSS, images — keep it under 4MB"}
+            trailing={<Button kind="quiet" size="md" onClick={() => fileRef.current?.click()}>{replaceFile ? "Change" : "Choose a file"}</Button>}
+            style={{ padding: "10px 0", minHeight: 56 }}
+          />
+          {replaceFile && (
+            <>
+              <div className="t-foot" style={{ color: "var(--sub)", margin: "4px 0 6px" }}>Path on the site (exact, case-sensitive)</div>
+              <Field
+                value={replacePath} onChange={e => setReplacePath(e.target.value)} placeholder="/index.html"
+                style={{ fontFamily: "var(--font-mono)" }}
+              />
+              <div className="t-foot" style={{ color: "var(--sub)", margin: "12px 0 8px" }}>Replace on</div>
+              <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
+                {deployables.map(p => {
+                  const sel = replaceTargets.includes(p.name);
+                  return (
+                    <Pill key={p.name} active={sel} onClick={() => toggleTarget(p.name)}>
+                      {sel && <IcCheck size={11} />}{p.name}
+                    </Pill>
+                  );
+                })}
+              </div>
+              <Button kind="tinted" size="md" full disabled={replaceBusy || !replacePath.trim() || !replaceTargets.length} onClick={runReplace} style={{ marginTop: 12 }}>
+                {replaceBusy ? "Replacing…" : `Replace on ${replaceTargets.length || 0} site${replaceTargets.length === 1 ? "" : "s"}`}
+              </Button>
+              {Object.keys(replaceResults).length > 0 && (
+                <div style={{ display: "flex", flexDirection: "column", gap: 5, marginTop: 10 }}>
+                  {Object.entries(replaceResults).map(([name, r]) => (
+                    <div key={name} className="t-foot" style={{ color: r.ok ? "var(--green)" : "var(--red)" }}>{r.ok ? "✓" : "✗"} {name}: {r.detail}</div>
+                  ))}
+                </div>
+              )}
+            </>
+          )}
+        </Card>
+      </div>
+    </Grid>
+  );
+}
+
+/* ═══ Supabase console — allowlisted maintenance ops ═══════════════════════ */
+
+export function SupabaseTab() {
   const [projects, setProjects] = useState(["Board Room"]);
   const [project, setProject] = useState("Board Room");
   useEffect(() => {
@@ -393,241 +571,43 @@ export function SystemsPage({ settings, updateSetting, session, btc, isMobile })
     setSqlBusy(false);
   };
 
-  // ── Usage / Models ──
-  const models = { ...DEFAULT_MODELS, ...(settings?.models || {}) };
-  // The board is gone; the Mind tab is the tool now. Two layers: the Mind's own
-  // reasoning/synthesis (Pulse, strategy) stored in settings.models.mind, and the
-  // Mini Me delegate's task runs — which live in settings.mini.model, so this row
-  // stays the single source of truth the delegate already reads.
-  const delegateModel = settings?.mini?.model || "haiku";
-  // Estimate: base cost per layer times the model's MODEL_META mult (mult 1 =
-  // Haiku). A mind pulse is one reasoning+synthesis call; a delegate run is one
-  // task execution.
-  const mult = k => (MODEL_META.find(m => m.key === k) || {}).mult || 1;
-  const est = 0.010 * mult(models.mind) + 0.008 * mult(delegateModel);
-  // "Today" line reads obs — the per-browser localStorage tracker (see the
-  // comment in telemetry.js). Distinct from the durable usage_log; never
-  // merge the two.
-  const spendToday = obs.all().filter(l => new Date(l.ts).toDateString() === new Date().toDateString());
-  const inTok = spendToday.reduce((s, l) => s + (l.inTok || 0), 0), outTok = spendToday.reduce((s, l) => s + (l.outTok || 0), 0);
-  const cost = spendToday.reduce((s, l) => s + (l.cost || 0), 0);
-  const fmtK = n => n > 999 ? Math.round(n / 1000) + "K" : String(n);
-  const layers = [
-    { key: "mind", name: "Mind", desc: "reasoning & synthesis — the neural mind thinking",
-      value: models.mind, onChange: (k) => updateSetting("models", { ...models, mind: k }) },
-    { key: "delegate", name: "Delegate", desc: "Mini Me — runs your queued tasks",
-      value: delegateModel, onChange: (k) => updateSetting("mini", { ...(settings?.mini || {}), model: k }) },
-  ];
-
-  const deployables = PROPERTIES.filter(p => !p.assetsOnly); // Runway/FFSR excluded on purpose
-
   return (
-    <div style={{ flex: 1, display: "flex", flexDirection: "column", padding: isMobile ? "4px 16px 24px" : "6px 0 40px" }}>
-      <div style={{ width: "100%", maxWidth: 1020, margin: "0 auto", display: "flex", flexDirection: "column", minWidth: 0 }}>
-        {/* PillRow, not Segmented: the fifth sub-tab (Miner) puts this past
-            Segmented's ≤4 equal-width ceiling (DESIGN.md §6), and five equal
-            columns would crush the labels on a phone. PillRow scrolls and
-            keeps the active pill centered. */}
-        <PillRow options={SYSTEMS_SUBTABS} value={sub} onChange={setSub} style={{ marginBottom: 14 }} />
-
-        {/* key={sub} re-mounts and animates the content on every tab switch. */}
-        <div key={sub} className="pagefade" style={{ display: "flex", flexDirection: "column", minWidth: 0 }}>
-
-          {sub === "usage" && (
-            <Grid min={isMobile ? 320 : 380} gap={12}>
-              <div>
-                <SectionHeader title="Model Control" trailing="Tokens" />
-                <Card pad="md">
-                  <div className="t-foot" style={{ color: "var(--sub)" }}>Start cheap. Escalate a layer only when the answers need it.</div>
-                  {layers.map(r => (
-                    <div key={r.key} style={{ display: "flex", flexDirection: "column", gap: 8, marginTop: 14 }}>
-                      <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", gap: 10 }}>
-                        <span className="t-call" style={{ fontWeight: 600 }}>{r.name}</span>
-                        <span className="t-cap" style={{ color: "var(--faint)", textAlign: "right" }}>{r.desc}</span>
-                      </div>
-                      <ModelPicker value={r.value} onChange={r.onChange} />
-                    </div>
-                  ))}
-                  <div style={{ marginTop: 14, background: "var(--surface-2)", borderRadius: 12, padding: "12px 14px", display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10 }}>
-                    <span className="t-foot" style={{ color: "var(--sub)" }}>Est. per pulse + delegate task</span>
-                    <span className="t-num" style={{ fontSize: 15, fontWeight: 600, color: "var(--ink)" }}>${est.toFixed(3)}</span>
-                  </div>
-                  <div className="t-cap t-num" style={{ marginTop: 10, color: "var(--faint)" }}>Today · {fmtK(inTok)} in · {fmtK(outTok)} out · ${cost.toFixed(2)}</div>
-                </Card>
-              </div>
-              <UsageCard isMobile={isMobile} />
-            </Grid>
-          )}
-
-          {sub === "status" && (
-            <>
-              <Card pad="md">
-                <div style={{ display: "grid", gridTemplateColumns: isMobile ? "1fr 1fr" : "repeat(4, 1fr)", gap: 8 }}>
-                  <StatTile value={counts.ok} label="Live" valueTone="var(--green)" />
-                  <StatTile value={counts.warn} label="Partial" valueTone="var(--amber)" />
-                  <StatTile value={counts.down} label="Down" valueTone="var(--red)" />
-                  <StatTile value={counts.off} label="Not set" valueTone="var(--faint)" />
-                </div>
-                <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, marginTop: 12 }}>
-                  <span className="t-cap t-num" style={{ color: "var(--faint)" }}>Last check {agoCheck(lastRun)}</span>
-                  <Button kind="tinted" size="md" onClick={runAll} disabled={running}>{running ? "Checking…" : "Run checks"}</Button>
-                </div>
-              </Card>
-
-              <Grid min={320} gap={12} style={{ marginTop: 12 }}>
-                {CONN_GROUPS.map(g => (
-                  // The long functions group spans the full row on tablet;
-                  // the small groups sit side by side.
-                  <div key={g.title} style={g.keys.length > 6 ? { gridColumn: "1 / -1" } : undefined}>
-                    <SectionHeader title={g.title} />
-                    <CellGroup>
-                      {g.keys.map(k => {
-                        const meta = CONN_META[k];
-                        const check = checks[k];
-                        return (
-                          <Cell
-                            key={k}
-                            title={meta.name}
-                            sub={check?.detail || meta.desc}
-                            trailing={
-                              <span style={{ display: "inline-flex", alignItems: "center", gap: 8, flex: "none" }}>
-                                {typeof check?.ms === "number" && <span className="t-num" style={{ fontSize: 11, color: "var(--faint)" }}>{check.ms}ms</span>}
-                                <ConnStatus check={check} />
-                              </span>
-                            }
-                          />
-                        );
-                      })}
-                    </CellGroup>
-                  </div>
-                ))}
-              </Grid>
-            </>
-          )}
-
-          {sub === "deploy" && (
-            <Grid min={isMobile ? 320 : 380} gap={12}>
-              <div>
-                <SectionHeader title="Deployments" trailing="Netlify" />
-                <CellGroup>
-                  {deployables.map(p => {
-                    const d = deploys[p.name] || {};
-                    const line = d.busy ? "Triggering build…" : d.when ? (d.ok ? `Build triggered · ${d.when}` : "Trigger failed — check deploy function") : `netlify · ${p.site}`;
-                    return (
-                      <Cell
-                        key={p.name}
-                        leading={<Dot tone={d.busy ? "var(--amber)" : d.when ? (d.ok ? "var(--green)" : "var(--red)") : "var(--faint)"} size={7} pulse={d.busy} />}
-                        title={p.name}
-                        sub={<span className="t-num" style={{ fontSize: 11.5, color: d.busy ? "var(--amber)" : "var(--sub)" }}>{line}</span>}
-                        trailing={
-                          <Button kind="quiet" size="md" disabled={d.busy} onClick={() => redeploy(p)} style={{ flex: "none" }}>
-                            {d.busy ? "Deploying…" : "Redeploy"}
-                          </Button>
-                        }
-                      />
-                    );
-                  })}
-                </CellGroup>
-                <div className="t-foot" style={{ color: "var(--faint)", padding: "8px 16px 0" }}>
-                  Each redeploy triggers a fresh Netlify build from the site's connected repo. Live/down state lives under the Status tab.
-                </div>
-              </div>
-
-              <div>
-                <SectionHeader title="Replace a File" trailing="Single-file swap" />
-                <Card pad="md">
-                  <div className="t-foot" style={{ color: "var(--sub)" }}>
-                    Swaps one file on the sites you pick — every other file on the live site is left exactly as it is. For a full rebuild, use Deployments instead.
-                  </div>
-                  <input
-                    ref={fileRef} type="file" accept={REPLACE_ACCEPT} style={{ display: "none" }}
-                    onChange={e => { const f = e.target.files?.[0] || null; setReplaceFile(f); setReplaceResults({}); if (f && !replacePath) setReplacePath("/" + f.name); }}
-                  />
-                  <Cell
-                    title={replaceFile ? replaceFile.name : "No file chosen"}
-                    sub={replaceFile ? "set the path below, pick sites, then replace" : "HTML, JS, CSS, images — keep it under 4MB"}
-                    trailing={<Button kind="quiet" size="md" onClick={() => fileRef.current?.click()}>{replaceFile ? "Change" : "Choose a file"}</Button>}
-                    style={{ padding: "10px 0", minHeight: 56 }}
-                  />
-                  {replaceFile && (
-                    <>
-                      <div className="t-foot" style={{ color: "var(--sub)", margin: "4px 0 6px" }}>Path on the site (exact, case-sensitive)</div>
-                      <Field
-                        value={replacePath} onChange={e => setReplacePath(e.target.value)} placeholder="/index.html"
-                        style={{ fontFamily: "var(--font-mono)" }}
-                      />
-                      <div className="t-foot" style={{ color: "var(--sub)", margin: "12px 0 8px" }}>Replace on</div>
-                      <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
-                        {deployables.map(p => {
-                          const sel = replaceTargets.includes(p.name);
-                          return (
-                            <Pill key={p.name} active={sel} onClick={() => toggleTarget(p.name)}>
-                              {sel && <IcCheck size={11} />}{p.name}
-                            </Pill>
-                          );
-                        })}
-                      </div>
-                      <Button kind="tinted" size="md" full disabled={replaceBusy || !replacePath.trim() || !replaceTargets.length} onClick={runReplace} style={{ marginTop: 12 }}>
-                        {replaceBusy ? "Replacing…" : `Replace on ${replaceTargets.length || 0} site${replaceTargets.length === 1 ? "" : "s"}`}
-                      </Button>
-                      {Object.keys(replaceResults).length > 0 && (
-                        <div style={{ display: "flex", flexDirection: "column", gap: 5, marginTop: 10 }}>
-                          {Object.entries(replaceResults).map(([name, r]) => (
-                            <div key={name} className="t-foot" style={{ color: r.ok ? "var(--green)" : "var(--red)" }}>{r.ok ? "✓" : "✗"} {name}: {r.detail}</div>
-                          ))}
-                        </div>
-                      )}
-                    </>
-                  )}
-                </Card>
-              </div>
-            </Grid>
-          )}
-
-          {/* `active` gates the 5s poll — it stops the moment you leave the
-              sub-tab, so the other four never pay for it. */}
-          {sub === "miner" && <MinerPanel active={sub === "miner"} isMobile={isMobile} />}
-
-          {sub === "supabase" && (
-            <div>
-              <SectionHeader title="Supabase Console" trailing="Allowlisted ops" />
-              <Card pad="md">
-                <div className="t-foot" style={{ color: "var(--sub)" }}>Run maintenance against a project's shared memory. Guardrails on — destructive ops ask twice.</div>
-                <div className="t-foot" style={{ color: "var(--sub)", margin: "12px 0 8px" }}>Project</div>
-                <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
-                  {projects.map(p => (
-                    <Pill key={p} active={project === p} onClick={() => setProject(p)}>{p}</Pill>
-                  ))}
-                </div>
-                <div style={{ display: "flex", flexWrap: "wrap", gap: 8, margin: "10px 0 12px" }}>
-                  {["backup chat_messages", "vacuum seat_notes", "clear findings > 30d"].map(q => (
-                    <Pill key={q} onClick={() => setSqlInput(q)} style={{ fontFamily: "var(--font-mono)", fontSize: 12 }}>{q}</Pill>
-                  ))}
-                </div>
-                {/* The console log renders in-page and grows with the session —
-                    no fixed-height inner scroller. */}
-                <div style={{ background: "var(--surface-2)", borderRadius: 12, padding: "12px 14px", minHeight: 96, display: "flex", flexDirection: "column", gap: 6, marginBottom: 10 }}>
-                  {sqlLog.map((l, i) => (
-                    <div key={i} className="t-num" style={{ fontSize: 11.5, lineHeight: 1.55, whiteSpace: "pre-wrap", overflowWrap: "break-word", color: l.kind === "cmd" ? "var(--sub)" : l.kind === "err" ? "var(--red)" : "var(--green)" }}>{l.text}</div>
-                  ))}
-                </div>
-                <div style={{ display: "flex", gap: 8 }}>
-                  <Field
-                    value={sqlInput} onChange={e => setSqlInput(e.target.value)}
-                    onKeyDown={e => { if (e.key === "Enter") { e.preventDefault(); runSql(); } }}
-                    placeholder="update seat_notes set …"
-                    style={{ flex: 1, fontFamily: "var(--font-mono)" }}
-                  />
-                  <Button kind="quiet" size="md" onClick={runSql} disabled={sqlBusy}>Run</Button>
-                </div>
-              </Card>
-            </div>
-          )}
-
+    <div>
+      <SectionHeader title="Supabase Console" trailing="Allowlisted ops" />
+      <Card pad="md">
+        <div className="t-foot" style={{ color: "var(--sub)" }}>Run maintenance against a project's shared memory. Guardrails on — destructive ops ask twice.</div>
+        <div className="t-foot" style={{ color: "var(--sub)", margin: "12px 0 8px" }}>Project</div>
+        <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
+          {projects.map(p => (
+            <Pill key={p} active={project === p} onClick={() => setProject(p)}>{p}</Pill>
+          ))}
         </div>
-      </div>
+        <div style={{ display: "flex", flexWrap: "wrap", gap: 8, margin: "10px 0 12px" }}>
+          {["backup chat_messages", "vacuum seat_notes", "clear findings > 30d"].map(q => (
+            <Pill key={q} onClick={() => setSqlInput(q)} style={{ fontFamily: "var(--font-mono)", fontSize: 12 }}>{q}</Pill>
+          ))}
+        </div>
+        {/* The console log renders in-page and grows with the session —
+            no fixed-height inner scroller. */}
+        <div style={{ background: "var(--surface-2)", borderRadius: 12, padding: "12px 14px", minHeight: 96, display: "flex", flexDirection: "column", gap: 6, marginBottom: 10 }}>
+          {sqlLog.map((l, i) => (
+            <div key={i} className="t-num" style={{ fontSize: 11.5, lineHeight: 1.55, whiteSpace: "pre-wrap", overflowWrap: "break-word", color: l.kind === "cmd" ? "var(--sub)" : l.kind === "err" ? "var(--red)" : "var(--green)" }}>{l.text}</div>
+          ))}
+        </div>
+        <div style={{ display: "flex", gap: 8 }}>
+          <Field
+            value={sqlInput} onChange={e => setSqlInput(e.target.value)}
+            onKeyDown={e => { if (e.key === "Enter") { e.preventDefault(); runSql(); } }}
+            placeholder="update seat_notes set …"
+            style={{ flex: 1, fontFamily: "var(--font-mono)" }}
+          />
+          <Button kind="quiet" size="md" onClick={runSql} disabled={sqlBusy}>Run</Button>
+        </div>
+      </Card>
     </div>
   );
 }
 
-export default SystemsPage;
+// Miner sub-tab re-exported so the Assets page composes every systems tab from
+// one import. `active` gates the 5s poll — see MinerPanel.
+export { MinerPanel } from "./MinerPanel.jsx";

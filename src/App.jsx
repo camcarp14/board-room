@@ -22,7 +22,6 @@ const PersonalPage = lazy(() => import("./pages/personal/PersonalPage.jsx").then
 const TrainPage = lazy(() => import("./pages/train/TrainPage.jsx").then(m => ({ default: m.TrainPage })));
 const BoardRoomPage = lazy(() => import("./pages/board/BoardPage.jsx").then(m => ({ default: m.BoardRoomPage })));
 const PropertiesPage = lazy(() => import("./pages/assets/AssetsPage.jsx").then(m => ({ default: m.PropertiesPage })));
-const SystemsPage = lazy(() => import("./pages/systems/SystemsPage.jsx").then(m => ({ default: m.SystemsPage })));
 const UpstreamPage = lazy(() => import("./pages/upstream/UpstreamPage.jsx").then(m => ({ default: m.UpstreamPage })));
 
 // ════════════════════════════════════════════════════════════════════════════
@@ -79,7 +78,7 @@ export default function App() {
   const [migration, setMigration] = useState(null);
   const [importing, setImporting] = useState(false);
   const [loadingData, setLoadingData] = useState(false);
-  const [page, setPage] = useState(() => previewParam("p") || "brief"); // single nav state — same source of truth on mobile and desktop
+  const [page, setPage] = useState(() => previewParam("p") || "assets"); // single nav state — Assets is the landing tab (same source of truth on mobile and desktop)
   const [dataStamp, setDataStamp] = useState(null);
   const [refreshing, setRefreshing] = useState(false);
   const [now, setNow] = useState(Date.now());
@@ -200,6 +199,9 @@ export default function App() {
   // actually somewhere to scroll from, skipped entirely if already at top
   // so it's not a pointless animation on every tap.
   const goToPage = (key) => {
+    // Systems folded into Assets — honor any stray "systems" deep link
+    // (old Summon muscle memory, saved links) by landing on Assets.
+    if (key === "systems") key = "assets";
     // Direction-aware: pages to the right slide in from the right, and vice
     // versa — the same physics whether the trigger was a tab tap or a swipe.
     const from = NAV.findIndex(n => n.key === page);
@@ -312,9 +314,10 @@ export default function App() {
   // One deep-link primitive: page + optional sub-tab/entity, used by Summon and
   // by anything on a page that wants to point somewhere (e.g. the Word's chips).
   const jumpTo = (target) => {
-    // Workout graduated from Personal to its own Train tab — old deep links
-    // (Brief chips, saved Summon muscle memory) land on the new page.
-    const t = target.page === "personal" && target.sub === "workout" ? { ...target, page: "train", sub: undefined } : target;
+    // Two migrations honored here: Workout graduated from Personal to its own
+    // Train tab, and Systems folded into Assets (its panels are Assets sub-tabs).
+    let t = target.page === "personal" && target.sub === "workout" ? { ...target, page: "train", sub: undefined } : target;
+    if (t.page === "systems") t = { ...t, page: "assets", sub: t.sub || "status" };
     goToPage(t.page);
     setJump({ t: Date.now(), ...t });
   };
@@ -425,8 +428,7 @@ export default function App() {
       case "boardroom": return <BoardRoomPage settings={settings} updateSetting={updateSetting} session={session} onWorkerRun={refreshData} onSkillsChanged={refreshSkills} jump={jump} isMobile={isMobile} skills={skills} />;
       case "personal": return <PersonalPage isMobile={isMobile} jumpSignal={personalJumpTo} jump={jump} settings={settings} updateSetting={updateSetting} />;
       case "train": return <TrainPage isMobile={isMobile} settings={settings} updateSetting={updateSetting} jump={jump} />;
-      case "assets": return <PropertiesPage isMobile={isMobile} settings={settings} updateSetting={updateSetting} session={session} />;
-      case "systems": return <SystemsPage settings={settings} updateSetting={updateSetting} session={session} btc={btc} isMobile={isMobile} />;
+      case "assets": return <PropertiesPage isMobile={isMobile} settings={settings} updateSetting={updateSetting} session={session} btc={btc} jump={jump} />;
       case "upstream": return <UpstreamPage isMobile={isMobile} />;
       default: return null;
     }

@@ -26,7 +26,8 @@ const SUMMON_PLACES = [
   { label: "Board chat", page: "boardroom", sub: "chat", hint: "ask the seats" },
   { label: "Seats", page: "boardroom", sub: "seats", hint: "the five" },
   { label: "Assets", page: "assets", hint: "properties · auditor" },
-  { label: "Systems", page: "systems", hint: "usage · status · deploy" },
+  // Systems folded into Assets — jump straight onto its Status sub-tab.
+  { label: "Systems", page: "assets", sub: "status", hint: "usage · status · deploy" },
 ];
 
 export function Summon({ onClose, onGo, onJot, onQueueTask, onAsk, isMobile }) {
