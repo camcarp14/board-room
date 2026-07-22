@@ -62,7 +62,16 @@ export const db = {
   },
   async saveFindings(rows) {
     if (!rows || !rows.length) return;
-    try { await supabase.from("auditor_findings").insert(rows.map(r => ({ property: r.property, severity: r.severity, area: r.area || null, finding: r.finding, suggestion: r.suggestion }))); } catch {}
+    // user_id stamped explicitly — db-admin's "clear findings > 30d" is
+    // scoped by user_id, so inserts must not depend on a column default
+    // being configured. Falls back to the bare shape if the column doesn't
+    // exist on an older table.
+    try {
+      const user_id = await db.uid();
+      const shaped = rows.map(r => ({ property: r.property, severity: r.severity, area: r.area || null, finding: r.finding, suggestion: r.suggestion }));
+      const { error } = await supabase.from("auditor_findings").insert(shaped.map(r => ({ ...r, user_id })));
+      if (error && /user_id|42703/i.test(error.message || "")) await supabase.from("auditor_findings").insert(shaped);
+    } catch {}
   },
   async loadNotes() {
     // Try the upgraded schema first; fall back cleanly if the pinned/color

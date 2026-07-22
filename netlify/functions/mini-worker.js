@@ -105,13 +105,18 @@ async function saveTasks(cfg, userId, tasks) {
 // The whole task list lives in one JSON setting, so a plain save is a
 // last-write-wins overwrite. Merge against a fresh read instead: rows this
 // run touched win, everything else (approvals, deletions, newly queued tasks
-// from another device) keeps the stored version.
-const taskKey = (t) => t.id || `${t.text}::${t.queued_at || ""}`;
+// from another device) keeps the stored version. Touched rows register under
+// BOTH keys — id and text::queued_at — because processUser assigns ephemeral
+// ids to legacy id-less tasks in memory, while the stored copy is still
+// id-less; matching only on id dropped those tasks' status updates and they
+// re-ran (re-spent) on every invocation.
+const taskKeys = (t) => [t.id, `${t.text}::${t.queued_at || ""}`].filter(Boolean);
 async function mergeSaveTasks(cfg, userId, touched) {
-  const byKey = new Map(touched.map(t => [taskKey(t), t]));
+  const byKey = new Map();
+  touched.forEach(t => taskKeys(t).forEach(k => byKey.set(k, t)));
   const fresh = await loadUserBundle(cfg, userId);
   const stored = Array.isArray(fresh.mini_tasks) ? fresh.mini_tasks : [];
-  const merged = stored.map(t => byKey.get(taskKey(t)) || t);
+  const merged = stored.map(t => taskKeys(t).map(k => byKey.get(k)).find(Boolean) || t);
   await saveTasks(cfg, userId, merged);
   return merged;
 }

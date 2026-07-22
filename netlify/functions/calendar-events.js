@@ -95,16 +95,23 @@ function expandRrule(start, rrule, winStart, winEnd, excluded) {
 
   const { wall, tz } = start;
   const anchor = Date.UTC(wall.y, wall.mo - 1, wall.d); // date-only cursor, DST-proof
+  const startDow = new Date(anchor).getUTCDay();
+  // WEEKLY intervals align to WEEK BOUNDARIES (WKST, default Monday — RFC
+  // 5545), not to DTSTART's own weekday: striding 14 days from a Wednesday
+  // start put a bi-weekly Mon/Wed meeting's Mondays in the OFF weeks. Anchor
+  // on the Monday of DTSTART's week and express BYDAY as offsets from it;
+  // occurrences before DTSTART are skipped below.
+  const mondayOffset = (startDow - 1 + 7) % 7; // days from Monday-of-week to DTSTART
+  const base0 = freq === "WEEKLY" ? anchor - mondayOffset * 86400000 : anchor;
   const dayAt = (offsetDays) => {
-    const d = new Date(anchor + offsetDays * 86400000);
+    const d = new Date(base0 + offsetDays * 86400000);
     return { y: d.getUTCFullYear(), mo: d.getUTCMonth() + 1, d: d.getUTCDate() };
   };
-  const startDow = new Date(anchor).getUTCDay();
-  // WEEKLY: BYDAY days sorted by distance from DTSTART's weekday so the
-  // sequence is chronological (COUNT depends on that). Default: DTSTART's day.
+  // BYDAY as Monday-relative offsets, sorted so the sequence is chronological
+  // (COUNT depends on that). Default: DTSTART's day.
   const bydays = (freq === "WEEKLY")
     ? (parts.BYDAY ? parts.BYDAY.split(",").map(t => DOW[t.trim().slice(-2).toUpperCase()]).filter(n => n !== undefined) : [startDow])
-        .map(dw => (dw - startDow + 7) % 7).sort((a, b) => a - b)
+        .map(dw => (dw - 1 + 7) % 7).sort((a, b) => a - b)
     : [0];
 
   const out = [];

@@ -224,7 +224,10 @@ export function Sheet({ onClose, title, headTrailing, footer, children, z = 300,
     // doesn't exist, so make it true — move focus in on open, keep Tab cycling
     // inside the top-most sheet, and hand focus back on close.
     const prevFocus = document.activeElement;
-    panelRef.current?.focus({ preventScroll: true });
+    // Respect a child's autoFocus: it lands during the commit phase, BEFORE
+    // this passive effect — unconditionally focusing the panel here stole the
+    // caret from every sheet form field that used it.
+    if (panelRef.current && !panelRef.current.contains(document.activeElement)) panelRef.current.focus({ preventScroll: true });
     const onKey = (e) => {
       const top = sheetStack[sheetStack.length - 1] === id;
       if (e.key === "Escape") {

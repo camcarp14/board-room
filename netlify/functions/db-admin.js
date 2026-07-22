@@ -55,8 +55,14 @@ exports.handler = async (event) => {
       if (!callerId) return json(401, { error: "couldn't resolve your user id" });
       // Scoped to the caller's rows — a service-role DELETE must never sweep
       // other users' data just because this caller asked for maintenance.
+      // A non-2xx (e.g. the table predates the user_id column) must surface
+      // as an error, not read as "deleted 0" success.
       const cutoff = new Date(Date.now() - 30 * 86400000).toISOString();
       const res = await rest(`auditor_findings?user_id=eq.${encodeURIComponent(callerId)}&created_at=lt.${cutoff}`, { method: "DELETE" });
+      if (!res.ok) {
+        const detail = (await res.text().catch(() => "")).slice(0, 200);
+        return json(502, { error: `cleanup failed (${res.status})${/user_id/.test(detail) ? " — auditor_findings has no user_id column; add one (uuid, default auth.uid()) and re-run" : `: ${detail}`}` });
+      }
       const count = res.headers.get("content-range")?.split("/")[1] || "0";
       return json(200, { success: true, message: `deleted ${count} findings older than 30 days` });
     }
