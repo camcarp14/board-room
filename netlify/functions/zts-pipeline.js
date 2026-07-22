@@ -54,7 +54,9 @@ exports.handler = async (event) => {
   if (!configured) return json(500, { error: "ZTS Supabase env vars not set" });
 
   try {
-    const res = await fetch(`${url}/rest/v1/creators?select=payload`, { headers: { apikey: key, Authorization: `Bearer ${key}` } });
+    // "Accept-Profile: zts" targets the zts schema — the registry now lives
+    // inside the clarify-outreach Supabase project (consolidated 2026-07).
+    const res = await fetch(`${url}/rest/v1/creators?select=payload`, { headers: { apikey: key, Authorization: `Bearer ${key}`, "Accept-Profile": "zts" } });
     if (!res.ok) throw new Error(`creators query failed (${res.status}) — check the "creators" table still has a "payload" column`);
     const rows = await res.json();
 
