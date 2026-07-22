@@ -14,8 +14,17 @@
 //
 // Needs: SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY (already set for db-admin
 // and mini-worker).
-const { json, error, methodGuard } = require("./_shared/response");
-const { randomUUID } = require("node:crypto");
+//
+// Deliberately self-contained (no require of _shared/response): with the
+// repo's "type":"module" + esbuild bundling, `module.exports` inside a
+// required helper clobbers the bundle's exports object before
+// `exports.handler` is assigned — the function deploys with NO handler.
+// Verified against Netlify's own bundler; btc.js/mini-worker.js work
+// precisely because they are self-contained. (tmdb.js has this same latent
+// bug from an earlier commit.)
+const json = (statusCode, data) => ({ statusCode, headers: { "Content-Type": "application/json" }, body: JSON.stringify(data) });
+const error = (statusCode, message) => json(statusCode, { error: message });
+const randomUUID = () => globalThis.crypto.randomUUID();
 
 function cfg() {
   return { url: process.env.SUPABASE_URL, service: process.env.SUPABASE_SERVICE_ROLE_KEY };
@@ -74,8 +83,7 @@ function normalizeWorkouts(list) {
 }
 
 exports.handler = async (event) => {
-  const guard = methodGuard(event, "POST");
-  if (guard) return guard;
+  if (event.httpMethod !== "POST") return { statusCode: 405, body: "Method not allowed" };
   const c = cfg();
   if (!c.url || !c.service) return error(500, "SUPABASE_URL / SUPABASE_SERVICE_ROLE_KEY not configured");
 

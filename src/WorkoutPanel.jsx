@@ -125,14 +125,23 @@ function makeWdb(sb) {
 
 // ─── in-progress checkpoint — localStorage only, Supabase stays the brain ────
 const ACTIVE_KEY = "br_workout_active";
-// Shape-guarded: a drifted/corrupted checkpoint must never white-screen the
-// tab — anything that isn't a plausible session reads as "no session".
+// Shape-guarded DEEPLY: a drifted/corrupted checkpoint must never
+// white-screen the tab — and because a render-time throw would fire on
+// EVERY visit (the cleanup effect never commits), anything that isn't a
+// plausible session down to the set level reads as "no session" and the
+// bad checkpoint is dropped on the spot.
 const loadActive = () => {
   try {
     const a = JSON.parse(localStorage.getItem(ACTIVE_KEY));
-    if (!a || typeof a !== "object" || !Array.isArray(a.exercises) || !Number.isFinite(a.startedAt)) return null;
+    const setOk = (s) => s && typeof s === "object"
+      && (s.weight == null || Number.isFinite(s.weight))
+      && (s.reps == null || Number.isFinite(s.reps));
+    const exOk = (e) => e && typeof e === "object" && typeof e.name === "string" && Array.isArray(e.sets) && e.sets.every(setOk);
+    const ok = a && typeof a === "object" && Number.isFinite(a.startedAt)
+      && Array.isArray(a.exercises) && a.exercises.every(exOk);
+    if (!ok) { if (a != null) clearActive(); return null; }
     return a;
-  } catch { return null; }
+  } catch { clearActive(); return null; }
 };
 const saveActive = (a) => { try { localStorage.setItem(ACTIVE_KEY, JSON.stringify(a)); } catch {} };
 const clearActive = () => { try { localStorage.removeItem(ACTIVE_KEY); } catch {} };
@@ -197,7 +206,9 @@ export default function WorkoutPanel({ isMobile, supabase, settings, updateSetti
   const unit = ws.unit === "kg" ? "kg" : "lb";
   const bar = Number(ws.bar) > 0 ? Number(ws.bar) : unit === "kg" ? 20 : 45;
   const defaultRest = Number.isFinite(Number(ws.rest)) ? Number(ws.rest) : 90;
-  const setWs = (patch) => updateSetting("workout", { ...ws, ...patch });
+  // Guard the boot window: before settings load, ws is {} and a write here
+  // would clobber the whole workout key (importToken, exNotes) server-side.
+  const setWs = (patch) => { if (settings == null) return; updateSetting("workout", { ...ws, ...patch }); };
 
   const [templates, setTemplates] = useState(null); // null = loading
   const [sessions, setSessions] = useState(null);
@@ -283,6 +294,7 @@ export default function WorkoutPanel({ isMobile, supabase, settings, updateSetti
       templateId: tpl?.id || null,
       templateName: tpl?.name || "Quick session",
       unit,
+      bar, // snapshot: plate math + ramp must not mix a switched-prefs bar with this session's unit
       startedAt: Date.now(),
       rest: null,
       exercises: (tpl?.exercises || []).map((e) => buildSessionExercise(e.name, { ...e, unit: tpl.unit || "lb" })),
@@ -314,14 +326,15 @@ export default function WorkoutPanel({ isMobile, supabase, settings, updateSetti
     if (updateTemplate && a.templateId) {
       const src = (templates || []).find((t) => t.id === a.templateId);
       if (src) {
+        // write-back reads WORKING sets only — a warm-up ramp must never
+        // inflate the routine's set count or reset its weight to the bar;
+        // an exercise left with ONLY warm-ups defines nothing and is skipped
         const exercises = a.exercises
-          .filter((ex) => ex.sets.length)
+          .filter((ex) => ex.sets.some((s) => !isWU(s)))
           .map((ex) => {
-            // write-back reads WORKING sets — a warm-up ramp must not inflate
-            // the routine to 7 sets or reset its weight to the empty bar
             const working = ex.sets.filter((s) => !isWU(s));
             const dsets = working.filter((s) => s.done);
-            const ref = dsets.length ? dsets : working.length ? working : ex.sets;
+            const ref = dsets.length ? dsets : working;
             const last = ref[ref.length - 1];
             return { id: uuid(), name: ex.name, targetSets: ref.length, targetReps: last.reps, weight: last.weight, restSec: ex.restSec };
           });
@@ -574,7 +587,9 @@ function TrainHome({ isMobile, templates, sessions, active, unit, onResume, onSt
                 <Cell key={s.id} title={s.template_name || "Quick session"}
                   sub={
                     <span className="t-num" style={{ fontSize: 11.5 }}>
-                      {fmtDate(s.started_at)} · {fmtVol(s.total_volume || 0)} {s.unit}
+                      {fmtDate(s.started_at)} · {isCardio(s)
+                        ? <>{s.duration_sec ? fmtDur(s.duration_sec) : "cardio"}{cardioMeta(s)?.source === "watch" ? " · watch" : ""}</>
+                        : <>{fmtVol(s.total_volume || 0)} {s.unit}</>}
                       {s.pr_count ? <span style={{ color: "var(--accent)", fontWeight: 600 }}> · ◆{s.pr_count}</span> : null}
                     </span>
                   } />
@@ -715,6 +730,11 @@ function ActiveSession({ isMobile, active, setActive, bar, bestByEx, prevByEx, d
   const upd = (fn) => setActive((a) => ({ ...a, ...fn(a) }));
   const updEx = (exId, fn) => upd((a) => ({ exercises: a.exercises.map((e) => (e.id === exId ? { ...e, ...fn(e) } : e)) }));
 
+  // the session's own bar (snapshotted at start) — a mid-session prefs unit
+  // flip resets the prefs bar to 20/45 in the NEW unit, which must not feed
+  // plate math or the ramp for weights recorded in this session's unit
+  const sessionBar = Number(active.bar) > 0 ? Number(active.bar) : bar;
+
   const elapsed = Math.floor((now - active.startedAt) / 1000);
   const doneSets = active.exercises.reduce((n, e) => n + e.sets.filter((s) => s.done && !isWU(s)).length, 0);
   const volume = active.exercises.reduce((v, e) => v + e.sets.reduce((x, s) => x + (s.done && !isWU(s) ? (s.weight || 0) * (s.reps || 0) : 0), 0), 0);
@@ -775,11 +795,13 @@ function ActiveSession({ isMobile, active, setActive, bar, bestByEx, prevByEx, d
   const restRemain = active.rest ? Math.ceil((active.rest.until - now) / 1000) : null;
   const resting = restRemain != null && restRemain > -5; // linger 5s in "GO" state
 
-  // one buzz the moment rest hits zero — the phone is face-up on the bench
+  // one buzz the moment rest hits zero — the phone is face-up on the bench.
+  // The > -5 window means a checkpoint resumed hours later mounts silently
+  // instead of buzzing for a rest that ended before the app was even open.
   const restDoneRef = useRef(null);
   useEffect(() => {
     if (restRemain == null) { restDoneRef.current = null; return; }
-    if (restRemain <= 0 && restDoneRef.current !== active.rest?.until) {
+    if (restRemain <= 0 && restRemain > -5 && restDoneRef.current !== active.rest?.until) {
       restDoneRef.current = active.rest?.until ?? null;
       buzz(vibrate, [80, 60, 80]);
     }
@@ -819,16 +841,16 @@ function ActiveSession({ isMobile, active, setActive, bar, bestByEx, prevByEx, d
           { targetReps: ex.targetReps || 8, increment: active.unit === "kg" ? 2.5 : 5 },
         ) : null;
         const firstWork = ex.sets.find((s) => !isWU(s) && s.weight > 0);
-        const canRamp = !ex.sets.some(isWU) && !!firstWork && firstWork.weight > bar;
+        const canRamp = !ex.sets.some(isWU) && !!firstWork && firstWork.weight > sessionBar;
         return (
           <ExerciseCard key={ex.id} isMobile={isMobile} ex={ex} index={i} count={active.exercises.length}
-            unit={active.unit} bar={bar}
+            unit={active.unit} bar={sessionBar}
             suggestion={suggestion}
             note={exNotes[norm(ex.name)] || ""}
             onSaveNote={(text) => onSaveNote(ex.name, text)}
             canRamp={canRamp}
             onAddRamp={() => {
-              const ramp = warmupRamp(firstWork.weight, { barWeight: bar, step: active.unit === "kg" ? 2.5 : 5 });
+              const ramp = warmupRamp(firstWork.weight, { barWeight: sessionBar, step: active.unit === "kg" ? 2.5 : 5 });
               if (!ramp.length) return;
               updEx(ex.id, (e) => ({
                 sets: [...ramp.map((r) => ({ id: uuid(), weight: r.weight, reps: r.reps, done: false, prev: null, kind: "warmup" })), ...e.sets],
@@ -838,7 +860,13 @@ function ActiveSession({ isMobile, active, setActive, bar, bestByEx, prevByEx, d
               sets: e.sets.map((s) => (s.id === setId ? { ...s, kind: KIND_NEXT[s.kind || "working"], pr: false } : s)),
             }))}
             onToggleSet={(s) => toggleSet(ex, s)}
-            onSetChange={(setId, patch) => updEx(ex.id, (e) => ({ sets: e.sets.map((s) => (s.id === setId ? { ...s, ...patch } : s)) }))}
+            // editing a LOGGED set's numbers voids its PR flag — a mis-tapped
+            // 500 corrected to 50 must not keep wearing the diamond
+            onSetChange={(setId, patch) => updEx(ex.id, (e) => ({
+              sets: e.sets.map((s) => (s.id === setId
+                ? { ...s, ...patch, ...(s.done && ("weight" in patch || "reps" in patch) ? { pr: false } : {}) }
+                : s)),
+            }))}
             onAddSet={() => addSet(ex)} onRemoveSet={(setId) => removeSet(ex, setId)}
             onCycleRest={() => cycleRest(ex)} onMove={(d) => moveEx(ex.id, d)} onRemove={() => removeEx(ex.id)}
           />

@@ -100,11 +100,15 @@ export function consistency(sessions, { now = Date.now(), goalPerWeek = 3, weeks
     weekRows.push({ start: dateOfDayNum(firstDay + w * 7), count: c, met: c >= goalPerWeek });
   }
   const thisWeekCount = weekRows[weekRows.length - 1]?.count ?? 0;
+  // The streak walks ALL history, not just the display window — a 25-week
+  // run must not read "20" because the heatmap shows 20 columns.
+  const weekCount = (startN) => {
+    let c = 0;
+    for (let d = 0; d < 7; d++) c += counts.get(dateOfDayNum(startN + d)) || 0;
+    return c;
+  };
   let streak = thisWeekCount >= goalPerWeek ? 1 : 0;
-  for (let w = weekRows.length - 2; w >= 0; w--) {
-    if (weekRows[w].met) streak++;
-    else break;
-  }
+  for (let startN = dayNum(thisWeekStart) - 7; weekCount(startN) >= goalPerWeek; startN -= 7) streak++;
   return { days, weekRows, streakWeeks: streak, thisWeekCount, totalSessions: total };
 }
 

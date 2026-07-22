@@ -51,6 +51,12 @@ const gap = consistency([session("2026-06-29", [["Plank", [[0, 1]]]]), session("
 check("streak: a gap week breaks it", gap.streakWeeks === 1, String(gap.streakWeeks));
 check("heatmap: exactly weeks×7 Monday-aligned days", streak3.days.length === 56 && streak3.days[0].date === "2026-06-01");
 check("consistency: cardio counts toward the week", consistency([cardio("2026-07-21")], { now: NOW, goalPerWeek: 1, weeks: 2 }).thisWeekCount === 1);
+// planted: a streak LONGER than the heatmap window must still count in full
+const longStreak = consistency(
+  [...met("2026-06-22"), ...met("2026-06-29"), ...met("2026-07-06"), ...met("2026-07-13")],
+  { now: NOW, goalPerWeek: 2, weeks: 2 } // window shows 2 weeks; streak spans 4
+);
+check("streak: not capped by the display window (4 met weeks, 2-week window → 4)", longStreak.streakWeeks === 4, String(longStreak.streakWeeks));
 
 // 5 — muscle grouping heuristic
 check("groups: bench→Chest, squat→Legs, curl→Arms, row→Back, unknown→Other",
