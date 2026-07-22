@@ -3,7 +3,7 @@
 // and the site auditor (audit + propose-a-fix) below. Data/behavior unchanged
 // from the pre-SESSION PropertiesPage/AuditorCard; anatomy re-voiced.
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import {
   Card, SectionHeader, CellGroup, Cell, Button, Pill, Field, Dot, Switch,
   EmptyState, Grid,
@@ -12,8 +12,8 @@ import { IcExternal, IcChevronDown, IcSearch } from "../../ui/icons.jsx";
 import { callFn } from "../../lib/functions.js";
 import { db } from "../../data/db.js";
 
-// The ventures — shared by the auditor below and by SystemsPage's Deploy and
-// Replace-a-File controls (which import PROPERTIES from here). The array shape
+// The ventures — shared by the auditor below and by SystemsPage's Deploy
+// controls (which import PROPERTIES from here). The array shape
 // (name/desc/url/appUrl/color/repo/site/assetsOnly/cta) is load-bearing.
 export const PROPERTIES = [
   { name: "Zero To Secure", desc: "Premium seed phrase backup", url: "https://zerotosecure.com", appUrl: "https://zts-command-center.netlify.app", color: "var(--green)", repo: "camcarp14/zts-command-center", site: "zero-to-secure" },
@@ -151,9 +151,13 @@ export function PropertiesPage({ isMobile, settings, updateSetting, session }) {
 }
 
 // ─── The auditor ──────────────────────────────────────────────────────────────
+// Returns { findings, error } — a failed call must be countable by runAll,
+// not silently collapsed into "no findings" (six failures used to render as
+// a clean "No findings yet" pass).
 async function auditProperty(p, token, ask) {
   const data = await callFn("audit", { name: p.name, url: p.url || p.appUrl, repo: p.repo, ask }, token ? { Authorization: `Bearer ${token}` } : undefined);
-  return (data?.success && Array.isArray(data.findings)) ? data.findings : [];
+  if (data?.success && Array.isArray(data.findings)) return { findings: data.findings, error: null };
+  return { findings: [], error: data?.error || "unreachable" };
 }
 
 const SEV_TONE = { high: "var(--red)", medium: "var(--amber)", low: "var(--sub)" };
@@ -183,18 +187,35 @@ function AuditorCard({ settings, updateSetting, session, isMobile }) {
   }, []);
 
   // Sequential on purpose (for..of, not parallel) — one audit at a time.
+  // runningRef guards re-entry: `running` state is stale inside the scheduler
+  // interval's closure, and auditor_last_run is only stamped AFTER a run, so
+  // the 5-minute tick used to start a second overlapping run (double model
+  // spend, double-inserted findings) whenever a full run took >5 minutes.
+  const runningRef = useRef(false);
+  const [runErr, setRunErr] = useState(null);
   const runAll = async (customAsk) => {
-    setRunning(true);
+    if (runningRef.current) return;
+    runningRef.current = true;
+    setRunning(true); setRunErr(null);
     const results = [];
+    let failed = 0;
     for (const p of PROPERTIES) {
-      const fs = await auditProperty(p, session?.access_token, customAsk);
+      const { findings: fs, error } = await auditProperty(p, session?.access_token, customAsk);
+      if (error) failed++;
       fs.forEach(f => results.push({ ...f, property: p.name, ts: Date.now() }));
     }
-    await db.saveFindings(results);
-    setFindings(prev => [...results, ...prev].slice(0, 40));
-    updateSetting("auditor_last_run", Date.now());
+    if (failed === PROPERTIES.length) {
+      // Every call failed — that's an outage, not a clean bill of health.
+      setRunErr("The audit couldn't reach any property — check the audit function and try again.");
+    } else {
+      if (failed > 0) setRunErr(`${failed} of ${PROPERTIES.length} audits didn't complete — results below are partial.`);
+      await db.saveFindings(results);
+      setFindings(prev => [...results, ...prev].slice(0, 40));
+      updateSetting("auditor_last_run", Date.now());
+      setOpen(true);
+    }
     setRunning(false);
-    setOpen(true);
+    runningRef.current = false;
   };
 
   // Auto-run scheduler: while enabled, a 5-minute interval checks whether the
@@ -254,12 +275,20 @@ function AuditorCard({ settings, updateSetting, session, isMobile }) {
             onChange={e => setAsk(e.target.value)}
             onKeyDown={e => { if (e.key === "Enter") { e.preventDefault(); if (ask.trim() && !running) runAll(ask.trim()); } }}
             placeholder="Ask something specific (optional) — e.g. check for broken nav links"
+            aria-label="Ask the auditor something specific"
             disabled={running}
             style={{ flex: 1 }}
           />
           <Button kind="quiet" size="md" disabled={running || !ask.trim()} onClick={() => ask.trim() && runAll(ask.trim())}>Ask</Button>
         </div>
 
+        {runErr && (
+          <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 8 }}>
+            <Dot tone="var(--red)" size={6} />
+            <span className="t-foot" style={{ color: "var(--red)", flex: 1 }}>{runErr}</span>
+            <Button kind="quiet" size="sm" onClick={() => runAll()} style={{ flex: "none" }}>Retry</Button>
+          </div>
+        )}
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, marginTop: 8 }}>
           <span className="t-cap" style={{ color: "var(--faint)" }}>Last run {ago(lastRun)}</span>
           <Button kind="plain" size="sm" onClick={() => setOpen(!open)} style={{ color: "var(--sub)", height: 44, paddingRight: 4 }}>
@@ -276,7 +305,7 @@ function AuditorCard({ settings, updateSetting, session, isMobile }) {
                 <EmptyState icon={<IcSearch size={22} />} title="No findings yet" sub="Run an audit to check every property." style={{ padding: "20px 16px" }} />
               )}
               {shown.map((f, i) => (
-                <div key={i} style={{ background: "var(--surface-2)", borderRadius: 12, padding: "10px 12px" }}>
+                <div key={`${f.ts || 0}-${f.property}-${i}`} style={{ background: "var(--surface-2)", borderRadius: 12, padding: "10px 12px" }}>
                   <div style={{ display: "flex", alignItems: "center", gap: 7, marginBottom: 4 }}>
                     <Dot tone={propColor(f.property)} size={6} />
                     <span className="t-cap" style={{ color: "var(--ink)", fontWeight: 600, flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{f.property}</span>
@@ -284,13 +313,17 @@ function AuditorCard({ settings, updateSetting, session, isMobile }) {
                   </div>
                   <div className="t-call" style={{ color: "var(--ink)" }}>{f.finding}</div>
                   <div className="t-foot" style={{ color: "var(--sub)", fontStyle: "italic", marginTop: 3 }}>→ {f.suggestion}</div>
-                  <Button
-                    kind="tinted" size="md"
-                    onClick={() => { setFixProp(f.property); setFixInstruction(`${f.finding} ${f.suggestion}`); setFixProposal(null); setFixError(null); setCommitted(null); }}
-                    style={{ marginTop: 8 }}
-                  >
-                    Propose fix
-                  </Button>
+                  {/* Only for properties with a wired repo — proposeFix silently
+                      no-ops otherwise, which read as a broken button. */}
+                  {PROPERTIES.find(p => p.name === f.property)?.repo && (
+                    <Button
+                      kind="tinted" size="md"
+                      onClick={() => { setFixProp(f.property); setFixInstruction(`${f.finding} ${f.suggestion}`); setFixProposal(null); setFixError(null); setCommitted(null); }}
+                      style={{ marginTop: 8 }}
+                    >
+                      Propose fix
+                    </Button>
+                  )}
                 </div>
               ))}
             </div>
@@ -315,6 +348,7 @@ function AuditorCard({ settings, updateSetting, session, isMobile }) {
             onChange={e => setFixInstruction(e.target.value)}
             onKeyDown={e => { if (e.key === "Enter") { e.preventDefault(); proposeFix(); } }}
             placeholder="e.g. add a meta description mentioning steel seed phrase backup"
+            aria-label="Describe the fix"
             disabled={fixBusy}
             style={{ flex: 1 }}
           />

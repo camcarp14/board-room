@@ -345,6 +345,7 @@ export default function LearnPanel({ isMobile, supabase, callClaude, session, mo
         <TextArea value={text} onChange={e => setText(e.target.value)}
           onKeyDown={e => { if ((e.metaKey || e.ctrlKey) && e.key === "Enter") learn(); }}
           placeholder={"https://…  — or paste the thing itself\nAdd a line about what you want learned from it, if it helps."}
+          aria-label="Something to learn — a URL or pasted text"
           rows={isMobile ? 4 : 3} disabled={!!phase}
           style={{ lineHeight: 1.6, resize: "vertical", opacity: phase ? 0.6 : 1 }} />
         <div style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>

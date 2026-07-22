@@ -79,8 +79,14 @@ export function CreedPanel({ isMobile }) {
       onError: (e) => { setSaving(false); setSaveErr(e.message || "Couldn't delete."); },
     });
   };
+  // Starter errors used to set saveErr, which only renders inside the edit
+  // sheet (not open here) — a failed add gave zero feedback, and no in-flight
+  // guard meant a double-tap inserted two rows (fresh uuid each).
+  const [starterErr, setStarterErr] = useState(null);
   const addStarter = (seed) => {
-    saveMut.mutate({ id: crypto.randomUUID(), text: seed.text, kind: seed.kind }, { onError: (e) => setSaveErr(e.message || "Couldn't save.") });
+    if (saveMut.isPending) return;
+    setStarterErr(null);
+    saveMut.mutate({ id: crypto.randomUUID(), text: seed.text, kind: seed.kind }, { onError: (e) => setStarterErr(e.message || "Couldn't save — try again.") });
   };
   // Jump the plate to entry i — both scrolls are needed: window for mobile,
   // #page-scroll for the app shell's scroll container.
@@ -134,9 +140,10 @@ export function CreedPanel({ isMobile }) {
             <span className="t-foot" style={{ lineHeight: 1.65, marginBottom: 8 }}>
               This room holds what's true about you when the week says otherwise — things you hold, and things you've done. Start with one of these, or carve your own.
             </span>
+            {starterErr && <span className="t-foot" style={{ color: "var(--red)" }}>{starterErr}</span>}
             <div style={{ display: "flex", flexDirection: "column", gap: 8, width: "100%" }}>
               {CREED_STARTERS.map((s, i) => (
-                <Button key={i} kind="quiet" size="md" onClick={(e) => { e.stopPropagation(); addStarter(s); }}
+                <Button key={i} kind="quiet" size="md" disabled={saveMut.isPending} onClick={(e) => { e.stopPropagation(); addStarter(s); }}
                   style={{ height: "auto", minHeight: 44, padding: "11px 16px", justifyContent: "flex-start", textAlign: "left", fontWeight: 500 }}>
                   <span className="t-call" style={{ lineHeight: 1.5 }}>
                     {s.text}

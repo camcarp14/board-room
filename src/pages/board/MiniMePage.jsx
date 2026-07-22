@@ -11,15 +11,17 @@ import { IcClose, IcChevronDown, IcChevronRight } from "../../ui/icons.jsx";
 import { ToggleRow, Segmented, Chips } from "../../ui/primitives.jsx";
 import { pingFn } from "../../lib/functions.js";
 import { supabase } from "../../lib/supabase.js";
-import { callClaude } from "../../lib/claude.js";
+import { callClaude, BOARD } from "../../lib/claude.js";
 import { getCompiledMind } from "./mind/mindGenome.js";
+import { db } from "../../data/db.js";
+import { SeatNotesModal } from "./SeatNotesModal.jsx";
 
 export const MINI_DEFAULTS = {
   model: "haiku", enabled: true, budget: "$3", oversight: true,
   directive: "", briefingLog: [], role: "",
   reflectOn: true, loopOn: true, loopMax: "5", approvalOn: true,
 };
-export const TASK_COLORS = { delivered: T.green, review: T.brass, queued: T.faint, failed: T.red };
+export const TASK_COLORS = { delivered: T.green, review: T.brass, queued: T.faint, working: T.blue, failed: T.red };
 export const EFFORT_LEVELS = [
   { key: "quick", label: "Quick", desc: "One shot, no self-review — fastest and cheapest." },
   { key: "careful", label: "Careful", desc: "Reviews its own draft once before delivering." },
@@ -27,7 +29,7 @@ export const EFFORT_LEVELS = [
 ];
 // Display casing only — the underlying status strings (queued/review/
 // delivered/failed) are shared with the worker and must never be renamed.
-const STATUS_LABELS = { queued: "Queued", review: "Review", delivered: "Delivered", failed: "Failed" };
+const STATUS_LABELS = { queued: "Queued", review: "Review", delivered: "Delivered", working: "Working…", failed: "Failed" };
 
 // Tap-to-configure starting points — the plug-and-play path. Each fills both
 // the role and the directive in one tap (no typing, no model call), tuned to
@@ -58,6 +60,10 @@ export function MiniMePage({ settings, updateSetting, session, onWorkerRun, onJu
   const setMini = (patch) => updateSetting("mini", { ...mini, ...patch });
   const tasks = settings?.mini_tasks || [];
   const setTasks = (list) => updateSetting("mini_tasks", list);
+  // Latest settings through a ref — async completions (sendChat) must read
+  // the state as it is NOW, not as it was when the request started.
+  const settingsRef = useRef(settings);
+  settingsRef.current = settings;
   // Cross-nav to the Neurons canvas — the wiring behind this delegate. Agent E
   // supplies onJump; guarded so the affordance only shows when a jump exists.
   const goNeurons = onJump ? () => onJump({ page: "boardroom", sub: "neural" }) : null;
@@ -75,6 +81,23 @@ export function MiniMePage({ settings, updateSetting, session, onWorkerRun, onJu
   const [skillCount, setSkillCount] = useState(null); // null loading · number · "teach" when table missing
   const [confirmEl, confirm] = useConfirm();
 
+  // ── Seat context ────────────────────────────────────────────────────────────
+  // The editor for the five seats' "ground truth" notes lost its only entry
+  // point when the board chat was retired — but the notes are still live
+  // prompt material for the Discord /board flow, so it lives here now.
+  const [editSeat, setEditSeat] = useState(null);
+  const [seatNotes, setSeatNotes] = useState(null); // null until loaded
+  useEffect(() => {
+    if (!showSettings || seatNotes !== null) return;
+    let alive = true;
+    db.loadSeatNotes().then(n => { if (alive) setSeatNotes(n || {}); }).catch(() => { if (alive) setSeatNotes({}); });
+    return () => { alive = false; };
+  }, [showSettings, seatNotes]);
+  const saveSeatNote = async (key, notes) => {
+    await db.saveSeatNote(key, notes);
+    setSeatNotes(prev => ({ ...(prev || {}), [key]: notes }));
+  };
+
   // ── Chat with the mind ──────────────────────────────────────────────────────
   // The low-friction front door: no setup, just talk to it. Every turn runs
   // against the compiled Neurons (doctrine + everything taught in Learn), so the
@@ -86,8 +109,10 @@ export function MiniMePage({ settings, updateSetting, session, onWorkerRun, onJu
   const [chatBusy, setChatBusy] = useState(false);
   const chatScrollRef = useRef(null);
   useEffect(() => {
+    // Pin to newest ONLY when already near the bottom — an async reply must
+    // not yank the view while the user is scrolled up re-reading history.
     const el = chatScrollRef.current;
-    if (el) el.scrollTop = el.scrollHeight; // pin to newest on every turn
+    if (el && el.scrollHeight - el.scrollTop - el.clientHeight < 80) el.scrollTop = el.scrollHeight;
   }, [chat.length, chatBusy]);
 
   const sendChat = async () => {
@@ -108,7 +133,15 @@ You're talking with Cameron directly, in a chat — not running a queued task. A
       messages: next.slice(-12).map(m => ({ role: m.role, content: m.text })),
       modelKey: mini.model || "haiku", maxTokens: 1000, fn: "mind_chat",
     });
-    setChat([...next, { role: "assistant", text: reply || "Couldn't reach the model just now — check the API key in Systems, then try again.", ts: Date.now() }]);
+    // Append against the LATEST stored list, not the send-time capture — a
+    // Reset landing while the model was thinking used to be resurrected
+    // wholesale by `[...next, reply]`. If our user turn is gone (reset/
+    // rewritten elsewhere), drop the reply and respect the newer state.
+    const latest = settingsRef.current?.mini_chat || [];
+    const userTs = next[next.length - 1].ts;
+    if (latest.some(m => m.ts === userTs)) {
+      setChat([...latest, { role: "assistant", text: reply || "Couldn't reach the model just now — check the API key in Systems, then try again.", ts: Date.now() }]);
+    }
     setChatBusy(false);
   };
   const resetChat = () => { setChat([]); setChatInput(""); };
@@ -337,8 +370,8 @@ Decide which of the two his message actually addresses — often just one. Outpu
             <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, marginBottom: 8 }}>
               <span className="t-label">Chat</span>
               {chat.length > 0 && (
-                <button onClick={resetChat} className="hoverable" aria-label="Reset chat"
-                  style={{ background: "none", border: "none", cursor: "pointer", color: "var(--sub)", fontSize: 12.5, fontWeight: 600, padding: "2px 2px" }}>
+                <button onClick={resetChat} className="hoverable" aria-label="Reset chat" disabled={chatBusy}
+                  style={{ background: "none", border: "none", cursor: chatBusy ? "default" : "pointer", color: "var(--sub)", fontSize: 12.5, fontWeight: 600, padding: "2px 2px", minHeight: 44, opacity: chatBusy ? 0.5 : 1 }}>
                   Reset
                 </button>
               )}
@@ -350,12 +383,16 @@ Decide which of the two his message actually addresses — often just one. Outpu
                   Ask your mind anything. It thinks with your Neurons — doctrine plus everything you've taught it.
                 </div>
               )}
+              {/* user bubbles: accent-TINTED per the design language (§8) — a
+                  solid gold fill per message blew the accent budget on every
+                  populated chat. ts keys, not index: the 40-cap slice shifts
+                  positions. */}
               {chat.map((m, i) => (
-                <div key={i} style={{ display: "flex", justifyContent: m.role === "user" ? "flex-end" : "flex-start" }}>
+                <div key={m.ts || i} style={{ display: "flex", justifyContent: m.role === "user" ? "flex-end" : "flex-start" }}>
                   <div className="t-call" style={{
                     maxWidth: "86%", padding: "9px 12px", borderRadius: 14, lineHeight: 1.55, whiteSpace: "pre-wrap", overflowWrap: "break-word",
-                    background: m.role === "user" ? "var(--accent)" : "var(--surface-2)",
-                    color: m.role === "user" ? "var(--on-accent)" : "var(--ink)",
+                    background: m.role === "user" ? "var(--accent-a10)" : "var(--surface-2)",
+                    color: "var(--ink)",
                     borderBottomRightRadius: m.role === "user" ? 4 : 14,
                     borderBottomLeftRadius: m.role === "user" ? 14 : 4,
                   }}>{m.text}</div>
@@ -370,8 +407,9 @@ Decide which of the two his message actually addresses — often just one. Outpu
             <div style={{ display: "flex", gap: 8 }}>
               <Field value={chatInput} onChange={e => setChatInput(e.target.value)}
                 onKeyDown={e => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); sendChat(); } }}
-                placeholder="Talk to your mind…" disabled={chatBusy} style={{ flex: 1 }} />
-              <Button kind="primary" size="md" onClick={sendChat} disabled={chatBusy || !chatInput.trim()} style={{ flex: "none" }}>
+                placeholder="Talk to your mind…" aria-label="Talk to your mind" disabled={chatBusy} style={{ flex: 1 }} />
+              {/* tinted, not primary — "Run queue now" below is this screen's one primary action */}
+              <Button kind="tinted" size="md" onClick={sendChat} disabled={chatBusy || !chatInput.trim()} style={{ flex: "none" }}>
                 {chatBusy ? "…" : "Send"}
               </Button>
             </div>
@@ -386,7 +424,7 @@ Decide which of the two his message actually addresses — often just one. Outpu
             <div style={{ display: "flex", gap: 8, marginBottom: 10 }}>
               <Field value={taskInput} onChange={e => setTaskInput(e.target.value)}
                 onKeyDown={e => { if (e.key === "Enter") { e.preventDefault(); addTask(); } }}
-                placeholder="e.g. Draft 5 outreach angles for the med-spa vertical" style={{ flex: 1 }} />
+                placeholder="e.g. Draft 5 outreach angles for the med-spa vertical" aria-label="Queue a task" style={{ flex: 1 }} />
               <Button kind="quiet" size="md" onClick={addTask} style={{ flex: "none" }}>Queue</Button>
             </div>
             <Button kind="primary" size="lg" full disabled={running || worker.state === "off" || mini.enabled === false} onClick={runNow} style={{ marginBottom: 12 }}>
@@ -432,7 +470,12 @@ Decide which of the two his message actually addresses — often just one. Outpu
             <div className="t-head" style={{ marginBottom: 2 }}>Activity Feed</div>
             <div className="t-foot" style={{ color: "var(--faint)", lineHeight: 1.5, marginBottom: 10 }}>Runs, findings, and approvals — newest first.</div>
             {feed === null && <div className="t-foot" style={{ color: "var(--faint)", textAlign: "center", padding: "8px 0" }}>Loading…</div>}
-            {feed?.error && <div className="t-foot" style={{ color: "var(--amber)", lineHeight: 1.5 }}>{feed.error}</div>}
+            {feed?.error && (
+              <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                <span className="t-foot" style={{ color: "var(--amber)", lineHeight: 1.5, flex: 1 }}>{feed.error}</span>
+                <Button kind="quiet" size="sm" onClick={loadFeed} style={{ flex: "none" }}>Retry</Button>
+              </div>
+            )}
             {Array.isArray(feed) && feed.length === 0 && (
               <div className="t-foot" style={{ color: "var(--faint)", textAlign: "center", padding: "8px 0" }}>No runs yet — queue a task and hit Run now.</div>
             )}
@@ -519,8 +562,23 @@ Decide which of the two his message actually addresses — often just one. Outpu
                 <Rule />
 
                 <ToggleRow title="Approval Gate" sub="Finished drafts wait for your tap before they count as delivered" on={mini.approvalOn} onToggle={() => setMini({ approvalOn: !mini.approvalOn })} />
-                <div style={{ height: 6 }} />
-                <ToggleRow title="Full Oversight" sub="Audits Chief chat answers for smoothed-over board dissent" on={mini.oversight} onToggle={() => setMini({ oversight: !mini.oversight })} />
+                {/* ("Full Oversight" is gone: it audited the retired board
+                    chat's multi-seat syntheses — with that pipeline removed
+                    the toggle controlled nothing.) */}
+
+                <Rule />
+
+                <div className="t-label" style={{ marginBottom: 8 }}>Seat context</div>
+                <div className="t-cap" style={{ color: "var(--faint)", fontWeight: 400, marginBottom: 8 }}>Ground truth each board seat reads — the Discord /board command consults these.</div>
+                <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
+                  {BOARD.map(s => (
+                    <button key={s.key} onClick={() => setEditSeat(s.key)} className="hoverable"
+                      style={{ display: "inline-flex", alignItems: "center", gap: 7, padding: "9px 14px", minHeight: 40, borderRadius: 999, border: "0.5px solid var(--line-strong)", background: "var(--surface-2)", color: "var(--ink)", fontSize: 13, fontWeight: 600, cursor: "pointer" }}>
+                      <Dot tone={seatNotes?.[s.key] ? s.color : "var(--line-strong)"} size={7} />
+                      {s.name}
+                    </button>
+                  ))}
+                </div>
 
                 <Rule />
 
@@ -531,6 +589,7 @@ Decide which of the two his message actually addresses — often just one. Outpu
             )}
           </Card>
         </div>
+      {editSeat && <SeatNotesModal seatKey={editSeat} initial={seatNotes?.[editSeat]} onSave={saveSeatNote} onClose={() => setEditSeat(null)} isMobile={isMobile} />}
       {confirmEl}
     </div>
   );

@@ -23,7 +23,15 @@ export function SeatNotesModal({ seatKey, initial, onSave, onClose, isMobile }) 
     if (dirty && !(await confirm({ title: "Discard changes?", message: "Your edits to this seat's context haven't been saved.", confirmLabel: "Discard", destructive: true }))) return;
     onClose();
   };
-  const save = async () => { setSaving(true); await onSave(seatKey, notes); setSaving(false); onClose(); };
+  // try/finally: dismissible={!saving} disables EVERY exit while saving, so a
+  // rejected onSave must never leave saving=true — that would lock the sheet
+  // with no way out but a reload.
+  const save = async () => {
+    setSaving(true);
+    try { await onSave(seatKey, notes); onClose(); }
+    catch (e) { await confirm({ title: "Couldn't save", message: e?.message || "Check the connection and try again.", confirmLabel: "OK", cancelLabel: false }); }
+    finally { setSaving(false); }
+  };
 
   return (
     <>

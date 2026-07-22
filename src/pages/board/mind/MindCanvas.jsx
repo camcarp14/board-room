@@ -1095,7 +1095,7 @@ export function MindCanvas({
                   className="dna-label"
                   y={r1(r + 15)}
                   textAnchor="middle"
-                  style={{ fontFamily: "var(--font-display)", fontSize: "10px", fontWeight: 600, fill: "var(--ink)", pointerEvents: "none", paintOrder: "stroke", stroke: "var(--bg)", strokeWidth: "3px", strokeLinejoin: "round" }}
+                  style={{ fontFamily: "var(--font-display)", fontSize: "10.5px", fontWeight: 600, fill: "var(--ink)", pointerEvents: "none", paintOrder: "stroke", stroke: "var(--bg)", strokeWidth: "3px", strokeLinejoin: "round" }}
                 >
                   {n.label}
                 </text>
@@ -1149,7 +1149,7 @@ export function MindCanvas({
         }}
       >
         <button className="dna-hudbtn" title="Zoom out" onClick={() => zoomBy(1 / 1.28)}>−</button>
-        <span ref={zoomTextRef} style={{ fontFamily: "var(--font-mono)", fontSize: "10px", color: "var(--sub)", minWidth: "38px", textAlign: "center" }}>
+        <span ref={zoomTextRef} style={{ fontFamily: "var(--font-mono)", fontSize: "10.5px", color: "var(--sub)", minWidth: "38px", textAlign: "center" }}>
           {Math.round(S.view.k * 100)}%
         </span>
         <button className="dna-hudbtn" title="Zoom in" onClick={() => zoomBy(1.28)}>+</button>
@@ -1158,7 +1158,7 @@ export function MindCanvas({
           className="dna-hudbtn"
           title="Fit the whole mind in view"
           onClick={fit}
-          style={{ width: "auto", padding: "0 10px", fontSize: "9px", fontWeight: 700, letterSpacing: "0.1em", fontFamily: "var(--font-display)" }}
+          style={{ width: "auto", padding: "0 10px", fontSize: "10.5px", fontWeight: 700, letterSpacing: "0.1em", fontFamily: "var(--font-display)" }}
         >
           FIT
         </button>
@@ -1166,7 +1166,7 @@ export function MindCanvas({
           className="dna-hudbtn"
           title={physOn ? "Pause layout physics" : "Resume layout physics"}
           onClick={togglePhysics}
-          style={{ color: physOn ? "var(--accent)" : "var(--sub)", fontSize: "10px" }}
+          style={{ color: physOn ? "var(--accent)" : "var(--sub)", fontSize: "10.5px" }}
         >
           {physOn ? "❚❚" : "▶"}
         </button>

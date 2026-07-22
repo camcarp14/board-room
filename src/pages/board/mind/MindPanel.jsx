@@ -142,7 +142,7 @@ const tint = (c, pct) => `color-mix(in srgb, ${c} ${pct}%, transparent)`;
 function StatPill({ label, value, brass, title }) {
   return (
     <span title={title} style={{ ...glass, borderRadius: 999, padding: "4px 11px", display: "inline-flex", alignItems: "baseline", gap: 6, pointerEvents: "auto" }}>
-      <span style={{ fontSize: 9, fontWeight: 700, color: "var(--faint)", textTransform: "uppercase", letterSpacing: "0.08em", fontFamily: "var(--font-display)" }}>{label}</span>
+      <span style={{ fontSize: 10.5, fontWeight: 700, color: "var(--faint)", textTransform: "uppercase", letterSpacing: "0.08em", fontFamily: "var(--font-display)" }}>{label}</span>
       <span className="t-num" style={{ fontSize: 12, color: brass ? "var(--accent)" : "var(--ink)", fontWeight: brass ? 700 : 500 }}>{value}</span>
     </span>
   );
@@ -284,7 +284,7 @@ function NodeInspector({ genome, node, apply, onSelect, onDeleted, onFireSkill }
                     style={{ flex: 1, minWidth: 0, textAlign: "left", background: "none", border: "none", cursor: "pointer", color: "var(--ink)", fontSize: 11.5, padding: 0, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
                     {out ? "→ " : "← "}{other ? other.label : otherId}
                   </button>
-                  <span className="t-num" style={{ fontSize: 10, color: "var(--sub)", flexShrink: 0 }}>{(e.weight || 0).toFixed(2)}</span>
+                  <span className="t-num" style={{ fontSize: 10.5, color: "var(--sub)", flexShrink: 0 }}>{(e.weight || 0).toFixed(2)}</span>
                   <button onClick={() => apply(removeEdge(genome, e.id))} title="Cut synapse"
                     style={{ background: "none", border: "none", color: "var(--faint)", fontSize: 13, cursor: "pointer", lineHeight: 1, padding: "0 2px", flexShrink: 0 }}>✕</button>
                 </div>
@@ -415,7 +415,7 @@ function LearnedNodeInspector({ genome, dispNodes, node, skill, apply, onSelect,
                     style={{ flex: 1, minWidth: 0, textAlign: "left", background: "none", border: "none", cursor: "pointer", color: "var(--ink)", fontSize: 11.5, padding: 0, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
                     {out ? "→ " : "← "}{labelOf(otherId)}
                   </button>
-                  <span className="t-num" style={{ fontSize: 10, color: "var(--sub)", flexShrink: 0 }}>{(e.weight || 0).toFixed(2)}</span>
+                  <span className="t-num" style={{ fontSize: 10.5, color: "var(--sub)", flexShrink: 0 }}>{(e.weight || 0).toFixed(2)}</span>
                   <button onClick={() => apply(removeEdge(genome, e.id))} title="Cut synapse"
                     style={{ background: "none", border: "none", color: "var(--faint)", fontSize: 13, cursor: "pointer", lineHeight: 1, padding: "0 2px", flexShrink: 0 }}>✕</button>
                 </div>
@@ -550,15 +550,19 @@ export function MindPanel({ isMobile, settings, updateSetting, session, jump, on
 
   // Escape closes the desktop popover first, then clears a selection (Sheet
   // modals + mobile sheets handle their own Escape via the kit's stack).
+  // Bail while a kit Sheet is open (modal set): the Sheet's stack handler
+  // already consumes that Escape — without this guard one keypress closed the
+  // sheet AND the inspector underneath (the exact layered-dismiss the stack
+  // exists to prevent).
   useEffect(() => {
     const onKey = (e) => {
-      if (e.key !== "Escape") return;
+      if (e.key !== "Escape" || modal) return;
       if (panel) setPanel(null);
       else if (!isMobile && inspectorOpen) setSelection(null);
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [panel, inspectorOpen, isMobile]);
+  }, [panel, inspectorOpen, isMobile, modal]);
 
   // ── Canvas callbacks — identity-stable (genome via ref). ──
   // A learned neuron's position lives in genome.learned (not genome.nodes), so its
@@ -809,7 +813,7 @@ export function MindPanel({ isMobile, settings, updateSetting, session, jump, on
       <button key={k} onClick={() => toggleRegion(k)}
         style={{ ...glass, pointerEvents: "auto", display: "inline-flex", alignItems: "center", gap: 6, padding: "5px 11px", borderRadius: 999, cursor: "pointer", flexShrink: 0, opacity: active ? 1 : 0.45, color: "var(--ink)", fontSize: 11, fontWeight: 600, fontFamily: "var(--font-display)" }}>
         <span style={{ width: 7, height: 7, borderRadius: "50%", background: r.color }} />{r.label}
-        <span className="t-num" style={{ fontSize: 10, color: "var(--faint)" }}>{stats.byRegion[k] || 0}</span>
+        <span className="t-num" style={{ fontSize: 10.5, color: "var(--faint)" }}>{stats.byRegion[k] || 0}</span>
       </button>
     );
   };
@@ -837,7 +841,7 @@ export function MindPanel({ isMobile, settings, updateSetting, session, jump, on
       <button onClick={() => setLearnedSpotlight((v) => !v)}
         style={{ ...glass, pointerEvents: "auto", display: "inline-flex", alignItems: "center", gap: 6, padding: "5px 11px", borderRadius: 999, cursor: "pointer", flexShrink: 0, border: learnedSpotlight ? "1px solid var(--accent-a40)" : "1px solid var(--line)", color: learnedSpotlight ? "var(--accent)" : "var(--ink)", fontSize: 11, fontWeight: 600, fontFamily: "var(--font-display)" }}>
         <span style={{ width: 7, height: 7, borderRadius: "50%", background: "transparent", border: "1.5px dashed var(--blue)" }} />Learned
-        <span className="t-num" style={{ fontSize: 10, color: "var(--faint)" }}>{stats.learned}</span>
+        <span className="t-num" style={{ fontSize: 10.5, color: "var(--faint)" }}>{stats.learned}</span>
       </button>
     );
   };
@@ -867,7 +871,7 @@ export function MindPanel({ isMobile, settings, updateSetting, session, jump, on
   const pulseBody = (
     <>
       <div style={{ display: "flex", gap: 6 }}>
-        <Field value={pq} onChange={(e) => setPq(e.target.value)} onKeyDown={(e) => e.key === "Enter" && firePulse()} placeholder="Ask the mind…" style={{ flex: 1 }} />
+        <Field value={pq} onChange={(e) => setPq(e.target.value)} onKeyDown={(e) => e.key === "Enter" && firePulse()} placeholder="Ask the mind…" aria-label="Ask the mind" style={{ flex: 1 }} />
         <Button kind="primary" size="md" onClick={firePulse} style={{ flexShrink: 0 }}>Fire</Button>
       </div>
       {pulseRes ? (

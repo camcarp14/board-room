@@ -35,7 +35,13 @@ function UsageCard({ isMobile }) {
   const [showLog, setShowLog] = useState(false);
   const [logShown, setLogShown] = useState(LOG_STEP);
 
+  // Generation guard: switching from a slow window ("All") to a fast one
+  // ("24h") could resolve out of order and overwrite the fresh numbers with
+  // the old window's data while the Segmented showed the new one.
+  const loadGen = useRef(0);
   const load = async () => {
+    const gen = ++loadGen.current;
+    const fresh = () => gen === loadGen.current;
     setSummary(null); setRecentRows(null); setErr(null); setLogShown(LOG_STEP);
     const since = new Date(Date.now() - USAGE_WINDOWS[windowIdx][1] * 86400000).toISOString();
     try {
@@ -47,11 +53,12 @@ function UsageCard({ isMobile }) {
       // still capped, but that's fine — nobody needs to scroll thousands of
       // individual lines, only the totals needed to be exact.
       const { data, error } = await supabase.rpc("usage_summary", { since_ts: since });
+      if (!fresh()) return;
       if (error) { setErr(error.message.includes("usage_summary") ? "Run supabase-usage-fix.sql in the Supabase SQL editor to enable accurate totals." : error.message); setSummary([]); return; }
       setSummary(data || []);
-    } catch { setErr("usage log unavailable"); setSummary([]); }
+    } catch { if (fresh()) { setErr("usage log unavailable"); setSummary([]); } else return; }
     supabase.from("usage_log").select("fn,kind,model,in_tokens,out_tokens,cost_usd,ms,ok,detail,created_at").gte("created_at", since).order("created_at", { ascending: false }).limit(300)
-      .then(({ data }) => setRecentRows(data || []));
+      .then(({ data }) => { if (fresh()) setRecentRows(data || []); });
   };
   useEffect(() => { load(); }, [windowIdx, retryNonce]); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -301,7 +308,6 @@ const SYSTEMS_SUBTABS = [
   { key: "miner", label: "Miner" },
 ];
 
-const REPLACE_ACCEPT = ".html,.htm,.js,.mjs,.css,.svg,.txt,.xml,.json,.webmanifest,image/*"; // matches the hint: HTML, JS, CSS, images
 
 export function SystemsPage({ settings, updateSetting, session, btc, isMobile }) {
   // Sub-tab state is deliberately local — not persisted, not deep-linked
@@ -337,58 +343,18 @@ export function SystemsPage({ settings, updateSetting, session, btc, isMobile })
     const res = await callFn("deploy", { site: p.site, action: "build" });
     setDeploys(d => ({ ...d, [p.name]: { busy: false, ok: !!res?.success, when: "just now" } }));
   };
-  const fileRef = useRef(null);
-  const [replaceFile, setReplaceFile] = useState(null);
-  const [replacePath, setReplacePath] = useState("");
-  const [replaceTargets, setReplaceTargets] = useState([]);
-  const [replaceBusy, setReplaceBusy] = useState(false);
-  const [replaceResults, setReplaceResults] = useState({});
-  const toggleTarget = (name) => setReplaceTargets(t => t.includes(name) ? t.filter(x => x !== name) : [...t, name]);
-  const fileToBase64 = (file) => new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    // strip the data: URL prefix — the fn wants raw base64
-    reader.onload = () => resolve(String(reader.result).split(",")[1] || "");
-    reader.onerror = reject;
-    reader.readAsDataURL(file);
-  });
-  const runReplace = async () => {
-    if (!replaceFile || !replacePath.trim() || !replaceTargets.length || replaceBusy) return;
-    setReplaceBusy(true);
-    setReplaceResults({});
-    const contentBase64 = await fileToBase64(replaceFile);
-    const results = {};
-    // Targets are processed SEQUENTIALLY, streaming each result into state.
-    for (const name of replaceTargets) {
-      const p = PROPERTIES.find(x => x.name === name);
-      const res = await callFn("deploy", { site: p.site, action: "replace-file", path: replacePath.trim(), contentBase64 });
-      results[name] = { ok: !!res?.success, detail: res?.success ? res.message : (res?.error || "failed — see Netlify deploy log") };
-      setReplaceResults({ ...results });
-    }
-    setReplaceBusy(false);
-  };
-
-  // ── Supabase — which project the console commands target ──
-  const [projects, setProjects] = useState(["Board Room"]);
-  const [project, setProject] = useState("Board Room");
-  useEffect(() => {
-    let alive = true;
-    callFn("db-admin", { ping: true }).then(d => {
-      if (!alive || !d?.projects?.length) return;
-      setProjects(d.projects);
-      // keep the current selection if the fn still lists it, else first
-      setProject(p => d.projects.includes(p) ? p : d.projects[0]);
-    });
-    return () => { alive = false; };
-  }, []);
+  // ── Supabase console ── (db-admin serves exactly one project — the phantom
+  // multi-project selector implied routing the backend never had: ping never
+  // returned a projects list and the `project` field was silently ignored)
   const [sqlInput, setSqlInput] = useState("");
   const [sqlBusy, setSqlBusy] = useState(false);
   const [sqlLog, setSqlLog] = useState([{ kind: "ok", text: "ready — allowlisted commands only" }]);
   const runSql = async () => {
     const q = sqlInput.trim();
     if (!q || sqlBusy) return;
-    setSqlLog(l => [...l, { kind: "cmd", text: `> [${project}] ${q}` }]);
+    setSqlLog(l => [...l, { kind: "cmd", text: `> ${q}` }]);
     setSqlInput(""); setSqlBusy(true);
-    const data = await callFn("db-admin", { command: q, project });
+    const data = await callFn("db-admin", { command: q });
     setSqlLog(l => [...l, { kind: data?.success ? "ok" : "err", text: data?.success ? "✓ " + (data.message || "done") : "✗ " + (data?.error || "db-admin function not deployed yet") }]);
     setSqlBusy(false);
   };
@@ -533,54 +499,6 @@ export function SystemsPage({ settings, updateSetting, session, btc, isMobile })
                 </div>
               </div>
 
-              <div>
-                <SectionHeader title="Replace a File" trailing="Single-file swap" />
-                <Card pad="md">
-                  <div className="t-foot" style={{ color: "var(--sub)" }}>
-                    Swaps one file on the sites you pick — every other file on the live site is left exactly as it is. For a full rebuild, use Deployments instead.
-                  </div>
-                  <input
-                    ref={fileRef} type="file" accept={REPLACE_ACCEPT} style={{ display: "none" }}
-                    onChange={e => { const f = e.target.files?.[0] || null; setReplaceFile(f); setReplaceResults({}); if (f && !replacePath) setReplacePath("/" + f.name); }}
-                  />
-                  <Cell
-                    title={replaceFile ? replaceFile.name : "No file chosen"}
-                    sub={replaceFile ? "set the path below, pick sites, then replace" : "HTML, JS, CSS, images — keep it under 4MB"}
-                    trailing={<Button kind="quiet" size="md" onClick={() => fileRef.current?.click()}>{replaceFile ? "Change" : "Choose a file"}</Button>}
-                    style={{ padding: "10px 0", minHeight: 56 }}
-                  />
-                  {replaceFile && (
-                    <>
-                      <div className="t-foot" style={{ color: "var(--sub)", margin: "4px 0 6px" }}>Path on the site (exact, case-sensitive)</div>
-                      <Field
-                        value={replacePath} onChange={e => setReplacePath(e.target.value)} placeholder="/index.html"
-                        style={{ fontFamily: "var(--font-mono)" }}
-                      />
-                      <div className="t-foot" style={{ color: "var(--sub)", margin: "12px 0 8px" }}>Replace on</div>
-                      <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
-                        {deployables.map(p => {
-                          const sel = replaceTargets.includes(p.name);
-                          return (
-                            <Pill key={p.name} active={sel} onClick={() => toggleTarget(p.name)}>
-                              {sel && <IcCheck size={11} />}{p.name}
-                            </Pill>
-                          );
-                        })}
-                      </div>
-                      <Button kind="tinted" size="md" full disabled={replaceBusy || !replacePath.trim() || !replaceTargets.length} onClick={runReplace} style={{ marginTop: 12 }}>
-                        {replaceBusy ? "Replacing…" : `Replace on ${replaceTargets.length || 0} site${replaceTargets.length === 1 ? "" : "s"}`}
-                      </Button>
-                      {Object.keys(replaceResults).length > 0 && (
-                        <div style={{ display: "flex", flexDirection: "column", gap: 5, marginTop: 10 }}>
-                          {Object.entries(replaceResults).map(([name, r]) => (
-                            <div key={name} className="t-foot" style={{ color: r.ok ? "var(--green)" : "var(--red)" }}>{r.ok ? "✓" : "✗"} {name}: {r.detail}</div>
-                          ))}
-                        </div>
-                      )}
-                    </>
-                  )}
-                </Card>
-              </div>
             </Grid>
           )}
 
@@ -592,14 +510,8 @@ export function SystemsPage({ settings, updateSetting, session, btc, isMobile })
             <div>
               <SectionHeader title="Supabase Console" trailing="Allowlisted ops" />
               <Card pad="md">
-                <div className="t-foot" style={{ color: "var(--sub)" }}>Run maintenance against a project's shared memory. Guardrails on — destructive ops ask twice.</div>
-                <div className="t-foot" style={{ color: "var(--sub)", margin: "12px 0 8px" }}>Project</div>
-                <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
-                  {projects.map(p => (
-                    <Pill key={p} active={project === p} onClick={() => setProject(p)}>{p}</Pill>
-                  ))}
-                </div>
-                <div style={{ display: "flex", flexWrap: "wrap", gap: 8, margin: "10px 0 12px" }}>
+                <div className="t-foot" style={{ color: "var(--sub)" }}>Run maintenance against Board Room's shared memory. Guardrails on — destructive ops ask twice.</div>
+                <div style={{ display: "flex", flexWrap: "wrap", gap: 8, margin: "12px 0 12px" }}>
                   {["backup chat_messages", "vacuum seat_notes", "clear findings > 30d"].map(q => (
                     <Pill key={q} onClick={() => setSqlInput(q)} style={{ fontFamily: "var(--font-mono)", fontSize: 12 }}>{q}</Pill>
                   ))}

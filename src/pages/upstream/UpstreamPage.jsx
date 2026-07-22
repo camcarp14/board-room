@@ -34,7 +34,7 @@ const VERDICT = {
 function Tag({ tone = "var(--sub)", children, title }) {
   return (
     <span title={title} style={{
-      fontSize: 9.5, fontWeight: 700, letterSpacing: "0.09em", textTransform: "uppercase",
+      fontSize: 10.5, fontWeight: 700, letterSpacing: "0.09em", textTransform: "uppercase",
       color: tone, border: `1px solid color-mix(in srgb, ${tone} 32%, transparent)`,
       background: `color-mix(in srgb, ${tone} 9%, transparent)`,
       borderRadius: 5, padding: "2px 7px", whiteSpace: "nowrap", flex: "none",
@@ -52,8 +52,10 @@ function Reveal({ summary, children, tone = "var(--faint)", defaultOpen = false 
   const [open, setOpen] = useState(defaultOpen);
   return (
     <div style={{ marginTop: 8 }}>
-      <button onClick={() => setOpen(!open)} style={{
-        display: "inline-flex", alignItems: "center", gap: 5, background: "none",
+      {/* min-height 44 + aria-expanded: this is a primary disclosure on a
+          phone, not a footnote — a ~15px bare-text target missed constantly */}
+      <button onClick={() => setOpen(!open)} aria-expanded={open} style={{
+        display: "inline-flex", alignItems: "center", gap: 5, background: "none", minHeight: 44,
         border: "none", padding: 0, cursor: "pointer", color: tone, fontSize: 11.5, fontWeight: 600, textAlign: "left",
       }}>
         <IcChevronDown size={11} style={{ transform: open ? "rotate(180deg)" : "none", transition: "transform 160ms", flex: "none" }} />
@@ -65,7 +67,7 @@ function Reveal({ summary, children, tone = "var(--faint)", defaultOpen = false 
 }
 
 const kLabel = {
-  fontSize: 9.5, fontWeight: 700, letterSpacing: "0.1em", textTransform: "uppercase",
+  fontSize: 10.5, fontWeight: 700, letterSpacing: "0.1em", textTransform: "uppercase",
   color: "var(--faint)", display: "block", marginBottom: 4,
 };
 
@@ -103,6 +105,7 @@ function Mechanism({ mech }) {
 }
 
 function SourceLink({ url, label }) {
+  if (!url) return null; // model-generated claims can arrive without sources
   return (
     <a href={url} target="_blank" rel="noreferrer" style={{
       fontSize: 11, color: "var(--brass)", display: "inline-flex", alignItems: "center",
@@ -143,7 +146,7 @@ function StageRail({ stages, artifact, run }) {
             {i > 0 && <span style={{ width: 14, height: 1, background: "var(--line)" }} />}
             <Dot tone={tone[state]} pulse={state === "run"} size={7} />
             <span style={{
-              fontSize: 10, fontWeight: 700, letterSpacing: "0.06em", textTransform: "uppercase",
+              fontSize: 10.5, fontWeight: 700, letterSpacing: "0.06em", textTransform: "uppercase",
               color: state === "idle" ? "var(--faint)" : state === "run" ? "var(--brass)" : "var(--sub)",
             }}>{s.label}</span>
           </span>
@@ -261,7 +264,8 @@ function EvidenceRow({ c, dim }) {
       <p style={{ margin: 0, fontSize: 12.5, lineHeight: 1.55 }}>{c.claim}</p>
       {c.quote && <p style={{ margin: "5px 0 0", fontSize: 11.5, fontStyle: "italic", color: "var(--sub)", borderLeft: "2px solid var(--line)", paddingLeft: 9 }}>“{c.quote}”</p>}
       <div style={{ marginTop: 5 }}>
-        <SourceLink url={c.urls[0]} label={c.sourceTitle ? `${c.sourceTitle} · ${hostOf(c.urls[0])}` : hostOf(c.urls[0])} />
+        {/* artifact JSON is model-generated — a claim can arrive without urls */}
+        <SourceLink url={(c.urls || [])[0]} label={c.sourceTitle ? `${c.sourceTitle} · ${hostOf((c.urls || [])[0])}` : hostOf((c.urls || [])[0])} />
       </div>
     </div>
   );
@@ -559,7 +563,7 @@ function NostradamusResult({ run }) {
               <p style={{ margin: 0, fontSize: 12.5, lineHeight: 1.5 }}>
                 {c.horizon && <Tag tone="var(--faint)">{c.horizon}</Tag>} {c.claim}
               </p>
-              <div style={{ marginTop: 4 }}><SourceLink url={c.urls[0]} /></div>
+              <div style={{ marginTop: 4 }}><SourceLink url={(c.urls || [])[0]} /></div>
             </div>
           ))}
           {(st.predictions?.rejected || []).length > 0 && (
@@ -568,7 +572,7 @@ function NostradamusResult({ run }) {
               {st.predictions.rejected.map((r, i) => (
                 <div key={i} style={{ padding: "7px 0", borderTop: "1px solid var(--line)" }}>
                   <p style={{ margin: 0, fontSize: 12.5, color: "var(--sub)" }}>{String(r.statement).slice(0, 140)}</p>
-                  <p style={{ margin: "3px 0 0", fontSize: 11.5, color: "var(--red)" }}>{r.problems.join("; ")}</p>
+                  <p style={{ margin: "3px 0 0", fontSize: 11.5, color: "var(--red)" }}>{(r.problems || []).join("; ")}</p>
                 </div>
               ))}
             </div>
@@ -717,7 +721,7 @@ function EngineTab() {
       setSelectedId(runId);
       setDomain("");
       setTimeout(loadRuns, 1500);
-      window.scrollTo({ top: 0, behavior: "smooth" });
+      document.getElementById("page-scroll")?.scrollTo({ top: 0, behavior: "smooth" });
     } catch (e) { setLaunchErr(e.message); }
     setLaunching(false);
   };
@@ -805,7 +809,7 @@ function EngineTab() {
                         onClick={(e) => { e.stopPropagation(); removeRun(r); }}><IcTrash size={12} /></Button>
                     </span>
                   }
-                  onClick={() => { setSelectedId(r.id); window.scrollTo({ top: 0, behavior: "smooth" }); }} />
+                  onClick={() => { setSelectedId(r.id); document.getElementById("page-scroll")?.scrollTo({ top: 0, behavior: "smooth" }); }} />
               ))}
             </CellGroup>
           )}
@@ -849,6 +853,11 @@ function NostradamusTab() {
   };
 
   const onCheckTell = async (id) => {
+    // One check at a time: checkTimer/checking are singular, so starting a
+    // second check while one polls would orphan the first poll chain (it kept
+    // hitting fetchPredictions for minutes after unmount-cleanup only cleared
+    // the LAST timer) and let its completion clear the new check's spinner.
+    if (checking) return;
     setChecking(id);
     try {
       await startJob("tell_check", { predictionId: id });
