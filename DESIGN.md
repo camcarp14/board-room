@@ -37,10 +37,12 @@ true-black, OLED). Theme storage keys stay `day` / `night` — never migrate
 
 ## 2. Type
 
-System stack only — on iPhone/iPad this is San Francisco; no webfonts, no FOUT:
+Inter Variable — the house typeface, self-hosted (`public/fonts/`, preloaded in
+index.html so first paint already has it) with the platform stack as the
+cold-cache fallback. One small variable file, same origin, `font-display: swap`.
 
 ```css
---font-body: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+--font-body: "Inter Variable", -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
 --font-display: var(--font-body);           /* kept for compat — same family */
 --font-mono: ui-monospace, "SF Mono", "Cascadia Mono", Menlo, Consolas, monospace;
 ```
@@ -58,9 +60,10 @@ Scale (utility classes in `src/design/components.css`; use them, don't restate):
 | `.t-foot`   | 12.5/1.4 | 400 | 0 | metadata under things |
 | `.t-cap`    | 11.5/1.3 | 500 | 0 | smallest annotations |
 | `.t-label`  | 12/1 | 600 | 0.05em, uppercase | section headers, `color: var(--sub)` |
-| `.t-num`    | — | 500 | — | mono + tabular-nums; add a size class |
+| `.t-num`    | — | 500 | — | proportional Inter + `tnum` tabular figures; add a size class |
 
 Hard floor: **10.5px**. Nothing smaller, ever (the old 7.5–9px labels are gone).
+One sanctioned exception: the tab-bar label is 10px/600 (§7 — iOS grammar).
 Body copy on cards is `--ink`; supporting copy `--sub`; annotations `--faint`.
 
 ## 3. Color
@@ -118,7 +121,9 @@ ink with a colored mark beside them.
 
 ## 4. Shape, elevation, material
 
-- Radii: **cards 18** · **inner tiles/wells 12** · **controls 10** · **pills/switches 999**. Sheets: 22 top corners (phone), 18 (tablet modal).
+- Radii: **cards 18** · **inner tiles/wells 12** · **buttons (md/lg), icon
+  buttons, fields 12** · **small controls & segmented 10** · **pills/switches
+  999**. Sheets: 22 top corners (phone), 18 (tablet modal).
 - Cards: `background: var(--surface); border: none; box-shadow: var(--shadow-card)`.
   **Never** a border + shadow together. Inner wells: `--surface-2`, no shadow.
 - Hairlines: only as inset row separators inside CellGroups (`margin-left`
@@ -147,17 +152,19 @@ Use these — do not hand-roll equivalents. (Signatures are final; read kit.jsx.
 - `<CellGroup>` + `<Cell leading title sub value trailing chevron onClick destructive>` —
   inset-grouped lists (Settings/Health grammar). 44pt minimum row height.
 - `<StatTile value label delta deltaTone tone selected onClick>` — hero numbers.
-- `<Button kind="primary|tinted|ghost|plain" size="lg|md|sm" full disabled>` —
-  primary = accent fill (one per screen).
+- `<Button kind="primary|tinted|quiet|plain|danger|danger-solid" size="lg|md|sm" full disabled>` —
+  primary = accent fill (one per screen); default is `quiet`.
 - `<Segmented options value onChange>` (≤4, equal width) ·
   `<PillRow options value onChange>` (scrollable, snap, for 5+).
-- `<Sheet open onClose title footer detent>` — phone: bottom sheet, grabber,
-  spring, safe-area padding; ≥761px: centered modal. (ModalShell shims to this.)
+- `<Sheet onClose title footer dismissible z>` — conditionally RENDERED (no
+  `open` prop); phone: bottom sheet, grabber, spring, safe-area padding;
+  ≥761px: centered modal. Focus moves in on open, Tab cycles inside, focus
+  restores on close.
 - `<Field>` / `<TextArea>` — 44pt, `--surface-2`, focus ring. 16px font on
   mobile (iOS zoom rule — keep the CSS guard).
 - `<Switch on onToggle>` — 51×31 iOS proportions. (Toggle shims to this.)
 - `<EmptyState icon title sub action>` — every empty/error/not-connected state.
-- `<Spinner>`, `<Dot tone>` (status dot), `<Delta value>` (▲/▼ + tone).
+- `<Spinner>`, `<Dot tone>` (status dot), `<Delta pct>` (▲/▼ + tone).
 - Icons: `src/ui/icons.jsx` — 24×24 grid, 1.8 stroke, round caps/joins,
   SF-Symbols-adjacent geometry. No emoji in chrome.
 
@@ -170,15 +177,17 @@ diagnostics, theme pre-paint script, meta theme-color sync (update its two hex
 values to `#F2F1EB` / `#000000` — also in manifest + index.html).
 
 ### Phone
-- **Nav bar:** glass, compact (48px + safe top). Centered page title 16/600
-  that fades in only after the large title scrolls away (sentinel +
-  IntersectionObserver). Left: nothing. Right: theme toggle + Summon + refresh —
-  quiet 34pt icon buttons, no boxes.
+- **No pinned nav bar** — deliberate: the theme/Summon/refresh controls live
+  inline with the large title and scroll away with it, so chrome never owns a
+  full row of the screen. (The earlier sentinel + IntersectionObserver bar
+  design was retired; its CSS is gone.)
 - **Large title block** at the top of every page: `.t-ltitle` + one-line
   `.t-foot` sub in `--sub` (the old HEADERS subtitles, rewritten sentence-case).
-- **Tab bar:** true iOS grammar — 5 tabs, glass, 49pt + `env(safe-area-inset-bottom)`
-  *inside* the bar, icon 24 + 10px/600 label, active = `--accent` (icon fills),
-  inactive = `--faint`. No ember, no pill behind the icon.
+- **Tab bar:** true iOS grammar — 6 tabs (Brief · Personal · Train · Board ·
+  Assets · Systems), glass, 49pt + `env(safe-area-inset-bottom)` *inside* the
+  bar, icon 24 + 10px/600 label, active = `--accent` (icon fills), inactive =
+  `--faint` in Graphite and `--sub` in Porcelain (`--faint` over the light
+  glass is ~2.3:1 — below the 3:1 UI minimum). No ember, no pill behind the icon.
 - Page gutter 16px; card gap 12px; section gap 28px.
 
 ### Tablet / desktop (≥761px)
@@ -186,10 +195,12 @@ values to `#F2F1EB` / `#000000` — also in manifest + index.html).
   gold mark), nav groups with `.t-label` headers — TODAY: Brief · Personal;
   THE FIRM: Board · Assets · Systems. Rows 44pt, icon + 15/600 label,
   active = accent tint wash `--accent-a10` + accent icon.
-  Footer: BTC mini-tile, calendar link, account row (email · theme · sign out).
+  Footer: BTC mini-tile, account row (email · theme · sign out). (The
+  calendar link moved: the .ics feed editor lives on the Brief's Business
+  Meetings card, where it works on the phone too.)
 - **Content column:** header row (large title + sub, right-aligned status
-  cluster), max-width 1120 centered, gutter 28px; cards flow in a 12-col grid —
-  Brief uses 2 columns ≥1000px, panels define their own (see §8).
+  cluster), max-width 1480 centered (wide enough for the Brief's 3-column
+  masonry; other pages set narrower inner max-widths), gutter 28px.
 - Sheets become centered modals (max-width 560) with scrim.
 
 ## 8. Per-page notes
@@ -207,10 +218,12 @@ behavior.)*
   field + 2-col masonry preview cards (phone 1-col), pinned = subtle accent
   hairline top. Calendar: month grid with 44pt targets, event dots in category
   colors (validated palette), agenda as CellGroup.
-- **Board** — chat is the room: full-height thread, user bubbles = accent-tinted
-  (`--accent-a10`, no border), assistant = surface card; consulted-seat chips =
-  `<Dot>` + name in `.t-cap`; composer = floating glass field above tab
-  bar/keyboard with accent send. Seats/Mini/Learn under a Segmented.
+- **Board** — the board chat was retired; the page is one mind viewed three
+  ways under a Segmented: **Mind** (the delegate — chat + task queue + run
+  controls; user bubbles = accent-tinted `--accent-a10`, no border, assistant =
+  `--surface-2`; one primary action per screen — Run queue), **Neurons** (the
+  canvas), **Learn** (teaches it). Seat context (ground truth the Discord
+  /board seats read) is edited from the Mind settings card.
 - **Assets** — property cards as CellGroup (favicon-ish leading mark, name,
   domain, trailing status Dot + chevron); auditor below.
 - **Systems** — pure Settings grammar: CellGroups per subsystem, usage as
@@ -246,8 +259,10 @@ src/
 
 - localStorage keys (`br_*`), settings keys, Supabase tables/columns, query
   keys, netlify function paths, PREVIEW mode semantics (`VITE_PREVIEW=1`, `?p=`,
-  `?view=`), deep-link `jump` shape, Summon behaviors, oversight, migration
-  modal, `.env` handling.
+  `?view=`), deep-link `jump` shape, Summon behaviors, migration modal, `.env`
+  handling. (Oversight was removed WITH its feature — it audited the retired
+  board chat's multi-seat syntheses; the `mini.oversight` settings key remains
+  stored but unused.)
 - All hard-won iOS comments/workarounds (§7) — move them, never delete.
 - `useTween`/NumTween on metrics; `cssVar()` for canvas charts;
   lightweight-charts wiring (restyle options only: no vertical grid, `--line`
