@@ -78,7 +78,7 @@ export default function App() {
   const [migration, setMigration] = useState(null);
   const [importing, setImporting] = useState(false);
   const [loadingData, setLoadingData] = useState(false);
-  const [page, setPage] = useState(() => previewParam("p") || "assets"); // single nav state — Assets is the landing tab (same source of truth on mobile and desktop)
+  const [page, setPage] = useState(() => previewParam("p") || "brief"); // single nav state — Brief is the landing tab (same source of truth on mobile and desktop)
   const [dataStamp, setDataStamp] = useState(null);
   const [refreshing, setRefreshing] = useState(false);
   const [now, setNow] = useState(Date.now());

@@ -18,7 +18,6 @@ import { callClaude } from "../../lib/claude.js";
 import { updateSnapshot, getSnapshot } from "../../lib/snapshot.js";
 import { db } from "../../data/db.js";
 import { nextBirthdayOccurrence, localDayKey } from "../../lib/dates.js";
-import { DocketCard } from "./DocketCard.jsx";
 import { NotesTile } from "./NotesTile.jsx";
 import { EVENT_CATEGORIES } from "../personal/CalendarPanel.jsx"; // canonical category → color map (mini-calendar pills)
 
@@ -581,7 +580,9 @@ export function MorningBriefPage({ btc, isMobile, settings, updateSetting, onOpe
     </Card>
   );
 
-  const card_docket =<DocketCard isMobile={isMobile} birthdays={birthdays} macroEvents={eventsStatus.state === "live" ? events : []} settings={settings} onOpenCalendar={onOpenCalendar} onOpenQueue={onOpenQueue} onOpenBirthdays={onOpenBirthdays} />;
+  // The Docket card was retired — its greeting/date/summary duplicated the
+  // "Brief" large-title header at the top of the page. (birthdays/events are
+  // still loaded above; they feed the snapshot the board seats read.)
   const card_notes = <NotesTile isMobile={isMobile} refreshSignal={refreshSignal} onOpenNotes={onOpenNotes} />;
 
   // Column count + container width scale with the viewport so a wide desktop
@@ -592,10 +593,9 @@ export function MorningBriefPage({ btc, isMobile, settings, updateSetting, onOpe
   // ONE masonry over every card — no fixed rows, no full-width section dividers
   // that would strand a short card above a gap. Cards are dealt round-robin into
   // nCols columns that each pack vertically, so tall and short widgets nestle
-  // together like a puzzle. Row-major deal means the daily trio (Docket · Notes ·
-  // Calendar) lands as the three column-tops; on the phone (nCols 1) it's simply
-  // one calm ordered stack.
-  const allCards = [card_docket, card_notes, card_minicalendar, card_markets, card_wire, card_watch, card_gsc, card_clarify, card_zts, card_shopify, card_meetings];
+  // together like a puzzle. Row-major deal means Notes · Calendar · Markets land
+  // as the column-tops; on the phone (nCols 1) it's simply one calm ordered stack.
+  const allCards = [card_notes, card_minicalendar, card_markets, card_wire, card_watch, card_gsc, card_clarify, card_zts, card_shopify, card_meetings];
   const columns = Array.from({ length: nCols }, () => []);
   allCards.forEach((c, i) => columns[i % nCols].push(<div key={i} style={{ marginBottom: 8 }}>{c}</div>));
   return (
