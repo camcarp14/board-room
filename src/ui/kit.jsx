@@ -8,7 +8,7 @@
 
 import { useState, useRef, useEffect, useCallback, forwardRef } from "react";
 import { createPortal } from "react-dom";
-import { IcChevronRight, IcClose, IcCheck } from "./icons.jsx";
+import { IcChevronRight, IcChevronDown, IcClose, IcCheck } from "./icons.jsx";
 
 /* ── surfaces ──────────────────────────────────────────────────────────────── */
 export function Card({ pad = "md", pressable, onClick, className = "", style, children, ...rest }) {
@@ -19,6 +19,35 @@ export function Card({ pad = "md", pressable, onClick, className = "", style, ch
       {...rest}>
       {children}
     </div>
+  );
+}
+
+// A card that collapses to just its title. The toggle is a *tap on the title
+// row* (a plain click — a scroll drag never fires it), with a small chevron as
+// the only added chrome; the trailing status/links hide when collapsed so the
+// card shrinks to a clean one-line header. Body animates via the .expand
+// grammar. Controlled: pass `collapsed` + `onToggle` (persist them where you
+// like). Everything else mirrors the Card + CardHead pattern.
+export function CollapsibleCard({ id, title, leading, trailing, tight, pad = "md", collapsed, onToggle, children, style, className }) {
+  return (
+    <Card pad={pad} className={className} style={{ minWidth: 0, ...style }}>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, marginBottom: collapsed ? 0 : (tight ? 5 : 9) }}>
+        <button
+          type="button" onClick={onToggle} aria-expanded={!collapsed}
+          aria-label={typeof title === "string" ? `${collapsed ? "Expand" : "Collapse"} ${title}` : undefined}
+          style={{ display: "flex", alignItems: "center", gap: 8, minWidth: 0, flex: 1, background: "none", border: "none", padding: "4px 0", margin: "-4px 0", font: "inherit", color: "inherit", textAlign: "left", cursor: "pointer" }}>
+          {leading}
+          <span className="t-head" style={{ minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{title}</span>
+          <IcChevronDown size={13} style={{ flex: "none", color: "var(--faint)", transform: collapsed ? "rotate(-90deg)" : "none", transition: "transform var(--dur-2) var(--ease-out)" }} />
+        </button>
+        {!collapsed && trailing != null && (
+          <span style={{ display: "inline-flex", alignItems: "center", gap: 8, flex: "none" }}>{trailing}</span>
+        )}
+      </div>
+      <div className={`expand${collapsed ? "" : " open"}`}>
+        <div>{children}</div>
+      </div>
+    </Card>
   );
 }
 

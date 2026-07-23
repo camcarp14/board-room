@@ -2,7 +2,7 @@
 // Same personal_notes table the Notes tab owns: recent notes at a glance,
 // one-line capture, tap any note to edit it in place, or jump to the full tab.
 import { useState, useRef } from "react";
-import { Card, Button, Field, Spinner, EmptyState, Dot } from "../../ui/kit.jsx";
+import { CollapsibleCard, Button, Field, Spinner, EmptyState, Dot } from "../../ui/kit.jsx";
 import { IcNote, IcPin, IcPlus, IcChevronRight } from "../../ui/icons.jsx";
 import { NoteCardPreview, sealColor, continueListOnEnter, toggleBulletAtCaret } from "../../ui/shared.jsx";
 import { queryClient } from "../../lib/queryClient.js";
@@ -11,7 +11,7 @@ import { db } from "../../data/db.js";
 
 const LIST_CAP = 5; // first N notes in-page; the rest behind "Show all" (no nested scroll)
 
-export function NotesTile({ isMobile, refreshSignal, onOpenNotes }) {
+export function NotesTile({ isMobile, refreshSignal, onOpenNotes, collapsed, onToggle }) {
   // refreshSignal is accepted but unused here — freshness comes from the
   // useNotes query cache; the prop stays wired for parity with the other cards.
   const { data: notesData, error: notesErr } = useNotes();
@@ -81,14 +81,13 @@ export function NotesTile({ isMobile, refreshSignal, onOpenNotes }) {
   };
 
   return (
-    <Card pad={isMobile ? "md" : "lg"} style={{ minWidth: 0, display: "flex", flexDirection: "column" }}>
-      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8, marginBottom: 10 }}>
-        <span className="t-head">Notes</span>
+    <CollapsibleCard collapsed={collapsed} onToggle={onToggle} pad={isMobile ? "md" : "lg"} title="Notes"
+      trailing={
         <Button kind="plain" size="sm" onClick={() => onOpenNotes?.()} aria-label="Open all notes"
           style={{ height: 44, margin: "-10px -10px -10px 0", padding: "0 10px", flex: "none" }}>
           All <IcChevronRight size={12} />
         </Button>
-      </div>
+      }>
 
       {/* quick capture — one line, Enter files it */}
       <div style={{ display: "flex", gap: 8, marginBottom: 6 }}>
@@ -162,6 +161,6 @@ export function NotesTile({ isMobile, refreshSignal, onOpenNotes }) {
           </>
         )}
       </div>
-    </Card>
+    </CollapsibleCard>
   );
 }

@@ -5,7 +5,7 @@
 // (with the actual failure). Empty dashes beat plausible-looking fake data.
 import { useState, useEffect, useCallback, lazy, Suspense } from "react";
 import { T } from "../../theme.js";
-import { Card, StatTile, Button, Dot, Delta } from "../../ui/kit.jsx";
+import { CollapsibleCard, StatTile, Button, Dot, Delta } from "../../ui/kit.jsx";
 import { IcChevronRight } from "../../ui/icons.jsx";
 import { StancePill, StatusTag, CARD_STATES } from "../../ui/shared.jsx";
 import { NumTween, Sparkline } from "../../ui/primitives.jsx";
@@ -35,20 +35,6 @@ const TAKES_LS = "br_event_takes";
 // often keeps the same time+text, so without this the forward-looking take
 // stays cached and never regenerates against the actual print.
 const takeKey = (e) => `${e.isPast ? "p" : "f"}|${e.time || ""}|${(e.text || "").trim()}`;
-
-/* Card header: .t-head title + status cluster at right — one grammar for every
-   Brief card. */
-function CardHead({ title, leading, trailing, tight }) {
-  return (
-    <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, marginBottom: tight ? 5 : 9 }}>
-      <span style={{ display: "flex", alignItems: "center", gap: 8, minWidth: 0 }}>
-        {leading}
-        <span className="t-head" style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{title}</span>
-      </span>
-      <span style={{ display: "inline-flex", alignItems: "center", gap: 8, flex: "none" }}>{trailing}</span>
-    </div>
-  );
-}
 
 /* Freshness stamp — same voice and position on every card that has one. */
 function Fresh({ children }) {
@@ -114,6 +100,11 @@ export function MorningBriefPage({ btc, isMobile, settings, updateSetting, onOpe
   const [btcChartOpen, setBtcChartOpen] = useState(false);
   const [tickerChart, setTickerChart] = useState(null); // {key,label} of the watchlist ticker whose chart is open
   const [meetingsAll, setMeetingsAll] = useState(false);
+  // Per-card collapse state, persisted per-device so a collapsed card stays
+  // collapsed across reloads. Keyed by a stable card id (see coll() below).
+  const [collapsed, setCollapsed] = useState(() => {
+    try { return JSON.parse(localStorage.getItem("br_brief_collapsed") || "{}") || {}; } catch { return {}; }
+  });
 
   // Auto-generates a single, tidy one-sentence take (Bitcoin + stocks
   // together, not separate lines) for every Watch This Week event as soon
@@ -290,6 +281,17 @@ export function MorningBriefPage({ btc, isMobile, settings, updateSetting, onOpe
 
   const pad = isMobile ? "sm" : "md";
 
+  // Collapse controller — spread {...coll("id")} into any CollapsibleCard.
+  const coll = (cardId) => ({
+    id: cardId,
+    collapsed: !!collapsed[cardId],
+    onToggle: () => setCollapsed(prev => {
+      const next = { ...prev, [cardId]: !prev[cardId] };
+      try { localStorage.setItem("br_brief_collapsed", JSON.stringify(next)); } catch { /* storage full — collapse just won't persist */ }
+      return next;
+    }),
+  });
+
   const FeedFallbackRow = ({ status }) => status.state === "loading" ? (
     // skeleton matches the row it resolves into — pages develop, not arrive
     <div style={{ background: "var(--surface-2)", borderRadius: 12, padding: "12px 13px" }}>
@@ -308,17 +310,16 @@ export function MorningBriefPage({ btc, isMobile, settings, updateSetting, onOpe
 
   /* ── Markets — Bitcoin (tap for the chart) + gold and the watchlist ────── */
   const card_markets = (
-    <Card pad={pad} style={{ minWidth: 0 }}>
-      <CardHead
-        leading={<span aria-hidden style={{ width: 20, height: 20, borderRadius: "50%", background: "var(--btc)", color: "#1A0F00", display: "inline-flex", alignItems: "center", justifyContent: "center", fontSize: 11, fontWeight: 700, flex: "none" }}>₿</span>}
-        title="Markets"
-        trailing={
-          <span style={{ display: "inline-flex", alignItems: "center", gap: 10, minWidth: 0 }}>
-            <StancePill text={stance} color={stanceColor} />
-            {(marketsStatus.state !== "live" || marketsStatus.stale) && <StatusTag status={marketsStatus} />}
-          </span>
-        }
-      />
+    <CollapsibleCard {...coll("markets")} pad={pad}
+      leading={<span aria-hidden style={{ width: 20, height: 20, borderRadius: "50%", background: "var(--btc)", color: "#1A0F00", display: "inline-flex", alignItems: "center", justifyContent: "center", fontSize: 11, fontWeight: 700, flex: "none" }}>₿</span>}
+      title="Markets"
+      trailing={
+        <span style={{ display: "inline-flex", alignItems: "center", gap: 10, minWidth: 0 }}>
+          <StancePill text={stance} color={stanceColor} />
+          {(marketsStatus.state !== "live" || marketsStatus.stale) && <StatusTag status={marketsStatus} />}
+        </span>
+      }
+    >
       {/* Bitcoin hero — price, day move, and a sparkline that taps to the chart */}
       <div onClick={() => setBtcChartOpen(true)} style={{ cursor: "pointer" }} title="Tap for the full chart">
         <div style={{ display: "flex", alignItems: "baseline", gap: 8, marginBottom: btc.price != null ? 10 : 4 }}>
@@ -351,14 +352,13 @@ export function MorningBriefPage({ btc, isMobile, settings, updateSetting, onOpe
           Chart <IcChevronRight size={12} />
         </Button>
       </div>
-    </Card>
+    </CollapsibleCard>
   );
 
   /* ── Watch this week — US econ calendar with one-line AI takes ─────────── */
   const card_watch = (
-    <Card pad={pad} style={{ minWidth: 0 }}>
-      <CardHead title="Watch This Week" tight
-        trailing={<><span className="t-cap" style={{ color: "var(--faint)" }}>CT time</span><StatusTag status={eventsStatus} /></>} />
+    <CollapsibleCard {...coll("watch")} pad={pad} title="Watch This Week" tight
+      trailing={<><span className="t-cap" style={{ color: "var(--faint)" }}>CT time</span><StatusTag status={eventsStatus} /></>}>
       <div className="brief-scroll" style={{ display: "flex", flexDirection: "column", gap: 8, maxHeight: 340, overflowY: "auto" }}>
         {eventsStatus.state === "live" ? (
           events.length ? <>{events.map((e, i) => {
@@ -392,13 +392,12 @@ export function MorningBriefPage({ btc, isMobile, settings, updateSetting, onOpe
         ) : <FeedFallbackRow status={eventsStatus} />}
       </div>
       {freshOrStale(eventsStatus)}
-    </Card>
+    </CollapsibleCard>
   );
 
   /* ── Search Console — stat tiles double as the chart's metric tabs ─────── */
   const card_gsc = (
-    <Card pad={pad} style={{ minWidth: 0 }}>
-      <CardHead title="Zero To Secure · Search Console" trailing={<StatusTag status={gscStatus} />} />
+    <CollapsibleCard {...coll("gsc")} pad={pad} title="Zero To Secure · Search Console" trailing={<StatusTag status={gscStatus} />}>
       <div style={{ display: "grid", gridTemplateColumns: "repeat(3, minmax(0, 1fr))", gap: 8, marginBottom: 8 }}>
         <StatTile value={gsc.impressions} label="Impressions" onClick={() => setGscMetric("impressions")} selected={gscMetric === "impressions"} />
         <StatTile value={gsc.clicks} label="Clicks" onClick={() => setGscMetric("clicks")} selected={gscMetric === "clicks"} />
@@ -409,13 +408,12 @@ export function MorningBriefPage({ btc, isMobile, settings, updateSetting, onOpe
         {gscStatus.state === "live" ? gsc.note : gscStatus.state === "loading" ? "Loading…" : gscStatus.detail}
       </div>
       {freshOrStale(gscStatus)}
-    </Card>
+    </CollapsibleCard>
   );
 
   /* ── Clarify pipeline ──────────────────────────────────────────────────── */
   const card_clarify = (
-    <Card pad={pad} style={{ minWidth: 0 }}>
-      <CardHead title="Clarify · Outreach Pipeline" trailing={<StatusTag status={clarifyStatus} />} />
+    <CollapsibleCard {...coll("clarify")} pad={pad} title="Clarify · Outreach Pipeline" trailing={<StatusTag status={clarifyStatus} />}>
       {clarifyStatus.state === "live" ? (
         <>
           <div style={{ display: "grid", gridTemplateColumns: "repeat(4, minmax(0, 1fr))", gap: 6, marginBottom: 6 }}>
@@ -427,13 +425,12 @@ export function MorningBriefPage({ btc, isMobile, settings, updateSetting, onOpe
           {freshOrStale(clarifyStatus)}
         </>
       ) : <FeedFallbackRow status={clarifyStatus} />}
-    </Card>
+    </CollapsibleCard>
   );
 
   /* ── ZTS creator pipeline ──────────────────────────────────────────────── */
   const card_zts = (
-    <Card pad={pad} style={{ minWidth: 0 }}>
-      <CardHead title="Zero To Secure · Creator Pipeline" trailing={<StatusTag status={ztsPipeStatus} />} />
+    <CollapsibleCard {...coll("zts")} pad={pad} title="Zero To Secure · Creator Pipeline" trailing={<StatusTag status={ztsPipeStatus} />}>
       {ztsPipeStatus.state === "live" ? (
         <>
           <div style={{ display: "grid", gridTemplateColumns: "repeat(4, minmax(0, 1fr))", gap: 6, marginBottom: 6 }}>
@@ -445,13 +442,12 @@ export function MorningBriefPage({ btc, isMobile, settings, updateSetting, onOpe
           {freshOrStale(ztsPipeStatus)}
         </>
       ) : <FeedFallbackRow status={ztsPipeStatus} />}
-    </Card>
+    </CollapsibleCard>
   );
 
   /* ── Shopify store ─────────────────────────────────────────────────────── */
   const card_shopify = (
-    <Card pad={pad} style={{ minWidth: 0 }}>
-      <CardHead title="Zero To Secure · Store" trailing={<StatusTag status={shopifyStatus} />} />
+    <CollapsibleCard {...coll("shopify")} pad={pad} title="Zero To Secure · Store" trailing={<StatusTag status={shopifyStatus} />}>
       {shopifyStatus.state === "live" ? (
         <>
           {/* No delta line here — it added a third row to each tile and made
@@ -464,7 +460,7 @@ export function MorningBriefPage({ btc, isMobile, settings, updateSetting, onOpe
           {freshOrStale(shopifyStatus)}
         </>
       ) : <FeedFallbackRow status={shopifyStatus} />}
-    </Card>
+    </CollapsibleCard>
   );
 
   /* ── Mini calendar — tap a day to add an event on it; "Open" for the full tab ── */
@@ -482,11 +478,9 @@ export function MorningBriefPage({ btc, isMobile, settings, updateSetting, onOpe
   const miniDateKey = (day) => `${miniYear}-${String(miniMonth + 1).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
   const todayDate = miniNow.getDate();
   const card_minicalendar = (
-    <Card pad={pad} style={{ minWidth: 0 }}>
-      {/* Title stays informative; the "Open" link goes to the full calendar.
-          Each day is a button that starts a new event pre-dated to it. */}
-      <CardHead tight title={miniNow.toLocaleDateString("en-US", { month: "long", year: "numeric" })}
-        trailing={<button className="sec-link" onClick={onOpenCalendar} style={{ display: "inline-flex", alignItems: "center", gap: 2 }}>Open<IcChevronRight size={12} /></button>} />
+    <CollapsibleCard {...coll("calendar")} pad={pad} tight
+      title={miniNow.toLocaleDateString("en-US", { month: "long", year: "numeric" })}
+      trailing={<button className="sec-link" onClick={onOpenCalendar} style={{ display: "inline-flex", alignItems: "center", gap: 2 }}>Open<IcChevronRight size={12} /></button>}>
       {/* minmax(0,1fr) columns + minWidth 0 cells: a long event title can never
           widen its column — the pill truncates inside a fixed, even grid */}
       <div style={{ display: "grid", gridTemplateColumns: "repeat(7, minmax(0, 1fr))", gap: 2, marginBottom: 4 }}>
@@ -516,7 +510,7 @@ export function MorningBriefPage({ btc, isMobile, settings, updateSetting, onOpe
           );
         })}
       </div>
-    </Card>
+    </CollapsibleCard>
   );
 
   /* ── Upcoming birthdays — the next two weeks, rolling ──────────────────── */
@@ -526,9 +520,8 @@ export function MorningBriefPage({ btc, isMobile, settings, updateSetting, onOpe
     .sort((a, b) => a.daysUntil - b.daysUntil);
   const bdayUntil = (d) => d === 0 ? "Today" : d === 1 ? "Tomorrow" : `in ${d}d`;
   const card_birthdays = (
-    <Card pad={pad} style={{ minWidth: 0 }}>
-      <CardHead tight title="Birthdays"
-        trailing={<button className="sec-link" onClick={onOpenBirthdays} style={{ display: "inline-flex", alignItems: "center", gap: 2 }}>All<IcChevronRight size={12} /></button>} />
+    <CollapsibleCard {...coll("birthdays")} pad={pad} tight title="Birthdays"
+      trailing={<button className="sec-link" onClick={onOpenBirthdays} style={{ display: "inline-flex", alignItems: "center", gap: 2 }}>All<IcChevronRight size={12} /></button>}>
       {birthdays === null ? (
         birthdaysErr ? (
           <div className="t-foot" style={{ color: "var(--faint)", padding: "4px 0" }}>{birthdaysErr}</div>
@@ -558,14 +551,13 @@ export function MorningBriefPage({ btc, isMobile, settings, updateSetting, onOpe
           })}
         </div>
       )}
-    </Card>
+    </CollapsibleCard>
   );
 
   /* ── Business meetings (external iCal) ─────────────────────────────────── */
   const visibleMeetings = meetingsAll ? meetings : meetings.slice(0, ROW_CAP);
   const card_meetings = (
-    <Card pad={pad} style={{ minWidth: 0 }}>
-      <CardHead tight title="Business Meetings" trailing={<StatusTag status={meetingsStatus} />} />
+    <CollapsibleCard {...coll("meetings")} pad={pad} tight title="Business Meetings" trailing={<StatusTag status={meetingsStatus} />}>
       <div style={{ display: "flex", flexDirection: "column" }}>
         {meetingsStatus.state === "live" ? (
           meetings.length ? (
@@ -584,13 +576,12 @@ export function MorningBriefPage({ btc, isMobile, settings, updateSetting, onOpe
           ) : <div className="t-foot" style={{ color: "var(--faint)", padding: "6px 0" }}>Nothing on the calendar in the next two weeks.</div>
         ) : <FeedFallbackRow status={meetingsStatus} />}
       </div>
-    </Card>
+    </CollapsibleCard>
   );
 
   /* ── The wire — headline ticker ────────────────────────────────────────── */
   const card_wire = (
-    <Card pad={pad} style={{ minWidth: 0 }}>
-      <CardHead tight title="The Wire" trailing={<StatusTag status={wireStatus} />} />
+    <CollapsibleCard {...coll("wire")} pad={pad} tight title="The Wire" trailing={<StatusTag status={wireStatus} />}>
       {wireStatus.state === "live" ? (
         wire.length ? (
           <div className="brief-scroll" style={{ display: "flex", flexDirection: "column", maxHeight: 320, overflowY: "auto" }}>
@@ -616,13 +607,13 @@ export function MorningBriefPage({ btc, isMobile, settings, updateSetting, onOpe
         ) : <div className="t-foot" style={{ color: "var(--faint)", padding: "6px 0" }}>No headlines returned this cycle.</div>
       ) : <FeedFallbackRow status={wireStatus} />}
       {freshOrStale(wireStatus)}
-    </Card>
+    </CollapsibleCard>
   );
 
   // The Docket card was retired — its greeting/date/summary duplicated the
   // "Brief" large-title header at the top of the page. (birthdays/events are
   // still loaded above; they feed the snapshot the board seats read.)
-  const card_notes = <NotesTile isMobile={isMobile} refreshSignal={refreshSignal} onOpenNotes={onOpenNotes} />;
+  const card_notes = <NotesTile {...coll("notes")} isMobile={isMobile} refreshSignal={refreshSignal} onOpenNotes={onOpenNotes} />;
 
   // Column count + container width scale with the viewport so a wide desktop
   // fills the space instead of stranding two narrow columns in a sea of black:
