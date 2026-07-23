@@ -5,10 +5,11 @@ export const NAV = [
   { key: "brief", label: "Brief", group: "Today" },
   { key: "personal", label: "Personal", group: "Today" },
   { key: "train", label: "Train", group: "Today" },
-  { key: "boardroom", label: "Mind", group: "The Firm" },
-  // Systems was folded into Assets — its Usage/Status/Deploy/Supabase/Miner
-  // panels are now sub-tabs of the Assets page (App.jsx redirects any stray
-  // "systems" deep link to "assets").
+  // Mind and Systems both fold into Assets now — Mind is the Assets page's first
+  // sub-tab (with its own Mind/Neurons/Learn sub-sub-tabs), Systems supplies the
+  // Usage/Status/Deploy/Supabase/Miner sub-tabs. App.jsx redirects any stray
+  // "boardroom"/"systems" deep link to the right Assets sub-tab. Keeps the bottom
+  // bar to four: Brief · Personal · Train · Assets.
   { key: "assets", label: "Assets", group: "The Firm" },
   // Upstream is built and deployed but hidden from nav while the pipeline settles.
   // To bring it back, uncomment this line — the page, route, HEADERS entry and the

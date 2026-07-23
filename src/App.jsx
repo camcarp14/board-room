@@ -20,7 +20,6 @@ import { MorningBriefPage } from "./pages/brief/BriefPage.jsx";
 import { SeatNotesModal } from "./pages/board/SeatNotesModal.jsx";
 const PersonalPage = lazy(() => import("./pages/personal/PersonalPage.jsx").then(m => ({ default: m.PersonalPage })));
 const TrainPage = lazy(() => import("./pages/train/TrainPage.jsx").then(m => ({ default: m.TrainPage })));
-const BoardRoomPage = lazy(() => import("./pages/board/BoardPage.jsx").then(m => ({ default: m.BoardRoomPage })));
 const PropertiesPage = lazy(() => import("./pages/assets/AssetsPage.jsx").then(m => ({ default: m.PropertiesPage })));
 const UpstreamPage = lazy(() => import("./pages/upstream/UpstreamPage.jsx").then(m => ({ default: m.UpstreamPage })));
 
@@ -199,9 +198,10 @@ export default function App() {
   // actually somewhere to scroll from, skipped entirely if already at top
   // so it's not a pointless animation on every tap.
   const goToPage = (key) => {
-    // Systems folded into Assets — honor any stray "systems" deep link
-    // (old Summon muscle memory, saved links) by landing on Assets.
-    if (key === "systems") key = "assets";
+    // Systems and Mind both fold into Assets — honor any stray "systems"/
+    // "boardroom" deep link (old Summon muscle memory, saved links) by landing
+    // on Assets (jumpTo carries the right sub-tab).
+    if (key === "systems" || key === "boardroom") key = "assets";
     // Direction-aware: pages to the right slide in from the right, and vice
     // versa — the same physics whether the trigger was a tab tap or a swipe.
     const from = NAV.findIndex(n => n.key === page);
@@ -314,10 +314,13 @@ export default function App() {
   // One deep-link primitive: page + optional sub-tab/entity, used by Summon and
   // by anything on a page that wants to point somewhere (e.g. the Word's chips).
   const jumpTo = (target) => {
-    // Two migrations honored here: Workout graduated from Personal to its own
-    // Train tab, and Systems folded into Assets (its panels are Assets sub-tabs).
+    // Three migrations honored here: Workout graduated from Personal to its own
+    // Train tab; Systems folded into Assets; and Mind (boardroom) folded into
+    // Assets as its first sub-tab. A boardroom deep link keeps its inner sub via
+    // `boardSub`, which the Assets page re-hydrates into a boardroom-shaped jump.
     let t = target.page === "personal" && target.sub === "workout" ? { ...target, page: "train", sub: undefined } : target;
     if (t.page === "systems") t = { ...t, page: "assets", sub: t.sub || "status" };
+    if (t.page === "boardroom") t = { ...t, page: "assets", sub: "mind", boardSub: t.sub };
     goToPage(t.page);
     setJump({ t: Date.now(), ...t });
   };
@@ -425,10 +428,9 @@ export default function App() {
   const renderPageInner = (key) => {
     switch (key) {
       case "brief": return <MorningBriefPage btc={btc} isMobile={isMobile} settings={settings} updateSetting={updateSetting} onOpenCalendar={goToCalendar} onAddEvent={(date) => jumpTo({ page: "personal", sub: "calendar", newEventDate: date })} onOpenNotes={(noteId) => summonGo({ page: "personal", sub: "notes", noteId })} onOpenQueue={() => jumpTo({ page: "boardroom", sub: "mini" })} onOpenBirthdays={() => jumpTo({ page: "personal", sub: "birthdays" })} refreshSignal={briefRefreshSignal} />;
-      case "boardroom": return <BoardRoomPage settings={settings} updateSetting={updateSetting} session={session} onWorkerRun={refreshData} onSkillsChanged={refreshSkills} jump={jump} isMobile={isMobile} skills={skills} />;
       case "personal": return <PersonalPage isMobile={isMobile} jumpSignal={personalJumpTo} jump={jump} settings={settings} updateSetting={updateSetting} />;
       case "train": return <TrainPage isMobile={isMobile} settings={settings} updateSetting={updateSetting} jump={jump} />;
-      case "assets": return <PropertiesPage isMobile={isMobile} settings={settings} updateSetting={updateSetting} session={session} btc={btc} jump={jump} />;
+      case "assets": return <PropertiesPage isMobile={isMobile} settings={settings} updateSetting={updateSetting} session={session} btc={btc} jump={jump} onWorkerRun={refreshData} onSkillsChanged={refreshSkills} skills={skills} />;
       case "upstream": return <UpstreamPage isMobile={isMobile} />;
       default: return null;
     }

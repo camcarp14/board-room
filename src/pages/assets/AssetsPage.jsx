@@ -18,6 +18,7 @@ import { PROPERTIES } from "./properties.js";
 import {
   SYSTEMS_SUBTABS, useConnections, UsageTab, StatusTab, DeployTab, SupabaseTab, MinerPanel,
 } from "../systems/SystemsPage.jsx";
+import { BoardRoomPage } from "../board/BoardPage.jsx";
 
 // Re-exported for any older importers — PROPERTIES now lives in ./properties.js.
 export { PROPERTIES } from "./properties.js";
@@ -27,9 +28,10 @@ const hostOf = (u) => { try { return new URL(u).hostname; } catch { return u || 
 // <a target="_blank" rel="noopener"> links — keep the noopener.
 const openExternal = (u) => window.open(u, "_blank", "noopener");
 
-// Assets is now a tabbed page: Properties first, then the folded-in systems
+// Assets is now a tabbed page: Mind first (the folded-in Mind tab, with its own
+// Mind/Neurons/Learn sub-sub-tabs), then Properties, then the folded-in systems
 // tabs. Keys are stable — Summon and muscle memory point at them.
-const ASSETS_SUBTABS = [{ key: "properties", label: "Properties" }, ...SYSTEMS_SUBTABS];
+const ASSETS_SUBTABS = [{ key: "mind", label: "Mind" }, { key: "properties", label: "Properties" }, ...SYSTEMS_SUBTABS];
 
 /* Trailing status for a property row: response code in mono + a semantic dot.
    States: checking (pulse) → live/down once site-status answers, or an honest
@@ -148,12 +150,20 @@ function PropertiesTab({ isMobile, settings, updateSetting, session }) {
 
 // ─── The page ─────────────────────────────────────────────────────────────────
 // Named PropertiesPage for the App.jsx route it has always answered to.
-export function PropertiesPage({ isMobile, settings, updateSetting, session, btc, jump }) {
-  const [sub, setSub] = useState("properties");
-  // Summon / deep links can open straight onto a systems sub-tab.
+export function PropertiesPage({ isMobile, settings, updateSetting, session, btc, jump, onWorkerRun, onSkillsChanged, skills }) {
+  const [sub, setSub] = useState("mind"); // Mind is the first sub-tab and the default landing
+  // Summon / deep links can open straight onto a sub-tab (systems or Mind).
   useEffect(() => {
     if (jump?.sub && ASSETS_SUBTABS.some(t => t.key === jump.sub)) setSub(jump.sub);
   }, [jump]);
+
+  // Mind deep links (Summon "Mini Me"/"Learn", the Brief's queue chip, Ask the
+  // Mind) arrive transformed to { sub: "mind", boardSub }. Re-hydrate a
+  // boardroom-shaped jump so the embedded BoardRoomPage — unchanged — still
+  // consumes them. Null when the current jump isn't aimed at Mind.
+  const boardJump = jump?.sub === "mind"
+    ? { page: "boardroom", sub: jump.boardSub || "mini", skillId: jump.skillId, ask: jump.ask, t: jump.t }
+    : null;
 
   // Connections hook hosted here (not inside StatusTab) so results survive a
   // hop to another sub-tab and back. Lazy-started the first time Status shows —
@@ -169,14 +179,29 @@ export function PropertiesPage({ isMobile, settings, updateSetting, session, btc
 
   return (
     <div style={{ flex: 1, display: "flex", flexDirection: "column", padding: isMobile ? "4px 16px 24px" : "6px 0 40px" }}>
-      <div style={{ width: "100%", maxWidth: 1020, margin: "0 auto", display: "flex", flexDirection: "column", minWidth: 0 }}>
-        {/* PillRow, not Segmented: six sub-tabs is well past Segmented's ≤4
+      <div style={{ width: "100%", maxWidth: 1020, margin: "0 auto", display: "flex", flexDirection: "column", minWidth: 0, flex: 1 }}>
+        {/* PillRow, not Segmented: seven sub-tabs is well past Segmented's ≤4
             equal-width ceiling (DESIGN.md §6). PillRow scrolls and keeps the
             active pill centered. */}
-        <PillRow options={ASSETS_SUBTABS} value={sub} onChange={setSub} style={{ marginBottom: 14 }} />
+        <PillRow options={ASSETS_SUBTABS} value={sub} onChange={setSub} style={{ marginBottom: 14, flex: "none" }} />
 
-        {/* key={sub} re-mounts and animates the content on every tab switch. */}
-        <div key={sub} className="pagefade" style={{ display: "flex", flexDirection: "column", minWidth: 0 }}>
+        {/* key={sub} re-mounts and animates the content on every tab switch.
+            flex:1 lets a full-height sub-tab (Mind's canvas) fill; the others
+            top-align inside it as before. */}
+        <div key={sub} className="pagefade" style={{ display: "flex", flexDirection: "column", minWidth: 0, flex: 1, minHeight: 0 }}>
+          {/* Mind — the folded-in tab, with its own Mind/Neurons/Learn sub-sub-tabs.
+              Negative horizontal margin on mobile cancels the Assets 16px inset so
+              the Mind page keeps its own edge-to-edge padding, exactly as it read
+              when it was a top-level tab. */}
+          {sub === "mind" && (
+            <div style={{ display: "flex", flexDirection: "column", flex: 1, minHeight: 0, margin: isMobile ? "0 -16px" : 0 }}>
+              <BoardRoomPage
+                settings={settings} updateSetting={updateSetting} session={session}
+                onWorkerRun={onWorkerRun} onSkillsChanged={onSkillsChanged} skills={skills}
+                jump={boardJump} isMobile={isMobile}
+              />
+            </div>
+          )}
           {sub === "properties" && <PropertiesTab isMobile={isMobile} settings={settings} updateSetting={updateSetting} session={session} />}
           {sub === "usage" && <UsageTab settings={settings} updateSetting={updateSetting} isMobile={isMobile} />}
           {sub === "status" && <StatusTab checks={conn.checks} lastRun={conn.lastRun} running={conn.running} runAll={conn.runAll} isMobile={isMobile} />}
