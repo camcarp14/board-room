@@ -31,7 +31,7 @@ function env() {
 function rest(cfg, path, opts = {}) {
   return fetch(`${cfg.url}/rest/v1/${path}`, {
     ...opts,
-    headers: { apikey: cfg.service, Authorization: `Bearer ${cfg.service}`, "Content-Type": "application/json", Prefer: "return=minimal", ...(opts.headers || {}) },
+    headers: { apikey: cfg.service, Authorization: `Bearer ${cfg.service}`, "Content-Type": "application/json", "Accept-Profile": "boardroom", "Content-Profile": "boardroom", Prefer: "return=minimal", ...(opts.headers || {}) },
   });
 }
 async function verifyUser(cfg, token) {
