@@ -28,7 +28,7 @@ exports.handler = async (event) => {
 
   const rest = (path, opts = {}) => fetch(`${url}/rest/v1/${path}`, {
     ...opts,
-    headers: { apikey: key, Authorization: `Bearer ${key}`, "Content-Type": "application/json", Prefer: "count=exact", ...(opts.headers || {}) },
+    headers: { apikey: key, Authorization: `Bearer ${key}`, "Content-Type": "application/json", "Accept-Profile": "boardroom", "Content-Profile": "boardroom", Prefer: "count=exact", ...(opts.headers || {}) },
   });
 
   const cmd = String(body.command || "").trim().toLowerCase();

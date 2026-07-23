@@ -32,7 +32,7 @@ function cfg() {
 function rest(c, path, opts = {}) {
   return fetch(`${c.url}/rest/v1/${path}`, {
     ...opts,
-    headers: { apikey: c.service, Authorization: `Bearer ${c.service}`, "Content-Type": "application/json", ...(opts.headers || {}) },
+    headers: { apikey: c.service, Authorization: `Bearer ${c.service}`, "Content-Type": "application/json", "Accept-Profile": "boardroom", "Content-Profile": "boardroom", ...(opts.headers || {}) },
   });
 }
 

@@ -34,7 +34,7 @@ function sbConfig() {
   return { url: SUPABASE_URL.replace(/\/$/, ""), key: SUPABASE_SERVICE_ROLE_KEY, uid: BOARD_USER_ID };
 }
 async function sbGet(cfg, path) {
-  const res = await fetch(`${cfg.url}/rest/v1/${path}`, { headers: { apikey: cfg.key, Authorization: `Bearer ${cfg.key}` } });
+  const res = await fetch(`${cfg.url}/rest/v1/${path}`, { headers: { apikey: cfg.key, Authorization: `Bearer ${cfg.key}`, "Accept-Profile": "boardroom" } });
   if (!res.ok) return null;
   return res.json();
 }
@@ -42,7 +42,7 @@ async function sbInsert(cfg, table, rows) {
   try {
     await fetch(`${cfg.url}/rest/v1/${table}`, {
       method: "POST",
-      headers: { apikey: cfg.key, Authorization: `Bearer ${cfg.key}`, "Content-Type": "application/json", Prefer: "return=minimal" },
+      headers: { apikey: cfg.key, Authorization: `Bearer ${cfg.key}`, "Content-Type": "application/json", "Content-Profile": "boardroom", Prefer: "return=minimal" },
       body: JSON.stringify(rows),
     });
   } catch {}

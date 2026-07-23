@@ -20,6 +20,11 @@ async function rest(path, { method = 'GET', body, prefer } = {}) {
       apikey: c.key,
       Authorization: `Bearer ${c.key}`,
       'Content-Type': 'application/json',
+      // Board Room's tables live in the `boardroom` schema on the shared
+      // Pentagon project. Accept-Profile selects it for reads, Content-Profile
+      // for writes (each is ignored by the other verb — safe to send both).
+      'Accept-Profile': 'boardroom',
+      'Content-Profile': 'boardroom',
       Prefer: prefer || (method === 'GET' ? undefined : 'return=minimal'),
     },
     body: body ? JSON.stringify(body) : undefined,

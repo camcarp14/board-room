@@ -280,7 +280,7 @@ exports.handler = async (event) => {
     return jsonRes(500, { success: false, error: "SUPABASE_SERVICE_ROLE_KEY isn't set in Netlify yet — see the comment at the top of this file." });
   }
 
-  const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SERVICE_ROLE_KEY);
+  const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SERVICE_ROLE_KEY, { db: { schema: "boardroom" } });
   const userId = process.env.TRMNL_USER_ID || process.env.MINER_USER_ID || null;
 
   try {
