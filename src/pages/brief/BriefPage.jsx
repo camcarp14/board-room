@@ -519,8 +519,47 @@ export function MorningBriefPage({ btc, isMobile, settings, updateSetting, onOpe
     </Card>
   );
 
-  // Birthdays live on the Docket (and Personal) now — no separate Brief card.
-  // The `birthdays` state is still loaded above so the Docket can read it.
+  /* ── Upcoming birthdays — the next two weeks, rolling ──────────────────── */
+  const upcomingBdays = (birthdays || [])
+    .map(b => ({ ...b, ...nextBirthdayOccurrence(b.month, b.day) }))
+    .filter(b => b.daysUntil <= 14)
+    .sort((a, b) => a.daysUntil - b.daysUntil);
+  const bdayUntil = (d) => d === 0 ? "Today" : d === 1 ? "Tomorrow" : `in ${d}d`;
+  const card_birthdays = (
+    <Card pad={pad} style={{ minWidth: 0 }}>
+      <CardHead tight title="Birthdays"
+        trailing={<button className="sec-link" onClick={onOpenBirthdays} style={{ display: "inline-flex", alignItems: "center", gap: 2 }}>All<IcChevronRight size={12} /></button>} />
+      {birthdays === null ? (
+        birthdaysErr ? (
+          <div className="t-foot" style={{ color: "var(--faint)", padding: "4px 0" }}>{birthdaysErr}</div>
+        ) : (
+          <div style={{ display: "flex", flexDirection: "column", gap: 8, paddingTop: 2 }}>
+            <div className="sk sk-line w80" style={{ margin: 0 }} />
+            <div className="sk sk-line w60" style={{ margin: 0 }} />
+          </div>
+        )
+      ) : upcomingBdays.length === 0 ? (
+        <div className="t-foot" style={{ color: "var(--faint)", padding: "4px 0" }}>No birthdays in the next two weeks.</div>
+      ) : (
+        <div style={{ display: "flex", flexDirection: "column" }}>
+          {upcomingBdays.map((b, i) => {
+            const soon = b.daysUntil <= 7;
+            return (
+              <div key={b.id} style={{ display: "flex", alignItems: "center", gap: 10, minHeight: 34, padding: "3px 0", borderTop: i === 0 ? "none" : "0.5px solid var(--line)" }}>
+                <Dot tone={T.pink} size={6} />
+                <span className="t-call" style={{ flex: 1, minWidth: 0, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+                  {b.name}
+                  {b.year ? <span className="t-cap" style={{ color: "var(--faint)", fontWeight: 400 }}> · turns {b.next.getFullYear() - b.year}</span> : null}
+                </span>
+                <span className="t-cap t-num" style={{ color: "var(--faint)", flex: "none" }}>{b.next.toLocaleDateString("en-US", { month: "short", day: "numeric" })}</span>
+                <span className="t-num" style={{ fontSize: 12, fontWeight: 600, color: soon ? "var(--accent)" : "var(--faint)", flex: "none", minWidth: 56, textAlign: "right" }}>{bdayUntil(b.daysUntil)}</span>
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </Card>
+  );
 
   /* ── Business meetings (external iCal) ─────────────────────────────────── */
   const visibleMeetings = meetingsAll ? meetings : meetings.slice(0, ROW_CAP);
@@ -595,7 +634,7 @@ export function MorningBriefPage({ btc, isMobile, settings, updateSetting, onOpe
   // nCols columns that each pack vertically, so tall and short widgets nestle
   // together like a puzzle. Row-major deal means Notes · Calendar · Markets land
   // as the column-tops; on the phone (nCols 1) it's simply one calm ordered stack.
-  const allCards = [card_notes, card_minicalendar, card_markets, card_wire, card_watch, card_gsc, card_clarify, card_zts, card_shopify, card_meetings];
+  const allCards = [card_notes, card_minicalendar, card_birthdays, card_markets, card_wire, card_watch, card_gsc, card_clarify, card_zts, card_shopify, card_meetings];
   const columns = Array.from({ length: nCols }, () => []);
   allCards.forEach((c, i) => columns[i % nCols].push(<div key={i} style={{ marginBottom: 8 }}>{c}</div>));
   return (
