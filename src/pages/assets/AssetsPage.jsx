@@ -83,13 +83,32 @@ function PropertiesTab({ isMobile, settings, updateSetting, session }) {
     return () => { alive = false; };
   }, []);
 
-  // Properties with a public site AND a separate command center get a second
-  // link row below — every URL from the old two-button cards survives.
-  const managed = PROPERTIES.filter(p => p.url && p.appUrl);
   const ctaLabel = (p) => {
     const raw = (p.cta || "Command Center ›").replace(/\s*›\s*$/, "").trim();
     return raw.charAt(0).toUpperCase() + raw.slice(1).toLowerCase(); // sentence case
   };
+
+  // Command centers, deduped by destination. ZTS, Clarify, Runway and Macro were
+  // consolidated into one app — The Pentagon — so the four now share a SINGLE
+  // command center; it shows once (as "The Pentagon") instead of once per venture
+  // all pointing at the same URL. Genuinely separate centers (e.g. FFSR's team
+  // view) keep their own row. Only ventures that had their own command center
+  // (a public site AND an appUrl — the old two-button cards) are listed.
+  const PENTAGON_APP = "https://the-pentagon.netlify.app";
+  const commandCenters = (() => {
+    const seen = new Set();
+    const out = [];
+    for (const p of PROPERTIES) {
+      if (!p.url || !p.appUrl || seen.has(p.appUrl)) continue;
+      seen.add(p.appUrl);
+      out.push(
+        p.appUrl === PENTAGON_APP
+          ? { key: "pentagon", name: "The Pentagon", appUrl: p.appUrl, color: "var(--purple)", sub: `Unified command center · ${hostOf(p.appUrl)}` }
+          : { key: p.name, name: p.name, appUrl: p.appUrl, color: p.color, sub: `${ctaLabel(p)} · ${hostOf(p.appUrl)}` }
+      );
+    }
+    return out;
+  })();
 
   return (
     <div className="stagger" style={{ display: "flex", flexDirection: "column", minWidth: 0 }}>
@@ -125,15 +144,15 @@ function PropertiesTab({ isMobile, settings, updateSetting, session }) {
         <div>
           <SectionHeader title="Command Centers" />
           <CellGroup>
-            {managed.map(p => (
+            {commandCenters.map(c => (
               <Cell
-                key={p.name}
-                leading={<span style={{ fontSize: 13.5, fontWeight: 700 }}>{p.name.charAt(0)}</span>}
-                leadingTone={p.color}
-                title={p.name}
-                sub={`${ctaLabel(p)} · ${hostOf(p.appUrl)}`}
+                key={c.key}
+                leading={<span style={{ fontSize: 13.5, fontWeight: 700 }}>{c.name.charAt(0)}</span>}
+                leadingTone={c.color}
+                title={c.name}
+                sub={c.sub}
                 chevron
-                onClick={() => openExternal(p.appUrl)}
+                onClick={() => openExternal(c.appUrl)}
               />
             ))}
           </CellGroup>
