@@ -14,6 +14,11 @@ async function authHeader() {
 }
 
 // ─── Netlify function helpers (graceful fallback when a fn isn't built yet) ──
+// Health probes are pure config reads — they cost nothing, tell you nothing
+// after the fact, and used to account for a large share of usage_log's growth.
+// Keep them out of the durable log; the Status tab shows their result live.
+const isProbe = (payload) => !!payload && payload.ping === true;
+
 export async function callFn(name, payload, extraHeaders) {
   const t0 = Date.now();
   let ok = false, detail;
@@ -29,7 +34,7 @@ export async function callFn(name, payload, extraHeaders) {
     if (!detail) detail = "network error";
     return null;
   } finally {
-    logUsage({ fn: name, kind: "call", ms: Date.now() - t0, ok, detail });
+    if (!isProbe(payload)) logUsage({ fn: name, kind: "call", ms: Date.now() - t0, ok, detail });
   }
 }
 // Like callFn but keeps HTTP status + error body so the UI can say WHY a card isn't live.
@@ -49,7 +54,7 @@ export async function callFnFull(name, payload) {
     detail = "network error";
     return { ok: false, status: 0, data: null };
   } finally {
-    logUsage({ fn: name, kind: "call", ms: Date.now() - t0, ok, detail });
+    if (!isProbe(payload)) logUsage({ fn: name, kind: "call", ms: Date.now() - t0, ok, detail });
   }
 }
 

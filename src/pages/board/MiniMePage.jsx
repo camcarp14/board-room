@@ -437,7 +437,7 @@ Decide which of the two his message actually addresses — often just one. Outpu
               <div className="t-foot" style={{ color: "var(--faint)", textAlign: "center", padding: "8px 0" }}>No runs yet — queue a task and hit Run now.</div>
             )}
             {Array.isArray(feed) && feed.map((f, i) => (
-              <div key={i} style={{ display: "flex", gap: 11, padding: "9px 0", borderTop: i === 0 ? "none" : "0.5px solid var(--line)" }}>
+              <div key={`${f.when}|${f.text}`} style={{ display: "flex", gap: 11, padding: "9px 0", borderTop: i === 0 ? "none" : "0.5px solid var(--line)" }}>
                 <span className="t-cap t-num" style={{ color: "var(--faint)", flex: "none", width: 92, paddingTop: 1 }}>{f.when}</span>
                 <span className="t-foot" style={{ lineHeight: 1.55, flex: 1, minWidth: 0 }}>{f.text}</span>
               </div>

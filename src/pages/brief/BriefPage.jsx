@@ -3,7 +3,7 @@
 // No fabricated fallback numbers anywhere on this page. Each card is either
 // live (real data), not connected (with exact setup instructions), or error
 // (with the actual failure). Empty dashes beat plausible-looking fake data.
-import { useState, useEffect, useCallback, lazy, Suspense } from "react";
+import { useState, useEffect, useCallback, useRef, lazy, Suspense } from "react";
 import { T } from "../../theme.js";
 import { CollapsibleCard, StatTile, Button, Dot, Delta } from "../../ui/kit.jsx";
 import { IcChevronRight } from "../../ui/icons.jsx";
@@ -35,6 +35,26 @@ const TAKES_LS = "br_event_takes";
 // often keeps the same time+text, so without this the forward-looking take
 // stays cached and never regenerates against the actual print.
 const takeKey = (e) => `${e.isPast ? "p" : "f"}|${e.time || ""}|${(e.text || "").trim()}`;
+// A take that fails is allowed to retry — but the effect below re-runs on every
+// 5-minute refresh with a freshly-allocated `events` array, so without a ceiling
+// one event the model reliably chokes on becomes a permanent ~288-call-a-day
+// loop with a zero success rate. Two more tries, then leave it alone.
+const TAKE_MAX_TRIES = 3;
+const takeTries = new Map(); // takeKey -> attempts, this page load only
+
+// The { ping: true } probe answers one question — is the env var set — and that
+// can only change on deploy. Asking it before every call meant two function
+// invocations per credentialed card per refresh: ~1,150 extra invocations a day
+// for GSC/Clarify/ZTS/Shopify alone, each one also writing a usage_log row.
+// Memoized per page load; a failed probe isn't cached, so a cold start that
+// 404s can still recover on the next cycle.
+const pingCache = new Map(); // fn name -> resolved ping result
+async function pingOnce(fn) {
+  if (pingCache.has(fn)) return pingCache.get(fn);
+  const res = await callFnFull(fn, { ping: true });
+  if (res.ok || res.status === 404) pingCache.set(fn, res); // 404 = not deployed, also stable until deploy
+  return res;
+}
 
 /* Freshness stamp — same voice and position on every card that has one. */
 function Fresh({ children }) {
@@ -117,7 +137,12 @@ export function MorningBriefPage({ btc, isMobile, settings, updateSetting, onOpe
     // old bug where the pre-event guess was shown as if it were the result).
     if (e.isPast && !e.actual) return;
     const k = takeKey(e);
-    if (eventAnalysis[k] && eventAnalysis[k] !== "error") return; // have a take (or one in flight); errors may retry
+    if (eventAnalysis[k] && eventAnalysis[k] !== "error") return; // have a take (or one in flight)
+    // Errors may retry, but only up to TAKE_MAX_TRIES per page load — see the
+    // note on takeTries. Past the ceiling the "couldn't get a read" line stands.
+    const tries = takeTries.get(k) || 0;
+    if (tries >= TAKE_MAX_TRIES) return;
+    takeTries.set(k, tries + 1);
     setEventAnalysis(prev => ({ ...prev, [k]: "loading" }));
     // The reader already understands markets — give a terse directional read,
     // not an explainer. One short clause, ~12 words, no preamble, no hedging.
@@ -161,8 +186,24 @@ export function MorningBriefPage({ btc, isMobile, settings, updateSetting, onOpe
   // stale with no way to fix it short of a full page reload. Now a named,
   // reusable function — called on mount, on a shared interval below, and
   // when you switch back to this tab after it's been hidden a while.
+  //
+  // Cancellation is a generation counter in a ref, NOT a local `alive` flag.
+  // The previous version declared `let alive = true` and ended with
+  // `return () => { alive = false; }` — but this is an async function, so that
+  // closure was just the promise's resolved value and the caller
+  // (`refreshBrief()`, result discarded) never received it. `alive` was never
+  // set to false and every guard below was unreachable. Two overlapping passes
+  // — a calendar_url change landing on the interval, or the visibility refetch
+  // racing it — could therefore let the slower, staler pass write last and
+  // clobber good numbers. Bumping the ref on entry makes the newest pass the
+  // only one allowed to write.
+  const refreshGen = useRef(0);
+  // Unmounting counts as a new generation, so nothing writes into a dead tree.
+  useEffect(() => () => { refreshGen.current += 1; }, []);
   const refreshBrief = useCallback(async () => {
-    let alive = true;
+    const gen = refreshGen.current + 1;
+    refreshGen.current = gen;
+    const alive = () => refreshGen.current === gen;
     // On a failed refresh, if the card is already showing good data (seeded from
     // the snapshot or from a prior successful load), keep it and just flag it
     // stale — don't yank real numbers for an "unreachable" row. Only show the
@@ -178,12 +219,12 @@ export function MorningBriefPage({ btc, isMobile, settings, updateSetting, onOpe
     // a "Stale" tag), falling back to the persisted snapshot's time.
     const liveStatus = (stale) => (prev) => ({ state: "live", stale, at: stale ? (prev?.at ?? boot.updatedAt ?? Date.now()) : Date.now() });
     const loadCredentialed = async (fn, payload, setData, setStatus, hint) => {
-      const ping = await callFnFull(fn, { ping: true });
-      if (!alive) return;
+      const ping = await pingOnce(fn);
+      if (!alive()) return;
       if (ping.status === 404) return setStatus({ state: "nofn", detail: `push netlify/functions/${fn}.js and redeploy` });
       if (ping.data?.configured === false) return setStatus({ state: "notconfigured", detail: hint(ping.data.missing) });
       const res = await callFnFull(fn, payload);
-      if (!alive) return;
+      if (!alive()) return;
       // A backend can answer 200 with its last-good value when the upstream
       // failed (stale/cached flags) — surface that instead of stamping it fresh.
       if (res.ok && res.data?.success) { setData(res.data); setStatus(liveStatus(!!(res.data.stale || res.data.cached))); }
@@ -191,7 +232,7 @@ export function MorningBriefPage({ btc, isMobile, settings, updateSetting, onOpe
     };
     const loadOpen = async (fn, apply, setStatus) => {
       const res = await callFnFull(fn, {});
-      if (!alive) return;
+      if (!alive()) return;
       if (res.status === 404) return setStatus({ state: "nofn", detail: `push netlify/functions/${fn}.js and redeploy` });
       if (res.ok && res.data?.success) { apply(res.data); setStatus(liveStatus(!!(res.data.stale || res.data.cached))); }
       else setStatus(keepIfLive(res));
@@ -210,28 +251,27 @@ export function MorningBriefPage({ btc, isMobile, settings, updateSetting, onOpe
       loadCredentialed("shopify", { days: 14 }, (d) => { setShopify(d); updateSnapshot({ shopify: d }); }, setShopifyStatus,
         (m) => `Add ${m || "SHOPIFY_SHOP + SHOPIFY_CLIENT_ID + SHOPIFY_CLIENT_SECRET"} in Netlify env vars, then redeploy.`),
       db.loadBirthdays().then(rows => {
-        if (!alive) return;
+        if (!alive()) return;
         setBirthdays(rows);
         const soon = (rows || []).map(b => ({ name: b.name, ...nextBirthdayOccurrence(b.month, b.day) })).filter(b => b.daysUntil <= 14).sort((a, b) => a.daysUntil - b.daysUntil);
         updateSnapshot({ todayBirthdays: soon });
-      }).catch(e => { if (alive) setBirthdaysErr(/fetch/i.test(e?.message || "") ? "Couldn't reach Supabase — check the connection and refresh." : e?.message || "Couldn't load birthdays."); }),
+      }).catch(e => { if (alive()) setBirthdaysErr(/fetch/i.test(e?.message || "") ? "Couldn't reach Supabase — check the connection and refresh." : e?.message || "Couldn't load birthdays."); }),
       db.loadEvents().then(rows => {
-        if (!alive) return;
+        if (!alive()) return;
         setMiniEvents(rows);
         const soon = (rows || []).filter(ev => { const days = (new Date(ev.start_time) - new Date()) / 86400000; return days >= -0.5 && days <= 3; }).map(ev => ({ title: ev.title }));
         updateSnapshot({ todayEvents: soon });
-      }).catch(() => { if (alive) setMiniEvents([]); }),
+      }).catch(() => { if (alive()) setMiniEvents([]); }),
       loadOpen("calendar", (d) => setEvents(d.events || []), setEventsStatus),
       (async () => {
-        if (!settings?.calendar_url) { if (alive) setMeetingsStatus({ state: "notconfigured", detail: "Link a calendar (iCal / .ics URL) in the sidebar to see meetings here." }); return; }
+        if (!settings?.calendar_url) { if (alive()) setMeetingsStatus({ state: "notconfigured", detail: "Add your calendar's iCal (.ics) link in Settings to see meetings here." }); return; }
         const res = await callFnFull("calendar-events", { url: settings.calendar_url });
-        if (!alive) return;
+        if (!alive()) return;
         if (res.ok && res.data?.success) { setMeetings(res.data.events || []); setMeetingsStatus(liveStatus(!!(res.data.stale || res.data.cached))); }
         else setMeetingsStatus(keepIfLive(res));
       })(),
     ]);
-    if (alive) setBriefRefreshedAt(Date.now());
-    return () => { alive = false; };
+    if (alive()) setBriefRefreshedAt(Date.now());
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [settings?.calendar_url]);
 
@@ -370,7 +410,11 @@ export function MorningBriefPage({ btc, isMobile, settings, updateSetting, onOpe
               // line; the event title gets the full width below it (aligned
               // under the time), then the one-line take. Reads cleanly on a
               // phone instead of wrapping the title into a narrow middle column.
-              <div key={i} style={{ background: released ? "var(--green-a06)" : "var(--surface-2)", borderRadius: 12, padding: "11px 13px", display: "flex", flexDirection: "column", gap: 5, flexShrink: 0 }}>
+              // Stable identity, not list position: this feed re-sorts and drops
+              // old events every refresh, so an index key hands React a reused
+              // node for a different event. takeKey() is already the identity the
+              // cached AI takes are stored under.
+              <div key={takeKey(e)} style={{ background: released ? "var(--green-a06)" : "var(--surface-2)", borderRadius: 12, padding: "11px 13px", display: "flex", flexDirection: "column", gap: 5, flexShrink: 0 }}>
                 <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
                   <Dot tone={e.color} />
                   <span className="t-cap t-num" style={{ color: "var(--faint)", whiteSpace: "nowrap" }}>{e.time}</span>
@@ -563,7 +607,7 @@ export function MorningBriefPage({ btc, isMobile, settings, updateSetting, onOpe
           meetings.length ? (
             <>
               {visibleMeetings.map((m, i) => (
-                <div key={i} style={{ display: "flex", alignItems: "center", gap: 10, minHeight: 44, padding: "5px 0", borderTop: i === 0 ? "none" : "0.5px solid var(--line)" }}>
+                <div key={`${m.when}|${m.title}`} style={{ display: "flex", alignItems: "center", gap: 10, minHeight: 44, padding: "5px 0", borderTop: i === 0 ? "none" : "0.5px solid var(--line)" }}>
                   <Dot tone={T.blue} />
                   <span style={{ display: "flex", flexDirection: "column", gap: 1, flex: 1, minWidth: 0 }}>
                     <span className="t-call" style={{ lineHeight: 1.4 }}>{m.title}</span>
@@ -588,7 +632,7 @@ export function MorningBriefPage({ btc, isMobile, settings, updateSetting, onOpe
             {wire.map((w, i) => {
               const Row = w.link ? "a" : "div";
               return (
-                <Row key={i} {...(w.link ? { href: w.link, target: "_blank", rel: "noreferrer" } : {})}
+                <Row key={w.link || `${w.time}|${w.text}`} {...(w.link ? { href: w.link, target: "_blank", rel: "noreferrer" } : {})}
                   className={w.link ? "hoverable" : undefined}
                   title={w.tag ? `${w.tag} · ${w.text}` : w.text}
                   style={{ display: "flex", alignItems: "baseline", gap: 8, textDecoration: "none", color: "inherit", minHeight: 34, flexShrink: 0, padding: "6px 0", borderTop: i === 0 ? "none" : "0.5px solid var(--line)" }}>

@@ -93,7 +93,7 @@ export function DocketCard({ isMobile, birthdays, macroEvents, settings, onOpenC
             const action = r.onClick || r.onDone; // upkeep rows log done; the rest deep-link
             const Tag = action ? "button" : "div";
             return (
-              <Tag key={i} onClick={action} className={action ? "hoverable" : undefined}
+              <Tag key={`${r.tag}|${r.text}`} onClick={action} className={action ? "hoverable" : undefined}
                 aria-label={r.onDone ? `Log done — ${r.text}` : undefined}
                 style={{
                   display: "flex", alignItems: "center", gap: 10, width: "100%", minHeight: action ? 40 : 34,
