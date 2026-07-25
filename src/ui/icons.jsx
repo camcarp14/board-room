@@ -57,6 +57,19 @@ export const IcTrainFill = (p = {}) => (
     <rect x="9.6" y="10.9" width="4.8" height="2.2" rx="1.1" />
   </svg>
 );
+export const IcGrocery = (p = {}) => ( // shopping bag — the list you shop from
+  <svg {...base(p)}>
+    <path d="M4.6 7.8h14.8l-1.1 11.4a2.1 2.1 0 0 1-2.1 1.9H7.8a2.1 2.1 0 0 1-2.1-1.9L4.6 7.8Z" />
+    <path d="M9 7.8V6.4a3 3 0 0 1 6 0v1.4" />
+  </svg>
+);
+export const IcGroceryFill = (p = {}) => (
+  <svg {...solid(p)}>
+    <path d="M4.4 7.6h15.2l-1.1 11.7a2.2 2.2 0 0 1-2.2 2H7.7a2.2 2.2 0 0 1-2.2-2L4.4 7.6Z" />
+    {/* the handle stays a stroke so the bag still reads as a bag when filled */}
+    <path d="M9 7.6V6.4a3 3 0 0 1 6 0v1.2" fill="none" stroke="currentColor" strokeWidth={p.weight || 1.9} strokeLinecap="round" />
+  </svg>
+);
 export const IcBoard = (p = {}) => ( // Mini Me — your delegate, a small stand-in
   <svg {...base(p)}>
     <line x1="12" y1="3.7" x2="12" y2="5.9" />
@@ -160,6 +173,7 @@ export const NAV_ICONS = {
   brief: { line: IcBrief, fill: IcBriefFill },
   personal: { line: IcPersonal, fill: IcPersonalFill },
   train: { line: IcTrain, fill: IcTrainFill },
+  grocery: { line: IcGrocery, fill: IcGroceryFill },
   boardroom: { line: IcBoard, fill: IcBoardFill },
   assets: { line: IcAssets, fill: IcAssetsFill },
   systems: { line: IcSystems, fill: IcSystemsFill },

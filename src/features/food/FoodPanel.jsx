@@ -1,13 +1,10 @@
 import { useState } from "react";
 import { tint } from "../../ui/styles.js";
 import { callClaude } from "../../lib/claude.js";
-import { useGroceries, useSavedRecipes, useAddGrocery, useToggleGrocery, useDeleteGrocery, useClearCheckedGroceries, useSaveRecipe, useDeleteRecipe } from "../../data/food.js";
-import { Card, CellGroup, Button, Field, Pill, Grid, useConfirm, IcCheck } from "../../ui/kit.jsx";
+import { useSavedRecipes, useSaveRecipe, useDeleteRecipe } from "../../data/food.js";
+import { Card, CellGroup, Button, Field, Pill, Grid, useConfirm } from "../../ui/kit.jsx";
 import { IcClose, IcSpark } from "../../ui/icons.jsx";
 
-// Reset that lets a <button> wear the kit's .cell-body anatomy (rows keep a
-// separate delete button, so the whole cell can't be one <button> itself).
-const rowBtn = { background: "none", border: 0, padding: 0, margin: 0, font: "inherit", color: "inherit", textAlign: "left", cursor: "pointer", alignSelf: "stretch", justifyContent: "center" };
 // Full-bleed list inside a pad-md card: the group sheds its own surface and
 // stretches to the card edges so row hairlines read like native inset cells.
 const inCardGroup = { boxShadow: "none", background: "transparent", borderRadius: 0, margin: "0 -16px -10px" };
@@ -16,15 +13,9 @@ export function FoodPanel({ isMobile, settings, updateSetting }) {
   const prefs = settings?.food_preferences || { likes: [], dislikes: [] };
   const [newLike, setNewLike] = useState("");
   const [newDislike, setNewDislike] = useState("");
-  const { data: groceries = null } = useGroceries();
   const { data: savedRecipes = null } = useSavedRecipes();
-  const addGroceryMut = useAddGrocery();
-  const toggleMut = useToggleGrocery();
-  const delGroceryMut = useDeleteGrocery();
-  const clearMut = useClearCheckedGroceries();
   const saveRecipeMut = useSaveRecipe();
   const delRecipeMut = useDeleteRecipe();
-  const [newItem, setNewItem] = useState("");
   const [generating, setGenerating] = useState(false);
   const [idea, setIdea] = useState(null);
   const [ideaErr, setIdeaErr] = useState(null);
@@ -37,10 +28,6 @@ export function FoodPanel({ isMobile, settings, updateSetting }) {
   const removeLike = (i) => updateSetting("food_preferences", { ...prefs, likes: prefs.likes.filter((_, idx) => idx !== i) });
   const removeDislike = (i) => updateSetting("food_preferences", { ...prefs, dislikes: prefs.dislikes.filter((_, idx) => idx !== i) });
 
-  const addGroceryItem = () => { if (!newItem.trim()) return; addGroceryMut.mutate(newItem.trim(), { onSuccess: () => setNewItem("") }); };
-  const toggleItem = (it) => { toggleMut.mutate({ id: it.id, checked: !it.checked }); };
-  const removeItem = (id) => delGroceryMut.mutate(id);
-  const clearChecked = () => { clearMut.mutate((groceries || []).filter(g => g.checked)); };
 
   const generateIdea = async () => {
     setGenerating(true); setIdeaErr(null); setIdea(null); setReasonOpen(false); setReason("");
@@ -97,41 +84,11 @@ export function FoodPanel({ isMobile, settings, updateSetting }) {
         </div>
       </Card>
 
-      {/* ── grocery list ── */}
-      <Card pad="md" style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10 }}>
-          <span className="t-head">Grocery list</span>
-          {(groceries || []).some(g => g.checked) && (
-            <button className="sec-link" style={{ padding: "10px 8px", margin: "-10px -8px" }} onClick={clearChecked}>Clear checked</button>
-          )}
-        </div>
-        <div style={{ display: "flex", gap: 8 }}>
-          <Field value={newItem} onChange={e => setNewItem(e.target.value)} onKeyDown={e => { if (e.key === "Enter") addGroceryItem(); }} placeholder="Add an item…" style={{ flex: 1, minWidth: 0 }} />
-          <Button kind="quiet" size="md" onClick={addGroceryItem} style={{ flex: "none" }}>Add</Button>
-        </div>
-        {groceries === null ? (
-          <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-            {[0, 1].map(i => <div key={i} className="sk sk-line w60" style={{ margin: 0, height: 26, borderRadius: 8 }} />)}
-          </div>
-        ) : groceries.length ? (
-          <CellGroup style={inCardGroup}>
-            {groceries.map(it => (
-              <div key={it.id} className="cell" style={{ paddingRight: 8, minHeight: 48 }}>
-                <button className="cell-body" onClick={() => toggleItem(it)} role="checkbox" aria-checked={!!it.checked}
-                  style={{ ...rowBtn, flexDirection: "row", alignItems: "center", gap: 12 }}>
-                  <span aria-hidden style={{ width: 22, height: 22, borderRadius: "50%", flex: "none", display: "inline-flex", alignItems: "center", justifyContent: "center", ...(it.checked ? { background: "var(--green)", color: "#FFFFFF" } : { boxShadow: "inset 0 0 0 1.5px var(--line-strong)" }) }}>
-                    {it.checked && <IcCheck size={12} />}
-                  </span>
-                  <span className="t-call" style={{ flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", ...(it.checked ? { color: "var(--faint)", textDecoration: "line-through" } : null) }}>{it.item}</span>
-                </button>
-                <button className="icon-btn" aria-label={`Delete ${it.item}`} onClick={() => removeItem(it.id)}><IcClose size={15} /></button>
-              </div>
-            ))}
-          </CellGroup>
-        ) : (
-          <span className="t-foot" style={{ color: "var(--faint)", padding: "4px 0" }}>List's empty.</span>
-        )}
-      </Card>
+      {/* The grocery list moved to its own top-level tab (pages/grocery). It
+          gets used standing in a shop, one-handed — two taps deep in here was
+          the wrong depth for that, whatever its topical home. This panel keeps
+          tastes, meal ideas and saved recipes. */}
+
 
       {/* ── meal ideas ── */}
       <Card pad="md" style={{ display: "flex", flexDirection: "column", gap: 12 }}>
