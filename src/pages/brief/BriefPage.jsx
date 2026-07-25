@@ -665,22 +665,22 @@ export function MorningBriefPage({ btc, isMobile, settings, updateSetting, onOpe
   const nCols = xwide ? 3 : wide ? 2 : 1;
   const maxW = xwide ? 1480 : 960;
   // ONE masonry over every card — no fixed rows, no full-width section dividers
-  // that would strand a short card above a gap. Cards are dealt round-robin into
-  // nCols columns that each pack vertically, so tall and short widgets nestle
-  // together like a puzzle. Row-major deal means Notes · Calendar · Markets land
-  // as the column-tops; on the phone (nCols 1) it's simply one calm ordered stack.
-  // Cards are dealt in GLANCE ORDER into whichever column is currently shortest,
-  // rather than round-robin by index. Round-robin optimises for column balance,
-  // which isn't what you're reading for: at two columns it put Markets — the
-  // second thing you look at — below the fold of the right column, under Wire.
-  // Dealing in priority order guarantees the top cards are the column tops (all
-  // columns start empty), and `w` is a rough relative height so the packing
-  // benefit survives. Weights are eyeballed, not measured — they only need to be
-  // ordinally right, and being wrong costs a slightly uneven column, never a bug.
+  // that would strand a short card above a gap. Cards are dealt in GLANCE ORDER
+  // into whichever column is currently shortest, so tall and short widgets nestle
+  // together while the order still reflects what you actually read first. `w` is a
+  // rough relative height, eyeballed not measured: it only needs to be ordinally
+  // right, and being wrong costs a slightly uneven column, never a bug.
+  //
+  // On the phone (nCols 1) this array IS the scroll order, which is what the order
+  // below is tuned for. Birthdays sits directly under the calendar on purpose —
+  // it's a calendar concern ("who's coming up"), so that's where you look for it.
+  // Side effect worth knowing: at three columns that makes Birthdays a column-top
+  // and pushes Markets to second in its column. Markets is still above the fold,
+  // and the phone is the surface that matters here.
   const allCards = [
-    { c: card_notes, w: 3 }, { c: card_minicalendar, w: 2.5 }, { c: card_markets, w: 2.5 },
-    { c: card_watch, w: 3 }, { c: card_wire, w: 3 }, { c: card_gsc, w: 2.5 },
-    { c: card_meetings, w: 2 }, { c: card_birthdays, w: 1.5 }, { c: card_clarify, w: 1.5 },
+    { c: card_notes, w: 3 }, { c: card_minicalendar, w: 2.5 }, { c: card_birthdays, w: 1.5 },
+    { c: card_markets, w: 2.5 }, { c: card_watch, w: 3 }, { c: card_wire, w: 3 },
+    { c: card_gsc, w: 2.5 }, { c: card_meetings, w: 2 }, { c: card_clarify, w: 1.5 },
     { c: card_zts, w: 1.5 }, { c: card_shopify, w: 1.5 },
   ];
   const columns = Array.from({ length: nCols }, () => []);
