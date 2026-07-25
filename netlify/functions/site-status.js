@@ -1,9 +1,29 @@
 // Fan-out HEAD/GET checks against each property's live URL, server-side —
 // browsers can't read cross-origin response status directly (CORS gives an
 // opaque response), so this has to run here rather than client-side.
-const { requireUser } = require("./_shared/require-user");
-
 const json = (code, body) => ({ statusCode: code, headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+
+// Session gate, inlined ON PURPOSE. Under this repo's "type":"module" + esbuild
+// bundling, `module.exports` inside a required helper clobbers the bundle's
+// exports before `exports.handler` is assigned and the function deploys with NO
+// handler — a 502 on every call. See the same note in tmdb.js and
+// workout-import.js; btc.js / mini-worker.js work precisely because they are
+// self-contained. Do NOT refactor these back into a shared module.
+// Degrades open when the service key is absent so `netlify dev` still runs.
+async function denyUnlessSignedIn(event) {
+  const url = process.env.SUPABASE_URL, service = process.env.SUPABASE_SERVICE_ROLE_KEY;
+  if (!url || !service) return null;
+  const h = event.headers || {};
+  const token = String(h.authorization || h.Authorization || "").replace(/^Bearer\s+/i, "").trim();
+  if (!token) return json(401, { success: false, error: "sign in first" });
+  try {
+    const who = await fetch(`${url}/auth/v1/user`, { headers: { apikey: service, Authorization: `Bearer ${token}` } });
+    if (!who.ok) return json(401, { success: false, error: "session expired — refresh and try again" });
+  } catch {
+    return json(503, { success: false, error: "couldn't verify your session — try again in a moment" });
+  }
+  return null;
+}
 
 async function checkOne(url) {
   const t0 = Date.now();
@@ -28,7 +48,7 @@ exports.handler = async (event) => {
   // Session required: this fans out up to 20 caller-supplied fetches from our
   // domain and reports each status, which is a fine uptime check for the
   // Properties page and a fine port scanner for anyone else.
-  const denied = await requireUser(event, json);
+  const denied = await denyUnlessSignedIn(event);
   if (denied) return denied;
 
   const urls = Array.isArray(body.urls) ? body.urls.filter(Boolean).slice(0, 20) : [];

@@ -5,13 +5,33 @@
 // Anonymous callers could (a) spend that key without limit, and (b) use it as a
 // server-side fetcher for any URL, getting back either an LLM summary of the
 // response or the raw error string. Both are closed now:
-//   · requireUser() — same session gate as claude/deploy/db-admin/fetch-page.
+//   · a session gate — same posture as claude/deploy/db-admin/fetch-page.
 //   · badUrl() — http(s) only, no private/loopback/link-local hosts. Same guard
 //     fetch-page has carried all along; this function was missing it entirely.
 //   · a 10s abort timer, because there wasn't one.
-const { requireUser } = require("./_shared/require-user");
-
 const json = (code, body) => ({ statusCode: code, headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+
+// Session gate, inlined ON PURPOSE. Under this repo's "type":"module" + esbuild
+// bundling, `module.exports` inside a required helper clobbers the bundle's
+// exports before `exports.handler` is assigned and the function deploys with NO
+// handler — a 502 on every call. See the same note in tmdb.js and
+// workout-import.js; btc.js / mini-worker.js work precisely because they are
+// self-contained. Do NOT refactor these back into a shared module.
+// Degrades open when the service key is absent so `netlify dev` still runs.
+async function denyUnlessSignedIn(event) {
+  const url = process.env.SUPABASE_URL, service = process.env.SUPABASE_SERVICE_ROLE_KEY;
+  if (!url || !service) return null;
+  const h = event.headers || {};
+  const token = String(h.authorization || h.Authorization || "").replace(/^Bearer\s+/i, "").trim();
+  if (!token) return json(401, { success: false, error: "sign in first" });
+  try {
+    const who = await fetch(`${url}/auth/v1/user`, { headers: { apikey: service, Authorization: `Bearer ${token}` } });
+    if (!who.ok) return json(401, { success: false, error: "session expired — refresh and try again" });
+  } catch {
+    return json(503, { success: false, error: "couldn't verify your session — try again in a moment" });
+  }
+  return null;
+}
 
 // Mirrors fetch-page.js — keep the two in sync.
 const PRIVATE_HOST = /^(localhost|0\.0\.0\.0|127\.|10\.|192\.168\.|169\.254\.|172\.(1[6-9]|2\d|3[01])\.)/i;
@@ -34,7 +54,7 @@ exports.handler = async (event) => {
   if (body.ping) return json(200, { success: true, service: "audit", configured: !!key, missing: key ? undefined : "ANTHROPIC_API_KEY" });
   if (!key) return json(500, { error: "ANTHROPIC_API_KEY not set" });
 
-  const denied = await requireUser(event, json);
+  const denied = await denyUnlessSignedIn(event);
   if (denied) return denied;
 
   if (!body.url) return json(400, { error: "url is required" });
