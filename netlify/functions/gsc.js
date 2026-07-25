@@ -8,6 +8,8 @@
 // The service account email must be added as a user on the Search Console
 // property (sc-domain:zerotosecure.com or the URL-prefix property).
 const crypto = require("crypto");
+const { requireUser } = require("./_shared/require-user");
+
 const json = (code, body) => ({ statusCode: code, headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
 
 // Cleans up the ways a PEM key commonly gets mangled when copy-pasted
@@ -88,6 +90,10 @@ exports.handler = async (event) => {
 
   if (body.ping) return json(200, { success: true, service: "gsc", configured, missing: configured ? undefined : "GSC_CLIENT_EMAIL / GSC_PRIVATE_KEY" });
   if (!configured) return json(500, { error: "GSC env vars not set" });
+
+  // Search Console performance for a real property — session required.
+  const denied = await requireUser(event, json);
+  if (denied) return denied;
 
   const privateKey = normalizePrivateKey(rawKey);
   const shapeError = pemShapeError(privateKey);

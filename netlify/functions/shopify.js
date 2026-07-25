@@ -19,6 +19,8 @@
 // Shopify's protected-customer-data review blocks this for your app, this
 // falls back to showing orders/revenue only, with a clear reason why —
 // not a fabricated number.
+const { requireUser } = require("./_shared/require-user");
+
 const json = (code, body) => ({ statusCode: code, headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
 
 let cachedToken = null;
@@ -86,6 +88,10 @@ exports.handler = async (event) => {
 
   if (body.ping) return json(200, { success: true, service: "shopify", configured, missing: configured ? undefined : "SHOPIFY_SHOP / SHOPIFY_CLIENT_ID / SHOPIFY_CLIENT_SECRET" });
   if (!configured) return json(500, { error: "Shopify env vars not set" });
+
+  // Real store revenue and traffic — not something to hand to anonymous callers.
+  const denied = await requireUser(event, json);
+  if (denied) return denied;
 
   const days = Math.min(body.days || 14, 60);
   const since = new Date(Date.now() - days * 86400000);

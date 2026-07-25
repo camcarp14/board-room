@@ -15,6 +15,8 @@
 // they can be added back for real.
 // Needs: CLARIFY_SUPABASE_URL, CLARIFY_SUPABASE_ANON_KEY (or a service role
 // key if RLS blocks anon reads on this table).
+const { requireUser } = require("./_shared/require-user");
+
 const json = (code, body) => ({ statusCode: code, headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
 
 exports.handler = async (event) => {
@@ -27,6 +29,10 @@ exports.handler = async (event) => {
 
   if (body.ping) return json(200, { success: true, service: "clarify-pipeline", configured, missing: configured ? undefined : "CLARIFY_SUPABASE_URL / CLARIFY_SUPABASE_ANON_KEY" });
   if (!configured) return json(500, { error: "Clarify Supabase env vars not set" });
+
+  // Outreach pipeline counts from the Clarify project — session required.
+  const denied = await requireUser(event, json);
+  if (denied) return denied;
 
   const headers = { apikey: key, Authorization: `Bearer ${key}` };
   const count = async (query) => {

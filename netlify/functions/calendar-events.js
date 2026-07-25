@@ -5,6 +5,8 @@
 // public HTML calendar page (not an .ics link) won't parse here.
 // Dependency-free regex-based parsing, consistent with the rest of this
 // codebase (see wire.js for the same approach with RSS).
+const { requireUser } = require("./_shared/require-user");
+
 const json = (code, body) => ({ statusCode: code, headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
 
 // Unfold iCal's line-continuation format (a leading space/tab means "this
@@ -51,6 +53,11 @@ exports.handler = async (event) => {
   let body = {};
   try { body = JSON.parse(event.body || "{}"); } catch {}
   if (body.ping) return json(200, { success: true, service: "calendar-events", configured: true });
+
+  // Session required: the caller names the URL we fetch, and the response is
+  // somebody's actual calendar.
+  const denied = await requireUser(event, json);
+  if (denied) return denied;
   if (!body.url) return json(200, { success: false, error: "no calendar linked yet — add one in the sidebar" });
 
   try {

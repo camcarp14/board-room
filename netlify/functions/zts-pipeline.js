@@ -16,6 +16,8 @@
 // clarify-pipeline function uses). If RLS blocks anon reads on zts.creators,
 // either add a policy allowing anon SELECT or point the anon var at a
 // service-role key.
+
+const { requireUser } = require("./_shared/require-user");
 const json = (code, body) => ({ statusCode: code, headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
 
 // Flat stage → the four buckets the Brief card shows. "drafted" is a pre-send
@@ -38,6 +40,10 @@ exports.handler = async (event) => {
 
   if (body.ping) return json(200, { success: true, service: "zts-pipeline", configured, missing: configured ? undefined : "CLARIFY_SUPABASE_URL / CLARIFY_SUPABASE_ANON_KEY" });
   if (!configured) return json(500, { error: "Pentagon (Clarify) Supabase env vars not set" });
+
+  // Creator-pipeline stage counts from the ZTS project — session required.
+  const denied = await requireUser(event, json);
+  if (denied) return denied;
 
   try {
     // Accept-Profile selects the `zts` schema on the shared project.

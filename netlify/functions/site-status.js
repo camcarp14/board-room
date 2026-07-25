@@ -1,6 +1,8 @@
 // Fan-out HEAD/GET checks against each property's live URL, server-side —
 // browsers can't read cross-origin response status directly (CORS gives an
 // opaque response), so this has to run here rather than client-side.
+const { requireUser } = require("./_shared/require-user");
+
 const json = (code, body) => ({ statusCode: code, headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
 
 async function checkOne(url) {
@@ -22,6 +24,12 @@ exports.handler = async (event) => {
   let body = {};
   try { body = JSON.parse(event.body || "{}"); } catch {}
   if (body.ping) return json(200, { success: true, service: "site-status", configured: true });
+
+  // Session required: this fans out up to 20 caller-supplied fetches from our
+  // domain and reports each status, which is a fine uptime check for the
+  // Properties page and a fine port scanner for anyone else.
+  const denied = await requireUser(event, json);
+  if (denied) return denied;
 
   const urls = Array.isArray(body.urls) ? body.urls.filter(Boolean).slice(0, 20) : [];
   if (!urls.length) return json(400, { error: "urls[] is required" });
