@@ -669,9 +669,27 @@ export function MorningBriefPage({ btc, isMobile, settings, updateSetting, onOpe
   // nCols columns that each pack vertically, so tall and short widgets nestle
   // together like a puzzle. Row-major deal means Notes · Calendar · Markets land
   // as the column-tops; on the phone (nCols 1) it's simply one calm ordered stack.
-  const allCards = [card_notes, card_minicalendar, card_birthdays, card_markets, card_wire, card_watch, card_gsc, card_clarify, card_zts, card_shopify, card_meetings];
+  // Cards are dealt in GLANCE ORDER into whichever column is currently shortest,
+  // rather than round-robin by index. Round-robin optimises for column balance,
+  // which isn't what you're reading for: at two columns it put Markets — the
+  // second thing you look at — below the fold of the right column, under Wire.
+  // Dealing in priority order guarantees the top cards are the column tops (all
+  // columns start empty), and `w` is a rough relative height so the packing
+  // benefit survives. Weights are eyeballed, not measured — they only need to be
+  // ordinally right, and being wrong costs a slightly uneven column, never a bug.
+  const allCards = [
+    { c: card_notes, w: 3 }, { c: card_minicalendar, w: 2.5 }, { c: card_markets, w: 2.5 },
+    { c: card_watch, w: 3 }, { c: card_wire, w: 3 }, { c: card_gsc, w: 2.5 },
+    { c: card_meetings, w: 2 }, { c: card_birthdays, w: 1.5 }, { c: card_clarify, w: 1.5 },
+    { c: card_zts, w: 1.5 }, { c: card_shopify, w: 1.5 },
+  ];
   const columns = Array.from({ length: nCols }, () => []);
-  allCards.forEach((c, i) => columns[i % nCols].push(<div key={i} style={{ marginBottom: 8 }}>{c}</div>));
+  const loads = Array.from({ length: nCols }, () => 0);
+  allCards.forEach(({ c, w }, i) => {
+    const target = loads.indexOf(Math.min(...loads)); // ties resolve left — stable
+    columns[target].push(<div key={i} style={{ marginBottom: 8 }}>{c}</div>);
+    loads[target] += w;
+  });
   return (
     <div style={{ flex: 1, padding: isMobile ? "2px 12px 20px" : "6px 0 0", minWidth: 0 }}>
       <div className="stagger" style={{ maxWidth: maxW, width: "100%", margin: "0 auto", minWidth: 0, display: "flex", gap: 8, alignItems: "flex-start" }}>

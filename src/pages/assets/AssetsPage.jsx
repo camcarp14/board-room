@@ -281,15 +281,20 @@ function AuditorCard({ settings, updateSetting, session, isMobile }) {
     setOpen(true);
   };
 
-  // Auto-run scheduler: while enabled, a 5-minute interval checks whether the
-  // last run is older than 6h; torn down on disable/unmount and re-created
-  // when auditor_last_run changes.
+  // Auto-run, honestly scoped. This card claimed "auto-audits every 6 hours",
+  // which it could never do: the interval lives in a component that unmounts the
+  // moment you leave Assets, AND the first tick was five minutes in, so the run
+  // required sitting on this tab for 5+ minutes with a 6h-stale last run. In
+  // practice it never fired on its own. Only a scheduled Netlify function could
+  // honour "every 6 hours" — until then, this checks ON ARRIVAL (which is when
+  // you'd want fresh findings anyway) and keeps the interval for long sessions.
+  // The copy below now says exactly this.
+  const STALE_MS = 6 * 3600 * 1000;
   useEffect(() => {
     if (!enabled) return;
-    const iv = setInterval(() => {
-      const last = settings?.auditor_last_run || 0;
-      if (Date.now() - last > 6 * 3600 * 1000) runAll();
-    }, 5 * 60 * 1000);
+    const runIfStale = () => { if (Date.now() - (settings?.auditor_last_run || 0) > STALE_MS) runAll(); };
+    runIfStale();                                   // on arrival — the fix
+    const iv = setInterval(runIfStale, 5 * 60 * 1000);
     return () => clearInterval(iv);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [enabled, settings?.auditor_last_run]);
@@ -327,7 +332,7 @@ function AuditorCard({ settings, updateSetting, session, isMobile }) {
           <span className="t-head">Site Auditor</span>
           <Switch on={enabled} onToggle={() => updateSetting("auditor_enabled", !enabled)} aria-label="Auditor enabled" />
         </div>
-        <div className="t-foot" style={{ color: "var(--faint)", marginBottom: 12 }}>Auto-audits every 6 hours while enabled.</div>
+        <div className="t-foot" style={{ color: "var(--faint)", marginBottom: 12 }}>While on, audits when you open this tab if the last run is over 6 hours old.</div>
 
         <Button kind="tinted" size="md" full disabled={running} onClick={() => runAll()}>
           {running ? "Auditing all properties…" : "Run audit now"}

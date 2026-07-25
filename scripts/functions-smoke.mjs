@@ -33,6 +33,34 @@ const require_ = createRequire(import.meta.url);
 // check doesn't depend on bundling third-party trees.
 const EXTERNALS = ["tweetnacl"];
 
+// ─── extra assertions on pure helpers a function exports for testing ─────────
+// Netlify only reads `handler`, so a function may export a pure helper purely so
+// it can be asserted here. Keep these to logic that would otherwise be
+// untestable — anything richer belongs in src/ with its own smoke.
+const EXTRA = {
+  "mini-worker": (mod) => {
+    const m = mod.mergeTasks;
+    if (typeof m !== "function") return [["mini-worker exports mergeTasks", false, "not exported"]];
+    const A = { id: "a", status: "delivered", output: "done" };   // ours, finished this run
+    const B = { id: "b", status: "queued" };                      // ours, untouched
+    const C = { id: "c", status: "queued" };                      // queued by the CLIENT mid-run
+    return [
+      // the bug this fixes: a task the client queued during a run must survive our write
+      ["mergeTasks keeps a task queued mid-run", m([A, B], [C, { ...A, status: "queued" }, B]).some(t => t.id === "c")],
+      ["mergeTasks lets our version win for ids we touched",
+        m([A, B], [C, { ...A, status: "queued", output: null }, B]).find(t => t.id === "a")?.output === "done"],
+      ["mergeTasks preserves live order (client prepends, so new stays on top)",
+        m([A, B], [C, A, B]).map(t => t.id).join() === "c,a,b"],
+      ["mergeTasks appends ours when the live row hasn't seen it",
+        m([A, B], [A]).map(t => t.id).join() === "a,b"],
+      ["mergeTasks falls back to ours when live is absent/garbage",
+        m([A, B], null).length === 2 && m([A, B], "nope").length === 2],
+      ["mergeTasks tolerates empty/idless input",
+        m([], []).length === 0 && m(null, null).length === 0 && m([{ status: "queued" }], []).length === 0],
+    ];
+  },
+};
+
 rmSync(OUT_DIR, { recursive: true, force: true });
 mkdirSync(OUT_DIR, { recursive: true });
 
@@ -59,6 +87,10 @@ for (const file of fns) {
     if (typeof mod.handler === "function" || typeof mod.default === "function") {
       pass++;
       console.log(`ok:   ${name}`);
+      for (const [label, cond, detail = ""] of (EXTRA[name]?.(mod) || [])) {
+        if (cond) console.log(`ok:     ${label}`);
+        else failures.push([`${name} · ${label}`, detail || "assertion failed"]);
+      }
     } else {
       failures.push([name, `bundled with NO handler — exports are ${JSON.stringify(Object.keys(mod))}. `
         + `A required helper's module.exports has clobbered the bundle's exports; inline it into the function instead.`]);

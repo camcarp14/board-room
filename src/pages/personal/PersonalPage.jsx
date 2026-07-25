@@ -3,15 +3,26 @@
 // feature panels and handles cross-app jump/deep-link signals. Panels are
 // unmounted when not active (state resets on section switch — current, kept).
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, lazy, Suspense } from "react";
 import { PillRow } from "../../ui/kit.jsx";
-import { UpkeepPanel } from "../../features/upkeep/UpkeepPanel.jsx";
-import { CreedPanel } from "../../features/creed/CreedPanel.jsx";
-import { BirthdaysPanel } from "../../features/birthdays/BirthdaysPanel.jsx";
-import { MoviesPanel } from "../../features/movies/MoviesPanel.jsx";
-import { FoodPanel } from "../../features/food/FoodPanel.jsx";
+// Notes & Calendar is the sub-tab you land on, so it stays in this chunk —
+// first paint must not wait on a second request. The other five are one tap away
+// and rarely the reason you opened Personal, so they split out: opening the tab
+// you actually use every day no longer downloads Movies, Food, Creed, Birthdays
+// and Upkeep alongside it.
 import { NotesPanel } from "./NotesPanel.jsx";
 import { CalendarPanel } from "./CalendarPanel.jsx";
+const UpkeepPanel = lazy(() => import("../../features/upkeep/UpkeepPanel.jsx").then(m => ({ default: m.UpkeepPanel })));
+const CreedPanel = lazy(() => import("../../features/creed/CreedPanel.jsx").then(m => ({ default: m.CreedPanel })));
+const BirthdaysPanel = lazy(() => import("../../features/birthdays/BirthdaysPanel.jsx").then(m => ({ default: m.BirthdaysPanel })));
+const MoviesPanel = lazy(() => import("../../features/movies/MoviesPanel.jsx").then(m => ({ default: m.MoviesPanel })));
+const FoodPanel = lazy(() => import("../../features/food/FoodPanel.jsx").then(m => ({ default: m.FoodPanel })));
+
+// Local boundary so a lazy panel shows a card-shaped skeleton in place, rather
+// than falling through to App's page-level fallback and blanking the pill row.
+const PanelFallback = () => (
+  <div className="sk" style={{ height: 180, borderRadius: 18 }} />
+);
 
 // Section keys are wired to jump.sub values coming from other parts of the app
 // (Summon, Brief) — renaming a key breaks deep links.
@@ -57,11 +68,15 @@ export function PersonalPage({ isMobile, jumpSignal, jump, settings, updateSetti
               <NotesPanel isMobile={isMobile} openSignal={noteSignal} />
             </>
           )}
-          {sub === "upkeep" && <UpkeepPanel isMobile={isMobile} />}
-          {sub === "creed" && <CreedPanel isMobile={isMobile} />}
-          {sub === "birthdays" && <BirthdaysPanel isMobile={isMobile} />}
-          {sub === "movies" && <MoviesPanel isMobile={isMobile} />}
-          {sub === "food" && <FoodPanel isMobile={isMobile} settings={settings} updateSetting={updateSetting} />}
+          {sub !== "notescal" && (
+            <Suspense fallback={<PanelFallback />}>
+              {sub === "upkeep" && <UpkeepPanel isMobile={isMobile} />}
+              {sub === "creed" && <CreedPanel isMobile={isMobile} />}
+              {sub === "birthdays" && <BirthdaysPanel isMobile={isMobile} />}
+              {sub === "movies" && <MoviesPanel isMobile={isMobile} />}
+              {sub === "food" && <FoodPanel isMobile={isMobile} settings={settings} updateSetting={updateSetting} />}
+            </Suspense>
+          )}
         </div>
       </div>
     </div>

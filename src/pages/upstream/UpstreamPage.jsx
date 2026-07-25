@@ -24,9 +24,9 @@ import {
 /* ── primitives ─────────────────────────────────────────────────────────────── */
 
 const VERDICT = {
-  povs_shipped: { tone: "var(--brass)", label: "POVS SHIPPED" },
+  povs_shipped: { tone: "var(--accent)", label: "POVS SHIPPED" },
   consensus_holds: { tone: "var(--green)", label: "CONSENSUS HOLDS" },
-  predictions_shipped: { tone: "var(--brass)", label: "PREDICTIONS SHIPPED" },
+  predictions_shipped: { tone: "var(--accent)", label: "PREDICTIONS SHIPPED" },
   consensus_affirmed: { tone: "var(--green)", label: "CONSENSUS AFFIRMED" },
   failed: { tone: "var(--red)", label: "INCOMPLETE" },
 };
@@ -43,7 +43,7 @@ function Tag({ tone = "var(--sub)", children, title }) {
 }
 
 function RunBadge({ run }) {
-  if (run.status === "running") return <Tag tone="var(--brass)">RUNNING</Tag>;
+  if (run.status === "running") return <Tag tone="var(--accent)">RUNNING</Tag>;
   const v = VERDICT[run.verdict] || { tone: "var(--faint)", label: (run.status || "—").toUpperCase() };
   return <Tag tone={v.tone}>{v.label}</Tag>;
 }
@@ -74,9 +74,9 @@ function ConfBar({ value, width = 80 }) {
   return (
     <span style={{ display: "inline-flex", alignItems: "center", gap: 8 }}>
       <span style={{ width, height: 5, borderRadius: 99, background: "var(--line)", overflow: "hidden", display: "inline-block", flex: "none" }}>
-        <span style={{ display: "block", width: `${pct}%`, height: "100%", background: "var(--brass)" }} />
+        <span style={{ display: "block", width: `${pct}%`, height: "100%", background: "var(--accent)" }} />
       </span>
-      <span className="t-num" style={{ fontSize: 13.5, color: "var(--brass)", fontWeight: 700 }}>{pct}%</span>
+      <span className="t-num" style={{ fontSize: 13.5, color: "var(--accent)", fontWeight: 700 }}>{pct}%</span>
     </span>
   );
 }
@@ -95,7 +95,7 @@ function Mechanism({ mech }) {
     <div style={{ marginTop: 12 }}>
       <span style={kLabel}>why smart people miss it</span>
       <div style={{ display: "flex", gap: 7, alignItems: "baseline", flexWrap: "wrap" }}>
-        <Tag tone="var(--brass)">{mech.type.replace(/_/g, " ")}</Tag>
+        <Tag tone="var(--accent)">{mech.type.replace(/_/g, " ")}</Tag>
         <span style={{ fontSize: 13, lineHeight: 1.55, flex: 1, minWidth: 200 }}><b>{mech.who}</b> — {mech.why}</span>
       </div>
     </div>
@@ -105,7 +105,7 @@ function Mechanism({ mech }) {
 function SourceLink({ url, label }) {
   return (
     <a href={url} target="_blank" rel="noreferrer" style={{
-      fontSize: 11, color: "var(--brass)", display: "inline-flex", alignItems: "center",
+      fontSize: 11, color: "var(--accent)", display: "inline-flex", alignItems: "center",
       gap: 4, marginRight: 10, whiteSpace: "nowrap",
     }}><IcExternal size={10} /> {label || hostOf(url)}</a>
   );
@@ -133,7 +133,7 @@ function StageRail({ stages, artifact, run }) {
     }
     return "idle";
   };
-  const tone = { done: "var(--green)", run: "var(--brass)", fail: "var(--red)", idle: "var(--faint)" };
+  const tone = { done: "var(--green)", run: "var(--accent)", fail: "var(--red)", idle: "var(--faint)" };
   return (
     <div style={{ display: "flex", alignItems: "center", gap: 7, flexWrap: "wrap", margin: "12px 0 2px" }}>
       {stages.map((s, i) => {
@@ -144,7 +144,7 @@ function StageRail({ stages, artifact, run }) {
             <Dot tone={tone[state]} pulse={state === "run"} size={7} />
             <span style={{
               fontSize: 10, fontWeight: 700, letterSpacing: "0.06em", textTransform: "uppercase",
-              color: state === "idle" ? "var(--faint)" : state === "run" ? "var(--brass)" : "var(--sub)",
+              color: state === "idle" ? "var(--faint)" : state === "run" ? "var(--accent)" : "var(--sub)",
             }}>{s.label}</span>
           </span>
         );
@@ -167,9 +167,9 @@ function QuestionCard({ n, question, pov, dive, score, researchFailed }) {
     <Card pad="lg" style={{ marginBottom: 10 }}>
       <div style={{ display: "flex", gap: 11, alignItems: "flex-start" }}>
         <span className="t-num" style={{
-          fontSize: 11.5, fontWeight: 700, color: "var(--brass)",
-          background: "color-mix(in srgb, var(--brass) 12%, transparent)",
-          border: "1px solid color-mix(in srgb, var(--brass) 30%, transparent)", borderRadius: 7,
+          fontSize: 11.5, fontWeight: 700, color: "var(--accent)",
+          background: "color-mix(in srgb, var(--accent) 12%, transparent)",
+          border: "1px solid color-mix(in srgb, var(--accent) 30%, transparent)", borderRadius: 7,
           width: 22, height: 22, display: "inline-flex", alignItems: "center", justifyContent: "center", flex: "none", marginTop: 2,
         }}>{n}</span>
         <div style={{ flex: 1, minWidth: 0 }}>
@@ -178,7 +178,7 @@ function QuestionCard({ n, question, pov, dive, score, researchFailed }) {
           {/* the take, one line — the reason to care */}
           {pov && (
             <div style={{ display: "flex", gap: 10, alignItems: "baseline", flexWrap: "wrap", marginTop: 9 }}>
-              <span style={{ color: "var(--brass)", fontSize: 13, flex: "none" }}>→</span>
+              <span style={{ color: "var(--accent)", fontSize: 13, flex: "none" }}>→</span>
               <span style={{ fontSize: 13.5, fontWeight: 600, lineHeight: 1.5, flex: 1, minWidth: 200 }}>{pov.spine}</span>
               <ConfBar value={pov.confidence} width={54} />
             </div>
@@ -239,7 +239,7 @@ function QuestionCard({ n, question, pov, dive, score, researchFailed }) {
                   ))}
                 </div>
                 {score.nearestConsensus && (
-                  <div style={{ borderLeft: "2px solid var(--brass)", padding: "2px 11px" }}>
+                  <div style={{ borderLeft: "2px solid var(--accent)", padding: "2px 11px" }}>
                     <p style={{ fontSize: 12, color: "var(--faint)", margin: "0 0 3px" }}>
                       Closest thing anyone else asks: “{score.nearestConsensus.text}”
                     </p>
@@ -283,7 +283,7 @@ function ShowTheWork({ a }) {
             Treated as burned territory. Survivors had to be demonstrably outside all of it.
           </p>
           {st.consensus?.searchDegraded && (
-            <p style={{ fontSize: 12, color: "var(--brass)", margin: "0 0 8px" }}>
+            <p style={{ fontSize: 12, color: "var(--accent)", margin: "0 0 8px" }}>
               ⚠ Web grounding was degraded — this map is model-prior only, so novelty deserves skepticism.
             </p>
           )}
@@ -341,7 +341,7 @@ function UpstreamResult({ run, onRerun }) {
   return (
     <>
       {st.synthesis?.runSpine && (
-        <Card pad="lg" style={{ marginTop: 12, background: "color-mix(in srgb, var(--brass) 7%, transparent)", border: "1px solid color-mix(in srgb, var(--brass) 25%, transparent)" }}>
+        <Card pad="lg" style={{ marginTop: 12, background: "color-mix(in srgb, var(--accent) 7%, transparent)", border: "1px solid color-mix(in srgb, var(--accent) 25%, transparent)" }}>
           <span style={kLabel}>the spine</span>
           <p style={{ fontSize: 16.5, fontWeight: 700, lineHeight: 1.45, margin: 0 }}>{st.synthesis.runSpine}</p>
         </Card>
@@ -400,7 +400,7 @@ function PredictionCard({ p, actions }) {
   const [resolving, setResolving] = useState(false);
   const days = p.resolution_date ? daysUntil(p.resolution_date) : null;
   const last = p.tellChecks?.length ? p.tellChecks[p.tellChecks.length - 1] : null;
-  const sigTone = { none: "var(--faint)", early: "var(--brass)", strong: "var(--green)", contra: "var(--red)" };
+  const sigTone = { none: "var(--faint)", early: "var(--accent)", strong: "var(--green)", contra: "var(--red)" };
   const statusTone = { open: "var(--faint)", correct: "var(--green)", wrong: "var(--red)", void: "var(--faint)" };
   const yrs = days != null ? (days / 365).toFixed(1) : null;
   const closed = p.status && p.status !== "open";
@@ -413,11 +413,11 @@ function PredictionCard({ p, actions }) {
   return (
     <Card pad="lg" style={{ marginBottom: 10, opacity: p.status === "void" ? 0.72 : 1 }}>
       <div style={{ display: "flex", gap: 7, flexWrap: "wrap", alignItems: "center", marginBottom: 10 }}>
-        <Tag tone={p.kind === "bold" ? "var(--brass)" : "var(--green)"}>{p.kind === "bold" ? "bold call" : "consensus affirmed"}</Tag>
+        <Tag tone={p.kind === "bold" ? "var(--accent)" : "var(--green)"}>{p.kind === "bold" ? "bold call" : "consensus affirmed"}</Tag>
         {closed && <Tag tone={statusTone[p.status]}>{p.status}</Tag>}
         {last && <Tag tone={sigTone[last.signal]}>tell: {last.signal}</Tag>}
         {!closed && (
-          <Tag tone={last ? "var(--faint)" : "var(--brass)"}>
+          <Tag tone={last ? "var(--faint)" : "var(--accent)"}>
             {last ? `checked ${checkAge}` : "never checked"}
           </Tag>
         )}
@@ -433,8 +433,8 @@ function PredictionCard({ p, actions }) {
       {/* the tell — the only part you can act on this month */}
       <div style={{
         padding: "11px 13px", borderRadius: 11,
-        background: "color-mix(in srgb, var(--brass) 7%, transparent)",
-        border: "1px solid color-mix(in srgb, var(--brass) 22%, transparent)",
+        background: "color-mix(in srgb, var(--accent) 7%, transparent)",
+        border: "1px solid color-mix(in srgb, var(--accent) 22%, transparent)",
       }}>
         <span style={kLabel}>the tell — earliest thing you could go check</span>
         <p style={{ margin: 0, fontSize: 13, lineHeight: 1.55 }}>{p.tell?.observable}</p>
@@ -526,7 +526,7 @@ function SubjectHeader({ subject, count }) {
         {truncated && (
           <button onClick={() => setOpen(!open)} style={{
             background: "none", border: "none", padding: "0 0 0 6px", cursor: "pointer",
-            color: "var(--brass)", fontSize: 12,
+            color: "var(--accent)", fontSize: 12,
           }}>{open ? "less" : "more"}</button>
         )}
       </p>

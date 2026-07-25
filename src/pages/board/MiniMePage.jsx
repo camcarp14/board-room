@@ -19,7 +19,7 @@ export const MINI_DEFAULTS = {
   directive: "", briefingLog: [], role: "",
   reflectOn: true, loopOn: true, loopMax: "5", approvalOn: true,
 };
-export const TASK_COLORS = { delivered: T.green, review: T.brass, queued: T.faint, failed: T.red };
+export const TASK_COLORS = { delivered: T.green, review: T.accent, queued: T.faint, failed: T.red };
 export const EFFORT_LEVELS = [
   { key: "quick", label: "Quick", desc: "One shot, no self-review — fastest and cheapest." },
   { key: "careful", label: "Careful", desc: "Reviews its own draft once before delivering." },

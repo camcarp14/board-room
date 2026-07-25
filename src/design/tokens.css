@@ -163,28 +163,10 @@
   --green-a06: color-mix(in srgb, var(--green) 6%, transparent);
   --green-a50: color-mix(in srgb, var(--green) 50%, transparent);
 
-  /* legacy metal aliases — unmigrated surfaces keep resolving */
-  --brass: var(--accent);
-  --brass-hi: var(--accent-hi);
-  --brass-deep: var(--accent-deep);
-  --on-brass: var(--on-accent);
-  --brass-a06: var(--accent-a06);
-  --brass-a08: var(--accent-a08);
-  --brass-a10: var(--accent-a10);
-  --brass-a12: var(--accent-a12);
-  --brass-a16: var(--accent-a16);
-  --brass-a20: var(--accent-a20);
-  --brass-a25: var(--accent-a25);
-  --brass-a32: var(--accent-a32);
-  --brass-a40: var(--accent-a40);
-  --brass-a55: var(--accent-a55);
-  --brass-a85: var(--accent-a85);
-
-  /* retired effects — resolve to nothing so old inline styles go quiet */
-  --white-edge: transparent;
-  --white-inset: transparent;
-  --glow-brass: 0 0 0 rgba(0, 0, 0, 0);
-  --canvas-wash: none;
+  /* The legacy --brass-* aliases and the retired --white-edge / --white-inset /
+     --glow-brass / --canvas-wash no-ops lived here, kept so surfaces awaiting the
+     Porcelain/Graphite migration still resolved. Every call site is migrated now,
+     so they are gone — the palette has exactly one name per colour again. */
 
   --focus-ring: 0 0 0 2px var(--bg), 0 0 0 4px var(--accent-a55);
 }

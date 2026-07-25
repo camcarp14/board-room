@@ -95,10 +95,42 @@ async function loadSkillsBlock(cfg, userId, budget = 9000) {
     return out;
   } catch { return ""; }
 }
+/** Reconcile our task list against whatever is live, by task id. Pure, and
+ *  exported ONLY so scripts/mini-worker-smoke.mjs can assert it (Netlify reads
+ *  `handler` and ignores the rest of the exports).
+ *
+ *  Both sides used to write the WHOLE array: the client upserts it on every
+ *  queue/remove, and this function replaced it at the end of a run. Queue a task
+ *  from Summon or the task field while a run was in flight and whichever write
+ *  landed second silently discarded the other's changes — a lost task, or a lost
+ *  deliverable. Live order is preserved (the client prepends new tasks, so a task
+ *  queued mid-run stays at the top and gets picked up next run); ours wins for
+ *  ids we touched; anything of ours the live row hasn't seen is appended. */
+function mergeTasks(ours, live) {
+  const mine = new Map((ours || []).filter(t => t && t.id).map(t => [t.id, t]));
+  if (!Array.isArray(live)) return ours || [];
+  const seen = new Set();
+  const merged = live.filter(t => t && t.id).map(t => { seen.add(t.id); return mine.get(t.id) || t; });
+  for (const t of ours || []) if (t && t.id && !seen.has(t.id)) merged.push(t);
+  return merged;
+}
+exports.mergeTasks = mergeTasks;
+
 async function saveTasks(cfg, userId, tasks) {
-  await rest(cfg, `app_settings?user_id=eq.${userId}&setting_key=eq.mini_tasks`, {
-    method: "PATCH",
-    body: JSON.stringify({ setting_value: tasks, updated_at: new Date().toISOString() }),
+  let merged = tasks;
+  try {
+    const res = await rest(cfg, `app_settings?user_id=eq.${userId}&setting_key=eq.mini_tasks&select=setting_value`, { headers: { Prefer: "" } });
+    const rows = await res.json();
+    merged = mergeTasks(tasks, Array.isArray(rows) ? rows[0]?.setting_value : null);
+  } catch { /* couldn't re-read — write what we have rather than lose the run's output */ }
+  // UPSERT, not PATCH. A PATCH filtered on (user_id, setting_key) matches no row
+  // on a first-ever run and then succeeds having written nothing at all — the run
+  // reported success and saved none of its output. The table has the unique
+  // constraint the client already upserts against, so merge-duplicates works here.
+  await rest(cfg, "app_settings", {
+    method: "POST",
+    headers: { Prefer: "return=minimal,resolution=merge-duplicates" },
+    body: JSON.stringify({ user_id: userId, setting_key: "mini_tasks", setting_value: merged, updated_at: new Date().toISOString() }),
   });
 }
 
