@@ -135,8 +135,15 @@ const norm = (x) => (x || "").trim().toLowerCase();
 // "=x" = exact match (guards short words like "run" against "cRUNch").
 const GROUP_RULES = [
   ["Shoulders", ["rear delt", "upright row", "face pull"]], // disambiguators — beat Chest's "fly" and Back's "row"/"pull"
-  ["Legs", ["squat", "leg press", "leg extension", "leg curl", "lunge", "deadlift", "rdl", "hip thrust", "glute", "calf", "hamstring", "step-up", "step up", "adduct", "abduct", "nordic"]],
-  ["Conditioning", ["running", " run", "=run", "rowing", "row (erg", "bike", "erg", "sled", "carry", "swing", "burpee", "box jump", "jump rope", "ski", "stair", "elliptical", "swim", "incline walk", "treadmill", "sprint", "hiit"]],
+  // "wall sit" and "thruster" are Legs: the squat drives both. wall sit was
+  // already used by the bodyweight library and was silently landing in "Other",
+  // so it never counted toward weekly leg sets or the recovery clock.
+  ["Legs", ["squat", "leg press", "leg extension", "leg curl", "lunge", "deadlift", "rdl", "hip thrust", "glute", "calf", "hamstring", "step-up", "step up", "adduct", "abduct", "nordic", "wall sit", "thruster"]],
+  // Metabolic/circuit moves. "mountain climber" was the other pre-existing gap —
+  // the Bodyweight Burner and Conditioning Blast templates both use it. Keys are
+  // specific phrases, not bare words: "jump rope"/"box jump" don't catch
+  // "jumping jack", and "crawl" alone would be too greedy.
+  ["Conditioning", ["running", " run", "=run", "rowing", "row (erg", "bike", "erg", "sled", "carry", "swing", "burpee", "box jump", "jump rope", "jumping jack", "mountain climber", "high knee", "skater", "bear crawl", "battle rope", "ski", "stair", "elliptical", "swim", "incline walk", "treadmill", "sprint", "hiit", "shuttle"]],
   ["Arms", ["curl", "tricep", "skullcrusher", "skull crusher", "pushdown", "close-grip", "close grip", "preacher", "dip (tricep", "wrist", "forearm"]],
   ["Chest", ["bench", "chest", "fly", "push-up", "pushup", "crossover", "pec", "dip (chest", "incline"]],
   ["Shoulders", ["overhead press", "shoulder", "ohp", "military", "lateral raise", "front raise", "arnold", "delt", "dumbbell press", "db press", "shrug"]],

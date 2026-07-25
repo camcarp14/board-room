@@ -12,6 +12,7 @@ import {
   upNext, weeklyVolumeSeries, plateauRead,
 } from "./lib/workout-engine.js";
 import { FindWorkout } from "./pages/train/PerfectWorkout.jsx";
+import { FatMelter } from "./pages/train/FatMelter.jsx";
 
 // ════════════════════════════════════════════════════════════════════════════
 // WORKOUT — the Train tab (graduated from Personal to its own dock slot).
@@ -642,6 +643,15 @@ function TrainHome({ isMobile, templates, sessions, active, unit, onResume, onSt
               in one tap — no routine required. Sits above your routines so
               "I don't know what to do" never stalls a session. */}
           <FindWorkout
+            isMobile={isMobile} sessions={sessions} unit={unit}
+            onStart={onStart} onSaveRoutine={onSaveRoutine}
+            style={{ marginBottom: 10 }}
+          />
+          {/* Same one-tap-to-training path, different question. Find your workout
+              answers "what should I train today"; Fat Melter answers "I want to
+              burn". Both hand a workout to the same onStart, so either one starts
+              a normal session that logs, prefills weights and feeds the heatmap. */}
+          <FatMelter
             isMobile={isMobile} sessions={sessions} unit={unit}
             onStart={onStart} onSaveRoutine={onSaveRoutine}
             style={{ marginBottom: 10 }}
