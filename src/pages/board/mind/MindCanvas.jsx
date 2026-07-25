@@ -14,8 +14,8 @@ import { REGIONS, dnaBus } from "./mindGenome.js";
 // highlight-only pulses, no ambient dust, no rAF at all.
 //
 // ── THEME-AWARE (the difference from the clarify original) ───────────────────
-// Board Room runs TWO themes on <html data-theme=day|night>: Porcelain (warm
-// paper, #F2F1EB) and Graphite (true-black OLED, #000). Every color the app
+// Board Room runs a light/dark MODE on <html data-theme=day|night> crossed with
+// one of 20 PALETTES on data-palette (see src/design/themes.css). Every color the app
 // draws is a CSS custom property (--accent/--ink/--bg/--green/…). This canvas
 // NEVER hardcodes a hex. Two mechanisms keep it honest in both rooms:
 //   1. Auto-flip via element.style — SVG fills/strokes set to a var() string
@@ -911,7 +911,10 @@ export function MindCanvas({
       else if (!S.paused && S.sim) S.sim.alpha = Math.max(S.sim.alpha, 0.14);
     };
     const themeObs = new MutationObserver(onTheme);
-    themeObs.observe(document.documentElement, { attributes: true, attributeFilter: ["data-theme"] });
+    // data-palette as well as data-theme: the 20 colour schemes change --accent /
+    // --bg / --ink without touching the light/dark mode, and the resolved-literal
+    // cache above has to be rebuilt for either.
+    themeObs.observe(document.documentElement, { attributes: true, attributeFilter: ["data-theme", "data-palette"] });
     if (!RM) S.raf = requestAnimationFrame(loop);
     return () => {
       cancelAnimationFrame(S.raf);

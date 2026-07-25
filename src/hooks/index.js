@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from "react";
-import { getThemePref, setThemePref, resolveTheme, applyTheme } from "../theme.js";
+import { getThemePref, setThemePref, resolveTheme, applyTheme, getPalettePref, setPalettePref } from "../theme.js";
 import { updateSnapshot, getSnapshot } from "../lib/snapshot.js";
 
 // The room follows the sun: Nocturne 19:00–07:00, Daylight otherwise, unless
@@ -7,9 +7,10 @@ import { updateSnapshot, getSnapshot } from "../lib/snapshot.js";
 // live afterwards (the minute-tick catches sunset while the app is open).
 export function useThemeController() {
   const [pref, setPrefState] = useState(getThemePref);
+  const [palette, setPaletteState] = useState(getPalettePref);
   const [resolved, setResolved] = useState(() => resolveTheme(getThemePref()));
   useEffect(() => {
-    applyTheme(resolveTheme(pref));
+    applyTheme(resolveTheme(pref), { palette });
     setResolved(resolveTheme(pref));
     if (pref !== "auto") return;
     // auto follows the device appearance — react the instant it flips, and
@@ -23,14 +24,22 @@ export function useThemeController() {
     mq?.addEventListener?.("change", reresolve);
     const iv = setInterval(reresolve, 60 * 1000);
     return () => { mq?.removeEventListener?.("change", reresolve); clearInterval(iv); };
-  }, [pref]);
+  }, [pref, palette]);
   const setPref = (p) => {
     setThemePref(p);
     setPrefState(p);
-    applyTheme(resolveTheme(p), { animate: true });
+    applyTheme(resolveTheme(p), { animate: true, palette });
     setResolved(resolveTheme(p));
   };
-  return { pref, setPref, resolved };
+  // Switching palette keeps the light/dark mode exactly where it is — the two
+  // axes never move each other. The veil cross-fade is reused so a 20-token
+  // repaint doesn't hard-cut.
+  const setPalette = (key) => {
+    setPalettePref(key);
+    setPaletteState(key);
+    applyTheme(resolveTheme(pref), { animate: true, palette: key });
+  };
+  return { pref, setPref, resolved, palette, setPalette };
 }
 
 // iOS standalone under-reports the viewport through several APIs at once

@@ -15,10 +15,12 @@ import { supabase } from "../lib/supabase.js";
 import { Sheet, Cell, CellGroup, Button, Field, SectionHeader, useConfirm } from "../ui/kit.jsx";
 import { IcSun, IcMoon, IcAutoTheme, IcCheck } from "../ui/icons.jsx";
 
+// Light/dark MODE only. Which of the 20 colour schemes is a separate axis, and it
+// lives in Assets → Theme where there's room to show swatches.
 const THEMES = [
   { key: "auto", label: "Auto", sub: "Follows your device", Icon: IcAutoTheme },
-  { key: "day", label: "Porcelain", sub: "Warm paper, always", Icon: IcSun },
-  { key: "night", label: "Graphite", sub: "True black, always", Icon: IcMoon },
+  { key: "day", label: "Light", sub: "Always light, whatever the device says", Icon: IcSun },
+  { key: "night", label: "Dark", sub: "Always dark, whatever the device says", Icon: IcMoon },
 ];
 
 // An iCal feed is the only shape calendar-events.js can parse. A Google
@@ -65,7 +67,7 @@ export function SettingsSheet({ onClose, session, theme, calUrl, onSaveCalUrl, i
                   leading={<Icon size={17} />}
                   leadingTone={active ? "var(--accent)" : undefined}
                   title={label}
-                  sub={key === "auto" ? `${sub} — currently ${theme.resolved === "night" ? "Graphite" : "Porcelain"}` : sub}
+                  sub={key === "auto" ? `${sub} — currently ${theme.resolved === "night" ? "dark" : "light"}` : sub}
                   onClick={() => theme.setPref(key)}
                   trailing={active
                     ? <span style={{ color: "var(--accent)", display: "inline-flex", flex: "none" }}><IcCheck size={15} /></span>

@@ -6,6 +6,9 @@
    ═══════════════════════════════════════════════════════════════════════════ */
 
 @import "./design/tokens.css";
+/* AFTER tokens.css on purpose: [data-palette] matches tokens' own specificity,
+   so import order is what lets a palette override the base day/night values. */
+@import "./design/themes.css";
 @import "./design/components.css";
 
 /* ── base ──────────────────────────────────────────────────────────────────── */

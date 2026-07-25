@@ -44,9 +44,31 @@
           else if (window.matchMedia) t = window.matchMedia("(prefers-color-scheme: dark)").matches ? "night" : "day";
           else { var h = new Date().getHours(); t = (h >= 19 || h < 7) ? "night" : "day"; }
         } catch (e) {}
-        document.documentElement.setAttribute("data-theme", t);
+        // The palette is the second axis (20 colour schemes; see
+        // src/design/themes.css). It only needs the ATTRIBUTE set here — the
+        // values live in CSS, so no palette data has to be duplicated into this
+        // script and there's nothing to drift. If it were applied from JS after
+        // hydration instead, every relaunch of a non-default theme would paint
+        // Porcelain for a frame first, which on an installed PWA is a visible
+        // flash on every single open.
+        var pal = "porcelain";
+        try { pal = localStorage.getItem("br_palette") || "porcelain"; } catch (e) {}
+        var root = document.documentElement;
+        root.setAttribute("data-theme", t);
+        root.setAttribute("data-palette", pal);
+        // theme-color paints the strip behind the iOS status bar on an installed
+        // app, so a wrong value here is a visible seam at the top of the screen
+        // for the whole first frame. It CANNOT be read from the cascade: Vite
+        // emits the stylesheet link after this script, so getComputedStyle
+        // returns empty at this point in both dev and production. Hence the
+        // grounds are inlined — generated, never hand-edited, and theme-smoke
+        // fails the build if they drift from themes.css.
+        /* THEME-GROUNDS:GENERATED — scripts/gen-themes.mjs */
+        var G = {"porcelain":["#F4F3F0","#0E0D0B"],"graphite":["#F3F2F2","#0C0C0B"],"lapis":["#EFF1F5","#0A0C12"],"slate":["#F0F2F4","#0B0C0E"],"forest":["#F0F5F2","#0B0F0D"],"claret":["#F4F0F1","#0F0B0B"],"ink":["#F1F3F3","#0B0C0D"],"navy":["#EFF2F5","#0A0D11"],"plum":["#F4F0F5","#0E0B0F"],"moss":["#F3F4F0","#0E0F0B"],"copper":["#F5F2F0","#100D0B"],"teal":["#F0F4F5","#0B0F10"],"iris":["#F0EFF5","#0B0A10"],"arctic":["#EFF3F5","#0A0E10"],"ember":["#F4F2F1","#0D0C0B"],"mono":["#F2F2F2","#0B0B0B"],"sand":["#F5F3EF","#100E0A"],"rose":["#F3F1F2","#0D0B0C"],"pine":["#EFF5F4","#0A110F"],"oxide":["#F3F2F1","#0D0B0B"]};
+        /* /THEME-GROUNDS */
+        var g = G[pal] || G.porcelain;
         var m = document.querySelector('meta[name="theme-color"]');
-        if (m) m.setAttribute("content", t === "night" ? "#000000" : "#F2F1EB");
+        if (m && g) m.setAttribute("content", t === "night" ? g[1] : g[0]);
       })();
     </script>
     <!-- Type: Inter (self-hosted, preloaded above) with the platform stack as

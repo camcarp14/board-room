@@ -26,7 +26,7 @@ import { supabase } from "../../../lib/supabase.js";
 // the mutation history records it and the dnaBus "genome" event keeps every
 // consumer (canvas, pills, delegate) in sync. The panel owns zero business logic.
 //
-// THEME: Porcelain (day) / Graphite (night) both live here. Not one hardcoded
+// THEME: light (day) / dark (night) × 20 palettes all live here. Not one hardcoded
 // hex — every color is a CSS-var token (var(--surface)/--ink/--sub/--line/
 // --accent/…) or a color-mix over one, so the whole overlay flips with the room.
 // ════════════════════════════════════════════════════════════════════════════
