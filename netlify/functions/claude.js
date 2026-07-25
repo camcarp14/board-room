@@ -8,7 +8,9 @@ const json = (statusCode, body) => ({
 
 // The only models the app ever asks for. Allowlisted so a caller can't request
 // an arbitrary (expensive) model even with a valid session.
-const ALLOWED_MODELS = new Set(["claude-haiku-4-5-20251001", "claude-sonnet-4-6", "claude-opus-4-1"]);
+// MUST match MODEL_IDS in src/lib/claude.js — a client-side id that isn't here
+// comes back as "unsupported model", which looks nothing like the real cause.
+const ALLOWED_MODELS = new Set(["claude-haiku-4-5", "claude-sonnet-5", "claude-opus-4-8"]);
 
 exports.handler = async (event) => {
   if (event.httpMethod !== "POST") return json(405, { error: "POST only" });
@@ -43,6 +45,11 @@ exports.handler = async (event) => {
     messages: body.messages,
   };
   if (body.system) payload.system = body.system;
+  // Sonnet 5 runs ADAPTIVE thinking when `thinking` is omitted, so a call with a
+  // tight max_tokens can spend its budget reasoning and truncate the answer.
+  // The vision-parse call passes {type:"disabled"} for exactly that reason —
+  // forward it, or the opt-out silently doesn't happen.
+  if (body.thinking) payload.thinking = body.thinking;
 
   try {
     const res = await fetch("https://api.anthropic.com/v1/messages", {

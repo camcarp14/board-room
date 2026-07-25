@@ -20,8 +20,10 @@
 // Needs: ANTHROPIC_API_KEY, SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY.
 const json = (code, body) => ({ statusCode: code, headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
 
-const MODEL_IDS = { haiku: "claude-haiku-4-5-20251001", sonnet: "claude-sonnet-4-6", opus: "claude-opus-4-1" };
-const PRICING = { haiku: { in: 1, out: 5 }, sonnet: { in: 3, out: 15 }, opus: { in: 15, out: 75 } }; // $ per 1M tokens
+// Mirrors MODEL_IDS / PRICING in src/lib/claude.js — keep in sync (a stale id
+// here fails every queued task with a raw Anthropic 404 in the task's output).
+const MODEL_IDS = { haiku: "claude-haiku-4-5", sonnet: "claude-sonnet-5", opus: "claude-opus-4-8" };
+const PRICING = { haiku: { in: 1, out: 5 }, sonnet: { in: 3, out: 15 }, opus: { in: 5, out: 25 } }; // $ per 1M tokens
 const estCost = (mk, i, o) => (i / 1e6) * (PRICING[mk]?.in || 1) + (o / 1e6) * (PRICING[mk]?.out || 5);
 const BUDGET_TASK_LIMIT = { "$1": 1, "$3": 3, "$10": 8 };
 

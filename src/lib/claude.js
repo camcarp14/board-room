@@ -5,17 +5,29 @@ import { formatSnapshotForChat, formatSnapshotForSeat } from "./snapshot.js";
 import { buildSkillsBlock } from "../LearnPanel.jsx";
 
 // ─── Model registry — every layer starts on the cheapest model ───────────────
+// Keep these THREE places in lockstep or Opus/Sonnet break in confusing ways:
+//   1. here, 2. netlify/functions/claude.js ALLOWED_MODELS (the proxy rejects
+//   anything not on its list with "unsupported model"), 3. mini-worker.js.
+// History worth not repeating: `opus` sat on claude-opus-4-1 until it was 12
+// days from its 2026-08-05 retirement. A retired id 404s, and callClaude()
+// collapses that into "The board couldn't be reached — check your API key",
+// which sends you after the key instead of the model. Check retirement dates
+// when you touch this.
 const MODEL_IDS = {
-  haiku: "claude-haiku-4-5-20251001",
-  sonnet: "claude-sonnet-4-6",
-  opus: "claude-opus-4-1",
+  haiku: "claude-haiku-4-5",
+  sonnet: "claude-sonnet-5",
+  opus: "claude-opus-4-8",
 };
+// `mult` is the price multiple over Haiku, used for the relative spend estimate
+// on Systems → Model Control. It tracks `price` — update both together.
 export const MODEL_META = [
   { key: "haiku", label: "Haiku", price: "$1/$5", mult: 1 },
   { key: "sonnet", label: "Sonnet", price: "$3/$15", mult: 3 },
-  { key: "opus", label: "Opus", price: "$15/$75", mult: 15 },
+  { key: "opus", label: "Opus", price: "$5/$25", mult: 5 },
 ];
-const PRICING = { haiku: { in: 1, out: 5 }, sonnet: { in: 3, out: 15 }, opus: { in: 15, out: 75 } };
+// $ per 1M tokens. Opus 4.8 is $5/$25 — a third of the Opus 4.1 pricing this
+// table used to carry, so the old estimate discouraged escalating for no reason.
+const PRICING = { haiku: { in: 1, out: 5 }, sonnet: { in: 3, out: 15 }, opus: { in: 5, out: 25 } };
 const estCost = (mk, i, o) => (i / 1e6) * (PRICING[mk]?.in || 1) + (o / 1e6) * (PRICING[mk]?.out || 5);
 // Model layers, post-board: the Mind tab is the tool now. `mind` powers the
 // neural mind's reasoning/synthesis (Pulse, strategy); `delegate` is Mini Me's
@@ -25,7 +37,7 @@ const estCost = (mk, i, o) => (i / 1e6) * (PRICING[mk]?.in || 1) + (o / 1e6) * (
 // settings.models carries them.
 export const DEFAULT_MODELS = { mind: "haiku", delegate: "haiku" };
 
-export async function callClaude({ system, messages, modelKey = "haiku", maxTokens = 800, fn = "call" }) {
+export async function callClaude({ system, messages, modelKey = "haiku", maxTokens = 800, fn = "call", thinking }) {
   const t0 = Date.now();
   const model = MODEL_IDS[modelKey] || MODEL_IDS.haiku;
   try {
@@ -57,6 +69,10 @@ export async function callClaude({ system, messages, modelKey = "haiku", maxToke
     }
     const body = { model, max_tokens: maxTokens, messages };
     if (system) body.system = system;
+    // Only pass `thinking` where a caller has a reason to. Sonnet 5 and Opus 4.8
+    // reject the old {type:"enabled", budget_tokens} shape — use "adaptive" to
+    // turn thinking on, "disabled" to keep a tight max_tokens all for the answer.
+    if (thinking) body.thinking = thinking;
     const res = await fetch(url, { method: "POST", headers, body: JSON.stringify(body) });
     const data = await res.json();
     // Distinguish rate-limit / bad-key / unauthorized in telemetry instead of

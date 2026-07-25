@@ -90,6 +90,11 @@ Only extract entries you can read with real confidence — skip anything blurry,
             { type: "text", text: "Extract every event from this calendar screenshot as instructed." },
           ] }],
           modelKey: "sonnet", maxTokens: 2500, fn: "parse_calendar_image",
+          // Sonnet 5 thinks adaptively unless told not to, and a month of events
+          // can fill 2500 tokens on its own — thinking would eat the budget and
+          // truncate the JSON mid-array, which parses as "couldn't extract
+          // anything". This is extraction, not reasoning; turn it off.
+          thinking: { type: "disabled" },
         });
         if (!text) { errors.push(`${img.name}: no response`); continue; }
         const cleaned = text.trim().replace(/^```(json)?/i, "").replace(/```$/, "").trim();
