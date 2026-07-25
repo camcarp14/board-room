@@ -227,7 +227,7 @@ const LIB = [
   ["Arms", ["Barbell Curl", "Dumbbell Curl", "Hammer Curl", "Preacher Curl", "Cable Curl", "Close-Grip Bench", "Skullcrusher", "Triceps Pushdown", "Overhead Triceps Extension", "Dip (Triceps)"]],
   ["Legs", ["Back Squat", "Front Squat", "Leg Press", "Romanian Deadlift", "Bulgarian Split Squat", "Walking Lunge", "Leg Extension", "Leg Curl", "Hip Thrust", "Calf Raise", "Goblet Squat", "Hack Squat"]],
   ["Core", ["Plank", "Hanging Leg Raise", "Cable Crunch", "Ab Wheel Rollout", "Russian Twist", "Side Plank", "Dead Bug"]],
-  ["Conditioning", ["Rowing (Erg)", "Assault Bike", "Sled Push", "Farmer's Carry", "Kettlebell Swing", "Box Jump", "Burpee"]],
+  ["Conditioning", ["Rowing (Erg)", "Assault Bike", "Bike Ride", "Sled Push", "Farmer's Carry", "Kettlebell Swing", "Box Jump", "Burpee"]],
 ];
 
 // ════════════════════════════════════════════════════════════════════════════

@@ -121,7 +121,14 @@ async function fetchFeed(token) {
   const data = await req.loadJSON();
   // The endpoint answers a bad token with 401 + {success:false,error}. Surface
   // that message rather than a generic failure — it's the one that's actionable.
-  if (data && data.success === false) throw new Error(data.error || "feed refused the request");
+  if (data && data.success === false) {
+    const err = new Error(data.error || "feed refused the request");
+    // The endpoint's exact wording for a bad/missing token — used below to
+    // clear the stored value and reprompt instead of getting stuck forever
+    // reusing whatever was typed wrong the first time.
+    err.isAuthError = /missing or incorrect token/i.test(data.error || "");
+    throw err;
+  }
   if (!data || !Array.isArray(data.events)) throw new Error("unexpected response from the feed");
   return data;
 }
@@ -138,6 +145,22 @@ async function load() {
     cacheWrite(data);
     return { data, stale: false };
   } catch (e) {
+    // Wrong token and we're in a position to fix it right now — Scriptable has
+    // no keychain-management UI, so clear the bad value and reprompt rather
+    // than leaving the widget stuck on the same wrong token forever.
+    if (e.isAuthError && config.runsInApp) {
+      Keychain.remove(KEYCHAIN_KEY);
+      const retryToken = await resolveToken();
+      if (retryToken) {
+        try {
+          const data = await fetchFeed(retryToken);
+          cacheWrite(data);
+          return { data, stale: false };
+        } catch (e2) {
+          e = e2;
+        }
+      }
+    }
     const cached = cacheRead();
     const fresh = cached && Date.now() - cached.at < CACHE_TTL_HOURS * 3600000;
     if (fresh) return { data: cached.data, stale: true, cachedAt: cached.at };

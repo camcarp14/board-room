@@ -47,11 +47,11 @@ export const MELT_QUIZ = [
     key: "gear",
     multi: true,
     q: "What have you got?",
-    help: "Pick every one that applies — they combine. Nothing is assumed: choose “Just me” if bodyweight work is on the table.",
+    help: "Pick every one that applies — they combine. Nothing is assumed: choose “Just me” if bodyweight work is on the table. Bike means a real ride, not a gym air bike.",
     options: [
       { key: "gym", label: "Full gym" },
       { key: "dumbbell", label: "Dumbbells" },
-      { key: "bike", label: "Bike" },
+      { key: "bike", label: "Bike (outdoor)" },
       { key: "bodyweight", label: "Just me" },
     ],
   },
@@ -124,7 +124,6 @@ const PRIMERS = [
   ex("Jump Rope", "bodyweight", "full", 2),
   ex("Mountain Climber", "bodyweight", "low", 2),
   ex("Rowing (Erg)", "gym", "low", 2),
-  ex("Assault Bike", "bike", "low", 2),
   ex("High Knees", "bodyweight", "full", 2),
 ];
 
@@ -166,16 +165,16 @@ const CIRCUIT = [
   ex("Plank", "bodyweight", "low", 2),
   ex("Farmer's Carry", "dumbbell", "low", 3),
   ex("Step-Up", "bodyweight", "low", 3),
-  ex("Assault Bike", "bike", "low", 4),
 ];
 
 const FINISHERS = [
   ex("Kettlebell Swing", "dumbbell", "low", 5),
   ex("Burpee", "bodyweight", "full", 5),
   ex("Rowing (Erg)", "gym", "low", 4),
-  // A bike sprint is one of the best finishers there is: maximal output, zero
-  // impact, and nothing to set up.
-  ex("Assault Bike", "bike", "low", 5),
+  // A ride is a legitimate way to CLOSE a session — lift, then go ride. It is
+  // never a primer (you don't warm up for squats by cycling away from the gym)
+  // and never a circuit move.
+  ex("Bike Ride", "bike", "low", 5),
   ex("Jump Rope", "bodyweight", "full", 3),
   ex("Mountain Climber", "bodyweight", "low", 3),
 ];
@@ -185,13 +184,13 @@ const usable = (pool, caps, impact) =>
 
 // Hold-for-time moves are logged as one "rep" (a hold), matching the library's
 // convention — Plank is targetReps 1 there too.
-const HOLDS = new Set(["Plank", "Side Plank", "Wall Sit", "Bear Crawl", "Farmer's Carry"]);
+const HOLDS = new Set(["Plank", "Side Plank", "Wall Sit", "Bear Crawl", "Farmer's Carry", "Bike Ride"]);
 const REPS = {
   "Jump Rope": 60, "High Knees": 40, "Jumping Jack": 40, "Mountain Climber": 30,
   "Russian Twist": 24, "Air Squat": 20, "Skater Hop": 20, "Step-Up": 16,
   "Kettlebell Swing": 15, "Burpee": 12, "Box Jump": 12, "Walking Lunge": 14,
   "Thruster": 12, "Goblet Squat": 15, "Push-Up": 15, "Inverted Row": 12,
-  "Dumbbell Row": 12, "Rowing (Erg)": 60, "Assault Bike": 40,
+  "Dumbbell Row": 12, "Rowing (Erg)": 60,
 };
 const repsFor = (m) => (HOLDS.has(m.name) ? 1 : REPS[m.name] ?? 12);
 // Strength block chases 8–12: enough load to hold muscle, enough reps to spend energy.
@@ -259,7 +258,8 @@ export function buildFatMelter(answers = {}, { sessions = [] } = {}) {
   // muscle, so there's no honest strength block to build — say so instead of
   // inventing bodyweight the user didn't select.
   const hasResistance = caps.has("bodyweight") || caps.has("dumbbell") || caps.has("gym");
-  if (!hasResistance) return buildIntervalsOnly(caps, cfg, minutes, impact);
+  if (!hasResistance) return buildRidePlan(caps, cfg, minutes, impact)
+    || buildFatMelter({ time: minutes, gear: ["bodyweight"], impact, intensity: cfg.label.toLowerCase() });
 
   const primerPool = usable(PRIMERS, caps, impact);
   const strengthPool = usable(STRENGTH, caps, impact);
@@ -355,38 +355,48 @@ export function buildFatMelter(answers = {}, { sessions = [] } = {}) {
   };
 }
 
-/** Conditioning-only session: the answer named a machine and nothing to lift.
- *  One move, many intervals — which is exactly what a bike session IS, and the
- *  data model already expresses it (sets = intervals). Carries a `caveat` so the
- *  sheet can be straight about the missing half rather than hiding it. */
-function buildIntervalsOnly(caps, cfg, minutes, impact) {
-  const pool = usable([...PRIMERS, ...FINISHERS], caps, impact);
-  const move = pool.sort((a, b) => b.cost - a.cost)[0];
-  if (!move) return buildFatMelter({ time: minutes, gear: ["bodyweight"], impact, intensity: cfg.label.toLowerCase() });
-  // ~55s of work per interval at this rest, plus 3 min of easy spinning either end.
-  const intervals = Math.max(4, Math.min(20, Math.round(((minutes - 6) * 60) / (55 + cfg.circuitRest))));
+/** The answer named a bike and nothing to lift, so this is a RIDE — planned in
+ *  minutes, because that's the unit a ride happens in. Rep counts are meaningless
+ *  on a path with wind, lights and pedestrians, so the effort is logged as a timed
+ *  hold (reps=1, the same convention Plank and Farmer's Carry use) and the protocol
+ *  lives in the block note where it can be read at a glance.
+ *
+ *  Steady gets one continuous ride; Hard and Brutal get intervals, because varying
+ *  the pace spends more energy in the same minutes than holding one cruise speed. */
+function buildRidePlan(caps, cfg, minutes, impact) {
+  const pool = usable(FINISHERS, caps, impact);
+  const move = pool.find((m) => m.name === "Bike Ride") || pool[0];
+  if (!move) return null;
+  const WARM = 10; // ~5 min easy at each end, which every real ride has anyway
+  const steady = cfg.label === "Steady";
+  // Effort/recovery in MINUTES. Brutal is shorter and sharper; hard is longer reps.
+  const effort = cfg.label === "Brutal" ? 2 : 3;
+  const easy = cfg.label === "Brutal" ? 2 : 2;
+  const rideable = Math.max(6, minutes - WARM);
+  const intervals = steady ? 1 : Math.max(3, Math.min(12, Math.floor(rideable / (effort + easy))));
   const blocks = [{
-    key: "intervals",
-    label: `Intervals · ${intervals} rounds`,
-    note: `Hard effort, ${cfg.circuitRest}s easy between. Spin easy 3 min either side.`,
-    moves: [{ name: move.name, sets: intervals, reps: repsFor(move), restSec: cfg.circuitRest, group: move.group }],
+    key: "ride",
+    label: steady ? `Ride · ${minutes} min` : `Ride · ${intervals} × ${effort} min`,
+    note: steady
+      ? `Five easy minutes to start, then hold a pace you could just about hold a conversation at. Five easy to finish.`
+      : `Warm up 5 min. Then ${intervals} × ${effort} min hard with ${easy} min easy between. Five easy to finish.`,
+    moves: [{ name: move.name, sets: intervals, reps: 1, restSec: easy * 60, group: move.group }],
   }];
   return {
     id: null,
-    sourceId: `melt-intervals-${[...caps].sort().join("+")}-${cfg.label.toLowerCase()}-${minutes}`,
-    name: `Fat Melter · ${minutes} min`,
-    blurb: `${intervals} hard intervals on the ${move.name.toLowerCase()}. Pure conditioning — high burn, no resistance work.`,
+    sourceId: `melt-ride-${cfg.label.toLowerCase()}-${minutes}`,
+    name: `Fat Melter · ${minutes} min ride`,
+    blurb: steady
+      ? `A steady ${minutes}-minute ride. Low impact, and the easiest kind of session to actually do.`
+      : `${intervals} hard efforts inside a ${minutes}-minute ride. Varying the pace spends more than cruising does.`,
     focus: "cardio",
     time: minutes,
-    estMinutes: Math.round(6 + (intervals * (55 + cfg.circuitRest)) / 60),
+    estMinutes: steady ? minutes : WARM + intervals * (effort + easy),
     intensity: cfg.label,
     intensityNote: cfg.note,
     rounds: intervals,
     groups: [move.group],
-    // The honest trade-off, surfaced in the UI. Conditioning alone spends plenty
-    // of energy but does nothing to protect lean mass, which is half the reason
-    // this tool exists.
-    caveat: "No resistance work in this one — a bike can't load a muscle, so nothing here protects lean mass while you're in a deficit. Add “Just me” (or dumbbells) and you'll get a strength block alongside the intervals.",
+    caveat: "A ride is conditioning only — there's nothing here loading a muscle, so nothing protecting lean mass while you're in a deficit. Add “Just me” or dumbbells and you'll get a strength block too, which is what stops the deficit taking muscle along with the fat.",
     blocks,
     exercises: blocks[0].moves.map((m) => ({ name: m.name, targetSets: m.sets, targetReps: m.reps, restSec: m.restSec })),
   };

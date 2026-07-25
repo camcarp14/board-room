@@ -60,7 +60,7 @@ check("every combination produces a well-formed exercise list", true);
 // 3 — every move name must be one the app already knows, or weight prefill and the
 // muscle-group heatmap both break for that row.
 const known = new Set(WORKOUT_LIBRARY.flatMap(w => w.exercises.map(e => e.name)));
-const NEW_TO_MELTER = new Set(["Thruster", "Bear Crawl", "Skater Hop", "Jumping Jack", "High Knees", "Step-Up", "Rowing (Erg)", "Air Squat"]);
+const NEW_TO_MELTER = new Set(["Thruster", "Bear Crawl", "Skater Hop", "Jumping Jack", "High Knees", "Step-Up", "Rowing (Erg)", "Air Squat", "Bike Ride"]);
 const allNames = [...new Set(every.flatMap(({ w }) => w.exercises.map(e => e.name)))];
 const unknown = allNames.filter(n => !known.has(n) && !NEW_TO_MELTER.has(n));
 check("no move is unknown to the app's exercise vocabulary", unknown.length === 0, unknown.join(", "));
@@ -170,26 +170,44 @@ check("no answer falls back to a home setup", capsOf().has("dumbbell") && capsOf
 check("bodyweight is not implied by other gear — Just me is a real choice",
   !capsOf(["bike"]).has("bodyweight"));
 const bikeOnly = buildFatMelter({ time: 30, gear: ["bike"], impact: "low", intensity: "hard" });
-check("bike alone is an interval session on the bike",
-  bikeOnly.exercises.length === 1 && bikeOnly.exercises[0].name === "Assault Bike",
+// "Bike" is a real bicycle on a path, not a gym air bike — so the plan is a RIDE,
+// measured in minutes, and it can never be a circuit move (you can't ride the
+// lakefront between sets of push-ups).
+check("bike alone is a ride, not an air-bike interval",
+  bikeOnly.exercises.length === 1 && bikeOnly.exercises[0].name === "Bike Ride",
   bikeOnly.exercises.map(e => e.name).join(", "));
-check("bike alone is real work, not one set", bikeOnly.exercises[0].targetSets >= 4, bikeOnly.exercises[0].targetSets + " intervals");
+check("the ride is a TIMED effort, not a rep count", bikeOnly.exercises[0].targetReps === 1, `reps=${bikeOnly.exercises[0].targetReps}`);
+check("the block note spells out the protocol in minutes", /min/.test(bikeOnly.blocks[0].note));
+check("a hard ride is intervals, not one long cruise", bikeOnly.exercises[0].targetSets >= 3, bikeOnly.exercises[0].targetSets + " efforts");
 check("bike alone honours the clock", Math.abs(bikeOnly.estMinutes - 30) <= 6, bikeOnly.estMinutes + " min");
 check("bike alone surfaces nothing it wasn't given",
   !bikeOnly.exercises.some(e => /Dumbbell|Barbell|Kettlebell|Goblet|Thruster|Farmer|Squat|Push-Up|Row|Plank|Twist|Lunge|Crawl/.test(e.name)),
   bikeOnly.exercises.map(e => e.name).join(", "));
-check("bike alone states the missing half rather than hiding it",
-  /resistance/i.test(bikeOnly.caveat || "") && /Just me/i.test(bikeOnly.caveat || ""));
+// Assert the CONTRACT, not the wording: the caveat has to name what's missing
+// (muscle / lean mass) and point at the fix (add bodyweight or dumbbells). The
+// previous version matched the literal word "resistance" and broke the moment the
+// copy was rewritten, which tests nothing useful.
+check("bike alone states the missing half rather than hiding it", (() => {
+  const c = bikeOnly.caveat || "";
+  return /muscle|lean mass/i.test(c) && /just me|dumbbell/i.test(c) && /strength/i.test(c);
+})(), bikeOnly.caveat);
 
 const bikeBw = buildFatMelter({ time: 30, gear: ["bike", "bodyweight"], impact: "low", intensity: "hard" });
-check("bike + bodyweight gets BOTH the strength block and the bike",
-  bikeBw.blocks.some(b => b.key === "strength" && b.moves.length) && bikeBw.exercises.some(e => e.name === "Assault Bike"));
+check("bike + bodyweight gets BOTH the strength block and the ride",
+  bikeBw.blocks.some(b => b.key === "strength" && b.moves.length) && bikeBw.exercises.some(e => e.name === "Bike Ride"));
 check("a session with resistance carries no caveat", !bikeBw.caveat);
 
 const dbBike = buildFatMelter({ time: 45, gear: ["dumbbell", "bike"], impact: "low", intensity: "hard" });
 check("a dumbbell+bike combo draws on both",
-  dbBike.exercises.some(e => e.name === "Assault Bike") && dbBike.exercises.some(e => /Dumbbell|Kettlebell|Goblet|Thruster|Romanian/.test(e.name)),
+  dbBike.exercises.some(e => e.name === "Bike Ride") && dbBike.exercises.some(e => /Dumbbell|Kettlebell|Goblet|Thruster|Romanian/.test(e.name)),
   dbBike.exercises.map(e => e.name).join(", "));
+// A ride closes a session; it is never a warm-up for one, and never inside a circuit.
+check("a ride is only ever the closing block", (() => {
+  const b = dbBike.blocks.find(x => x.moves.some(m => m.name === "Bike Ride"));
+  return b?.key === "finisher";
+})(), dbBike.blocks.find(x => x.moves.some(m => m.name === "Bike Ride"))?.key);
+check("a ride never appears in a circuit or as a primer",
+  !dbBike.blocks.some(b => (b.key === "circuit" || b.key === "prime") && b.moves.some(m => m.name === "Bike Ride")));
 check("a combo never surfaces gear you didn't pick",
   !dbBike.exercises.some(e => /Back Squat|Barbell Row|Barbell Bench|Lat Pulldown|Box Jump|Rowing \(Erg\)/.test(e.name)),
   dbBike.exercises.map(e => e.name).join(", "));
