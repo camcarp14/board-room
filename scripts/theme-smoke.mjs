@@ -110,6 +110,27 @@ for (const field of ["bg", "accent"]) {
   }
 }
 
+// VARIANCE. The first cut of these palettes pinned every light ground to ~95% and
+// every dark ground to ~5%, so all twenty read as the same brightness in different
+// hues — twenty picks that felt like three. Distinct hexes alone don't catch that
+// (95% vs 95.4% are "distinct"), so assert the actual spread: light grounds must
+// range from dim paper to near-white, dark from true-black to soft charcoal.
+const hslL = (h) => {
+  const [r, g, b] = [1, 3, 5].map(i => parseInt(h.slice(i, i + 2), 16) / 255);
+  return ((Math.max(r, g, b) + Math.min(r, g, b)) / 2) * 100;
+};
+const spread = (mode) => {
+  const ls = PALETTES.map(p => hslL(p[mode].bg));
+  return { lo: Math.min(...ls), hi: Math.max(...ls), range: Math.max(...ls) - Math.min(...ls) };
+};
+const day = spread("day"), night = spread("night");
+check("light grounds span ≥ 8 lightness points", day.range >= 8, `${day.lo.toFixed(0)}%–${day.hi.toFixed(0)}% (${day.range.toFixed(1)} pts)`);
+check("dark grounds span ≥ 10 lightness points", night.range >= 10, `${night.lo.toFixed(0)}%–${night.hi.toFixed(0)}% (${night.range.toFixed(1)} pts)`);
+check("at least one genuinely dim light theme (≤ 90%)", day.lo <= 90, `dimmest is ${day.lo.toFixed(0)}%`);
+check("at least one near-white light theme (≥ 96%)", day.hi >= 96, `brightest is ${day.hi.toFixed(0)}%`);
+check("at least one true-black dark theme (≤ 5%)", night.lo <= 5, `darkest is ${night.lo.toFixed(0)}%`);
+check("at least one soft-charcoal dark theme (≥ 13%)", night.hi >= 13, `lightest is ${night.hi.toFixed(0)}%`);
+
 // The pre-paint script sets data-palette from this exact key, and reads the
 // fallback ground from CSS. If the localStorage key ever changes here without
 // changing index.html, every relaunch flashes the default palette.

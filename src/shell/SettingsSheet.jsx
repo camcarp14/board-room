@@ -14,9 +14,11 @@ import { useState } from "react";
 import { supabase } from "../lib/supabase.js";
 import { Sheet, Cell, CellGroup, Button, Field, SectionHeader, useConfirm } from "../ui/kit.jsx";
 import { IcSun, IcMoon, IcAutoTheme, IcCheck } from "../ui/icons.jsx";
+import { PALETTES } from "../design/palettes.js";
 
-// Light/dark MODE only. Which of the 20 colour schemes is a separate axis, and it
-// lives in Assets → Theme where there's room to show swatches.
+// Two axes, both here: MODE (below) and PALETTE (the swatch grid). They live
+// together because this sheet is what opens from the light/dark button — looking
+// for "the colour settings" anywhere else is a detour.
 const THEMES = [
   { key: "auto", label: "Auto", sub: "Follows your device", Icon: IcAutoTheme },
   { key: "day", label: "Light", sub: "Always light, whatever the device says", Icon: IcSun },
@@ -27,6 +29,29 @@ const THEMES = [
 // "public HTML" link looks close enough to paste by mistake, so say so before
 // the Brief card has to.
 const looksLikeIcs = (v) => /^https?:\/\//i.test(v) && !/\/calendar\/(u\/\d+\/)?r($|\?)/i.test(v);
+
+/* A palette rendered as what it actually is: the page ground, a card lifted off
+   it, two ink bars, one accent chip. Compact enough for three-up inside a sheet.
+   Colours come from design/palettes.js, generated from the same table as
+   design/themes.css — so a swatch can't show a colour the theme doesn't use. */
+function Swatch({ p, mode, selected }) {
+  const c = p[mode];
+  return (
+    <span aria-hidden style={{
+      display: "block", height: 38, borderRadius: 9, background: c.bg, position: "relative",
+      // box-shadow, not border: a border would change the box size and reflow the
+      // grid every time the selection moved.
+      boxShadow: selected
+        ? `inset 0 0 0 1px color-mix(in srgb, ${c.ink} 14%, transparent), 0 0 0 2px var(--accent)`
+        : `inset 0 0 0 1px color-mix(in srgb, ${c.ink} 14%, transparent)`,
+    }}>
+      <span style={{ position: "absolute", left: 5, right: 5, top: 7, bottom: 0, borderRadius: 6, background: c.surface }} />
+      <span style={{ position: "absolute", left: 10, top: 14, width: 18, height: 3, borderRadius: 2, background: c.ink }} />
+      <span style={{ position: "absolute", left: 10, top: 21, width: 11, height: 3, borderRadius: 2, background: c.ink, opacity: 0.45 }} />
+      <span style={{ position: "absolute", right: 9, top: 13, width: 11, height: 11, borderRadius: "50%", background: c.accent }} />
+    </span>
+  );
+}
 
 export function SettingsSheet({ onClose, session, theme, calUrl, onSaveCalUrl, isMobile }) {
   const [draft, setDraft] = useState(calUrl || "");
@@ -76,6 +101,49 @@ export function SettingsSheet({ onClose, session, theme, calUrl, onSaveCalUrl, i
               );
             })}
           </CellGroup>
+
+          {/* The palette grid previews every scheme in the mode CURRENTLY in force,
+              so what you see is what tapping it gives you. Both axes on one screen
+              is the point: choosing a "dark" scheme while pinned to Light would
+              otherwise read as the picker being broken. */}
+          <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", gap: 10, padding: "16px 4px 8px" }}>
+            <span className="t-label">Colour scheme</span>
+            <span className="t-cap" style={{ color: "var(--faint)" }}>
+              {PALETTES.find(p => p.key === theme.palette)?.label || "Porcelain"}
+            </span>
+          </div>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(3, minmax(0, 1fr))", gap: 8 }}>
+            {PALETTES.map((p) => {
+              const selected = p.key === theme.palette;
+              return (
+                <button
+                  key={p.key}
+                  type="button"
+                  onClick={() => theme.setPalette(p.key)}
+                  aria-pressed={selected}
+                  aria-label={`${p.label} — ${p.blurb}`}
+                  title={p.blurb}
+                  className="press"
+                  style={{
+                    display: "flex", flexDirection: "column", gap: 5, minWidth: 0,
+                    padding: 7, borderRadius: 12, border: "none", cursor: "pointer",
+                    textAlign: "left", font: "inherit",
+                    background: selected ? "var(--accent-a12)" : "var(--surface-2)",
+                  }}
+                >
+                  <Swatch p={p} mode={theme.resolved === "night" ? "night" : "day"} selected={selected} />
+                  <span style={{ display: "flex", alignItems: "center", gap: 4, minWidth: 0 }}>
+                    <span className="t-cap" style={{ fontWeight: 650, color: "var(--ink)", minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{p.label}</span>
+                    {selected && <span style={{ color: "var(--accent)", display: "inline-flex", flex: "none" }}><IcCheck size={11} /></span>}
+                  </span>
+                </button>
+              );
+            })}
+          </div>
+          <div className="t-cap" style={{ color: "var(--faint)", lineHeight: 1.5, padding: "8px 4px 0" }}>
+            Every scheme has a light and a dark version — the rows above choose which.
+            Status colours stay put: green still means live in all twenty.
+          </div>
 
           <SectionHeader title="Business Meetings" style={{ marginTop: 14 }} />
           <div className="t-foot" style={{ color: "var(--sub)", lineHeight: 1.55, padding: "0 4px 10px" }}>

@@ -24,7 +24,6 @@ import { MinerPanel } from "./MinerPanel.jsx";
 // Keys are stable (Summon and muscle memory point at them). Consumed by the
 // Assets page, which prepends its own "Properties" pill.
 export const SYSTEMS_SUBTABS = [
-  { key: "theme", label: "Theme" },
   { key: "usage", label: "Usage" },
   { key: "status", label: "Status" },
   { key: "deploy", label: "Deploy" },

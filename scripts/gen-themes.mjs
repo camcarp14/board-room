@@ -62,28 +62,34 @@ function tune(make, against, target, start, dir) {
 // ─── the table ───────────────────────────────────────────────────────────────
 // nH/nS  = neutral (background + text) hue and saturation — the "paper"
 // aH/aS  = accent hue and saturation — the one metal/colour the theme spends
+// dL/nL  = how LIGHT the ground is in each mode. This is the axis that was
+//          missing: every theme sat at ~95% light / ~5% dark, so all twenty read
+//          as the same brightness wearing different hues. Now light grounds run
+//          87→97 (dim muted paper → near-white) and dark grounds 3→18 (true-black
+//          OLED → soft charcoal), so picking a theme changes the VALUE of the room
+//          and not just its temperature.
 // Tuned so no two adjacent entries in the picker read as the same idea.
 const THEMES = [
-  { key: "porcelain", label: "Porcelain",  blurb: "Warm paper and bronze — the house default",  nH: 45,  nS: 14, aH: 42,  aS: 65 },
-  { key: "graphite",  label: "Graphite",   blurb: "Neutral grey under cool steel",              nH: 40,  nS: 3,  aH: 215, aS: 30 },
-  { key: "lapis",     label: "Lapis",      blurb: "Deep imperial blue under roman gold",        nH: 226, nS: 30, aH: 43,  aS: 62 },
-  { key: "slate",     label: "Slate",      blurb: "Cool grey and steel",                        nH: 213, nS: 14, aH: 211, aS: 62 },
-  { key: "forest",    label: "Forest",     blurb: "Deep green, sage highlight",                 nH: 152, nS: 18, aH: 148, aS: 48 },
-  { key: "claret",    label: "Claret",     blurb: "Oxblood and old rose",                       nH: 350, nS: 16, aH: 348, aS: 55 },
-  { key: "ink",       label: "Ink",        blurb: "Near-black paper, cold cyan",                nH: 200, nS: 8,  aH: 189, aS: 70 },
-  { key: "navy",      label: "Navy",       blurb: "Naval blue with brass fittings",             nH: 218, nS: 26, aH: 30,  aS: 72 },
-  { key: "plum",      label: "Plum",       blurb: "Aubergine and lilac",                        nH: 288, nS: 18, aH: 280, aS: 52 },
-  { key: "moss",      label: "Moss",       blurb: "Olive and cream, field-notes green",         nH: 78,  nS: 16, aH: 96,  aS: 55 },
-  { key: "copper",    label: "Copper",     blurb: "Oxidised metal, warm and worked",            nH: 24,  nS: 20, aH: 22,  aS: 62 },
-  { key: "teal",      label: "Teal",       blurb: "Deep teal cut with coral",                   nH: 186, nS: 20, aH: 12,  aS: 62 },
-  { key: "iris",      label: "Iris",       blurb: "Indigo and periwinkle",                      nH: 250, nS: 22, aH: 252, aS: 58 },
-  { key: "arctic",    label: "Arctic",     blurb: "Ice white over deep polar blue",             nH: 200, nS: 22, aH: 205, aS: 68 },
-  { key: "ember",     label: "Ember",      blurb: "Charcoal with a live coal in it",            nH: 20,  nS: 10, aH: 14,  aS: 72 },
-  { key: "mono",      label: "Mono",       blurb: "Pure greyscale — the accent is the ink",      nH: 0,   nS: 0,  aH: 0,   aS: 0  },
-  { key: "sand",      label: "Sand",       blurb: "Desert paper, dusty blue accent",            nH: 38,  nS: 22, aH: 208, aS: 42 },
-  { key: "rose",      label: "Rose",       blurb: "Grey with dusty pink",                       nH: 340, nS: 8,  aH: 342, aS: 48 },
-  { key: "pine",      label: "Pine",       blurb: "Black-green and pale gold",                  nH: 165, nS: 24, aH: 55,  aS: 70 },
-  { key: "oxide",     label: "Oxide",      blurb: "Iron grey and rust",                         nH: 15,  nS: 6,  aH: 18,  aS: 58 },
+  { key: "porcelain", label: "Porcelain",  blurb: "Warm paper and bronze — the house default",  nH: 45,  nS: 14, aH: 42,  aS: 65 , dL: 95, nL: 5 },
+  { key: "graphite",  label: "Graphite",   blurb: "Neutral grey under cool steel",              nH: 40,  nS: 3,  aH: 215, aS: 30 , dL: 95, nL: 8 },
+  { key: "lapis",     label: "Lapis",      blurb: "Deep imperial blue under roman gold",        nH: 226, nS: 30, aH: 43,  aS: 62 , dL: 93, nL: 4 },
+  { key: "slate",     label: "Slate",      blurb: "Cool grey and steel",                        nH: 213, nS: 14, aH: 211, aS: 62 , dL: 96, nL: 14 },
+  { key: "forest",    label: "Forest",     blurb: "Deep green, sage highlight",                 nH: 152, nS: 18, aH: 148, aS: 48 , dL: 94, nL: 6 },
+  { key: "claret",    label: "Claret",     blurb: "Oxblood and old rose",                       nH: 350, nS: 16, aH: 348, aS: 55 , dL: 91, nL: 10 },
+  { key: "ink",       label: "Ink",        blurb: "Near-black paper, cold cyan",                nH: 200, nS: 8,  aH: 189, aS: 70 , dL: 97, nL: 3 },
+  { key: "navy",      label: "Navy",       blurb: "Naval blue with brass fittings",             nH: 218, nS: 26, aH: 30,  aS: 72 , dL: 92, nL: 5 },
+  { key: "plum",      label: "Plum",       blurb: "Aubergine and lilac",                        nH: 288, nS: 18, aH: 280, aS: 52 , dL: 93, nL: 11 },
+  { key: "moss",      label: "Moss",       blurb: "Olive and cream, field-notes green",         nH: 78,  nS: 16, aH: 96,  aS: 55 , dL: 90, nL: 7 },
+  { key: "copper",    label: "Copper",     blurb: "Oxidised metal, warm and worked",            nH: 24,  nS: 20, aH: 22,  aS: 62 , dL: 89, nL: 9 },
+  { key: "teal",      label: "Teal",       blurb: "Deep teal cut with coral",                   nH: 186, nS: 20, aH: 12,  aS: 62 , dL: 95, nL: 12 },
+  { key: "iris",      label: "Iris",       blurb: "Indigo and periwinkle",                      nH: 250, nS: 22, aH: 252, aS: 58 , dL: 94, nL: 6 },
+  { key: "arctic",    label: "Arctic",     blurb: "Ice white over deep polar blue",             nH: 200, nS: 22, aH: 205, aS: 68 , dL: 97, nL: 16 },
+  { key: "ember",     label: "Ember",      blurb: "Charcoal with a live coal in it",            nH: 20,  nS: 10, aH: 14,  aS: 72 , dL: 88, nL: 4 },
+  { key: "mono",      label: "Mono",       blurb: "Pure greyscale — the accent is the ink",      nH: 0,   nS: 0,  aH: 0,   aS: 0  , dL: 96, nL: 3 },
+  { key: "sand",      label: "Sand",       blurb: "Desert paper, dusty blue accent",            nH: 38,  nS: 22, aH: 208, aS: 42 , dL: 91, nL: 13 },
+  { key: "rose",      label: "Rose",       blurb: "Grey with dusty pink",                       nH: 340, nS: 8,  aH: 342, aS: 48 , dL: 94, nL: 18 },
+  { key: "pine",      label: "Pine",       blurb: "Black-green and pale gold",                  nH: 165, nS: 24, aH: 55,  aS: 70 , dL: 90, nL: 4 },
+  { key: "oxide",     label: "Oxide",      blurb: "Iron grey and rust",                         nH: 15,  nS: 6,  aH: 18,  aS: 58 , dL: 87, nL: 15 },
 ];
 
 // ─── derivation ──────────────────────────────────────────────────────────────
@@ -94,7 +100,7 @@ const FLOOR = { ink: 8, sub: 4.6, faint: 3.05, accent: 4.6, onAccent: 4.6 };
 
 function build(t, mode) {
   const dark = mode === "night";
-  const { nH, nS, aH, aS } = t;
+  const { nH, nS, aH, aS, dL, nL } = t;
   // Backgrounds and surfaces: authored, not tuned — these ARE the theme's look.
   // Light: tinted paper with a near-white card above it. Dark: deep ground, card
   // lifted off it. surface-2 is the well *inside* a card, so it moves toward the
@@ -102,23 +108,37 @@ function build(t, mode) {
   // Ground lightness leans a hair on the neutral saturation so no two dark
   // backgrounds resolve to the same hex — two themes that look identical on the
   // phone would make four of the twenty picks pointless.
-  const bg        = dark ? hsl(nH, Math.min(nS, 30), 4.4 + Math.min(nS, 30) / 26) : hsl(nH, Math.min(nS, 22), 95);
-  const surface   = dark ? hsl(nH, Math.min(nS, 22), 11)  : hsl(nH, Math.min(nS, 10), 99.5);
-  const surface2  = dark ? hsl(nH, Math.min(nS, 18), 17)  : hsl(nH, Math.min(nS, 16), 96.5);
+  // Grounds are per-theme now, and the surfaces derive FROM the ground rather than
+  // sitting at fixed lightness — a card pinned to 99.5% is invisible on a 97% page
+  // and a well pinned to 17% is invisible on a 18% one. Deltas keep the card
+  // lifted and the well recessed at every point in the range.
+  const gL = dark ? nL : dL;
+  const bg       = hsl(nH, Math.min(nS, dark ? 30 : 22), gL);
+  const surfL = dark ? gL + 6.5 : Math.min(99.6, gL + 4.6);
+  const surface  = hsl(nH, Math.min(nS, dark ? 22 : 10), surfL);
+  // The well is defined relative to the CARD, not the page: on the brightest
+  // themes the card clamps near white, and a well pinned to the ground ended up
+  // fractions of a point from it — an invisible inner surface on 2 of 20 themes.
+  const surface2 = dark ? hsl(nH, Math.min(nS, 18), gL + 12.5) : hsl(nH, Math.min(nS, 16), surfL - 3.2);
 
   // Text: tuned against bg until each floor is met, starting from the intended
   // tone and moving only as far as it has to.
-  const ink   = tune(L => hsl(nH, Math.min(nS, 12), L), bg, FLOOR.ink,   dark ? 95 : 12, dark ? +1 : -1);
-  const sub   = tune(L => hsl(nH, Math.min(nS, 10), L), bg, FLOOR.sub,   dark ? 68 : 44, dark ? +1 : -1);
-  const faint = tune(L => hsl(nH, Math.min(nS, 8),  L), bg, FLOOR.faint, dark ? 46 : 62, dark ? +1 : -1);
+  // Text lands on the page, on cards, AND in wells. Light-mode text is dark, so its
+  // hardest ground is the DARKEST of the three (the page); dark-mode text is light,
+  // so its hardest ground is the LIGHTEST (the well). Tuning against the page alone
+  // is what made faint unreadable inside cards on all twenty dark themes.
+  const textGround = dark ? surface2 : bg;
+  const ink   = tune(L => hsl(nH, Math.min(nS, 12), L), textGround, FLOOR.ink,   dark ? gL + 78 : gL - 80, dark ? +1 : -1);
+  const sub   = tune(L => hsl(nH, Math.min(nS, 10), L), textGround, FLOOR.sub,   dark ? gL + 52 : gL - 48, dark ? +1 : -1);
+  const faint = tune(L => hsl(nH, Math.min(nS, 8),  L), textGround, FLOOR.faint, dark ? gL + 32 : gL - 30, dark ? +1 : -1);
 
   // The accent has to clear AA against BOTH the page and a card, since it lands
   // on each (active nav item on the canvas, primary button label on a card).
-  const accentBase = dark ? 66 : 34;
+  const accentBase = dark ? Math.max(52, gL + 50) : Math.min(46, gL - 56);
   const accentDir = dark ? +1 : -1;
   let accent = tune(L => hsl(aH, aS, L), bg, FLOOR.accent, accentBase, accentDir);
-  if (contrast(accent, surface) < FLOOR.accent) {
-    accent = tune(L => hsl(aH, aS, L), surface, FLOOR.accent, accentBase, accentDir);
+  for (const ground of [surface, surface2]) {
+    if (contrast(accent, ground) < FLOOR.accent) accent = tune(L => hsl(aH, aS, L), ground, FLOOR.accent, accentBase, accentDir);
   }
   // hi/deep are the hover and pressed steps — same hue, one notch either side.
   const accentL = accentLightness(accent, aH, aS);

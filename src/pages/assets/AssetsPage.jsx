@@ -18,7 +18,6 @@ import { PROPERTIES } from "./properties.js";
 import {
   SYSTEMS_SUBTABS, useConnections, UsageTab, StatusTab, DeployTab, SupabaseTab, MinerPanel,
 } from "../systems/SystemsPage.jsx";
-import { ThemeTab } from "../systems/ThemeTab.jsx";
 import { BoardRoomPage } from "../board/BoardPage.jsx";
 
 // Re-exported for any older importers — PROPERTIES now lives in ./properties.js.
@@ -170,7 +169,7 @@ function PropertiesTab({ isMobile, settings, updateSetting, session }) {
 
 // ─── The page ─────────────────────────────────────────────────────────────────
 // Named PropertiesPage for the App.jsx route it has always answered to.
-export function PropertiesPage({ isMobile, settings, updateSetting, session, btc, jump, onWorkerRun, onSkillsChanged, skills, theme }) {
+export function PropertiesPage({ isMobile, settings, updateSetting, session, btc, jump, onWorkerRun, onSkillsChanged, skills }) {
   const [sub, setSub] = useState("mind"); // Mind is the first sub-tab and the default landing
   // Summon / deep links can open straight onto a sub-tab (systems or Mind).
   useEffect(() => {
@@ -223,7 +222,6 @@ export function PropertiesPage({ isMobile, settings, updateSetting, session, btc
             </div>
           )}
           {sub === "properties" && <PropertiesTab isMobile={isMobile} settings={settings} updateSetting={updateSetting} session={session} />}
-          {sub === "theme" && <ThemeTab theme={theme} isMobile={isMobile} />}
           {sub === "usage" && <UsageTab settings={settings} updateSetting={updateSetting} isMobile={isMobile} />}
           {sub === "status" && <StatusTab checks={conn.checks} lastRun={conn.lastRun} running={conn.running} runAll={conn.runAll} isMobile={isMobile} />}
           {sub === "deploy" && <DeployTab isMobile={isMobile} />}
