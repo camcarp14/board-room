@@ -137,6 +137,9 @@ export const IcFood = (p = {}) => <svg {...base(p)}><path d="M5.5 3.5v6.2c0 1 .8
 export const IcWrench = (p = {}) => <svg {...base(p)}><path d="M14.2 6.3a4.6 4.6 0 0 1 5.6-.9l-3 3 .7 2.2 2.2.7 3-3v-.1a4.6 4.6 0 0 1-6.4 5.8L9 21.3a2 2 0 0 1-2.8-2.8L13.5 11a4.6 4.6 0 0 1 .7-4.7z" transform="scale(0.92) translate(1 1)" /></svg>;
 export const IcCompass = (p = {}) => <svg {...base(p)}><circle cx="12" cy="12" r="8.5" /><path d="m15.5 8.5-2 5-5 2 2-5z" fill="currentColor" stroke="none" /></svg>;
 export const IcSeal = (p = {}) => <svg {...base(p)}><circle cx="12" cy="12" r="8.5" /><rect x="9.2" y="9.2" width="5.6" height="5.6" rx="0.8" transform="rotate(45 12 12)" fill="currentColor" stroke="none" /></svg>;
+// Gear — the Settings sheet. Deliberately NOT IcSystems (control sliders): that
+// one is the Systems tab's mark, and reusing it here would read as navigation.
+export const IcSettings = (p = {}) => <svg {...base(p)}><circle cx="12" cy="12" r="3.2" /><path d="M12 2.8v2.4M12 18.8v2.4M4.5 12H2.1M21.9 12h-2.4M6.7 6.7 5 5M19 19l-1.7-1.7M6.7 17.3 5 19M19 5l-1.7 1.7" /></svg>;
 
 export const IcUpstream = (p = {}) => ( // arrow rising against the current — upstream
   <svg {...base(p)}>

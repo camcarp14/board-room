@@ -11,6 +11,7 @@ import { MobileShell } from "./shell/MobileShell.jsx";
 import { SidebarShell } from "./shell/SidebarShell.jsx";
 import { Summon } from "./shell/Summon.jsx";
 import { BootScreen, LoginScreen, SetupNotice } from "./shell/Boot.jsx";
+import { SettingsSheet } from "./shell/SettingsSheet.jsx";
 import { ErrorBoundary } from "./shell/ErrorBoundary.jsx";
 import { Sheet, Button, useConfirm } from "./ui/kit.jsx";
 // The Brief is the landing tab — keep it in the main chunk so first paint is
@@ -299,6 +300,11 @@ export default function App() {
   };
   useEffect(() => { if (session?.user?.id) refreshSkills(); }, [session?.user?.id]); // eslint-disable-line react-hooks/exhaustive-deps
 
+  // Settings — theme, the calendar feed, account + sign-out. One sheet, both
+  // shells; before this, sign-out was desktop-only and calendar_url had no UI.
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  useEffect(() => { if (!session) setSettingsOpen(false); }, [session]);
+
   // Summon (⌘K) — global jump + quick capture
   const [summon, setSummon] = useState(false);
   const [jump, setJump] = useState(null); // { t, page, sub, noteId?, skillId? }
@@ -449,11 +455,21 @@ export default function App() {
   // ═══ SHELLS ═══
   // One nav state, two chromes: MobileShell (glass nav bar + tab bar, all the
   // iOS-standalone geometry) and SidebarShell (iPadOS sidebar + content well).
-  const shellProps = { page, theme, onNavigate: goToPage, onSummon: () => setSummon(true), now, dataStamp, refreshing, onRefresh: refreshData };
+  const shellProps = { page, theme, onNavigate: goToPage, onSummon: () => setSummon(true), onOpenSettings: () => setSettingsOpen(true), now, dataStamp, refreshing, onRefresh: refreshData };
   const overlays = (
     <>
       {confirmEl}
       {summonEl}
+      {settingsOpen && (
+        <SettingsSheet
+          onClose={() => setSettingsOpen(false)}
+          session={session}
+          theme={theme}
+          calUrl={calUrl}
+          onSaveCalUrl={(v) => updateSetting("calendar_url", v)}
+          isMobile={isMobile}
+        />
+      )}
       {editSeat && <SeatNotesModal seatKey={editSeat} initial={seatNotes[editSeat]} onSave={saveSeatNote} onClose={() => setEditSeat(null)} isMobile={isMobile} />}
       {migration && <MigrationModal counts={migration} onImport={runImport} onSkip={skipImport} importing={importing} />}
     </>
@@ -473,8 +489,6 @@ export default function App() {
         {...shellProps}
         btc={btc}
         session={session}
-        calUrl={calUrl}
-        onSaveCalUrl={(v) => updateSetting("calendar_url", v)}
         totalSpend={totalSpend}
         callCount={obs.all().length}
       >

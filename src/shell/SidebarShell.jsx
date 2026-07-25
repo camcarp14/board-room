@@ -3,15 +3,13 @@
 // column with its own header, and a centered max-width content well.
 import { NAV, HEADERS } from "./nav.js";
 import { TopStatus } from "./TopStatus.jsx";
-import { ThemeToggle } from "./Boot.jsx";
-import { NAV_ICONS, IcSearch } from "../ui/icons.jsx";
+import { NAV_ICONS, IcSearch, IcSettings } from "../ui/icons.jsx";
 import { NumTween, Sparkline } from "../ui/primitives.jsx";
-import { Button, Delta } from "../ui/kit.jsx";
-import { supabase } from "../lib/supabase.js";
+import { Delta } from "../ui/kit.jsx";
 
 const GROUPS = [...new Set(NAV.map(n => n.group))];
 
-export function SidebarShell({ page, theme, onNavigate, onSummon, btc, session, totalSpend, callCount, now, dataStamp, refreshing, onRefresh, children }) {
+export function SidebarShell({ page, onNavigate, onSummon, onOpenSettings, btc, session, totalSpend, callCount, now, dataStamp, refreshing, onRefresh, children }) {
   const head = HEADERS[page];
 
   return (
@@ -59,12 +57,14 @@ export function SidebarShell({ page, theme, onNavigate, onSummon, btc, session, 
             )}
           </div>
 
+          {/* Theme, sign-out, and the calendar feed all live in the Settings
+              sheet now — one place on both platforms, and the only place the
+              calendar_url field has ever existed. */}
           <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8, borderTop: "0.5px solid var(--line)", paddingTop: 12 }}>
             <span className="t-cap" style={{ color: "var(--faint)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{session?.user?.email}</span>
-            <div style={{ display: "flex", alignItems: "center", gap: 2, flex: "none" }}>
-              <ThemeToggle theme={theme} />
-              <Button kind="plain" size="sm" style={{ color: "var(--sub)", fontWeight: 500 }} onClick={() => supabase.auth.signOut()}>Sign out</Button>
-            </div>
+            <button className="icon-btn" onClick={onOpenSettings} aria-label="Settings" title="Settings" style={{ flex: "none" }}>
+              <IcSettings size={18} />
+            </button>
           </div>
         </div>
       </aside>
@@ -80,8 +80,12 @@ export function SidebarShell({ page, theme, onNavigate, onSummon, btc, session, 
               style={{ display: "inline-flex", alignItems: "center", gap: 8, height: 36, padding: "0 12px", background: "var(--ink-a05)", border: "none", borderRadius: 10, color: "var(--sub)", fontSize: 13, cursor: "pointer" }}>
               <IcSearch size={15} /> Summon <kbd>⌘K</kbd>
             </button>
-            <span className="t-cap head-spend" style={{ color: "var(--faint)" }} title="Model spend this session">
-              ${totalSpend.toFixed(3)} · {callCount} calls
+            {/* Honest label: this reads the `obs` localStorage ring, which is
+                capped at 300 entries and persists across launches — so it's
+                neither "this session" nor complete. The durable cross-device
+                numbers are on Systems → Usage. */}
+            <span className="t-cap head-spend" style={{ color: "var(--faint)" }} title="Anthropic spend across the last 300 calls logged on this device. Systems → Usage has the durable, cross-device totals.">
+              ${totalSpend.toFixed(3)} · last {callCount} calls
             </span>
             <TopStatus now={now} dataStamp={dataStamp} refreshing={refreshing} onRefresh={onRefresh} />
           </div>

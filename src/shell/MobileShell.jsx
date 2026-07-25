@@ -7,13 +7,12 @@
 import { useState, useRef } from "react";
 import { NAV, HEADERS } from "./nav.js";
 import { TopStatus } from "./TopStatus.jsx";
-import { ThemeToggle } from "./Boot.jsx";
 import { ViewportDiag } from "./ViewportDiag.jsx";
-import { NAV_ICONS, IcSearch } from "../ui/icons.jsx";
+import { NAV_ICONS, IcSearch, IcSettings } from "../ui/icons.jsx";
 import { LargeTitle } from "../ui/kit.jsx";
 import { IS_STANDALONE, useVisualViewport } from "../hooks/index.js";
 
-export function MobileShell({ page, navDir, theme, onNavigate, onSummon, now, dataStamp, refreshing, onRefresh, children }) {
+export function MobileShell({ page, navDir, onNavigate, onSummon, onOpenSettings, now, dataStamp, refreshing, onRefresh, children }) {
   const { vvh, envTop } = useVisualViewport();
   const diagTaps = useRef({ n: 0, t: 0 });
   const [diagOpen, setDiagOpen] = useState(false);
@@ -46,9 +45,14 @@ export function MobileShell({ page, navDir, theme, onNavigate, onSummon, now, da
   const head = HEADERS[page];
   const sub = head.sub(new Date(now));
 
+  // Theme moved into Settings, where it's three labelled choices instead of a
+  // cycling icon whose current state you had to infer — and where sign-out and
+  // the calendar feed live too. Four icons in this row was already the ceiling.
   const controls = (
     <div className="nav-actions">
-      <ThemeToggle theme={theme} />
+      <button className="icon-btn" onClick={onOpenSettings} aria-label="Settings" title="Settings">
+        <IcSettings size={19} />
+      </button>
       <button className="icon-btn" onClick={onSummon} aria-label="Summon — search everything" title="Summon">
         <IcSearch size={19} />
       </button>
