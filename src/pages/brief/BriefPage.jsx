@@ -667,7 +667,7 @@ export function MorningBriefPage({ btc, isMobile, settings, updateSetting, onOpe
   // The Docket card was retired — its greeting/date/summary duplicated the
   // "Brief" large-title header at the top of the page. (birthdays/events are
   // still loaded above; they feed the snapshot the board seats read.)
-  const card_notes = <NotesTile {...coll("notes")} isMobile={isMobile} refreshSignal={refreshSignal} onOpenNotes={onOpenNotes} />;
+  const card_notes = <NotesTile {...coll("notes")} isMobile={isMobile} refreshSignal={refreshSignal} onOpenNotes={onOpenNotes} settings={settings} updateSetting={updateSetting} />;
 
   // Column count + container width scale with the viewport so a wide desktop
   // fills the space instead of stranding two narrow columns in a sea of black:

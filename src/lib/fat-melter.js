@@ -41,11 +41,17 @@ export const MELT_QUIZ = [
     ],
   },
   {
+    // MULTI-select: gear combines in real life. "Dumbbells + Bike" is a garage,
+    // "Full gym" already implies the rest. A single-select ladder couldn't say
+    // "I have a bike and nothing else", which is a real setup.
     key: "gear",
+    multi: true,
     q: "What have you got?",
+    help: "Pick every one that applies.",
     options: [
       { key: "gym", label: "Full gym" },
       { key: "dumbbell", label: "Dumbbells" },
+      { key: "bike", label: "Bike" },
       { key: "bodyweight", label: "Just me" },
     ],
   },
@@ -69,7 +75,31 @@ export const MELT_QUIZ = [
   },
 ];
 
-const GEAR_RANK = { bodyweight: 0, dumbbell: 1, gym: 2 };
+// Equipment is a SET, not a ladder. A gym implies dumbbells and bodyweight; a
+// dumbbell implies bodyweight. A bike implies nothing else — that's exactly why
+// the old single-select rank couldn't express it, since ranking a bike above or
+// below dumbbells would have been a lie either way.
+const IMPLIES = {
+  gym: ["gym", "dumbbell", "bodyweight"],
+  dumbbell: ["dumbbell", "bodyweight"],
+  bike: ["bike"],
+  bodyweight: ["bodyweight"],
+};
+/** Expand the answer into everything it lets you do. Accepts an array (current)
+ *  or a bare string (the shape before gear went multi-select), so an order or
+ *  saved answer from before this change still resolves. */
+export function capsOf(gear) {
+  const picked = Array.isArray(gear) ? gear : gear ? [gear] : [];
+  const caps = new Set();
+  for (const g of picked) for (const c of IMPLIES[g] || []) caps.add(c);
+  if (!caps.size) caps.add("dumbbell"); // no answer → assume a home setup
+  // You always have your bodyweight. Without this, "Bike" alone produced a
+  // one-move session with no strength block at all — which contradicts the whole
+  // premise, since the strength work is what stops the deficit eating muscle. A
+  // bike plus your own body is a perfectly good session.
+  caps.add("bodyweight");
+  return caps;
+}
 
 // Intensity sets DENSITY, not just effort — shorter rest is the actual lever on
 // energy cost per minute. rounds/rest are what change; the moves don't get
@@ -91,6 +121,7 @@ const PRIMERS = [
   ex("Jump Rope", "bodyweight", "full", 2),
   ex("Mountain Climber", "bodyweight", "low", 2),
   ex("Rowing (Erg)", "gym", "low", 2),
+  ex("Assault Bike", "bike", "low", 2),
   ex("High Knees", "bodyweight", "full", 2),
 ];
 
@@ -132,20 +163,22 @@ const CIRCUIT = [
   ex("Plank", "bodyweight", "low", 2),
   ex("Farmer's Carry", "dumbbell", "low", 3),
   ex("Step-Up", "bodyweight", "low", 3),
+  ex("Assault Bike", "bike", "low", 4),
 ];
 
 const FINISHERS = [
   ex("Kettlebell Swing", "dumbbell", "low", 5),
   ex("Burpee", "bodyweight", "full", 5),
   ex("Rowing (Erg)", "gym", "low", 4),
+  // A bike sprint is one of the best finishers there is: maximal output, zero
+  // impact, and nothing to set up.
+  ex("Assault Bike", "bike", "low", 5),
   ex("Jump Rope", "bodyweight", "full", 3),
   ex("Mountain Climber", "bodyweight", "low", 3),
 ];
 
-const usable = (pool, gear, impact) => {
-  const have = GEAR_RANK[gear] ?? 2;
-  return pool.filter((m) => (GEAR_RANK[m.gear] ?? 0) <= have && (impact === "full" || m.impact === "low"));
-};
+const usable = (pool, caps, impact) =>
+  pool.filter((m) => caps.has(m.gear) && (impact === "full" || m.impact === "low"));
 
 // Hold-for-time moves are logged as one "rep" (a hold), matching the library's
 // convention — Plank is targetReps 1 there too.
@@ -155,7 +188,7 @@ const REPS = {
   "Russian Twist": 24, "Air Squat": 20, "Skater Hop": 20, "Step-Up": 16,
   "Kettlebell Swing": 15, "Burpee": 12, "Box Jump": 12, "Walking Lunge": 14,
   "Thruster": 12, "Goblet Squat": 15, "Push-Up": 15, "Inverted Row": 12,
-  "Dumbbell Row": 12, "Rowing (Erg)": 60,
+  "Dumbbell Row": 12, "Rowing (Erg)": 60, "Assault Bike": 40,
 };
 const repsFor = (m) => (HOLDS.has(m.name) ? 1 : REPS[m.name] ?? 12);
 // Strength block chases 8–12: enough load to hold muscle, enough reps to spend energy.
@@ -200,7 +233,7 @@ const blockMinutes = (moves, sets, restSec) =>
  * @returns the buildPerfectWorkout shape + `blocks` for the preview
  */
 export function buildFatMelter(answers = {}, { sessions = [] } = {}) {
-  const gear = GEAR_RANK[answers.gear] != null ? answers.gear : "dumbbell";
+  const caps = capsOf(answers.gear);
   const impact = answers.impact === "low" ? "low" : "full";
   const cfg = INTENSITY[answers.intensity] || INTENSITY.hard;
   const minutes = Number(answers.time) || 30;
@@ -219,10 +252,10 @@ export function buildFatMelter(answers = {}, { sessions = [] } = {}) {
   const wantFinisher = minutes >= 30;
   const wantPrimer = minutes >= 30;
 
-  const primerPool = usable(PRIMERS, gear, impact);
-  const strengthPool = usable(STRENGTH, gear, impact);
-  const circuitPool = usable(CIRCUIT, gear, impact);
-  const finisherPool = usable(FINISHERS, gear, impact);
+  const primerPool = usable(PRIMERS, caps, impact);
+  const strengthPool = usable(STRENGTH, caps, impact);
+  const circuitPool = usable(CIRCUIT, caps, impact);
+  const finisherPool = usable(FINISHERS, caps, impact);
 
   // Blocks are picked in order of how much they matter, and each one excludes
   // everything already chosen. A repeated move reads as padding, and the pools
@@ -298,7 +331,7 @@ export function buildFatMelter(answers = {}, { sessions = [] } = {}) {
 
   return {
     id: null,
-    sourceId: `melt-${gear}-${impact}-${cfg.label.toLowerCase()}-${minutes}`,
+    sourceId: `melt-${[...caps].sort().join("+")}-${impact}-${cfg.label.toLowerCase()}-${minutes}`,
     name: `Fat Melter · ${minutes} min`,
     blurb: `${cfg.label} density, ${groups.length} muscle groups, strength kept in so the deficit takes fat and not muscle.`,
     focus: "full",

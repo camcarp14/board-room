@@ -57,12 +57,24 @@ function FatMelterSheet({ sessions, onStart, onSaveRoutine, onClose }) {
   // about soreness — it already knows what you trained.
   const built = useMemo(() => buildFatMelter(answers, { sessions: sessions || [] }), [answers, sessions]);
 
-  const pick = (qKey, optKey) => {
+  // Single-select questions replace; the multi-select one (gear) toggles
+  // membership, because equipment combines — "Dumbbells + Bike" is a garage.
+  const pick = (q, optKey) => {
     setSaved(false);
     setAnswers((a) => {
-      if (a[qKey] === optKey) { const n = { ...a }; delete n[qKey]; return n; } // second tap clears
-      return { ...a, [qKey]: optKey };
+      if (!q.multi) {
+        if (a[q.key] === optKey) { const n = { ...a }; delete n[q.key]; return n; } // second tap clears
+        return { ...a, [q.key]: optKey };
+      }
+      const cur = Array.isArray(a[q.key]) ? a[q.key] : a[q.key] ? [a[q.key]] : [];
+      const next = cur.includes(optKey) ? cur.filter((k) => k !== optKey) : [...cur, optKey];
+      if (!next.length) { const n = { ...a }; delete n[q.key]; return n; }
+      return { ...a, [q.key]: next };
     });
+  };
+  const isOn = (q, optKey) => {
+    const v = answers[q.key];
+    return q.multi ? (Array.isArray(v) ? v.includes(optKey) : v === optKey) : v === optKey;
   };
 
   const start = () => { onStart(built); onClose(); };
@@ -99,9 +111,9 @@ function FatMelterSheet({ sessions, onStart, onSaveRoutine, onClose }) {
           {q.help && <div className="t-cap" style={{ color: "var(--faint)", marginTop: 2 }}>{q.help}</div>}
           <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginTop: 8 }}>
             {q.options.map((o) => {
-              const on = answers[q.key] === o.key;
+              const on = isOn(q, o.key);
               return (
-                <Pill key={o.key} active={on} onClick={() => pick(q.key, o.key)}>
+                <Pill key={o.key} active={on} onClick={() => pick(q, o.key)}>
                   {on && <IcCheck size={11} />}{o.label}
                 </Pill>
               );

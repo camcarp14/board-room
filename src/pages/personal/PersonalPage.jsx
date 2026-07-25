@@ -65,7 +65,7 @@ export function PersonalPage({ isMobile, jumpSignal, jump, settings, updateSetti
             <>
               <CalendarPanel isMobile={isMobile} newEventSignal={newEventSignal} />
               <div style={{ height: 12 }} />
-              <NotesPanel isMobile={isMobile} openSignal={noteSignal} />
+              <NotesPanel isMobile={isMobile} openSignal={noteSignal} settings={settings} updateSetting={updateSetting} />
             </>
           )}
           {sub !== "notescal" && (

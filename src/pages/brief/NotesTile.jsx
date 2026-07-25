@@ -5,6 +5,8 @@ import { useState, useRef } from "react";
 import { CollapsibleCard, Button, Field, Spinner, EmptyState, Dot, useConfirm } from "../../ui/kit.jsx";
 import { IcNote, IcPin, IcPlus, IcChevronRight, IcTrash } from "../../ui/icons.jsx";
 import { NoteCardPreview, sealColor, continueListOnEnter, toggleBulletAtCaret } from "../../ui/shared.jsx";
+import { SortableList } from "../../ui/SortableList.jsx";
+import { applyNotesOrder, orderOf } from "../../lib/notes-order.js";
 import { queryClient } from "../../lib/queryClient.js";
 import { useNotes } from "../../data/notes.js";
 import { db } from "../../data/db.js";
@@ -16,7 +18,7 @@ const LIST_CAP = 5; // first N notes in-page; the rest behind "Show all" (no nes
 const PREVIEW_ROWS = 5;
 const PREVIEW_MAX_H = Math.round(PREVIEW_ROWS * 13 * 1.5);
 
-export function NotesTile({ isMobile, refreshSignal, onOpenNotes, collapsed, onToggle }) {
+export function NotesTile({ isMobile, refreshSignal, onOpenNotes, collapsed, onToggle, settings, updateSetting }) {
   // refreshSignal is accepted but unused here — freshness comes from the
   // useNotes query cache; the prop stays wired for parity with the other cards.
   const { data: notesData, error: notesErr } = useNotes();
@@ -36,8 +38,11 @@ export function NotesTile({ isMobile, refreshSignal, onOpenNotes, collapsed, onT
     requestAnimationFrame(() => { try { editBodyRef.current?.setSelectionRange(caret, caret); } catch {} });
   };
 
-  const sorted = (notes || []).slice().sort((a, b) =>
-    (b.pinned === true) - (a.pinned === true) || new Date(b.updated_at) - new Date(a.updated_at));
+  // Manual order lives in app_settings.notes_order (see lib/notes-order.js) — no
+  // migration, and it syncs across devices. Hold a note and drag to set it.
+  const noteOrder = settings?.notes_order || null;
+  const saveOrder = (ids) => updateSetting?.("notes_order", ids);
+  const sorted = applyNotesOrder(notes || [], noteOrder);
   // Keep the note being edited on screen even if a cache refresh reshuffles it
   // below the cap — the open editor must never vanish mid-thought.
   let visible = showAll ? sorted : sorted.slice(0, LIST_CAP);
@@ -158,7 +163,13 @@ export function NotesTile({ isMobile, refreshSignal, onOpenNotes, collapsed, onT
             style={{ padding: "22px 12px" }} />
         ) : (
           <>
-            {visible.map((n, i) => editing?.id === n.id ? (
+            {/* Hold a row, then drag. Disabled while an editor is open so the
+                textarea keeps its own pointer handling. */}
+            <SortableList
+              items={visible}
+              disabled={!!editing}
+              onReorder={(ids) => saveOrder(ids)}
+            >{(n, { dragging }) => editing?.id === n.id ? (
               <div key={n.id} style={{ background: "var(--surface-2)", borderRadius: 12, padding: 12, margin: "6px 0", display: "flex", flexDirection: "column", gap: 8 }}>
                 <Field className="on-well" value={editing.title} onChange={e => setEditing(ed => ({ ...ed, title: e.target.value }))}
                   placeholder="Title (optional)" style={{ fontWeight: 600 }} />
@@ -186,7 +197,7 @@ export function NotesTile({ isMobile, refreshSignal, onOpenNotes, collapsed, onT
               <div key={n.id} onClick={() => setEditing({ id: n.id, title: n.title || "", body: n.body || "" })}
                 className="press hoverable" role="button" tabIndex={0}
                 onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); setEditing({ id: n.id, title: n.title || "", body: n.body || "" }); } }}
-                style={{ display: "flex", alignItems: "flex-start", gap: 10, padding: "10px 2px", minHeight: 44, borderTop: i === 0 ? "none" : "0.5px solid var(--line)", cursor: "pointer", borderRadius: 6 }}>
+                style={{ display: "flex", alignItems: "flex-start", gap: 10, padding: "10px 2px", minHeight: 44, borderTop: "0.5px solid var(--line)", cursor: dragging ? "grabbing" : "pointer", borderRadius: 6 }}>
                 <span style={{ flex: "none", display: "inline-flex", paddingTop: 6 }}>
                   <Dot tone={sealColor(n.color) || "var(--ink-a18)"} />
                 </span>
@@ -210,7 +221,7 @@ export function NotesTile({ isMobile, refreshSignal, onOpenNotes, collapsed, onT
                 {n.pinned && <span title="Pinned" style={{ color: "var(--faint)", flex: "none", display: "inline-flex", paddingTop: 3 }}><IcPin size={13} /></span>}
                 <span className="t-cap t-num" style={{ color: "var(--faint)", flex: "none", paddingTop: 3 }}>{relTime(n.updated_at)}</span>
               </div>
-            ))}
+            )}</SortableList>
             {sorted.length > LIST_CAP && (
               <Button kind="plain" full onClick={() => setShowAll(v => !v)} style={{ marginTop: 2 }}>
                 {showAll ? "Show fewer" : `Show all ${sorted.length}`}

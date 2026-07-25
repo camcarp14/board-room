@@ -6,6 +6,8 @@
 
 import { useState, useEffect, useMemo, useRef } from "react";
 import { db } from "../../data/db.js";
+import { SortableList } from "../../ui/SortableList.jsx";
+import { applyNotesOrder, orderOf } from "../../lib/notes-order.js";
 import { queryClient } from "../../lib/queryClient.js";
 import { useNotes } from "../../data/notes.js";
 import { NOTE_SEALS, sealColor, NoteCardPreview, continueListOnEnter, toggleBulletAtCaret } from "../../ui/shared.jsx";
@@ -17,7 +19,7 @@ export const NOTES_UPGRADE_SQL = `-- Notes upgrade — pins + color seals (safe 
 alter table public.personal_notes add column if not exists pinned boolean not null default false;
 alter table public.personal_notes add column if not exists color text;`;
 
-export function NotesPanel({ isMobile, openSignal }) {
+export function NotesPanel({ isMobile, openSignal, settings, updateSetting }) {
   const { data: notesData, error: notesErr } = useNotes();
   const notes = notesData?.rows ?? null; // null = loading
   const legacy = notesData?.legacy ?? false; // true until pinned/color columns exist
@@ -87,10 +89,11 @@ export function NotesPanel({ isMobile, openSignal }) {
       ? d.toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" })
       : d.toLocaleDateString("en-US", { month: "short", day: "numeric" });
   };
-  const sorted = useMemo(() => {
-    if (!notes) return null;
-    return [...notes].sort((a, b) => (b.pinned === true) - (a.pinned === true) || new Date(b.updated_at) - new Date(a.updated_at));
-  }, [notes]);
+  // Manual order lives in app_settings.notes_order (see lib/notes-order.js) — no
+  // migration, and it syncs across devices. Hold a note and drag to set it.
+  const noteOrder = settings?.notes_order || null;
+  const saveOrder = (ids) => updateSetting?.("notes_order", ids);
+  const sorted = useMemo(() => (notes ? applyNotesOrder(notes, noteOrder) : null), [notes, noteOrder]);
   const visible = useMemo(() => {
     if (!sorted) return null;
     const q = query.trim().toLowerCase();
@@ -433,8 +436,12 @@ export function NotesPanel({ isMobile, openSignal }) {
 
       {/* note cards — 2-col masonry on wide screens, single column on phones */}
       {!loadErr && visible && visible.length > 0 && (
-        <div style={isMobile ? { display: "flex", flexDirection: "column", gap: 10 } : { columns: 2, columnGap: 12 }}>
-          {visible.map(n => {
+        <SortableList
+          items={visible}
+          disabled={selectMode || !!activeId}
+          onReorder={(ids) => saveOrder(ids)}
+          style={isMobile ? { gap: 10 } : { display: "block", columns: 2, columnGap: 12 }}
+        >{(n, { dragging }) => {
             const isSel = selected.has(n.id);
             const shadows = [
               isSel ? "inset 0 0 0 1.5px var(--accent)" : null,
@@ -479,8 +486,7 @@ export function NotesPanel({ isMobile, openSignal }) {
                 </div>
               </Card>
             );
-          })}
-        </div>
+          }}</SortableList>
       )}
 
       {/* select-mode bar — count + scope controls, actions live in a sheet */}

@@ -13,7 +13,7 @@
 //
 // Run by `npm run verify`.
 
-import { buildFatMelter, MELT_QUIZ } from "../src/lib/fat-melter.js";
+import { buildFatMelter, MELT_QUIZ, capsOf } from "../src/lib/fat-melter.js";
 import { muscleGroupOf } from "../src/lib/workout-engine.js";
 import { WORKOUT_LIBRARY } from "../src/lib/workout-library.js";
 
