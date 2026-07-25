@@ -247,14 +247,21 @@ export function buildPerfectWorkout(workout, answers = {}) {
 /** Score every library workout against the tapped answers and (optionally)
  *  recovery from recent sessions. Returns every workout ranked best-first with
  *  a `feasible` flag and up-to-three human `reasons`. Nothing is filtered here —
- *  the caller decides whether to hide the infeasible ones. */
-export function recommendWorkouts(answers = {}, { sessions = [] } = {}) {
+ *  the caller decides whether to hide the infeasible ones.
+ *
+ *  `now` is injectable for the same reason consistency()/upNext()/groupFreshness()
+ *  take it: this function reads a clock, so a test that can't pin the clock rots.
+ *  It did — the recovery assertion in workout-library-smoke.mjs used a hardcoded
+ *  "leg day today" that quietly became a leg day 62 hours ago as the calendar
+ *  moved, and the suite went red on correct code. Default stays Date.now(), so
+ *  every existing caller is unaffected. */
+export function recommendWorkouts(answers = {}, { sessions = [], now = Date.now() } = {}) {
   const focus = answers.focus || null;
   const time = Number(answers.time) || null;
   const energy = answers.energy || null;
   const equipment = answers.equipment || null;
   const availRank = equipment != null ? (EQUIP_RANK[equipment] ?? 2) : 2; // no answer → assume full gym
-  const fresh = new Map(groupFreshness(sessions || []).map((f) => [f.group, f]));
+  const fresh = new Map(groupFreshness(sessions || [], now).map((f) => [f.group, f]));
 
   const scored = WORKOUT_LIBRARY.map((w) => {
     const reasons = [];

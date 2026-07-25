@@ -13,6 +13,12 @@ const check = (name, cond, detail = "") => {
 
 const byId = (id) => WORKOUT_LIBRARY.find((w) => w.id === id);
 const iso = (d, h = 9) => new Date(`${d}T${String(h).padStart(2, "0")}:00:00`).toISOString();
+// Pinned clock. recommendWorkouts() reads a clock, so every assertion about
+// recovery has to pin it — otherwise "a leg day today" silently becomes "a leg
+// day N days ago" as the calendar moves and the suite goes red on correct code.
+// (That happened: this file's recovery check started failing ~2026-07-23.)
+// Mirrors the NOW constant in workout-smoke.mjs.
+const NOW = new Date("2026-07-22T18:00:00").getTime();
 const session = (date, exercises) => ({
   id: date, unit: "lb", started_at: iso(date), duration_sec: 3600,
   exercises: exercises.map(([name, sets]) => ({ name, sets: sets.map(([weight, reps]) => ({ weight, reps })) })),
@@ -46,7 +52,7 @@ check("recommend: focus=full,time=20 → top pick is short (≤30 min baseline)"
 
 // 4 — recovery: legs trained TODAY sink below fresh muscle when focus is open
 const legDayToday = session("2026-07-22", [["Back Squat", [[225, 5], [225, 5]]]]);
-const openRanked = recommendWorkouts({ focus: "any", equipment: "gym" }, { sessions: [legDayToday] });
+const openRanked = recommendWorkouts({ focus: "any", equipment: "gym" }, { sessions: [legDayToday], now: NOW });
 const idxLeg = openRanked.findIndex((r) => r.workout.id === "legs-gym");
 const idxPush = openRanked.findIndex((r) => r.workout.id === "push-gym");
 check("recommend: legs trained today ranks BELOW a fresh push day (recovery-aware)",
