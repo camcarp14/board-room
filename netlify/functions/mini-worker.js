@@ -62,9 +62,14 @@ async function claudeCall(cfg, modelKey, system, user, maxTokens, userId) {
 }
 
 async function loadUserBundle(cfg, userId) {
-  const res = await rest(cfg, `app_settings?user_id=eq.${userId}&setting_key=in.(mini,mini_tasks)&select=setting_key,setting_value`, { headers: { Prefer: "" } });
+  // mind_prompt is the compiled Mind (doctrine only — see mindGenome.js). It's
+  // read SERVER-SIDE from app_settings rather than taken off the request body:
+  // the client used to POST `mind: <compiled prompt>` and this function never
+  // read it, so tuning a Neuron changed nothing about what a queue run produced.
+  // Reading it here also means we don't trust a client-supplied system prompt.
+  const res = await rest(cfg, `app_settings?user_id=eq.${userId}&setting_key=in.(mini,mini_tasks,mind_prompt)&select=setting_key,setting_value`, { headers: { Prefer: "" } });
   const rows = await res.json();
-  const out = { mini: {}, mini_tasks: [] };
+  const out = { mini: {}, mini_tasks: [], mind_prompt: null };
   (Array.isArray(rows) ? rows : []).forEach(r => { out[r.setting_key] = r.setting_value; });
   return out;
 }
@@ -143,7 +148,20 @@ async function processUser(cfg, userId) {
   const directive = (mini.directive || "").trim();
   const role = (mini.role || "").trim();
   const skillsBlock = await loadSkillsBlock(cfg, userId);
-  const system = `You are "Mini Me", the user's autonomous assistant inside their Board Room app.${role ? ` Your role: ${role}` : ""} Produce the requested deliverable directly and completely — concrete and usable, no preamble, no clarifying questions (make reasonable assumptions and state them briefly at the end if needed).${directive ? `\n\nYour prime directive — this is the overall mission, weigh every task against it: ${directive}` : ""}${skillsBlock}`;
+  // The Mind leads, when there is one. Guarded: a missing/blank/oversized value
+  // falls straight back to the pre-Mind prompt, so a device that has never opened
+  // the Mind tab (or a corrupt setting) can never blank the delegate's
+  // instructions. The 24k ceiling is well clear of a real genome — the seed
+  // compiles to ~5k — and stops one bad write from eating the context window.
+  const mindPrompt = (() => {
+    const p = bundle.mind_prompt && typeof bundle.mind_prompt.prompt === "string" ? bundle.mind_prompt.prompt.trim() : "";
+    return p && p.length <= 24000 ? p : "";
+  })();
+  const base = `You are "Mini Me", the user's autonomous assistant inside their Board Room app.${role ? ` Your role: ${role}` : ""} Produce the requested deliverable directly and completely — concrete and usable, no preamble, no clarifying questions (make reasonable assumptions and state them briefly at the end if needed).${directive ? `\n\nYour prime directive — this is the overall mission, weigh every task against it: ${directive}` : ""}`;
+  // Skills come from loadSkillsBlock (live, server-read) rather than from the
+  // compiled mind, which is why mind_prompt is stored doctrine-only: teaching a
+  // skill in Learn takes effect on the next run without recompiling the genome.
+  const system = `${mindPrompt ? `${mindPrompt}\n\n` : ""}${base}${skillsBlock}`;
 
   const feedRows = [];
   let processed = 0;

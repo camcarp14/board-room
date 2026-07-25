@@ -2,9 +2,10 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Segmented, Switch, Field, TextArea, Button, Sheet, useConfirm, Dot, SectionHeader } from "../../../ui/kit.jsx";
 import { IcClose } from "../../../ui/icons.jsx";
 import { callClaude, MODEL_META } from "../../../lib/claude.js";
+import { db } from "../../../data/db.js";
 import { MindCanvas } from "./MindCanvas.jsx";
 import {
-  compileGenome, loadGenome, saveGenome, resetGenome,
+  compileGenome, loadGenome, saveGenome, resetGenome, hydrateGenomeFromCloud, setGenomeCloudWriter,
   addNode, updateNode, removeNode, addEdge, removeEdge,
   validateGenome, propagate, seedsForTask, dnaBus, genomeStats,
   displayGenome, setLearnedLayout,
@@ -482,6 +483,12 @@ function EdgeInspector({ genome, edge, apply, onSelect, onDeleted }) {
   );
 }
 
+// Give the genome layer its persistence sink. Registered at MODULE scope, not in
+// an effect: loadGenome() runs inside a useState initializer, and its re-seed path
+// calls saveGenome — that happens before any mount effect could run, so a
+// first-ever load would otherwise never reach the cloud.
+setGenomeCloudWriter((key, value) => db.saveSetting(key, value));
+
 // ─── The panel ─────────────────────────────────────────────────────────────────
 export function MindPanel({ isMobile, settings, updateSetting, session, jump, onJump, skills = [], onSkillsChanged, focusSkillId }) { // eslint-disable-line no-unused-vars -- updateSetting/session flow per contract; the panel reads settings.models.mind and persists via mindGenome's own localStorage
   const [genome, setGenome] = useState(() => loadGenome());
@@ -540,6 +547,19 @@ export function MindPanel({ isMobile, settings, updateSetting, session, jump, on
   // Subscribe to the genome bus — worker/grow/import side changes (and our own
   // saves) all arrive here so the panel stays live. Cleanup unsubscribes.
   useEffect(() => dnaBus.on((evt) => { if (evt.type === "genome") setGenome(evt.genome); }), []);
+
+  // Cross-device sync. saveGenome writes every edit to app_settings.mind_genome;
+  // this adopts that copy when it is strictly newer than what this device holds
+  // (last write wins on updated_at). `settings` is the bundle App already loaded,
+  // so this costs no extra query. hydrateGenomeFromCloud emits on the bus, which
+  // is what actually updates state — the return value covers the first paint.
+  useEffect(() => {
+    const cloud = settings?.mind_genome;
+    if (!cloud) return;
+    const inForce = hydrateGenomeFromCloud(cloud);
+    if (inForce !== genomeRef.current) setGenome(inForce);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [settings?.mind_genome?.updated_at]);
 
   // Self-dismissing toast.
   useEffect(() => {

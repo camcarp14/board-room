@@ -159,12 +159,13 @@ You're talking with Cameron directly, in a chat — not running a queued task. A
   const runNow = async () => {
     if (running) return;
     setRunning(true); setRunMsg(null);
-    // The compiled Neurons (doctrine + everything taught in Learn) are the
-    // operating context the delegate runs under. The genome lives in client
-    // storage, so the client hands the compiled mind to the worker to lead the
-    // task-execution prompt, ahead of role/directive/task — tune a Neuron or
-    // teach a skill and what the delegate produces shifts with it.
-    const { ok, data, status } = await callWorker({ run: true, mind: getCompiledMind(skills).systemPrompt });
+    // The mind is NOT sent from here. It used to be — `mind: getCompiledMind(…)`
+    // rode along on this call — but the worker never read the field, so a tuned
+    // Neuron changed nothing about a queue run despite the comment here claiming
+    // it did. saveGenome now persists the compiled doctrine to
+    // app_settings.mind_prompt and the worker reads it server-side, which both
+    // makes it actually work and avoids trusting a client-supplied system prompt.
+    const { ok, data, status } = await callWorker({ run: true });
     if (!ok || !data?.success) setRunMsg({ ok: false, text: data?.error || `worker failed (${status || "network"})` });
     else setRunMsg({ ok: true, text: data.message || `processed ${data.processed} task(s)` });
     await loadFeed();

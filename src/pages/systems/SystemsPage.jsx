@@ -8,13 +8,12 @@
 // the Properties tab; `useConnections` is hosted by that parent so Status
 // results survive sub-tab switches.
 
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect } from "react";
 import {
   Card, SectionHeader, CellGroup, Cell, StatTile, Button, Pill,
   Segmented, Field, Dot, Grid, EmptyState,
 } from "../../ui/kit.jsx";
 import { Segmented as ModelPicker } from "../../ui/primitives.jsx"; // the MODEL_META picker
-import { IcCheck } from "../../ui/icons.jsx";
 import { supabase, ANTHROPIC_API_KEY } from "../../lib/supabase.js";
 import { pingFn, callFn } from "../../lib/functions.js";
 import { callClaude, DEFAULT_MODELS, MODEL_META } from "../../lib/claude.js";
@@ -235,7 +234,9 @@ const CONN_META = {
   anthropic: { name: "Anthropic API", desc: IS_DEPLOYED ? "via /.netlify/functions/claude proxy" : "direct from localhost with VITE_ANTHROPIC_API_KEY" },
   coingecko: { name: "CoinGecko", desc: "upstream BTC source — reached via the btc proxy, not directly from the browser" },
   fn_health: { name: "health", desc: "reports which server-side keys are configured" },
-  fn_mini: { name: "mini-worker", desc: "Mini Me engine — nightly at ~3 AM CT + on-demand runs" },
+  // On-demand only. This claimed "nightly at ~3 AM CT", which netlify.toml
+  // explicitly contradicts ("runs on demand only … no schedule here").
+  fn_mini: { name: "mini-worker", desc: "Mini Me engine — runs when you hit Run queue now, Approve, or Reject" },
   fn_btc: { name: "btc", desc: "proxies BTC price + sparkline — avoids mobile-carrier IP rate limiting" },
   fn_btc_candles: { name: "btc-candles", desc: "BTC/USD candles via Kraken public API (5m/15m/30m/1d/1w) — no key needed" },
   fn_markets: { name: "markets", desc: "Gold, NVDA, MSTR, STRC quotes via Yahoo's public endpoint (unofficial)" },
@@ -420,9 +421,7 @@ export function StatusTab({ checks, lastRun, running, runAll, isMobile }) {
   );
 }
 
-/* ═══ Deploy — build triggers + a safe single-file replace ═════════════════ */
-
-const REPLACE_ACCEPT = ".html,.htm,.js,.mjs,.css,.svg,.txt,.xml,.json,.webmanifest,image/*"; // matches the hint: HTML, JS, CSS, images
+/* ═══ Deploy — build triggers ══════════════════════════════════════════════ */
 
 export function DeployTab({ isMobile }) {
   const [deploys, setDeploys] = useState({});
@@ -431,40 +430,18 @@ export function DeployTab({ isMobile }) {
     const res = await callFn("deploy", { site: p.site, action: "build" });
     setDeploys(d => ({ ...d, [p.name]: { busy: false, ok: !!res?.success, when: "just now" } }));
   };
-  const fileRef = useRef(null);
-  const [replaceFile, setReplaceFile] = useState(null);
-  const [replacePath, setReplacePath] = useState("");
-  const [replaceTargets, setReplaceTargets] = useState([]);
-  const [replaceBusy, setReplaceBusy] = useState(false);
-  const [replaceResults, setReplaceResults] = useState({});
-  const toggleTarget = (name) => setReplaceTargets(t => t.includes(name) ? t.filter(x => x !== name) : [...t, name]);
-  const fileToBase64 = (file) => new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    // strip the data: URL prefix — the fn wants raw base64
-    reader.onload = () => resolve(String(reader.result).split(",")[1] || "");
-    reader.onerror = reject;
-    reader.readAsDataURL(file);
-  });
-  const runReplace = async () => {
-    if (!replaceFile || !replacePath.trim() || !replaceTargets.length || replaceBusy) return;
-    setReplaceBusy(true);
-    setReplaceResults({});
-    const contentBase64 = await fileToBase64(replaceFile);
-    const results = {};
-    // Targets are processed SEQUENTIALLY, streaming each result into state.
-    for (const name of replaceTargets) {
-      const p = PROPERTIES.find(x => x.name === name);
-      const res = await callFn("deploy", { site: p.site, action: "replace-file", path: replacePath.trim(), contentBase64 });
-      results[name] = { ok: !!res?.success, detail: res?.success ? res.message : (res?.error || "failed — see Netlify deploy log") };
-      setReplaceResults({ ...results });
-    }
-    setReplaceBusy(false);
-  };
+  // The "Replace a File" panel lived here and could never work: it POSTed
+  // action:"replace-file", and deploy.js answers that with 400 "only
+  // action:'build' is supported — zip deploys are disabled by design". callFn
+  // discards the error body, so every attempt reported "failed — see Netlify
+  // deploy log" and sent you to a log with nothing in it, because no build was
+  // ever triggered. Removed rather than reimplemented: the function disables
+  // this deliberately, so the UI was the side that was wrong.
 
   const deployables = PROPERTIES.filter(p => !p.assetsOnly); // Runway/FFSR excluded on purpose
 
   return (
-    <Grid min={isMobile ? 320 : 380} gap={12}>
+    <div style={{ maxWidth: 520 }}>
       <div>
         <SectionHeader title="Deployments" trailing="Netlify" />
         <CellGroup>
@@ -491,82 +468,27 @@ export function DeployTab({ isMobile }) {
         </div>
       </div>
 
-      <div>
-        <SectionHeader title="Replace a File" trailing="Single-file swap" />
-        <Card pad="md">
-          <div className="t-foot" style={{ color: "var(--sub)" }}>
-            Swaps one file on the sites you pick — every other file on the live site is left exactly as it is. For a full rebuild, use Deployments instead.
-          </div>
-          <input
-            ref={fileRef} type="file" accept={REPLACE_ACCEPT} style={{ display: "none" }}
-            onChange={e => { const f = e.target.files?.[0] || null; setReplaceFile(f); setReplaceResults({}); if (f && !replacePath) setReplacePath("/" + f.name); }}
-          />
-          <Cell
-            title={replaceFile ? replaceFile.name : "No file chosen"}
-            sub={replaceFile ? "set the path below, pick sites, then replace" : "HTML, JS, CSS, images — keep it under 4MB"}
-            trailing={<Button kind="quiet" size="md" onClick={() => fileRef.current?.click()}>{replaceFile ? "Change" : "Choose a file"}</Button>}
-            style={{ padding: "10px 0", minHeight: 56 }}
-          />
-          {replaceFile && (
-            <>
-              <div className="t-foot" style={{ color: "var(--sub)", margin: "4px 0 6px" }}>Path on the site (exact, case-sensitive)</div>
-              <Field
-                value={replacePath} onChange={e => setReplacePath(e.target.value)} placeholder="/index.html"
-                style={{ fontFamily: "var(--font-mono)" }}
-              />
-              <div className="t-foot" style={{ color: "var(--sub)", margin: "12px 0 8px" }}>Replace on</div>
-              <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
-                {deployables.map(p => {
-                  const sel = replaceTargets.includes(p.name);
-                  return (
-                    <Pill key={p.name} active={sel} onClick={() => toggleTarget(p.name)}>
-                      {sel && <IcCheck size={11} />}{p.name}
-                    </Pill>
-                  );
-                })}
-              </div>
-              <Button kind="tinted" size="md" full disabled={replaceBusy || !replacePath.trim() || !replaceTargets.length} onClick={runReplace} style={{ marginTop: 12 }}>
-                {replaceBusy ? "Replacing…" : `Replace on ${replaceTargets.length || 0} site${replaceTargets.length === 1 ? "" : "s"}`}
-              </Button>
-              {Object.keys(replaceResults).length > 0 && (
-                <div style={{ display: "flex", flexDirection: "column", gap: 5, marginTop: 10 }}>
-                  {Object.entries(replaceResults).map(([name, r]) => (
-                    <div key={name} className="t-foot" style={{ color: r.ok ? "var(--green)" : "var(--red)" }}>{r.ok ? "✓" : "✗"} {name}: {r.detail}</div>
-                  ))}
-                </div>
-              )}
-            </>
-          )}
-        </Card>
-      </div>
-    </Grid>
+    </div>
   );
 }
 
 /* ═══ Supabase console — allowlisted maintenance ops ═══════════════════════ */
 
 export function SupabaseTab() {
-  const [projects, setProjects] = useState(["Board Room"]);
-  const [project, setProject] = useState("Board Room");
-  useEffect(() => {
-    let alive = true;
-    callFn("db-admin", { ping: true }).then(d => {
-      if (!alive || !d?.projects?.length) return;
-      setProjects(d.projects);
-      // keep the current selection if the fn still lists it, else first
-      setProject(p => d.projects.includes(p) ? p : d.projects[0]);
-    });
-    return () => { alive = false; };
-  }, []);
+  // There was a "Project" pill row here, decorative twice over: db-admin's
+  // ping never returns a `projects` array, so the list stayed the hardcoded
+  // ["Board Room"], and db-admin ignores body.project entirely — every command
+  // runs against the one SUPABASE_URL in the env. The prompt echoed
+  // "> [Board Room] …", which read like routing that wasn't happening.
   const [sqlInput, setSqlInput] = useState("");
   const [sqlBusy, setSqlBusy] = useState(false);
   const [sqlLog, setSqlLog] = useState([{ kind: "ok", text: "ready — allowlisted commands only" }]);
   const runSql = async () => {
     const q = sqlInput.trim();
     if (!q || sqlBusy) return;
-    setSqlLog(l => [...l, { kind: "cmd", text: `> [${project}] ${q}` }]);
+    setSqlLog(l => [...l, { kind: "cmd", text: `> ${q}` }]);
     setSqlInput(""); setSqlBusy(true);
-    const data = await callFn("db-admin", { command: q, project });
+    const data = await callFn("db-admin", { command: q });
     setSqlLog(l => [...l, { kind: data?.success ? "ok" : "err", text: data?.success ? "✓ " + (data.message || "done") : "✗ " + (data?.error || "db-admin function not deployed yet") }]);
     setSqlBusy(false);
   };
@@ -575,15 +497,9 @@ export function SupabaseTab() {
     <div>
       <SectionHeader title="Supabase Console" trailing="Allowlisted ops" />
       <Card pad="md">
-        <div className="t-foot" style={{ color: "var(--sub)" }}>Run maintenance against a project's shared memory. Guardrails on — destructive ops ask twice.</div>
-        <div className="t-foot" style={{ color: "var(--sub)", margin: "12px 0 8px" }}>Project</div>
-        <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
-          {projects.map(p => (
-            <Pill key={p} active={project === p} onClick={() => setProject(p)}>{p}</Pill>
-          ))}
-        </div>
-        <div style={{ display: "flex", flexWrap: "wrap", gap: 8, margin: "10px 0 12px" }}>
-          {["backup chat_messages", "vacuum seat_notes", "clear findings > 30d"].map(q => (
+        <div className="t-foot" style={{ color: "var(--sub)" }}>Run maintenance against Board Room's shared memory. Allowlisted commands only — anything else is refused.</div>
+        <div style={{ display: "flex", flexWrap: "wrap", gap: 8, margin: "14px 0 12px" }}>
+          {["backup chat_messages", "vacuum seat_notes", "clear findings > 30d", "clear usage_log > 30d"].map(q => (
             <Pill key={q} onClick={() => setSqlInput(q)} style={{ fontFamily: "var(--font-mono)", fontSize: 12 }}>{q}</Pill>
           ))}
         </div>

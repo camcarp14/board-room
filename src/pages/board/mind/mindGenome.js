@@ -339,8 +339,72 @@ export function loadGenome() {
 export function saveGenome(genome) {
   genome.updated_at = new Date().toISOString();
   sm.set(GENOME_KEY, genome);
+  syncGenomeToCloud(genome);               // fire-and-forget; localStorage stays the fast path
   dnaBus.emit({ type: "genome", genome }); // every save announces itself — panel + canvas stay live
   return genome;
+}
+
+// ─── cloud sync ──────────────────────────────────────────────────────────────
+// The mind used to live ONLY in localStorage. That meant two things, both bad:
+// it didn't sync (rewire on the desktop and the phone silently kept running the
+// seed genome), and it wasn't backed up — export-data.js copies Supabase tables,
+// and clearing site data or iOS reclaiming storage took every custom node,
+// weight, synapse and the whole mutation history back to seed. It was the most
+// personally invested artifact in the app and the least protected one.
+//
+// So every save also lands in app_settings, which syncs across devices for free
+// AND is already inside export-data's TABLES list, so the backup picks it up with
+// no change there.
+//
+// TWO keys, deliberately:
+//   mind_genome — the graph. Source of truth for editing; what hydration reads.
+//   mind_prompt — the DOCTRINE-ONLY compiled prompt (no skills folded in) plus
+//                 its hash. This exists so mini-worker can lead the delegate's
+//                 system prompt with the mind WITHOUT shipping a compiler
+//                 server-side, and without trusting a client-supplied prompt.
+//                 Skills are excluded on purpose: the worker already builds its
+//                 own live skills block, so folding them in here would go stale
+//                 the moment a skill changed in Learn.
+export const MIND_PROMPT_KEY = "mind_prompt";
+
+// The writer is INJECTED rather than imported. This module is deliberately free
+// of app dependencies — importing the db layer would pull in lib/supabase.js,
+// which reads `import.meta.env` and therefore only resolves under Vite. That
+// would make the genome layer impossible to unit-test in plain Node, which is
+// exactly the contract its sibling pure modules (workout-engine, workout-library)
+// hold and are tested against. MindPanel registers the real writer on import.
+let cloudWriter = null;
+/** Register the persistence sink: (settingKey, value) => Promise|void. */
+export function setGenomeCloudWriter(fn) { cloudWriter = typeof fn === "function" ? fn : null; }
+
+function syncGenomeToCloud(genome) {
+  if (!cloudWriter) return; // no sink registered (tests, or before the panel loads)
+  // Never let a sync failure touch the edit path. Both guards are load-bearing:
+  // the try/catch covers a synchronous throw, and the .catch covers an ASYNC
+  // rejection — db.saveSetting awaits db.uid(), which dereferences `supabase` and
+  // throws outright when the env vars are absent. Unawaited, that would surface as
+  // an unhandled promise rejection on every single save.
+  try {
+    Promise.resolve(cloudWriter(GENOME_KEY, genome)).catch(() => {});
+    const { systemPrompt, hash } = compileGenome(genome);
+    Promise.resolve(cloudWriter(MIND_PROMPT_KEY, { prompt: systemPrompt, hash, at: genome.updated_at })).catch(() => {});
+  } catch { /* the mind is already saved locally; the cloud copy can catch up */ }
+}
+
+/** Adopt a cloud genome when it is strictly NEWER than what this device holds.
+ *  Pass the value straight off the app_settings bundle the app already loaded —
+ *  no extra query. Returns the genome now in force (adopting emits on the bus, so
+ *  the panel and canvas converge without the caller wiring anything). Last write
+ *  wins on `updated_at`, which the genome has always carried. */
+export function hydrateGenomeFromCloud(cloudGenome) {
+  const local = loadGenome();
+  if (!cloudGenome || cloudGenome.version !== 1) return local;
+  if (!validateGenome(cloudGenome).ok) return local;           // corrupt cloud copy never overwrites a good local one
+  const t = (g) => Date.parse(g?.updated_at || "") || 0;
+  if (t(cloudGenome) <= t(local)) return local;                // ours is same-or-newer — keep it
+  sm.set(GENOME_KEY, cloudGenome);                             // adopt WITHOUT re-syncing (avoids a pointless write-back)
+  dnaBus.emit({ type: "genome", genome: cloudGenome });
+  return cloudGenome;
 }
 
 export function resetGenome() {
@@ -619,7 +683,13 @@ export function setLearnedLayout(genome, skillId, patch = {}) {
 // edges between enabled nodes become explicit conflict-resolution lines — the
 // model is TOLD which impulse wins, not left to average them.
 export function compileGenome(genome, { skills } = {}) {
-  const byId = new Map(genome.nodes.map(n => [n.id, n]));
+  // byId reads the MERGED view, not raw genome.nodes. addEdge deliberately allows
+  // a `learned_<skillId>` endpoint and validateGenome accepts it — but building
+  // this map from the raw nodes meant byId.get("learned_…") was undefined, so
+  // isAwake(undefined) was false and any INHIBITORY edge touching a taught skill
+  // got silently filtered out of the TENSIONS block below. The UI let you draw a
+  // tempering synapse onto a learned skill and it never reached the prompt.
+  const byId = new Map(displayGenome(genome, skills).nodes.map(n => [n.id, n]));
 
   // Learned neurons compile into a SUBSECTION of KNOWLEDGE. They are virtual
   // (content owned by mini_skills), read via learnedNodes and ordered
