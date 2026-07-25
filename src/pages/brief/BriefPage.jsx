@@ -6,7 +6,7 @@
 import { useState, useEffect, useCallback, useRef, lazy, Suspense } from "react";
 import { T } from "../../theme.js";
 import { CollapsibleCard, StatTile, Button, Dot, Delta } from "../../ui/kit.jsx";
-import { IcChevronRight } from "../../ui/icons.jsx";
+import { IcChevronRight, IcExternal } from "../../ui/icons.jsx";
 import { StancePill, StatusTag, CARD_STATES } from "../../ui/shared.jsx";
 import { NumTween, Sparkline } from "../../ui/primitives.jsx";
 import GscLineChart from "../../GscLineChart.jsx";
@@ -629,24 +629,34 @@ export function MorningBriefPage({ btc, isMobile, settings, updateSetting, onOpe
       {wireStatus.state === "live" ? (
         wire.length ? (
           <div className="brief-scroll" style={{ display: "flex", flexDirection: "column", maxHeight: 320, overflowY: "auto" }}>
-            {wire.map((w, i) => {
-              const Row = w.link ? "a" : "div";
-              return (
-                <Row key={w.link || `${w.time}|${w.text}`} {...(w.link ? { href: w.link, target: "_blank", rel: "noreferrer" } : {})}
-                  className={w.link ? "hoverable" : undefined}
-                  title={w.tag ? `${w.tag} · ${w.text}` : w.text}
-                  style={{ display: "flex", alignItems: "baseline", gap: 8, textDecoration: "none", color: "inherit", minHeight: 34, flexShrink: 0, padding: "6px 0", borderTop: i === 0 ? "none" : "0.5px solid var(--line)" }}>
-                  {/* Category is now just the colored dot next to the time — the
-                      text label (WIRE/REGULATORY/…) is dropped so each headline
-                      gets the full remaining width and wraps to fewer lines. */}
+            {wire.map((w, i) => (
+              // The whole ROW used to be the <a>, so on a phone any scroll-nudge or
+              // mis-tap while reading launched an article. Only the timestamp opens
+              // it now; the headline is inert (and selectable, so a headline can be
+              // copied). Still a real <a>, not an onClick — long-press, open-in-new-
+              // tab and copy-link all keep working.
+              <div key={w.link || `${w.time}|${w.text}`}
+                title={w.tag ? `${w.tag} · ${w.text}` : w.text}
+                style={{ display: "flex", alignItems: "baseline", gap: 8, minHeight: 34, flexShrink: 0, padding: "6px 0", borderTop: i === 0 ? "none" : "0.5px solid var(--line)" }}>
+                {/* Category is just the colored dot next to the time — the text
+                    label (WIRE/REGULATORY/…) is dropped so each headline gets the
+                    full remaining width and wraps to fewer lines. */}
+                {w.link ? (
+                  <a className="wire-open" href={w.link} target="_blank" rel="noreferrer"
+                    title="Open article" aria-label={`Open article: ${w.text}`}>
+                    <Dot tone={w.tagColor} size={6} />
+                    <span className="t-cap t-num">{w.time}</span>
+                    <IcExternal size={9} aria-hidden />
+                  </a>
+                ) : (
                   <span style={{ display: "inline-flex", alignItems: "center", gap: 6, flex: "none" }}>
                     <Dot tone={w.tagColor} size={6} />
                     <span className="t-cap t-num" style={{ color: "var(--faint)" }}>{w.time}</span>
                   </span>
-                  <span className="t-call" style={{ minWidth: 0, flex: 1, lineHeight: 1.4 }}>{w.text}</span>
-                </Row>
-              );
-            })}
+                )}
+                <span className="t-call" style={{ minWidth: 0, flex: 1, lineHeight: 1.4 }}>{w.text}</span>
+              </div>
+            ))}
           </div>
         ) : <div className="t-foot" style={{ color: "var(--faint)", padding: "6px 0" }}>No headlines returned this cycle.</div>
       ) : <FeedFallbackRow status={wireStatus} />}

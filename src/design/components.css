@@ -159,6 +159,25 @@ button:active:not(:disabled) { transform: scale(0.97); }
    its own narrower inner max-width, so they stay centered and unaffected. */
 .content-max { width: 100%; max-width: 1480px; margin: 0 auto; padding: 4px 28px 40px; }
 
+/* The Wire: the TIMESTAMP is the link, not the row — reading and scrolling a
+   headline on a phone must not navigate. The external glyph marks it as the
+   affordance without spending accent on eleven rows.
+   Deliberately NOT grown to 44pt: rows are ~34px and adjacent, so an inset
+   ::after big enough for 44 would overlap the neighbouring row's link and open
+   the WRONG article — worse than the mis-taps this fixes. A small, precise
+   target is the point here. Padding is cancelled by equal negative margin, so
+   the hit area grows without shifting the row. */
+.wire-open {
+  flex: none; display: inline-flex; align-items: center; gap: 5px;
+  color: var(--faint); text-decoration: none;
+  padding: 7px 9px 7px 3px; margin: -7px -9px -7px -3px;
+  border-radius: 8px;
+}
+.wire-open .dotstatus { transition: none; }
+@media (hover: hover) { .wire-open:hover { color: var(--sub); background: var(--ink-a04); } }
+.wire-open:active { color: var(--sub); background: var(--ink-a06); }
+.wire-open:focus-visible { box-shadow: var(--focus-ring); }
+
 /* Feed cards that cap their height and scroll internally (The Wire, Watch This
    Week) — a slim, unobtrusive scrollbar that matches the palette in both themes. */
 .brief-scroll { scrollbar-width: thin; scrollbar-color: var(--line) transparent; overscroll-behavior: contain; }
