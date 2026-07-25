@@ -1,68 +1,67 @@
 // ─── The tablet / desktop shell ───────────────────────────────────────────────
-// iPadOS grammar: a canvas-colored sidebar with grouped navigation, a content
-// column with its own header, and a centered max-width content well.
+// iPadOS grammar: a canvas-colored rail, a content column with its own header,
+// and a centered max-width content well.
+//
+// The rail was 300px with two section headers over four destinations, which left
+// a column of mostly empty canvas beside every page. It's 236px now, the section
+// headers are gone (see nav.js), and the rows are tighter — the content well
+// gets the difference back.
 import { NAV, HEADERS } from "./nav.js";
 import { TopStatus } from "./TopStatus.jsx";
 import { NAV_ICONS, IcSearch, IcSettings } from "../ui/icons.jsx";
 import { NumTween, Sparkline } from "../ui/primitives.jsx";
 import { Delta } from "../ui/kit.jsx";
 
-const GROUPS = [...new Set(NAV.map(n => n.group))];
-
 export function SidebarShell({ page, onNavigate, onSummon, onOpenSettings, btc, session, totalSpend, callCount, now, dataStamp, refreshing, onRefresh, children }) {
   const head = HEADERS[page];
 
   return (
-    <div style={{ minHeight: "100vh", display: "grid", gridTemplateColumns: "300px minmax(0,1fr)", color: "var(--ink)" }}>
+    <div style={{ minHeight: "100vh", display: "grid", gridTemplateColumns: "236px minmax(0,1fr)", color: "var(--ink)" }}>
       <aside className="sidebar">
         <div className="side-brand">
-          <span style={{ width: 14, height: 14, transform: "rotate(45deg)", borderRadius: 3, background: "var(--accent)", flex: "none" }} />
+          <span style={{ width: 13, height: 13, transform: "rotate(45deg)", borderRadius: 3, background: "var(--accent)", flex: "none" }} />
           <span className="side-brand-name">Board Room</span>
         </div>
 
-        <nav className="side-nav" style={{ display: "flex", flexDirection: "column", gap: 18 }} aria-label="Primary">
-          {GROUPS.map(g => (
-            <div className="side-group" key={g}>
-              <div className="side-group-label t-label">{g}</div>
-              {NAV.filter(n => n.group === g).map(n => {
-                const active = page === n.key;
-                const Icon = active ? NAV_ICONS[n.key].fill : NAV_ICONS[n.key].line;
-                return (
-                  <button key={n.key} className={`side-item${active ? " active" : ""}`} onClick={() => onNavigate(n.key)} aria-current={active ? "page" : undefined}>
-                    <span className="side-ic"><Icon size={21} /></span>
-                    <span style={{ minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{n.label}</span>
-                  </button>
-                );
-              })}
-            </div>
-          ))}
+        {/* One flat list, ordered — Brief · Personal · Train · Assets. */}
+        <nav className="side-nav" aria-label="Primary">
+          {NAV.map(n => {
+            const active = page === n.key;
+            const Icon = active ? NAV_ICONS[n.key].fill : NAV_ICONS[n.key].line;
+            return (
+              <button key={n.key} className={`side-item${active ? " active" : ""}`} onClick={() => onNavigate(n.key)} aria-current={active ? "page" : undefined}>
+                <span className="side-ic"><Icon size={20} /></span>
+                <span style={{ minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{n.label}</span>
+              </button>
+            );
+          })}
         </nav>
 
         <div className="side-foot">
           {/* live bitcoin — the one number that follows you around the firm */}
-          <div className="card pad-md" style={{ borderRadius: 14 }}>
-            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 7 }}>
-              <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                <span style={{ width: 18, height: 18, borderRadius: "50%", background: "var(--btc)", display: "inline-flex", alignItems: "center", justifyContent: "center", fontSize: 10.5, fontWeight: 700, color: "#1A0F00", flex: "none" }}>₿</span>
-                <span className="t-num" style={{ fontSize: 14, color: "var(--ink)" }}>
+          <div className="card pad-sm" style={{ borderRadius: 12 }}>
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 6, marginBottom: 5 }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 7, minWidth: 0 }}>
+                <span style={{ width: 16, height: 16, borderRadius: "50%", background: "var(--btc)", display: "inline-flex", alignItems: "center", justifyContent: "center", fontSize: 9.5, fontWeight: 700, color: "#1A0F00", flex: "none" }}>₿</span>
+                <span className="t-num" style={{ fontSize: 13.5, color: "var(--ink)" }}>
                   {btc.loading ? "…" : btc.error ? "—" : <NumTween v={btc.price} f={n => "$" + n.toLocaleString(undefined, { maximumFractionDigits: 0 })} />}
                 </span>
               </div>
               {!btc.loading && !btc.error && <Delta pct={btc.changePct || 0} />}
             </div>
             {btc.error || (!btc.loading && !(btc.points || []).length) ? (
-              <div className="t-cap" style={{ color: "var(--faint)", padding: "4px 0 2px" }}>Live price unavailable</div>
+              <div className="t-cap" style={{ color: "var(--faint)", padding: "2px 0 1px" }}>Live price unavailable</div>
             ) : (
-              <Sparkline points={btc.points} color={(btc.changePct || 0) >= 0 ? "var(--green)" : "var(--red)"} height={30} />
+              <Sparkline points={btc.points} color={(btc.changePct || 0) >= 0 ? "var(--green)" : "var(--red)"} height={24} />
             )}
           </div>
 
           {/* Theme, sign-out, and the calendar feed all live in the Settings
               sheet now — one place on both platforms, and the only place the
               calendar_url field has ever existed. */}
-          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8, borderTop: "0.5px solid var(--line)", paddingTop: 12 }}>
-            <span className="t-cap" style={{ color: "var(--faint)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{session?.user?.email}</span>
-            <button className="icon-btn" onClick={onOpenSettings} aria-label="Settings" title="Settings" style={{ flex: "none" }}>
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 6, borderTop: "0.5px solid var(--line)", paddingTop: 8 }}>
+            <span className="t-cap" style={{ color: "var(--faint)", minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{session?.user?.email}</span>
+            <button className="icon-btn" onClick={onOpenSettings} aria-label="Settings" title="Settings" style={{ flex: "none", width: 34, height: 34 }}>
               <IcSettings size={18} />
             </button>
           </div>

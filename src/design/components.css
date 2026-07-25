@@ -133,33 +133,33 @@ button:active:not(:disabled) { transform: scale(0.97); }
 .lbx .dock-tab { padding: 8px 0; } /* letterboxed standalone — OS already cleared the indicator */
 
 /* ═══ CHROME — sidebar (tablet / desktop) ════════════════════════════════════ */
+/* A 236px rail, not 300: four destinations in a flat list (no section headers —
+   see nav.js) don't need the width, and the surplus was dead canvas next to
+   every page. Padding and row height came down with it. */
 .sidebar {
   border-right: 0.5px solid var(--line);
-  padding: calc(20px + env(safe-area-inset-top)) 14px calc(18px + env(safe-area-inset-bottom));
-  display: flex; flex-direction: column; gap: 22px;
+  padding: calc(16px + env(safe-area-inset-top)) 10px calc(14px + env(safe-area-inset-bottom));
+  display: flex; flex-direction: column; gap: 14px;
   /* dvh, not vh: on iPad Safari 100vh runs behind the toolbar, pushing the
      footer (live BTC) below the fold. dvh tracks the visible height so the
      rail always fits. The nav scrolls if it must; the footer stays pinned. */
   height: 100vh; height: 100dvh; position: sticky; top: 0; overflow: hidden;
 }
-.side-nav { flex: 1 1 auto; min-height: 0; overflow-y: auto; }
-.side-brand { display: flex; align-items: center; gap: 10px; padding: 2px 10px 0; }
-.side-brand-name { font-size: 17px; font-weight: 700; letter-spacing: -0.015em; color: var(--ink); }
-.side-group { display: flex; flex-direction: column; gap: 2px; }
-.side-group + .side-group { margin-top: 4px; }
-.side-group-label { padding: 0 12px 6px; }
+.side-nav { flex: 1 1 auto; min-height: 0; overflow-y: auto; display: flex; flex-direction: column; gap: 2px; }
+.side-brand { display: flex; align-items: center; gap: 9px; padding: 2px 8px 0; }
+.side-brand-name { font-size: 16px; font-weight: 700; letter-spacing: -0.015em; color: var(--ink); }
 .side-item {
-  display: flex; align-items: center; gap: 11px; width: 100%;
-  padding: 0 12px; height: 42px; border-radius: 12px; border: none;
+  display: flex; align-items: center; gap: 10px; width: 100%;
+  padding: 0 10px; height: 38px; border-radius: 10px; border: none;
   background: transparent; cursor: pointer; color: var(--sub);
-  font-size: 15px; font-weight: 500; text-align: left;
+  font-size: 14.5px; font-weight: 500; text-align: left;
 }
 .side-item .side-ic { color: var(--faint); display: inline-flex; flex: none; transition: transform var(--dur-1) var(--ease-out); }
 @media (hover: hover) { .side-item:hover { background: var(--ink-a04); } }
 .side-item:active .side-ic { transform: scale(0.9); }
 .side-item.active { background: var(--accent-a10); color: var(--ink); font-weight: 600; }
 .side-item.active .side-ic { color: var(--accent); }
-.side-foot { margin-top: auto; display: flex; flex-direction: column; gap: 10px; }
+.side-foot { margin-top: auto; display: flex; flex-direction: column; gap: 8px; }
 
 /* content header (tablet/desktop) */
 .content-head {
