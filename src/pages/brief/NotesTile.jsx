@@ -2,14 +2,19 @@
 // Same personal_notes table the Notes tab owns: recent notes at a glance,
 // one-line capture, tap any note to edit it in place, or jump to the full tab.
 import { useState, useRef } from "react";
-import { CollapsibleCard, Button, Field, Spinner, EmptyState, Dot } from "../../ui/kit.jsx";
-import { IcNote, IcPin, IcPlus, IcChevronRight } from "../../ui/icons.jsx";
+import { CollapsibleCard, Button, Field, Spinner, EmptyState, Dot, useConfirm } from "../../ui/kit.jsx";
+import { IcNote, IcPin, IcPlus, IcChevronRight, IcTrash } from "../../ui/icons.jsx";
 import { NoteCardPreview, sealColor, continueListOnEnter, toggleBulletAtCaret } from "../../ui/shared.jsx";
 import { queryClient } from "../../lib/queryClient.js";
 import { useNotes } from "../../data/notes.js";
 import { db } from "../../data/db.js";
 
 const LIST_CAP = 5; // first N notes in-page; the rest behind "Show all" (no nested scroll)
+// Preview depth: NoteCardPreview renders at 13px / 1.5 line-height ≈ 19.5px a
+// line, so five rows of text is ~98px before the fade takes over. Most quick
+// captures are a few lines — three rows cut them off just as they got going.
+const PREVIEW_ROWS = 5;
+const PREVIEW_MAX_H = Math.round(PREVIEW_ROWS * 13 * 1.5);
 
 export function NotesTile({ isMobile, refreshSignal, onOpenNotes, collapsed, onToggle }) {
   // refreshSignal is accepted but unused here — freshness comes from the
@@ -24,6 +29,7 @@ export function NotesTile({ isMobile, refreshSignal, onOpenNotes, collapsed, onT
   const [editing, setEditing] = useState(null); // { id, title, body }
   const [savingEdit, setSavingEdit] = useState(false);
   const [showAll, setShowAll] = useState(false);
+  const [confirmEl, confirm] = useConfirm();
   const editBodyRef = useRef(null);
   const applyEditBody = (next, caret) => {
     setEditing(ed => ({ ...ed, body: next }));
@@ -48,7 +54,7 @@ export function NotesTile({ isMobile, refreshSignal, onOpenNotes, collapsed, onT
       const saved = await db.saveNote({ id: crypto.randomUUID(), title: "", body: text });
       setQuick("");
       setNotes(prev => [saved, ...(prev || [])]);
-    } catch (e) { setErr(e.message || "Couldn't save that."); }
+    } catch (e) { setErr(humanErr(e, "Couldn't save that.")); }
     setSavingQuick(false);
   };
   const saveEdit = async () => {
@@ -58,7 +64,7 @@ export function NotesTile({ isMobile, refreshSignal, onOpenNotes, collapsed, onT
       const saved = await db.saveNote({ id: editing.id, title: editing.title, body: editing.body });
       setNotes(prev => (prev || []).map(n => (n.id === saved.id ? saved : n)));
       setEditing(null);
-    } catch (e) { setErr(e.message || "Couldn't save that."); }
+    } catch (e) { setErr(humanErr(e, "Couldn't save that.")); }
     setSavingEdit(false);
   };
 
@@ -70,14 +76,33 @@ export function NotesTile({ isMobile, refreshSignal, onOpenNotes, collapsed, onT
     if (m < 60 * 24 * 7) return `${Math.round(m / 1440)}d`;
     return new Date(iso).toLocaleDateString("en-US", { month: "short", day: "numeric" });
   };
-  const headline = (n) => (n.title || "").trim() || (n.body || "").trim().split("\n")[0] || "Untitled";
-  const snippet = (n) => {
-    const body = n.body || "";
-    if ((n.title || "").trim()) return body.trim();
-    // No title → the first non-empty line is the headline; keep the rest with newlines intact.
-    const lines = body.split("\n");
-    const firstIdx = lines.findIndex(l => l.trim());
-    return firstIdx === -1 ? "" : lines.slice(firstIdx + 1).join("\n").trim();
+  // A headline ONLY when the note actually has a title. Promoting the first body
+  // line into a bold nowrap headline was wrong for the way notes get made here:
+  // quick capture files everything title-less, so every jotted thought had its
+  // opening line shouted and truncated with an ellipsis while the rest sat below
+  // it in small grey text. Untitled notes are now just their text.
+  const headline = (n) => (n.title || "").trim() || null;
+  // Which means the preview shows the WHOLE body for untitled notes — no line
+  // skipped, because no line was stolen for a headline.
+  const snippet = (n) => (n.body || "").trim();
+
+  // "TypeError: Failed to fetch" is what a dead connection looks like coming out
+  // of supabase-js, and it's not a sentence anyone should have to read.
+  const humanErr = (e, fallback) =>
+    /failed to fetch|networkerror|load failed|network request failed/i.test(e?.message || "")
+      ? "You're offline — that didn't save."
+      : (e?.message || fallback);
+
+  const requestDelete = async (n) => {
+    const label = (n.title || "").trim() || (n.body || "").trim().split("\n")[0].slice(0, 80) || "this note";
+    const ok = await confirm({ title: "Delete this note?", message: label, confirmLabel: "Delete", destructive: true });
+    if (!ok) return;
+    const prev = notes;
+    // Optimistic: the row goes now, and comes back if the delete actually fails.
+    setNotes(p => (p || []).filter(x => x.id !== n.id));
+    setEditing(null);
+    try { await db.deleteNote(n.id); }
+    catch (e) { setNotes(prev); setErr(humanErr(e, "Couldn't delete that.")); }
   };
 
   return (
@@ -100,18 +125,32 @@ export function NotesTile({ isMobile, refreshSignal, onOpenNotes, collapsed, onT
       </div>
 
       <div style={{ display: "flex", flexDirection: "column", minWidth: 0 }}>
-        {notes === null && !err && !loadErr ? (
+        {/* A failed save or delete is a BANNER, not a replacement. It used to take
+            over the whole card — so a delete that didn't reach Supabase left you
+            staring at "TypeError: Failed to fetch" where all your notes had been,
+            which reads like they're gone. They never were: the optimistic row is
+            rolled back and the list below is intact. Only a failure to LOAD
+            replaces the list, because then there's genuinely nothing to show. */}
+        {err && (
+          <div style={{ background: "var(--surface-2)", borderRadius: 12, display: "flex", alignItems: "center", gap: 10, padding: "8px 12px", minHeight: 48, margin: "4px 0 2px" }}>
+            <Dot tone="var(--red)" />
+            <span className="t-foot" style={{ flex: 1, minWidth: 0 }}>{err}</span>
+            <Button kind="quiet" size="sm" style={{ height: 40, flex: "none" }}
+              onClick={() => { setErr(null); queryClient.invalidateQueries({ queryKey: ["notes"] }); }}>Dismiss</Button>
+          </div>
+        )}
+        {notes === null && !loadErr ? (
           <div style={{ display: "flex", flexDirection: "column", gap: 8, paddingTop: 4 }}>
             <div className="sk" style={{ height: 44, borderRadius: 12 }} />
             <div className="sk" style={{ height: 44, borderRadius: 12 }} />
             <div className="sk" style={{ height: 44, borderRadius: 12 }} />
           </div>
-        ) : (err || loadErr) ? (
+        ) : loadErr ? (
           <div style={{ background: "var(--surface-2)", borderRadius: 12, display: "flex", alignItems: "center", gap: 10, padding: "8px 12px", minHeight: 52, marginTop: 4 }}>
             <Dot tone="var(--red)" />
-            <span className="t-foot" style={{ flex: 1, minWidth: 0 }}>{err || loadErr}</span>
+            <span className="t-foot" style={{ flex: 1, minWidth: 0 }}>{loadErr}</span>
             <Button kind="quiet" size="sm" style={{ height: 44, flex: "none" }}
-              onClick={() => { setErr(null); queryClient.invalidateQueries({ queryKey: ["notes"] }); }}>Retry</Button>
+              onClick={() => queryClient.invalidateQueries({ queryKey: ["notes"] })}>Retry</Button>
           </div>
         ) : sorted.length === 0 ? (
           <EmptyState icon={<IcNote size={26} />} title="A blank ledger"
@@ -135,6 +174,12 @@ export function NotesTile({ isMobile, refreshSignal, onOpenNotes, collapsed, onT
                   <Button kind="tinted" disabled={savingEdit} onClick={saveEdit} style={{ flex: 1, minWidth: 88 }}>{savingEdit ? "Saving…" : "Save"}</Button>
                   <Button kind="quiet" onClick={() => setEditing(null)} style={{ padding: "0 13px", flex: "none" }}>Cancel</Button>
                   <Button kind="plain" onClick={() => onOpenNotes?.(n.id)} style={{ padding: "0 10px", flex: "none" }}>Open <IcChevronRight size={12} /></Button>
+                  {/* Destructive, so it sits last and asks first. Deleting from the
+                      Brief used to mean a trip to the Notes tab. */}
+                  <Button kind="danger" onClick={() => requestDelete(n)} aria-label="Delete note" title="Delete note"
+                    style={{ padding: "0 13px", flex: "none" }}>
+                    <IcTrash size={15} />
+                  </Button>
                 </div>
               </div>
             ) : (
@@ -146,8 +191,21 @@ export function NotesTile({ isMobile, refreshSignal, onOpenNotes, collapsed, onT
                   <Dot tone={sealColor(n.color) || "var(--ink-a18)"} />
                 </span>
                 <div style={{ flex: 1, minWidth: 0 }}>
-                  <span className="t-call" style={{ display: "block", fontWeight: 600, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{headline(n)}</span>
-                  {snippet(n) && <NoteCardPreview text={snippet(n)} maxHeight={60} fadePx={16} style={{ marginTop: 1 }} />}
+                  {headline(n) && (
+                    <span className="t-call" style={{ display: "block", fontWeight: 600, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{headline(n)}</span>
+                  )}
+                  {/* Untitled notes carry the row on their own, so their text reads
+                      in ink; under a title the body is supporting detail and stays
+                      quiet. Either way it gets PREVIEW_ROWS lines before the fade. */}
+                  {snippet(n) && (
+                    <NoteCardPreview
+                      text={snippet(n)}
+                      maxHeight={PREVIEW_MAX_H}
+                      fadePx={20}
+                      color={headline(n) ? "var(--sub)" : "var(--ink)"}
+                      style={{ marginTop: headline(n) ? 1 : 0 }}
+                    />
+                  )}
                 </div>
                 {n.pinned && <span title="Pinned" style={{ color: "var(--faint)", flex: "none", display: "inline-flex", paddingTop: 3 }}><IcPin size={13} /></span>}
                 <span className="t-cap t-num" style={{ color: "var(--faint)", flex: "none", paddingTop: 3 }}>{relTime(n.updated_at)}</span>
@@ -161,6 +219,7 @@ export function NotesTile({ isMobile, refreshSignal, onOpenNotes, collapsed, onT
           </>
         )}
       </div>
+      {confirmEl}
     </CollapsibleCard>
   );
 }
