@@ -153,5 +153,46 @@ const legCount = (w) => w.exercises.filter(e => muscleGroupOf(e.name) === "Legs"
 check("a fresh leg day biases the session away from legs", legCount(sore) <= legCount(rested),
   `rested ${legCount(rested)} leg moves vs sore ${legCount(sore)}`);
 
+
+// 14 — gear is a SET, not a ladder (multi-select + bike)
+check("gear question is multi-select", MELT_QUIZ.find(q => q.key === "gear")?.multi === true);
+check("bike is an option", MELT_QUIZ.find(q => q.key === "gear").options.some(o => o.key === "bike"));
+check("a gym implies dumbbells and bodyweight", ["gym", "dumbbell", "bodyweight"].every(c => capsOf(["gym"]).has(c)));
+check("a bike implies only itself", capsOf(["bike"]).has("bike") && !capsOf(["bike"]).has("dumbbell"));
+check("combos union", ["dumbbell", "bike", "bodyweight"].every(c => capsOf(["dumbbell", "bike"]).has(c)));
+check("a bare string still resolves (the shape before gear went multi)", capsOf("dumbbell").has("dumbbell"));
+check("no answer falls back to a home setup", capsOf().has("dumbbell") && capsOf([]).has("bodyweight"));
+
+// A bike-only answer must produce a BIKE session. Bodyweight was briefly added
+// implicitly so the strength block would always survive — which silently overrode
+// the selection and answered "Bike" with Bulgarian split squats and push-ups. The
+// pills mean what they say now, and the missing half is STATED, not patched over.
+check("bodyweight is not implied by other gear — Just me is a real choice",
+  !capsOf(["bike"]).has("bodyweight"));
+const bikeOnly = buildFatMelter({ time: 30, gear: ["bike"], impact: "low", intensity: "hard" });
+check("bike alone is an interval session on the bike",
+  bikeOnly.exercises.length === 1 && bikeOnly.exercises[0].name === "Assault Bike",
+  bikeOnly.exercises.map(e => e.name).join(", "));
+check("bike alone is real work, not one set", bikeOnly.exercises[0].targetSets >= 4, bikeOnly.exercises[0].targetSets + " intervals");
+check("bike alone honours the clock", Math.abs(bikeOnly.estMinutes - 30) <= 6, bikeOnly.estMinutes + " min");
+check("bike alone surfaces nothing it wasn't given",
+  !bikeOnly.exercises.some(e => /Dumbbell|Barbell|Kettlebell|Goblet|Thruster|Farmer|Squat|Push-Up|Row|Plank|Twist|Lunge|Crawl/.test(e.name)),
+  bikeOnly.exercises.map(e => e.name).join(", "));
+check("bike alone states the missing half rather than hiding it",
+  /resistance/i.test(bikeOnly.caveat || "") && /Just me/i.test(bikeOnly.caveat || ""));
+
+const bikeBw = buildFatMelter({ time: 30, gear: ["bike", "bodyweight"], impact: "low", intensity: "hard" });
+check("bike + bodyweight gets BOTH the strength block and the bike",
+  bikeBw.blocks.some(b => b.key === "strength" && b.moves.length) && bikeBw.exercises.some(e => e.name === "Assault Bike"));
+check("a session with resistance carries no caveat", !bikeBw.caveat);
+
+const dbBike = buildFatMelter({ time: 45, gear: ["dumbbell", "bike"], impact: "low", intensity: "hard" });
+check("a dumbbell+bike combo draws on both",
+  dbBike.exercises.some(e => e.name === "Assault Bike") && dbBike.exercises.some(e => /Dumbbell|Kettlebell|Goblet|Thruster|Romanian/.test(e.name)),
+  dbBike.exercises.map(e => e.name).join(", "));
+check("a combo never surfaces gear you didn't pick",
+  !dbBike.exercises.some(e => /Back Squat|Barbell Row|Barbell Bench|Lat Pulldown|Box Jump|Rowing \(Erg\)/.test(e.name)),
+  dbBike.exercises.map(e => e.name).join(", "));
+
 console.log(`\n${failed ? `${failed} FAILURE(S)` : "FAT MELTER SMOKE: ALL CLEAN"}`);
 if (failed) { console.error("FAT MELTER SMOKE FAILED"); process.exit(1); }

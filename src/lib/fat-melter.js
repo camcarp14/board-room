@@ -47,7 +47,7 @@ export const MELT_QUIZ = [
     key: "gear",
     multi: true,
     q: "What have you got?",
-    help: "Pick every one that applies.",
+    help: "Pick every one that applies — they combine. Nothing is assumed: choose “Just me” if bodyweight work is on the table.",
     options: [
       { key: "gym", label: "Full gym" },
       { key: "dumbbell", label: "Dumbbells" },
@@ -92,12 +92,15 @@ export function capsOf(gear) {
   const picked = Array.isArray(gear) ? gear : gear ? [gear] : [];
   const caps = new Set();
   for (const g of picked) for (const c of IMPLIES[g] || []) caps.add(c);
-  if (!caps.size) caps.add("dumbbell"); // no answer → assume a home setup
-  // You always have your bodyweight. Without this, "Bike" alone produced a
-  // one-move session with no strength block at all — which contradicts the whole
-  // premise, since the strength work is what stops the deficit eating muscle. A
-  // bike plus your own body is a perfectly good session.
-  caps.add("bodyweight");
+  // Nothing picked → a home setup, which is the most common case.
+  if (!caps.size) { caps.add("dumbbell"); caps.add("bodyweight"); }
+  // Bodyweight is deliberately NOT added implicitly. It was, briefly, so that a
+  // bike-only answer would still get a strength block — but that silently
+  // overrode an explicit selection: picking Bike produced Bulgarian split squats
+  // and push-ups, which is not what the pill said. "Just me" is its own option
+  // precisely so bodyweight is a choice. Pick Bike + Just me and you get both;
+  // pick Bike alone and you get a bike session, with the trade-off stated
+  // (see `caveat` below) rather than quietly patched over.
   return caps;
 }
 
@@ -252,6 +255,12 @@ export function buildFatMelter(answers = {}, { sessions = [] } = {}) {
   const wantFinisher = minutes >= 30;
   const wantPrimer = minutes >= 30;
 
+  // Is there anything here to do resistance work WITH? A bike alone can't load a
+  // muscle, so there's no honest strength block to build — say so instead of
+  // inventing bodyweight the user didn't select.
+  const hasResistance = caps.has("bodyweight") || caps.has("dumbbell") || caps.has("gym");
+  if (!hasResistance) return buildIntervalsOnly(caps, cfg, minutes, impact);
+
   const primerPool = usable(PRIMERS, caps, impact);
   const strengthPool = usable(STRENGTH, caps, impact);
   const circuitPool = usable(CIRCUIT, caps, impact);
@@ -343,5 +352,42 @@ export function buildFatMelter(answers = {}, { sessions = [] } = {}) {
     groups,
     blocks,
     exercises,
+  };
+}
+
+/** Conditioning-only session: the answer named a machine and nothing to lift.
+ *  One move, many intervals — which is exactly what a bike session IS, and the
+ *  data model already expresses it (sets = intervals). Carries a `caveat` so the
+ *  sheet can be straight about the missing half rather than hiding it. */
+function buildIntervalsOnly(caps, cfg, minutes, impact) {
+  const pool = usable([...PRIMERS, ...FINISHERS], caps, impact);
+  const move = pool.sort((a, b) => b.cost - a.cost)[0];
+  if (!move) return buildFatMelter({ time: minutes, gear: ["bodyweight"], impact, intensity: cfg.label.toLowerCase() });
+  // ~55s of work per interval at this rest, plus 3 min of easy spinning either end.
+  const intervals = Math.max(4, Math.min(20, Math.round(((minutes - 6) * 60) / (55 + cfg.circuitRest))));
+  const blocks = [{
+    key: "intervals",
+    label: `Intervals · ${intervals} rounds`,
+    note: `Hard effort, ${cfg.circuitRest}s easy between. Spin easy 3 min either side.`,
+    moves: [{ name: move.name, sets: intervals, reps: repsFor(move), restSec: cfg.circuitRest, group: move.group }],
+  }];
+  return {
+    id: null,
+    sourceId: `melt-intervals-${[...caps].sort().join("+")}-${cfg.label.toLowerCase()}-${minutes}`,
+    name: `Fat Melter · ${minutes} min`,
+    blurb: `${intervals} hard intervals on the ${move.name.toLowerCase()}. Pure conditioning — high burn, no resistance work.`,
+    focus: "cardio",
+    time: minutes,
+    estMinutes: Math.round(6 + (intervals * (55 + cfg.circuitRest)) / 60),
+    intensity: cfg.label,
+    intensityNote: cfg.note,
+    rounds: intervals,
+    groups: [move.group],
+    // The honest trade-off, surfaced in the UI. Conditioning alone spends plenty
+    // of energy but does nothing to protect lean mass, which is half the reason
+    // this tool exists.
+    caveat: "No resistance work in this one — a bike can't load a muscle, so nothing here protects lean mass while you're in a deficit. Add “Just me” (or dumbbells) and you'll get a strength block alongside the intervals.",
+    blocks,
+    exercises: blocks[0].moves.map((m) => ({ name: m.name, targetSets: m.sets, targetReps: m.reps, restSec: m.restSec })),
   };
 }

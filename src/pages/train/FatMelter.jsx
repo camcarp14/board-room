@@ -139,7 +139,17 @@ function FatMelterSheet({ sessions, onStart, onSaveRoutine, onClose }) {
           <span className="t-cap" style={{ color: "var(--faint)" }}>{built.groups.length} muscle groups</span>
         </div>
 
-        {/* Blocks, not one flat list. The structure IS the method here — a circuit
+          {/* The honest gap, when there is one — a conditioning-only answer spends
+            plenty of energy but protects no muscle, and that's half the reason
+            this tool exists. Stated in the card, not buried in a footnote. */}
+        {built.caveat && (
+          <div style={{ marginTop: 12, padding: "10px 12px", borderRadius: 10, background: "color-mix(in srgb, var(--amber) 10%, transparent)" }}>
+            <div className="t-cap" style={{ color: "var(--amber)", fontWeight: 700, letterSpacing: "0.02em", textTransform: "uppercase", marginBottom: 3 }}>Worth knowing</div>
+            <div className="t-cap" style={{ color: "var(--sub)", lineHeight: 1.5 }}>{built.caveat}</div>
+          </div>
+        )}
+
+      {/* Blocks, not one flat list. The structure IS the method here — a circuit
             read as ten unrelated exercises would lose the whole point, and the
             rest figures are what make it a fat-loss session rather than a
             hypertrophy one. The logged data is still the flat list underneath. */}
