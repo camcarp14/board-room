@@ -17,7 +17,14 @@
 // target repos — a fine-grained token needs "Contents: read and write").
 const json = (code, body) => ({ statusCode: code, headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
 const GH = "https://api.github.com";
-const CANDIDATE_FILES = ["index.html", "public/index.html", "robots.txt", "public/robots.txt", "sitemap.xml", "public/sitemap.xml", "manifest.json", "public/manifest.json", "site.webmanifest", "public/site.webmanifest"];
+const BASE_FILES = ["index.html", "public/index.html", "robots.txt", "public/robots.txt", "sitemap.xml", "public/sitemap.xml", "manifest.json", "public/manifest.json", "site.webmanifest", "public/site.webmanifest"];
+// Where those files sit, probed in order. A standalone repo keeps them at the
+// root; a monorepo nests them per app (the Pentagon's live under apps/shell/),
+// so several ventures now share one repo with no root-level index.html at all.
+// Without the nested fallback, repointing a consolidated venture at the
+// monorepo makes every candidate 404 and auto-fix silently reports "no static
+// template files" — the repo pointer looks right while the tool does nothing.
+const REPO_DIRS = ["", "apps/shell/"];
 
 async function ghGet(repo, path, token) {
   const res = await fetch(`${GH}/repos/${repo}/contents/${path}`, {
@@ -75,9 +82,12 @@ exports.handler = async (event) => {
     // action: "propose" (default) — read-only, drafts a fix, commits nothing
     if (!body.instruction) return json(400, { error: "instruction is required" });
     const found = [];
-    for (const p of CANDIDATE_FILES) {
-      const f = await ghGet(body.repo, p, githubToken);
-      if (f && !found.some(x => x.path === f.path)) found.push(f);
+    for (const dir of REPO_DIRS) {
+      for (const p of BASE_FILES) {
+        const f = await ghGet(body.repo, `${dir}${p}`, githubToken);
+        if (f && !found.some(x => x.path === f.path)) found.push(f);
+      }
+      if (found.length) break; // first location that actually has files wins
     }
     if (!found.length) return json(200, { success: false, error: `couldn't read any static template files from ${body.repo} — either GITHUB_TOKEN doesn't have access to this repo, or the fix needs a source-code change this tool can't make yet` });
 
