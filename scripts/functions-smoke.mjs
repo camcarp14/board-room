@@ -59,6 +59,42 @@ const EXTRA = {
         m([], []).length === 0 && m(null, null).length === 0 && m([{ status: "queued" }], []).length === 0],
     ];
   },
+  // btc-reserve reads three providers whose payload shapes have nothing in
+  // common, and none of them can be reached from a test run — so the parser is
+  // the only part that CAN be checked here, and it's the part most likely to
+  // silently return [] after a provider tweaks a key name.
+  "btc-reserve": (mod) => {
+    const n = mod.normalizeSeries;
+    if (typeof n !== "function") return [["btc-reserve exports normalizeSeries", false, "not exported"]];
+    const DAY = 86400000;
+    const cq = { status: { code: 200 }, result: { window: "day", data: [ // CryptoQuant: newest first, date strings
+      { date: "2026-07-03", reserve: 2400300, reserve_usd: 1 },
+      { date: "2026-07-02", reserve: 2400200, reserve_usd: 1 },
+      { date: "2026-07-01", reserve: 2400100, reserve_usd: 1 },
+    ] } };
+    const cg = { code: "0", data: { // CoinGlass: parallel arrays, one per exchange, unix seconds
+      timeList: [Date.UTC(2026, 6, 1) / 1000, Date.UTC(2026, 6, 2) / 1000],
+      dataMap: { Binance: [500, 510], Coinbase: [300, null] },
+    } };
+    const pairs = [[Date.UTC(2026, 6, 1), 10], [Date.UTC(2026, 6, 2), 20]]; // bare [t, v] rows
+    const cqOut = n(cq), cgOut = n(cg);
+    return [
+      ["normalizeSeries reads the CryptoQuant shape", cqOut.length === 3 && cqOut[2].v === 2400300],
+      ["normalizeSeries sorts ascending regardless of source order",
+        cqOut[0].t < cqOut[1].t && cqOut[1].t < cqOut[2].t],
+      ["normalizeSeries snaps timestamps to UTC day boundaries", cqOut.every(p => p.t % DAY === 0)],
+      // The bug this guards: summing a missing exchange as 0 would print a
+      // cliff on the chart the day a provider drops one exchange's history.
+      ["normalizeSeries sums CoinGlass exchanges and skips holes",
+        cgOut.length === 2 && cgOut[0].v === 800 && cgOut[1].v === 510],
+      ["normalizeSeries reads unix seconds and [t,v] pairs", n(pairs).length === 2 && n(pairs)[1].v === 20],
+      ["normalizeSeries collapses intraday rows to one point per day",
+        n([{ time: Date.UTC(2026, 6, 1), value: 1 }, { time: Date.UTC(2026, 6, 1) + 3600000, value: 2 }]).length === 1],
+      ["normalizeSeries returns [] rather than throwing on garbage",
+        n(null).length === 0 && n({}).length === 0 && n("nope").length === 0
+        && n({ result: { data: [{ nope: 1 }] } }).length === 0],
+    ];
+  },
 };
 
 rmSync(OUT_DIR, { recursive: true, force: true });

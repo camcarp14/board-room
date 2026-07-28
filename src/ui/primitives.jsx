@@ -30,6 +30,43 @@ export function Sparkline({ points, color, height = 44 }) {
   );
 }
 
+// Tick marks: one 1px vertical dash per period, centred on that period's value.
+// A tick chart, not a line — the series it was built for (exchange reserve)
+// only has one honest reading a day, and a line would draw an intraday path
+// that doesn't exist. Deliberately NOT columns from a baseline: the scale is
+// zoomed to the series (a 2.4M-BTC number never moves enough for a zero
+// baseline to show anything), and columns off a false zero would exaggerate
+// every wiggle into a cliff. Ticks sit at the value and imply no origin — so
+// call sites print the change beside them instead of leaving the eye to
+// estimate it. Baseline hairline only, per the chart spec (no grid).
+export function TickChart({ points, color, height = 30, tickLen = 7 }) {
+  const vals = (points || []).map(p => (typeof p === "number" ? p : p?.v)).filter(v => typeof v === "number" && isFinite(v));
+  if (vals.length < 2) return <div style={{ height }} />;
+  const min = Math.min(...vals), max = Math.max(...vals);
+  const range = max - min || 1;
+  const w = 260;
+  const padY = tickLen / 2 + 1;         // keeps the extreme ticks fully inside the box
+  const step = (w - 1) / (vals.length - 1);
+  return (
+    <svg viewBox={`0 0 ${w} ${height}`} width="100%" height={height} preserveAspectRatio="none" aria-hidden="true">
+      <line x1="0" y1={height - 0.5} x2={w} y2={height - 0.5} stroke="var(--line)" strokeWidth="1" vectorEffect="non-scaling-stroke" />
+      {vals.map((v, i) => {
+        const y = height - padY - ((v - min) / range) * (height - padY * 2);
+        const x = 0.5 + i * step;
+        return (
+          <line
+            key={i}
+            x1={x} y1={y - tickLen / 2} x2={x} y2={y + tickLen / 2}
+            stroke={color} strokeWidth="1" strokeLinecap="butt"
+            opacity={i === vals.length - 1 ? 1 : 0.55}  // today at full strength, history quieter
+            vectorEffect="non-scaling-stroke"
+          />
+        );
+      })}
+    </svg>
+  );
+}
+
 // Bars: flat single-tone marks (identity does no work here — magnitude does),
 // 2px top radius, current period at full strength, history quieter.
 export function Bars({ data, from, to, height = 54 }) {

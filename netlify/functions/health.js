@@ -8,6 +8,12 @@ exports.handler = async () => {
     deploy: { configured: has("NETLIFY_API_TOKEN"), needs: ["NETLIFY_API_TOKEN"] },
     "db-admin": { configured: has("SUPABASE_URL") && has("SUPABASE_SERVICE_ROLE_KEY"), needs: ["SUPABASE_URL", "SUPABASE_SERVICE_ROLE_KEY"] },
     audit: { configured: has("ANTHROPIC_API_KEY"), needs: ["ANTHROPIC_API_KEY"] },
+    // Any one of the three is enough — see netlify/functions/btc-reserve.js for
+    // why this series can't be had for free.
+    "btc-reserve": {
+      configured: has("CRYPTOQUANT_API_KEY") || has("COINGLASS_API_KEY") || has("BTC_RESERVE_URL"),
+      needs: ["CRYPTOQUANT_API_KEY", "COINGLASS_API_KEY", "BTC_RESERVE_URL"],
+    },
   };
   return {
     statusCode: 200,

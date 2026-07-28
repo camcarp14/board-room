@@ -8,7 +8,8 @@ import { T } from "../../theme.js";
 import { CollapsibleCard, StatTile, Button, Dot, Delta } from "../../ui/kit.jsx";
 import { IcChevronRight, IcExternal } from "../../ui/icons.jsx";
 import { StancePill, StatusTag, CARD_STATES } from "../../ui/shared.jsx";
-import { NumTween, Sparkline } from "../../ui/primitives.jsx";
+import { NumTween, Sparkline, TickChart } from "../../ui/primitives.jsx";
+import { useBtcReserve } from "../../hooks/index.js";
 import GscLineChart from "../../GscLineChart.jsx";
 // Lazy — pulls lightweight-charts (~a quarter of the old bundle) into its own
 // chunk that loads only when you actually open a price chart.
@@ -54,6 +55,66 @@ async function pingOnce(fn) {
   const res = await callFnFull(fn, { ping: true });
   if (res.ok || res.status === 404) pingCache.set(fn, res); // 404 = not deployed, also stable until deploy
   return res;
+}
+
+/* ── Exchange reserve — BTC parked on exchanges, one tick mark per day ───────
+   Sits directly under the price hero: the hero says what a coin is worth, this
+   says how many of them are sitting somewhere they can be sold from.
+
+   Deliberately NOT green/red. A falling reserve is read as constructive by most
+   desks and a rising one as supply coming to market — the exact inverse of what
+   those two colors mean everywhere else on this page, where green is up. So the
+   marks wear the series tone (--btc), the number sits in ink, and the direction
+   is stated in words. Nothing here is inferred: with no source configured it
+   prints the env var to set, and it stays silent when the function isn't
+   deployed at all (local `vite dev`). */
+const fmtReserve = (n) =>
+  n == null ? "—"
+    : n >= 1e6 ? `${(n / 1e6).toFixed(2)}M`
+    : n >= 1e4 ? `${Math.round(n / 1e3).toLocaleString()}K`
+    : Math.round(n).toLocaleString();
+
+function ReserveStrip({ reserve }) {
+  // Not deployed — say nothing rather than nag in local dev.
+  if (reserve.missingFn) return null;
+
+  const pts = reserve.points || [];
+  const has = pts.length > 1;
+
+  if (!has) {
+    if (reserve.loading) return <div className="sk sk-line w60" style={{ margin: "0 0 8px" }} />;
+    const note = reserve.notConfigured
+      ? "Exchange reserve — set CRYPTOQUANT_API_KEY in Netlify to plot it."
+      : "Exchange reserve unavailable.";
+    return <div className="t-cap" style={{ color: "var(--faint)", marginBottom: 8 }}>{note}</div>;
+  }
+
+  const first = pts[0].v, last = pts[pts.length - 1].v;
+  const diff = last - first;
+  const pct = first ? (diff / first) * 100 : 0;
+  const fell = diff <= 0;
+  const days = pts.length;
+
+  return (
+    <div style={{ background: "var(--surface-2)", borderRadius: 12, padding: "9px 11px 7px", marginBottom: 8 }}>
+      <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", gap: 8, marginBottom: 2 }}>
+        <span className="t-cap" style={{ color: "var(--faint)", flex: "none" }}>Exchange reserve</span>
+        <span style={{ display: "inline-flex", alignItems: "baseline", gap: 6, minWidth: 0 }}>
+          <span className="t-num" style={{ fontSize: 13.5, color: "var(--ink)", fontWeight: 600 }}>
+            <NumTween v={last} f={fmtReserve} /> BTC
+          </span>
+          <span className="t-num" style={{ fontSize: 11.5, color: "var(--btc)" }}>
+            {fell ? "▼" : "▲"} {Math.abs(pct).toFixed(1)}%
+          </span>
+        </span>
+      </div>
+      <TickChart points={pts} color="var(--btc)" height={30} />
+      <div className="t-cap" style={{ color: "var(--faint)", marginTop: 1 }}>
+        {days}d · {fmtReserve(Math.abs(diff))} BTC {fell ? "left" : "moved onto"} exchanges
+        {reserve.source ? ` · ${reserve.source}` : ""}{reserve.stale ? " · last good read" : ""}
+      </div>
+    </div>
+  );
 }
 
 /* Freshness stamp — same voice and position on every card that has one. */
@@ -117,6 +178,9 @@ export function MorningBriefPage({ btc, isMobile, settings, updateSetting, onOpe
   const [eventAnalysis, setEventAnalysis] = useState(() => { // takeKey(e) -> take | "loading" | "error"; hydrated from localStorage
     try { return JSON.parse(localStorage.getItem(TAKES_LS) || "{}") || {}; } catch { return {}; }
   });
+  // Exchange reserve for the strip under the price hero. Its own hook, not
+  // threaded from App like `btc` — nothing outside this card reads it.
+  const reserve = useBtcReserve(90);
   const [btcChartOpen, setBtcChartOpen] = useState(false);
   const [tickerChart, setTickerChart] = useState(null); // {key,label} of the watchlist ticker whose chart is open
   const [meetingsAll, setMeetingsAll] = useState(false);
@@ -373,6 +437,9 @@ export function MorningBriefPage({ btc, isMobile, settings, updateSetting, onOpe
           </div>
         )}
       </div>
+      {/* Exchange reserve — outside the tappable hero above on purpose, so a tap
+          on it doesn't open the price chart it isn't about. */}
+      <ReserveStrip reserve={reserve} />
       {/* the watchlist: gold + the names worth watching. auto-fit so the tiles
           wrap to 2-up instead of crushing the price to "$…" on a narrow card. */}
       <div style={{ display: "grid", gridTemplateColumns: isMobile ? "repeat(2, minmax(0, 1fr))" : "repeat(auto-fit, minmax(96px, 1fr))", gap: 8 }}>

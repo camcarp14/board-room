@@ -5,7 +5,7 @@
 // read it back out into a compact context block. Module-level on purpose —
 // this is a single-instance app, and it avoids threading every page's state
 // through the whole component tree just so the chat can see it.
-const siteSnapshot = { btc: null, stocks: null, wire: null, todayEvents: null, todayBirthdays: null, clarify: null, zts: null, shopify: null, gsc: null, updatedAt: null };
+const siteSnapshot = { btc: null, btcReserve: null, stocks: null, wire: null, todayEvents: null, todayBirthdays: null, clarify: null, zts: null, shopify: null, gsc: null, updatedAt: null };
 
 // Persisted so the Brief can paint last-known market/pipeline data instantly on
 // reopen (instead of skeletons), and so the board seats have real numbers even
@@ -52,6 +52,14 @@ export function formatSnapshotForChat() {
   const parts = [];
   const b = siteSnapshot.btc;
   if (b && b.price) parts.push(`Bitcoin: $${Math.round(b.price).toLocaleString()}, ${b.changePct >= 0 ? "+" : ""}${(b.changePct || 0).toFixed(1)}% 24h`);
+  // Exchange reserve is the supply-side half of the same picture — a seat asked
+  // about Bitcoin should see where the coins are sitting, not just the price.
+  const r = siteSnapshot.btcReserve;
+  if (r && r.points?.length > 1) {
+    const first = r.points[0].v, last = r.points[r.points.length - 1].v;
+    const dir = last <= first ? "off" : "onto";
+    parts.push(`Bitcoin exchange reserve: ${Math.round(last).toLocaleString()} BTC on exchanges, ${Math.round(Math.abs(last - first)).toLocaleString()} BTC ${dir} exchanges over the last ${r.points.length} days`);
+  }
   const s = siteSnapshot.stocks;
   if (s && (s.gold?.value ?? "—") !== "—") parts.push(`Markets: Gold ${s.gold.value}, NVDA ${s.nvda?.value}, MSTR ${s.mstr?.value}, STRC ${s.strc?.value}`);
   const w = siteSnapshot.wire;

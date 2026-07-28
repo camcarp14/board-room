@@ -146,6 +146,60 @@ export function useBitcoinPrice() {
   return { ...state, refresh: () => setNonce(n => n + 1) };
 }
 
+// ─── Bitcoin exchange reserve ────────────────────────────────────────────────
+// Daily BTC held in exchange wallets, plotted as tick marks under the price on
+// the Brief. Same shape as useBitcoinPrice — snapshot seed so a reopen paints
+// the last known series instantly (flagged stale), then a live refresh.
+//
+// No direct-from-browser fallback here, unlike the price: every source for this
+// number is key-gated, and the keys are server-side only. If the function isn't
+// deployed or isn't configured the hook reports exactly that, and the strip
+// prints the env var to set. See netlify/functions/btc-reserve.js.
+const RESERVE_REFRESH_MS = 30 * 60 * 1000; // it updates once a day — polling harder buys nothing
+
+export function useBtcReserve(days = 90) {
+  const [state, setState] = useState(() => {
+    const r = getSnapshot().btcReserve;
+    return r && r.points?.length
+      ? { points: r.points, latest: r.latest ?? null, source: r.source || null, asOf: r.asOf ?? null, loading: false, error: null, notConfigured: false, missingFn: false, stale: true, fetchedAt: r.fetchedAt || null }
+      : { points: [], latest: null, source: null, asOf: null, loading: true, error: null, notConfigured: false, missingFn: false, stale: false, fetchedAt: null };
+  });
+  const [nonce, setNonce] = useState(0);
+  useEffect(() => {
+    let alive = true;
+    const load = async () => {
+      try {
+        const res = await fetch("/.netlify/functions/btc-reserve", {
+          method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ days }),
+        });
+        if (!alive) return;
+        // Not deployed yet (plain `vite dev`, or a build that predates the
+        // function) — a distinct state from "configured wrong", and the strip
+        // stays silent for it rather than nagging in local dev.
+        if (res.status === 404) { setState(s => ({ ...s, loading: false, missingFn: true })); return; }
+        const data = await res.json().catch(() => null);
+        if (!alive) return;
+        if (data?.success && Array.isArray(data.points) && data.points.length > 1) {
+          const next = { points: data.points, latest: data.latest ?? null, source: data.source || null, asOf: data.asOf ?? null, loading: false, error: null, notConfigured: false, missingFn: false, stale: !!(data.stale || data.cached), fetchedAt: Date.now() };
+          setState(next);
+          updateSnapshot({ btcReserve: next });
+          return;
+        }
+        if (data && data.configured === false) { setState(s => ({ ...s, loading: false, notConfigured: true, error: data.error || null })); return; }
+        // Keep any seeded series on the screen — a failed refresh shouldn't
+        // erase a chart that was true yesterday. It just goes stale.
+        setState(s => ({ ...s, loading: false, stale: true, error: data?.error || "exchange reserve unavailable" }));
+      } catch {
+        if (alive) setState(s => ({ ...s, loading: false, stale: true, error: "exchange reserve unavailable" }));
+      }
+    };
+    load();
+    const iv = setInterval(load, RESERVE_REFRESH_MS);
+    return () => { alive = false; clearInterval(iv); };
+  }, [nonce, days]);
+  return { ...state, refresh: () => setNonce(n => n + 1) };
+}
+
 // Numbers behave like instruments: big metrics count to their value.
 export function useTween(target, dur = 700) {
   const [v, setV] = useState(target ?? 0);

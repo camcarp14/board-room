@@ -225,7 +225,7 @@ const CONN_GROUPS = [
   { title: "Core", keys: ["supabase_env", "supabase_auth", "supabase_db"] },
   { title: "AI", keys: ["anthropic"] },
   { title: "Market data", keys: ["coingecko"] },
-  { title: "Netlify functions", keys: ["fn_health", "fn_mini", "fn_btc", "fn_btc_candles", "fn_markets", "fn_ticker_candles", "fn_wire", "fn_tmdb", "fn_export_data", "fn_calendar", "fn_calendar_events", "fn_site_status", "fn_gsc", "fn_shopify", "fn_clarify_pipeline", "fn_zts_pipeline", "fn_deploy", "fn_dbadmin", "fn_audit", "fn_autofix"] },
+  { title: "Netlify functions", keys: ["fn_health", "fn_mini", "fn_btc", "fn_btc_candles", "fn_btc_reserve", "fn_markets", "fn_ticker_candles", "fn_wire", "fn_tmdb", "fn_export_data", "fn_calendar", "fn_calendar_events", "fn_site_status", "fn_gsc", "fn_shopify", "fn_clarify_pipeline", "fn_zts_pipeline", "fn_deploy", "fn_dbadmin", "fn_audit", "fn_autofix"] },
 ];
 const CONN_META = {
   supabase_env: { name: "Supabase · config", desc: "VITE_SUPABASE_URL + anon key present at build time" },
@@ -239,6 +239,7 @@ const CONN_META = {
   fn_mini: { name: "mini-worker", desc: "Mini Me engine — runs when you hit Run queue now, Approve, or Reject" },
   fn_btc: { name: "btc", desc: "proxies BTC price + sparkline — avoids mobile-carrier IP rate limiting" },
   fn_btc_candles: { name: "btc-candles", desc: "BTC/USD candles via Kraken public API (5m/15m/30m/1d/1w) — no key needed" },
+  fn_btc_reserve: { name: "btc-reserve", desc: "daily BTC held on exchanges · the tick chart under the Brief's price — needs CRYPTOQUANT_API_KEY (or COINGLASS_API_KEY / BTC_RESERVE_URL)" },
   fn_markets: { name: "markets", desc: "Gold, NVDA, MSTR, STRC quotes via Yahoo's public endpoint (unofficial)" },
   fn_calendar: { name: "calendar", desc: "US econ calendar, today through +7 days (unofficial free feed)" },
   fn_calendar_events: { name: "calendar-events", desc: "upcoming meetings — parses the linked iCal URL" },
@@ -328,7 +329,7 @@ export function useConnections({ session, btc }) {
     // Netlify functions — this key→name mapping must stay in sync with
     // CONN_GROUPS keys and CONN_META. (fn_btc_candles used to be missing
     // here, leaving its row stuck on "checking" forever — fixed.)
-    const fns = [["fn_health", "health"], ["fn_mini", "mini-worker"], ["fn_btc", "btc"], ["fn_btc_candles", "btc-candles"], ["fn_markets", "markets"], ["fn_ticker_candles", "ticker-candles"], ["fn_wire", "wire"], ["fn_tmdb", "tmdb"], ["fn_export_data", "export-data"], ["fn_calendar", "calendar"], ["fn_calendar_events", "calendar-events"], ["fn_site_status", "site-status"], ["fn_gsc", "gsc"], ["fn_shopify", "shopify"], ["fn_clarify_pipeline", "clarify-pipeline"], ["fn_zts_pipeline", "zts-pipeline"], ["fn_deploy", "deploy"], ["fn_dbadmin", "db-admin"], ["fn_audit", "audit"], ["fn_autofix", "auto-fix"]];
+    const fns = [["fn_health", "health"], ["fn_mini", "mini-worker"], ["fn_btc", "btc"], ["fn_btc_candles", "btc-candles"], ["fn_btc_reserve", "btc-reserve"], ["fn_markets", "markets"], ["fn_ticker_candles", "ticker-candles"], ["fn_wire", "wire"], ["fn_tmdb", "tmdb"], ["fn_export_data", "export-data"], ["fn_calendar", "calendar"], ["fn_calendar_events", "calendar-events"], ["fn_site_status", "site-status"], ["fn_gsc", "gsc"], ["fn_shopify", "shopify"], ["fn_clarify_pipeline", "clarify-pipeline"], ["fn_zts_pipeline", "zts-pipeline"], ["fn_deploy", "deploy"], ["fn_dbadmin", "db-admin"], ["fn_audit", "audit"], ["fn_autofix", "auto-fix"]];
     if (!IS_DEPLOYED) {
       // netlify dev serves functions locally; try health first to decide —
       // if it's dead, mark ALL fns "local" instead of hammering 20 dead
