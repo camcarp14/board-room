@@ -27,6 +27,17 @@ button:active:not(:disabled) { transform: scale(0.97); }
 .hoverable { transition: background var(--dur-1) ease; }
 @media (hover: hover) { .hoverable:hover { background: var(--ink-a03); } }
 
+/* Focus rings for the things that aren't <button>. A Card with onClick is a
+   div[role=button][tabindex=0] (kit.jsx) and so were four hand-rolled controls
+   — every one of them took keyboard focus and showed nothing for it, because
+   styles.css only rings button/input/textarea. Same ring, same rule: pointer
+   users never see it, keyboard users always do.
+   Scoped to tabindex values a user can actually reach: tabindex="-1" is the
+   programmatic-focus escape hatch (scroll containers, dialog roots), and those
+   should not light up when code calls .focus() on them. */
+[role="button"]:focus-visible,
+[tabindex]:not([tabindex="-1"]):focus-visible { outline: none; box-shadow: var(--focus-ring); }
+
 /* ── entrances — quiet, brief, only on arrival ─────────────────────────────── */
 .pagefade { animation: pagein var(--dur-3) var(--ease-out) both; }
 @keyframes pagein { from { opacity: 0; transform: translateY(5px); } to { opacity: 1; transform: none; } }
@@ -47,6 +58,13 @@ button:active:not(:disabled) { transform: scale(0.97); }
 .sk-line { height: 12px; margin: 8px 0; }
 .sk-line.w40 { width: 40%; } .sk-line.w60 { width: 60%; } .sk-line.w80 { width: 80%; }
 .sk-big { height: 28px; width: 55%; margin: 10px 0 6px; }
+/* Card- and tile-shaped placeholders. A loading page should have the SHAPE of
+   the page it becomes, so nothing jumps when the data lands — a bare .sk-line
+   inside a full-size card was still a layout shift waiting to happen. */
+.sk-card { height: 108px; border-radius: var(--r-card); }
+.sk-tile { height: 62px; border-radius: var(--r-well); }
+.sk-row { display: flex; gap: 10px; }
+.sk-row > .sk { flex: 1; min-width: 0; }
 
 /* ── height:auto expansion, zero measuring, zero jank ──────────────────────── */
 .expand { display: grid; grid-template-rows: 0fr; transition: grid-template-rows var(--dur-3) var(--ease-out); }
@@ -84,7 +102,10 @@ button:active:not(:disabled) { transform: scale(0.97); }
 }
 /* the visual box stays 38px; the touch target reaches 44pt */
 .icon-btn::after { content: ''; position: absolute; inset: -4px; }
-@media (hover: hover) { .icon-btn:hover { background: var(--ink-a05); } }
+@media (hover: hover) { .icon-btn:hover { background: var(--ink-a05); color: var(--ink); } }
+/* Had a hover wash but no pressed one, so on touch — where hover never fires —
+   the only feedback was the global 0.97 scale. Now the well fills too. */
+.icon-btn:active { background: var(--ink-a10); }
 
 /* Large-title block — the first thing on every page. Kept tight to the nav
    bar so the useful content sits high on the screen. */
@@ -113,6 +134,11 @@ button:active:not(:disabled) { transform: scale(0.97); }
 .dock-tab:active:not(:disabled) { transform: none; } /* tabs don't shrink — the icon nudges instead */
 .dock-tab:active .dock-icon { transform: scale(0.88); }
 .dock-icon { display: inline-flex; transition: transform var(--dur-1) var(--ease-out); }
+/* The icon springs as it takes over. Because .active moves between tabs, the
+   animation is always on a newly-matched element, so it re-fires every switch
+   without any JS key or restart trick. It lands where the press left off. */
+.dock-tab.active .dock-icon { animation: tabpop var(--dur-3) var(--ease-spring) both; }
+@keyframes tabpop { from { transform: scale(0.84); } to { transform: scale(1); } }
 .dock-label { font-size: 10px; font-weight: 600; letter-spacing: 0.01em; line-height: 1; white-space: nowrap; max-width: 100%; overflow: hidden; }
 .lbx .dock-tab { padding: 8px 0; } /* letterboxed standalone — OS already cleared the indicator */
 
@@ -194,7 +220,13 @@ button:active:not(:disabled) { transform: scale(0.97); }
 .card.pad-md { padding: 16px; }
 .card.pad-sm { padding: 12px; }
 .card.pressable { cursor: pointer; transition: transform var(--dur-1) var(--ease-out), box-shadow var(--dur-2) var(--ease-out); }
-.card.pressable:active { transform: scale(0.985); }
+/* Hover lifts, press sinks — the pair is what makes a card feel like an object
+   rather than a rectangle that happens to be clickable. Pointer devices only;
+   on touch there is no hover state to be stuck in. */
+@media (hover: hover) {
+  .card.pressable:hover { transform: translateY(-1px); box-shadow: var(--shadow-lift); }
+}
+.card.pressable:active { transform: scale(0.985); box-shadow: var(--shadow-card); }
 
 /* section header */
 .sec-head { display: flex; align-items: baseline; justify-content: space-between; padding: 0 4px 8px; margin-top: 4px; }
@@ -260,6 +292,25 @@ button:active:not(:disabled) { transform: scale(0.97); }
 .btn.danger { background: color-mix(in srgb, var(--red) 12%, transparent); color: var(--red); }
 .btn.danger-solid { background: var(--red); color: #fff; }
 
+/* Buttons had no hover state at all — the single most-used control in the app
+   was inert under a pointer. Each kind steps up within its own material rather
+   than borrowing a generic overlay, and the background swap is INSTANT on
+   purpose: .btn transitions transform/opacity/shadow only, because a
+   colour transition with a var() endpoint wedges Chromium on theme flips
+   (see the note in styles.css). The lift is the animated part. */
+@media (hover: hover) {
+  .btn:hover:not(:disabled) { transform: translateY(-1px); }
+  .btn.primary:hover:not(:disabled) { background: var(--accent-hi); }
+  .btn.tinted:hover:not(:disabled) { background: var(--accent-a20); }
+  .btn.quiet:hover:not(:disabled) { background: var(--ink-a10); }
+  .btn.plain:hover:not(:disabled) { background: var(--accent-a08); }
+  .btn.danger:hover:not(:disabled) { background: color-mix(in srgb, var(--red) 20%, transparent); }
+  .btn.danger-solid:hover:not(:disabled) { background: color-mix(in srgb, var(--red) 88%, var(--ink)); }
+}
+/* Must follow the hover block: same specificity, later wins, so a hovered
+   button still sinks when pressed instead of staying lifted. */
+.btn:active:not(:disabled) { transform: scale(0.97); }
+
 /* pills — monochrome filters (accent is not for filters) */
 .pill {
   display: inline-flex; align-items: center; gap: 6px; height: 34px; padding: 0 14px;
@@ -268,6 +319,8 @@ button:active:not(:disabled) { transform: scale(0.97); }
   transition: transform var(--dur-1) var(--ease-out);
 }
 .pill.active { background: var(--ink); color: var(--bg); font-weight: 600; }
+@media (hover: hover) { .pill:hover:not(.active) { background: var(--ink-a10); color: var(--ink); } }
+.pill:active { transform: scale(0.96); }
 .pillrow { display: flex; gap: 8px; overflow-x: auto; padding: 2px 16px 10px; scrollbar-width: none; -ms-overflow-style: none; }
 .pillrow::-webkit-scrollbar { display: none; }
 
@@ -280,6 +333,7 @@ button:active:not(:disabled) { transform: scale(0.97); }
   padding: 4px 4px; min-width: 0;
 }
 .seg-opt.active { color: var(--ink); font-weight: 600; }
+@media (hover: hover) { .seg-opt:not(.active):hover { color: var(--ink); } }
 .seg-thumb {
   position: absolute; top: 2px; bottom: 2px; border-radius: 8px; background: var(--seg-thumb);
   box-shadow: 0 1px 4px rgba(0, 0, 0, 0.12), 0 3px 8px rgba(0, 0, 0, 0.06);
@@ -374,10 +428,13 @@ button:active:not(:disabled) { transform: scale(0.97); }
 @keyframes toastout { to { opacity: 0; transform: translateY(8px) scale(0.98); } }
 
 /* ── boot & entrance — the seal draws itself while the room wakes ──────────── */
+/* Transparent, not var(--bg): boot is an early return with nothing behind it but
+   the body ground, so an opaque fill bought nothing and cost the ambient wash —
+   which is exactly the screen it most belongs on. */
 .boot {
   position: fixed; inset: 0; display: flex; flex-direction: column;
   align-items: center; justify-content: center; gap: 18px;
-  background: var(--bg); z-index: 1000; animation: fadein var(--dur-3) ease both;
+  background: transparent; z-index: 1000; animation: fadein var(--dur-3) ease both;
 }
 .boot.leaving { animation: bootout var(--dur-3) var(--ease-out) both; }
 @keyframes bootout { to { opacity: 0; } }
@@ -434,4 +491,9 @@ kbd {
   .pagefade, .pageslide-l, .pageslide-r, .stagger > *, .toast, .sheet { animation: none !important; }
   .expand, .seg-thumb, .switch-knob { transition: none; }
   .sk::after { animation: none; }
+  /* The tab icon still fills accent — it just doesn't spring to get there. */
+  .dock-tab.active .dock-icon { animation: none !important; }
+  /* Hover keeps the shadow (a real depth cue) and drops the travel. */
+  .card.pressable:hover { transform: none; }
+  .btn:hover:not(:disabled) { transform: none; }
 }

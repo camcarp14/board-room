@@ -11,6 +11,7 @@ import { MobileShell } from "./shell/MobileShell.jsx";
 import { SidebarShell } from "./shell/SidebarShell.jsx";
 import { Summon } from "./shell/Summon.jsx";
 import { BootScreen, LoginScreen, SetupNotice } from "./shell/Boot.jsx";
+import { Ambient } from "./shell/Ambient.jsx";
 import { SettingsSheet } from "./shell/SettingsSheet.jsx";
 import { ErrorBoundary } from "./shell/ErrorBoundary.jsx";
 import { Sheet, Button, useConfirm } from "./ui/kit.jsx";
@@ -422,12 +423,21 @@ export default function App() {
     } catch { /* best-effort — never surface oversight failures to the user */ }
   };
 
-  if (previewParam("view") === "setup") return <SetupNotice />;
-  if (previewParam("view") === "login") return <LoginScreen />;
-  if (previewParam("view") === "boot") return <BootScreen />;
-  if (!supabase) return <SetupNotice />;
-  if (!authChecked && !PREVIEW) return <BootScreen />;
-  if (!session && !PREVIEW) return <LoginScreen />;
+  // One ambient canvas for the entire app, mounted above the auth gate so the
+  // wash is already drifting behind the boot seal and the login card — the two
+  // screens seen most often on a cold open. It is a sibling of everything, never
+  // a wrapper: it must not become the containing block for any fixed-position
+  // chrome (the tab bar, sheets), which a transformed ancestor would.
+  const ambient = <Ambient on={theme.ambient} />;
+  const gate =
+    previewParam("view") === "setup" ? <SetupNotice /> :
+    previewParam("view") === "login" ? <LoginScreen /> :
+    previewParam("view") === "boot" ? <BootScreen /> :
+    !supabase ? <SetupNotice /> :
+    !authChecked && !PREVIEW ? <BootScreen /> :
+    !session && !PREVIEW ? <LoginScreen /> :
+    null;
+  if (gate) return <>{ambient}{gate}</>;
 
   const calUrl = settings?.calendar_url || "";
   const totalSpend = obs.all().reduce((s, l) => s + (l.cost || 0), 0);
@@ -448,7 +458,18 @@ export default function App() {
   // Suspense catches the lazy page chunk on first open of a non-Brief tab.
   const renderPage = (key) => (
     <ErrorBoundary key={key} label={NAV.find(n => n.key === key)?.label || key}>
-      <Suspense fallback={<div style={{ flex: 1, minHeight: 220, display: "flex", alignItems: "center", justifyContent: "center" }}><div className="sk" style={{ width: 140, height: 12, borderRadius: 6 }} /></div>}>
+      {/* The chunk for a tab lands in a few hundred ms; what shows in the
+          meantime should be the page's silhouette, not a lonely bar in the
+          middle of the screen. Every page in the building is a column of cards,
+          so that is the shape — and the tail fades, which reads as "there is
+          more below" rather than "this is all there is". */}
+      <Suspense fallback={
+        <div style={{ flex: 1, padding: isMobile ? "6px 16px 0" : "6px 0 0", display: "flex", flexDirection: "column", gap: 12 }} aria-busy="true" aria-label={`Loading ${NAV.find(n => n.key === key)?.label || key}`}>
+          <div className="sk sk-card" />
+          <div className="sk sk-card" style={{ opacity: 0.7 }} />
+          <div className="sk sk-card" style={{ opacity: 0.4 }} />
+        </div>
+      }>
         {renderPageInner(key)}
       </Suspense>
     </ErrorBoundary>
@@ -480,6 +501,7 @@ export default function App() {
   if (isMobile) {
     return (
       <>
+        {ambient}
         <MobileShell {...shellProps} navDir={navDir}>{renderPage(page)}</MobileShell>
         {overlays}
       </>
@@ -487,6 +509,7 @@ export default function App() {
   }
   return (
     <>
+      {ambient}
       <SidebarShell
         {...shellProps}
         btc={btc}

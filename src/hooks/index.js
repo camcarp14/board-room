@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from "react";
-import { getThemePref, setThemePref, resolveTheme, applyTheme, getPalettePref, setPalettePref } from "../theme.js";
+import { getThemePref, setThemePref, resolveTheme, applyTheme, getPalettePref, setPalettePref, getAmbientPref, setAmbientPref } from "../theme.js";
 import { updateSnapshot, getSnapshot } from "../lib/snapshot.js";
 
 // The room follows the sun: Nocturne 19:00–07:00, Daylight otherwise, unless
@@ -39,7 +39,14 @@ export function useThemeController() {
     setPaletteState(key);
     applyTheme(resolveTheme(pref), { animate: true, palette: key });
   };
-  return { pref, setPref, resolved, palette, setPalette };
+  // Ambience rides along on this controller rather than getting its own hook:
+  // Settings already receives the whole `theme` object, so the toggle costs no
+  // new prop plumbing through two shells, and all three appearance axes stay in
+  // one place. No applyTheme call — the ambient layer is a React node, not an
+  // attribute on <html>, so re-rendering it IS applying it.
+  const [ambient, setAmbientState] = useState(getAmbientPref);
+  const setAmbient = (on) => { setAmbientPref(on); setAmbientState(on); };
+  return { pref, setPref, resolved, palette, setPalette, ambient, setAmbient };
 }
 
 // iOS standalone under-reports the viewport through several APIs at once

@@ -83,7 +83,7 @@ new values. `--brass*` aliases `--accent*` during migration.
 --shadow-card: 0 1px 1px rgba(26,22,14,0.03), 0 6px 24px rgba(26,22,14,0.05);
 --shadow-float: 0 12px 40px rgba(26,22,14,0.16);
 --shadow-deep: 0 24px 70px rgba(26,22,14,0.26);
---canvas-wash: none;  /* the canvas is honest — no gradients */
+--shadow-lift: 0 2px 3px rgba(26,22,14,0.04), 0 10px 30px rgba(26,22,14,0.09);  /* pressable card, hovered */
 ```
 
 ### Graphite (dark) — `[data-theme="night"]`
@@ -101,8 +101,44 @@ new values. `--brass*` aliases `--accent*` during migration.
 --shadow-card: 0 1px 1px rgba(0,0,0,0.3), 0 6px 24px rgba(0,0,0,0.35);
 --shadow-float: 0 12px 40px rgba(0,0,0,0.55);
 --shadow-deep: 0 24px 70px rgba(0,0,0,0.7);
---canvas-wash: none;
+--shadow-lift: 0 2px 3px rgba(0,0,0,0.34), 0 10px 30px rgba(0,0,0,0.48);
 ```
+
+### The canvas — one wash, and only one (`design/ambient.css`)
+
+The old rule said the canvas is honest: no gradients, `--canvas-wash: none`. It
+now has exactly one exception, and the exception is the reason the rule can
+stay everywhere else. **`.ambient`** is a single fixed layer at `z-index: -1`
+carrying three enormous, very soft pools of accent light that drift on 54s /
+63s / 78s cycles. Nothing else in the building may use a gradient.
+
+It earns the exemption by never touching content: cards, cells and sheets stay
+opaque, so the wash reads only in the gutters, above the large title, and
+through the glass of the tab bar. Content legibility is untouched by
+construction, not by tuning.
+
+- **Recipe is token-derived, never authored per palette.** Day *lifts* the
+  accent toward `--surface` first (`--amb-lift-*`) and then applies alpha —
+  every day-mode accent is dark by construction (4.6:1 on white), so a raw tint
+  reads as a stain, not as light. Night uses the accent unlifted; it is already
+  the bright end of its palette. All 20 schemes × 2 modes work with no per-
+  palette code, and a 21st would too.
+- **Transform only.** No `filter: blur()` (a per-frame repaint iOS charges
+  dearly for) — the soft edge is the radial gradient's own falloff. Three
+  composited layers, ~1.2px/s of travel: you should notice the room looks
+  different, never that something moved.
+- **Grain is load-bearing, not texture.** An 11%-alpha gradient across a phone
+  screen crosses barely a dozen 8-bit steps, which on OLED black are visible
+  rings. Static desaturated noise dithers them away.
+- **`z-index: -1` is fragile on purpose.** In the root stacking context it
+  paints after html's ground but *before* any in-flow block's background — so
+  an opaque `body` or `#root` hides the whole layer, silently. `html` keeps the
+  ground; nothing below it may paint one. `scripts/ambient-smoke.mjs` asserts
+  this, along with the reduced-motion gate and the token-only palette.
+- **Two off switches.** Settings → Ambience (`br_ambient`, device-local,
+  defaults on) removes the layer entirely. `prefers-reduced-motion` keeps the
+  light and freezes the drift at mid-cycle — those users get the same room
+  standing still, not a flatter app.
 
 Alpha ladders (`--ink-a02…a25`, `--accent-a06…a55` + `--brass-a*` aliases) are
 generated from the ink/accent above — see tokens.css; use the ladder, never
@@ -126,7 +162,9 @@ ink with a colored mark beside them.
 - Glass (header/tab bar/sheets): `backdrop-filter: blur(20px) saturate(1.8)`
   over `--glass`; hairline on the content side.
 - Focus: `box-shadow: 0 0 0 2px var(--bg), 0 0 0 4px var(--accent-a55)` on
-  `:focus-visible` only.
+  `:focus-visible` only — and it applies to `[role="button"]` / `[tabindex]`
+  too, not just `<button>`. A Card with `onClick` is a focusable div; it showed
+  nothing for it until that rule existed.
 
 ## 5. Motion
 
@@ -137,6 +175,21 @@ page slide ±16px; sheet spring `--ease-spring`; stagger 30ms, cap 6 children,
 **first mount of a page only**. Reduced motion kills everything (already wired —
 keep the block). **Never animate color properties** (Chromium wedge — see the
 comment in styles.css; the theme flips via the veil in theme.js).
+
+Every interactive thing owes all four states. The pattern, applied across the
+kit: **hover** lifts (`translateY(-1px)` + `--shadow-lift` on cards, a step up
+within its own material on buttons), **press** sinks (`scale(0.97)`, cards
+`0.985`, dock icons `0.88`), **focus-visible** rings, **disabled** drops to
+0.45. Hover rules live behind `@media (hover: hover)` so touch never sticks in
+one, and the background half of a hover swaps *instantly* — only the lift is
+animated, because a colour transition with a `var()` endpoint is the Chromium
+wedge above. Order matters: the `:active` rule must follow the `:hover` rule at
+equal specificity, or a hovered button stays lifted while you press it.
+
+Two motions above the token set, both once-only: the tab bar icon springs
+(`--ease-spring`, 420ms) as it takes over — the animation re-fires for free
+because `.active` moves between elements — and the ambient canvas drifts on
+54–78s cycles (§3), which is the one continuous animation in the app.
 
 ## 6. The kit (`src/ui/kit.jsx` + `src/design/components.css`)
 
@@ -230,9 +283,11 @@ src/
   styles.css                   (imports design/*.css; base+utilities only)
   design/tokens.css            (all custom properties, both themes)
   design/components.css        (kit + shell styles, type classes)
+  design/ambient.css           (the one wash — §3; shell/Ambient.jsx renders it)
   ui/kit.jsx  ui/icons.jsx  ui/primitives.jsx  ui/styles.js (S → new values)
   shell/MobileShell.jsx  shell/SidebarShell.jsx  (chrome, nav, diag)
   shell/Boot.jsx  shell/Login.jsx  (seal, entrance, setup notice)
+  shell/Ambient.jsx            (the canvas wash — mounted once, above the auth gate)
   shell/Summon.jsx
   pages/brief/BriefPage.jsx    (+ pieces it needs)
   pages/personal/PersonalPage.jsx  pages/personal/NotesPanel.jsx  pages/personal/CalendarPanel.jsx

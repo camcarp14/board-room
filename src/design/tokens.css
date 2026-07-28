@@ -85,6 +85,10 @@
   --glass-raised: rgba(255, 255, 255, 0.88);
 
   --shadow-card: 0 1px 1px rgba(26, 22, 14, 0.03), 0 6px 24px rgba(26, 22, 14, 0.05);
+  /* One step above --shadow-card, well below --shadow-float: what a pressable
+     card wears while the pointer is over it. Hover has to read as "this is
+     liftable", not as "this became a modal". */
+  --shadow-lift: 0 2px 3px rgba(26, 22, 14, 0.04), 0 10px 30px rgba(26, 22, 14, 0.09);
   --shadow-float: 0 12px 40px rgba(26, 22, 14, 0.16);
   --shadow-deep: 0 24px 70px rgba(26, 22, 14, 0.26);
   --shadow-bar: 0 -6px 24px rgba(26, 22, 14, 0.05);
@@ -123,6 +127,7 @@
   --glass-raised: rgba(28, 28, 30, 0.92);
 
   --shadow-card: 0 1px 1px rgba(0, 0, 0, 0.3), 0 6px 24px rgba(0, 0, 0, 0.35);
+  --shadow-lift: 0 2px 3px rgba(0, 0, 0, 0.34), 0 10px 30px rgba(0, 0, 0, 0.48);
   --shadow-float: 0 12px 40px rgba(0, 0, 0, 0.55);
   --shadow-deep: 0 24px 70px rgba(0, 0, 0, 0.7);
   --shadow-bar: 0 -8px 28px rgba(0, 0, 0, 0.5);

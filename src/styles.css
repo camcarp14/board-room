@@ -10,6 +10,9 @@
    so import order is what lets a palette override the base day/night values. */
 @import "./design/themes.css";
 @import "./design/components.css";
+/* AFTER themes.css: the ambient recipe is color-mix over --accent*, so it has
+   to resolve against whichever palette won above. */
+@import "./design/ambient.css";
 
 /* ── base ──────────────────────────────────────────────────────────────────── */
 *, *::before, *::after { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
@@ -19,13 +22,23 @@ html { background: var(--bg); } /* iOS rubber-band shows html, not body */
 /* the app shell pins itself to the real viewport (see App.jsx) — the height
    chain has to reach it, and 100dvh is not trustworthy in iOS standalone */
 html, body, #root { height: 100%; }
-body { color: var(--ink); background-color: var(--bg); }
+/* No background on body, deliberately. html already paints the ground (the line
+   above — iOS rubber-band shows html, not body), so body's copy was redundant —
+   and it was drawn OVER the ambient layer: in the root stacking context an
+   in-flow block's background (step 3) paints after negative-z-index descendants
+   (step 2), so an opaque body hid .ambient completely. Measured, not guessed:
+   the wash was a flat 0/0/0 delta at every sample point until this came off. */
+body { color: var(--ink); }
 h1, h2, h3 { text-wrap: balance; }
+/* Prose gets `pretty` rather than `balance`: no last-line orphans, without the
+   line-count re-flow `balance` does to a paragraph. Ignored where unsupported. */
+p, .t-body, .t-call, .t-foot, .empty-sub { text-wrap: pretty; }
 ::selection { background: var(--accent-a25); color: var(--ink); }
 * { scrollbar-width: thin; scrollbar-color: var(--ink-a18) transparent; }
 ::-webkit-scrollbar { width: 8px; height: 8px; }
 ::-webkit-scrollbar-track { background: transparent; }
 ::-webkit-scrollbar-thumb { background: var(--ink-a18); border-radius: 10px; }
+::-webkit-scrollbar-thumb:hover { background: var(--ink-a25); }
 textarea, input, select, button { font-family: var(--font-body); }
 
 /* Motion lives on transform/shadow/opacity ONLY. Color properties change

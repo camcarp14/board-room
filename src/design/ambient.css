@@ -1,0 +1,176 @@
+/* ═══════════════════════════════════════════════════════════════════════════
+   AMBIENT — the room breathes.
+
+   A single fixed layer behind every page: three enormous, very soft pools of
+   accent light that drift on minute-long cycles, plus a fine grain that keeps
+   them from banding. It is the one place in the app where a gradient is
+   allowed, and it earns that by never touching content: cards, cells and
+   sheets are all opaque, so the wash reads only in the gutters and through
+   the glass of the tab bar. Turn it off and nothing moves an inch.
+
+   Three constraints shaped every value below:
+
+   1. TOKENS ONLY. Every colour is color-mix over --accent / --accent-hi /
+      --accent-deep, so all 20 palettes × light/dark get a coherent wash for
+      free — gold in Porcelain, steel in Graphite, grey in Mono — and a new
+      palette needs no work here at all.
+   2. TRANSFORM ONLY. No filter: blur() (a per-frame repaint iOS charges dearly
+      for), no animated colours, no opacity keyframes on the pools. The soft
+      edge comes from the gradient's own falloff; the motion is three
+      composited transforms. That is a job the GPU does while idle.
+   3. IMPERCEPTIBLE PER FRAME. 54–78s cycles on an ease-in-out alternate: the
+      pools linger at the extremes and never appear to "loop". You should
+      notice the room looks different, not that something moved.
+
+   Three findings from actually profiling this (rAF frame times, ambient on vs
+   off, across phone/tablet/desktop viewports) — each one cost real frames:
+
+   · TRANSLATE, NEVER SCALE. The first version animated translate + scale and
+     tripled desktop frame time (16.7ms → 116ms). Scaling a layer re-rasterises
+     it; translating one does not. The pools no longer breathe in size, and the
+     travel amplitudes below are larger to make up for it.
+   · THE GRAIN IS A PSEUDO-ELEMENT, NOT A CHILD. As a fourth element it pushed
+     the stack past the point where the pools stayed composited and doubled
+     frame time (16.7ms → 33.3ms) for a layer that never even moves. Folding it
+     into .ambient::after gave all of that back. Do not turn it back into a
+     <span>.
+   · --amb-u IS CAPPED. Sizing straight off vmax makes the pools enormous on a
+     large monitor (2458px on a 2560-wide screen) and doubles the raster cost.
+     Clamping the unit bounds it. Below ~13px/vmax — every phone and most
+     tablets — the cap is inert and the composition is exactly as drawn.
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+/* ── the recipe ──────────────────────────────────────────────────────────────
+   Light and dark want genuinely different strengths. On paper the wash has to
+   push through a bright ground, but muddying it is instantly cheap-looking, so
+   it stays thin. On an OLED black ground the same alpha would be invisible, and
+   banding is the real enemy instead — hence more grain below. */
+:root, [data-theme="day"] {
+  /* On paper, a tint of the raw accent reads as a STAIN rather than as light —
+     every day-mode accent is dark by construction, because it has to clear
+     4.6:1 against white. Lifting it toward --surface first keeps the hue and
+     gives back the luminance, so the pools read as light falling on the page.
+     (First attempt skipped this step and the wash was invisible at any alpha
+     that wasn't also muddy.) */
+  --amb-lift-1: color-mix(in srgb, var(--accent) 58%, var(--surface));
+  --amb-lift-2: color-mix(in srgb, var(--accent-hi) 50%, var(--surface));
+  --amb-lift-3: color-mix(in srgb, var(--accent-deep) 55%, var(--surface));
+  --amb-1: color-mix(in srgb, var(--amb-lift-1) 30%, transparent);
+  --amb-2: color-mix(in srgb, var(--amb-lift-2) 26%, transparent);
+  --amb-3: color-mix(in srgb, var(--amb-lift-3) 20%, transparent);
+  --amb-grain: 0.03;
+}
+[data-theme="night"] {
+  /* No lift here: dark-mode accents are already the bright end of the palette,
+     and mixing them toward --surface would only grey them out. */
+  --amb-1: color-mix(in srgb, var(--accent) 18%, transparent);
+  --amb-2: color-mix(in srgb, var(--accent-hi) 12%, transparent);
+  --amb-3: color-mix(in srgb, var(--accent-deep) 15%, transparent);
+  /* True black shows 8-bit gradient steps that paper hides — more tooth. */
+  --amb-grain: 0.055;
+}
+
+/* ── the layer ───────────────────────────────────────────────────────────────
+   z-index -1 puts it above the body background and below everything in the
+   app, without either shell having to opt in: the phone shell is a positioned
+   box (auto z-index, later in the DOM) and the desktop shell is a static grid,
+   and negative z-index sits behind both. contain keeps the pools' paint and
+   layout sealed in here — deliberately NOT `strict`, which adds size
+   containment this box's inset-derived height cannot survive. */
+.ambient {
+  position: fixed;
+  inset: 0;
+  z-index: -1;
+  pointer-events: none;
+  overflow: hidden;
+  contain: layout paint style;
+  /* The one unit the whole composition is drawn in. vmax keeps it right in
+     portrait and landscape alike; the clamp stops a large display from asking
+     for pools thousands of pixels across. */
+  --amb-u: min(1vmax, 13px);
+  /* The room wakes up rather than snapping on — this also covers the moment
+     after hydration when the layer first mounts. */
+  animation: amb-wake 1800ms var(--ease-out) both;
+}
+@keyframes amb-wake { from { opacity: 0; } to { opacity: 1; } }
+
+/* ── grain ───────────────────────────────────────────────────────────────────
+   Desaturated fractal noise, tiled at 140px, riding on the layer itself rather
+   than on an element of its own (see the header — as a fourth box it cost half
+   the frame budget). It does one unglamorous job: an 11%-alpha gradient spread
+   over a phone screen crosses barely a dozen 8-bit steps, and on a true-black
+   OLED panel those steps are visible as rings. Noise dithers them away.
+   Static — animated grain is a battery bill for a shimmer nobody asked for. */
+.ambient::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  opacity: var(--amb-grain);
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='140' height='140'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='3' stitchTiles='stitch'/%3E%3CfeColorMatrix type='saturate' values='0'/%3E%3C/filter%3E%3Crect width='140' height='140' filter='url(%23n)'/%3E%3C/svg%3E");
+  background-repeat: repeat;
+}
+
+/* Pools are anchored well outside the viewport: you only ever see the soft
+   shoulder of one, never its edge. closest-side plus a mid stop gives a falloff
+   that reads as light rather than as a circle. */
+.amb-pool {
+  position: absolute;
+  border-radius: 50%;
+  will-change: transform;
+  backface-visibility: hidden;
+}
+.amb-1 {
+  width: calc(96 * var(--amb-u)); height: calc(96 * var(--amb-u));
+  top: calc(-44 * var(--amb-u)); left: calc(-32 * var(--amb-u));
+  background: radial-gradient(closest-side, var(--amb-1), color-mix(in srgb, var(--amb-1) 45%, transparent) 46%, transparent 100%);
+  animation: amb-drift-1 54s var(--ease-inout) infinite alternate;
+}
+.amb-2 {
+  width: calc(104 * var(--amb-u)); height: calc(104 * var(--amb-u));
+  bottom: calc(-52 * var(--amb-u)); right: calc(-38 * var(--amb-u));
+  background: radial-gradient(closest-side, var(--amb-2), color-mix(in srgb, var(--amb-2) 45%, transparent) 46%, transparent 100%);
+  animation: amb-drift-2 78s var(--ease-inout) infinite alternate;
+}
+/* The small one is the highlight — it crosses the middle of the screen, which
+   is the only reason the wash reads as depth instead of two corner glows. */
+.amb-3 {
+  width: calc(58 * var(--amb-u)); height: calc(58 * var(--amb-u));
+  top: 22%; left: 26%;
+  background: radial-gradient(closest-side, var(--amb-3), transparent 100%);
+  animation: amb-drift-3 63s var(--ease-inout) infinite alternate;
+}
+
+/* Coprime-ish durations (54 / 78 / 63) mean the three cycles don't re-align for
+   hours — there is no frame the eye can learn. Amplitudes are wider than they
+   would need to be with a scale component, because there isn't one: all the
+   evolution in the composition has to come from the pools sliding across each
+   other. Still only ~1.2px per second. */
+@keyframes amb-drift-1 {
+  from { transform: translate3d(0, 0, 0); }
+  50%  { transform: translate3d(calc(10 * var(--amb-u)), calc(7 * var(--amb-u)), 0); }
+  to   { transform: translate3d(calc(-6 * var(--amb-u)), calc(13 * var(--amb-u)), 0); }
+}
+@keyframes amb-drift-2 {
+  from { transform: translate3d(0, 0, 0); }
+  50%  { transform: translate3d(calc(-12 * var(--amb-u)), calc(-6 * var(--amb-u)), 0); }
+  to   { transform: translate3d(calc(7 * var(--amb-u)), calc(-13 * var(--amb-u)), 0); }
+}
+@keyframes amb-drift-3 {
+  from { transform: translate3d(0, 0, 0); }
+  50%  { transform: translate3d(calc(15 * var(--amb-u)), calc(-10 * var(--amb-u)), 0); }
+  to   { transform: translate3d(calc(-13 * var(--amb-u)), calc(9 * var(--amb-u)), 0); }
+}
+
+/* ── the mandate ─────────────────────────────────────────────────────────────
+   Reduced motion keeps the light and stops the drift. Killing the layer
+   outright would hand those users a visibly different, flatter app; freezing
+   it gives them the same room, standing still. The pools land on their
+   mid-cycle position so the composition is the one it was designed at. */
+@media (prefers-reduced-motion: reduce) {
+  .ambient { animation: none; }
+  .amb-pool { animation: none !important; will-change: auto; }
+  .amb-1 { transform: translate3d(calc(10 * var(--amb-u)), calc(7 * var(--amb-u)), 0); }
+  .amb-2 { transform: translate3d(calc(-12 * var(--amb-u)), calc(-6 * var(--amb-u)), 0); }
+  .amb-3 { transform: translate3d(calc(15 * var(--amb-u)), calc(-10 * var(--amb-u)), 0); }
+}

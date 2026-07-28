@@ -12,7 +12,7 @@
 // Opened from both shells so there's one place to look on either platform.
 import { useState } from "react";
 import { supabase } from "../lib/supabase.js";
-import { Sheet, Cell, CellGroup, Button, Field, SectionHeader, useConfirm } from "../ui/kit.jsx";
+import { Sheet, Cell, CellGroup, Button, Field, SectionHeader, SwitchRow, useConfirm } from "../ui/kit.jsx";
 import { IcSun, IcMoon, IcAutoTheme, IcCheck } from "../ui/icons.jsx";
 import { PALETTES } from "../design/palettes.js";
 
@@ -143,6 +143,24 @@ export function SettingsSheet({ onClose, session, theme, calUrl, onSaveCalUrl, i
           <div className="t-cap" style={{ color: "var(--faint)", lineHeight: 1.5, padding: "8px 4px 0" }}>
             Every scheme has a light and a dark version — the rows above choose which.
             Status colours stay put: green still means live in all twenty.
+          </div>
+
+          {/* The third appearance axis. Off is a real answer — on a small phone
+              screen the wash is mostly hidden behind cards anyway, and some
+              people simply don't want anything moving. Device-local (br_ambient),
+              like the other two: appearance follows the screen, not the account. */}
+          <SectionHeader title="Ambience" style={{ marginTop: 16 }} />
+          <CellGroup>
+            <SwitchRow
+              title="Drifting light"
+              sub="A slow wash of the accent colour behind the room"
+              on={theme.ambient}
+              onToggle={() => theme.setAmbient(!theme.ambient)}
+            />
+          </CellGroup>
+          <div className="t-cap" style={{ color: "var(--faint)", lineHeight: 1.5, padding: "8px 4px 0" }}>
+            It never moves under text — cards and lists are solid. If your device asks
+            for reduced motion, the light stays and the drifting stops.
           </div>
 
           <SectionHeader title="Business Meetings" style={{ marginTop: 14 }} />

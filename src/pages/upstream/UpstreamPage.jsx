@@ -780,8 +780,17 @@ function EngineTab() {
           onRerun={active ? null : () => launch(selectedRun.domain)}
           onDelete={() => removeRun(selectedRun)} />
       )}
+      {/* A run is a title, a status line and a body of findings — so that is what
+          waits for it. A spinner in a full-width card told you nothing about
+          what was coming and shifted the whole page when it arrived. */}
       {selectedId && !selectedRun && !listErr && (
-        <Card pad="lg" style={{ marginTop: 12 }}><Spinner size={14} /> <span style={{ fontSize: 13, color: "var(--sub)" }}>loading…</span></Card>
+        <Card pad="lg" style={{ marginTop: 12 }} aria-busy="true" aria-label="Loading run">
+          <div className="sk sk-big" />
+          <div className="sk sk-line w40" />
+          <div className="sk sk-line w80" style={{ marginTop: 16 }} />
+          <div className="sk sk-line" />
+          <div className="sk sk-line w60" />
+        </Card>
       )}
       {runs && runs.length === 0 && !listErr && (
         <EmptyState icon={<IcSearch size={20} />} title="Nothing run yet"
@@ -952,7 +961,14 @@ function NostradamusTab() {
         </div>
       )}
 
-      {preds == null && !err && <Card style={{ marginTop: 12 }}><Spinner size={14} /></Card>}
+      {/* Predictions resolve into a stack of cards; the placeholder is that
+          stack, so the page develops instead of jumping. */}
+      {preds == null && !err && (
+        <div style={{ marginTop: 12, display: "flex", flexDirection: "column", gap: 10 }} aria-busy="true" aria-label="Loading predictions">
+          <div className="sk sk-card" />
+          <div className="sk sk-card" style={{ opacity: 0.6 }} />
+        </div>
+      )}
 
       {/* Empty only when there is genuinely nothing — open OR closed. */}
       {preds != null && open.length === 0 && closed.length === 0 && (

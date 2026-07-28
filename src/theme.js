@@ -53,6 +53,7 @@ export function cssVar(name) {
 
 const THEME_KEY = "br_theme";
 const PALETTE_KEY = "br_palette";
+const AMBIENT_KEY = "br_ambient";
 
 // Two INDEPENDENT axes, deliberately:
 //   mode    — auto | day | night  (auto follows the device, as it always has)
@@ -75,6 +76,19 @@ export function setPalettePref(key) {
 export function themeColor(resolved, paletteKey = getPalettePref()) {
   const p = paletteByKey(paletteKey);
   return (resolved === "night" ? p.night.bg : p.day.bg);
+}
+
+// ─── The third axis: ambience ────────────────────────────────────────────────
+// Whether the drifting light behind the room is drawn at all (design/ambient.css
+// + shell/Ambient.jsx). Default ON — it is the house look — and stored as an
+// explicit "off" so an unset key, a cleared browser, and a new device all agree.
+// Users on prefers-reduced-motion keep the light and lose the drift; that is a
+// CSS decision, not this one, so the two settings compose instead of fighting.
+export function getAmbientPref() {
+  try { return localStorage.getItem(AMBIENT_KEY) !== "off"; } catch { return true; }
+}
+export function setAmbientPref(on) {
+  try { localStorage.setItem(AMBIENT_KEY, on ? "on" : "off"); } catch {}
 }
 
 export function getThemePref() {
