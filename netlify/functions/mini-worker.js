@@ -6,7 +6,10 @@
 // Real, working controls (all read from the user's `mini` setting):
 //   enabled     - master on/off. Off means Run now refuses to do anything.
 //   model       - which Claude model generates + critiques each task.
-//   budget      - caps tasks processed per run ($1->1, $3->3, $10->8).
+//   budget      - a REAL dollar cap. The run accumulates each call's estimated
+//                 cost and stops before starting a task that would exceed it;
+//                 unrun tasks stay queued. A task-count ceiling ($1->1, $3->3,
+//                 $10->8) still backstops it against a runaway single task.
 //   directive   - one-line mission, synthesized from the directive chat on
 //                 the page — read before every task, takes priority over role.
 //   role        - the identity/expertise Mini Me should adopt, set directly.
@@ -23,9 +26,32 @@ const json = (code, body) => ({ statusCode: code, headers: { "Content-Type": "ap
 // Mirrors MODEL_IDS / PRICING in src/lib/claude.js — keep in sync (a stale id
 // here fails every queued task with a raw Anthropic 404 in the task's output).
 const MODEL_IDS = { haiku: "claude-haiku-4-5", sonnet: "claude-sonnet-5", opus: "claude-opus-4-8" };
-const PRICING = { haiku: { in: 1, out: 5 }, sonnet: { in: 3, out: 15 }, opus: { in: 5, out: 25 } }; // $ per 1M tokens
-const estCost = (mk, i, o) => (i / 1e6) * (PRICING[mk]?.in || 1) + (o / 1e6) * (PRICING[mk]?.out || 5);
+// $ per 1M tokens. Duplicated from src/lib/claude.js ON PURPOSE — a required
+// helper's module.exports clobbers this bundle's exports and deploys a handler-
+// less function (see audit.js). scripts/spend-smoke.mjs asserts they agree.
+// Sonnet 5 is on introductory pricing ($2/$10) through 2026-08-31.
+const SONNET_INTRO_ENDS = Date.parse("2026-09-01T00:00:00Z");
+const PRICING = {
+  haiku: { in: 1, out: 5 },
+  sonnet: { in: 3, out: 15, introIn: 2, introOut: 10, introUntil: SONNET_INTRO_ENDS },
+  opus: { in: 5, out: 25 },
+};
+const rateFor = (mk, at = Date.now()) => {
+  const p = PRICING[mk] || PRICING.haiku;
+  return p.introUntil && at < p.introUntil ? { in: p.introIn, out: p.introOut } : { in: p.in, out: p.out };
+};
+// Cache tokens: write 1.25x input, read 0.1x input. Zero today (nothing sets
+// cache_control), priced so enabling caching can't silently undercount.
+const estCost = (mk, i, o, cacheWrite = 0, cacheRead = 0) => {
+  const p = rateFor(mk);
+  return ((i + cacheWrite * 1.25 + cacheRead * 0.1) * p.in + o * p.out) / 1e6;
+};
+// Task-count ceiling per run. This is a SAFETY STOP, not the budget — the real
+// budget is the dollar figure below, which the run accumulates against actual
+// per-call cost. Before that existed, "$3" capped the run at 3 Haiku tasks
+// (about one cent) and the dollar labels were off by ~300x.
 const BUDGET_TASK_LIMIT = { "$1": 1, "$3": 3, "$10": 8 };
+const BUDGET_USD = { "$1": 1, "$3": 3, "$10": 10 };
 
 function env() {
   return { anthropic: process.env.ANTHROPIC_API_KEY, url: process.env.SUPABASE_URL, service: process.env.SUPABASE_SERVICE_ROLE_KEY };
@@ -51,14 +77,19 @@ async function claudeCall(cfg, modelKey, system, user, maxTokens, userId) {
   });
   const data = await res.json();
   const ok = res.ok;
-  const inTok = data.usage?.input_tokens || 0, outTok = data.usage?.output_tokens || 0;
+  const u = data.usage || {};
+  const cacheWrite = u.cache_creation_input_tokens || 0, cacheRead = u.cache_read_input_tokens || 0;
+  const inTok = (u.input_tokens || 0) + cacheWrite + cacheRead, outTok = u.output_tokens || 0;
+  const cost = estCost(modelKey, u.input_tokens || 0, outTok, cacheWrite, cacheRead);
   if (userId) {
-    rest(cfg, "usage_log", { method: "POST", body: JSON.stringify({ user_id: userId, fn: "mini-worker", kind: "anthropic", model: modelKey, in_tokens: inTok, out_tokens: outTok, cost_usd: estCost(modelKey, inTok, outTok), ms: Date.now() - t0, ok, detail: ok ? undefined : (data?.error?.message || `HTTP ${res.status}`) }) })
+    rest(cfg, "usage_log", { method: "POST", body: JSON.stringify({ user_id: userId, fn: "mini-worker", kind: "anthropic", model: modelKey, in_tokens: inTok, out_tokens: outTok, cost_usd: cost, ms: Date.now() - t0, ok, detail: ok ? undefined : (data?.error?.message || `HTTP ${res.status}`) }) })
       .catch(() => {}); // best-effort, fire-and-forget
   }
   if (!ok) throw new Error(data?.error?.message || `Anthropic ${res.status}`);
   const text = (data.content || []).map(b => (b.type === "text" ? b.text : "")).join("");
-  return { text, outTok };
+  // `cost` rides back to processUser so the run can stop on the DOLLAR budget
+  // rather than only on a task count that had no relationship to it.
+  return { text, outTok, cost };
 }
 
 async function loadUserBundle(cfg, userId) {
@@ -96,8 +127,11 @@ async function loadSkillsBlock(cfg, userId, budget = 9000) {
   } catch { return ""; }
 }
 /** Reconcile our task list against whatever is live, by task id. Pure, and
- *  exported ONLY so scripts/mini-worker-smoke.mjs can assert it (Netlify reads
- *  `handler` and ignores the rest of the exports).
+ *  exported so a test can assert it (Netlify reads `handler` and ignores the
+ *  rest of the exports). This comment used to name a specific smoke script that
+ *  has never existed in the repo — the same trap that had Systems → Usage
+ *  pointing at a SQL file nobody had written. spend-smoke now fails on a
+ *  comment that names a missing file, so name one here only once it exists.
  *
  *  Both sides used to write the WHOLE array: the client upserts it on every
  *  queue/remove, and this function replaced it at the end of a run. Queue a task
@@ -143,19 +177,19 @@ async function runTask(cfg, mini, system, taskText, userId) {
   const loop = mini.loopOn !== false;
   const maxLoops = !reflect ? 1 : (!loop ? 2 : Math.max(2, parseInt(mini.loopMax || "5", 10) || 5));
 
-  let draft = null, prevDraft = null, noProgress = 0, loops = 0, outTok = 0;
+  let draft = null, prevDraft = null, noProgress = 0, loops = 0, outTok = 0, cost = 0;
   for (let i = 0; i < maxLoops; i++) {
     loops++;
     if (draft === null) {
       const r = await claudeCall(cfg, mini.model, system, taskText, 900, userId);
-      draft = r.text; outTok += r.outTok;
+      draft = r.text; outTok += r.outTok; cost += r.cost;
       if (!reflect) break;
       continue;
     }
     const critiqueSystem = `You are reviewing your own previous draft against the original task, as "Mini Me". If the draft fully satisfies the task and no meaningful improvement is needed, reply with exactly: DONE
 Otherwise, reply with ONLY the complete revised draft (no commentary, no prefix) — it will replace the previous draft as-is.`;
     const r = await claudeCall(cfg, mini.model, critiqueSystem, `ORIGINAL TASK:\n${taskText}\n\nCURRENT DRAFT:\n${draft}`, 900, userId);
-    outTok += r.outTok;
+    outTok += r.outTok; cost += r.cost;
     const reply = r.text.trim();
     if (reply === "DONE" || reply.startsWith("DONE")) break;
     if (prevDraft !== null && reply === prevDraft.trim()) { noProgress++; if (noProgress >= 2) break; } else noProgress = 0;
@@ -163,7 +197,7 @@ Otherwise, reply with ONLY the complete revised draft (no commentary, no prefix)
     draft = reply;
     if (!loop) break;
   }
-  return { draft, loops, outTok };
+  return { draft, loops, outTok, cost };
 }
 
 async function processUser(cfg, userId) {
@@ -176,6 +210,7 @@ async function processUser(cfg, userId) {
   if (!queuedIdx.length) { await saveTasks(cfg, userId, tasks); return { userId, processed: 0, skipped: "no queued tasks" }; }
 
   const limit = BUDGET_TASK_LIMIT[mini.budget] || 3;
+  const budgetUsd = BUDGET_USD[mini.budget] || 3;
   const toRun = queuedIdx.slice(0, limit);
   const directive = (mini.directive || "").trim();
   const role = (mini.role || "").trim();
@@ -196,14 +231,21 @@ async function processUser(cfg, userId) {
   const system = `${mindPrompt ? `${mindPrompt}\n\n` : ""}${base}${skillsBlock}`;
 
   const feedRows = [];
-  let processed = 0;
+  let processed = 0, spentUsd = 0;
   for (const idx of toRun) {
     const t = tasks[idx];
+    // Stop on the real budget. Checked BEFORE starting a task, so the cap is
+    // never breached mid-task; the task stays queued for the next run.
+    if (spentUsd >= budgetUsd) {
+      feedRows.push({ user_id: userId, text: `Stopped at the ${mini.budget} budget — $${spentUsd.toFixed(4)} spent this run. ${toRun.length - processed} task(s) still queued.` });
+      break;
+    }
     try {
-      const { draft, loops, outTok } = await runTask(cfg, mini, system, t.text, userId);
+      const { draft, loops, outTok, cost } = await runTask(cfg, mini, system, t.text, userId);
+      spentUsd += cost;
       const status = mini.approvalOn ? "review" : "delivered";
       tasks[idx] = { ...t, status, output: draft, loops, delivered_at: new Date().toISOString() };
-      feedRows.push({ user_id: userId, text: `${status === "review" ? "Drafted (awaiting your approval)" : "Delivered"} "${t.text.slice(0, 60)}${t.text.length > 60 ? "…" : ""}" — ${loops} loop(s), ~${outTok} tokens on ${mini.model}.` });
+      feedRows.push({ user_id: userId, text: `${status === "review" ? "Drafted (awaiting your approval)" : "Delivered"} "${t.text.slice(0, 60)}${t.text.length > 60 ? "…" : ""}" — ${loops} loop(s), ~${outTok} tokens on ${mini.model}, $${cost.toFixed(4)}.` });
       processed++;
     } catch (e) {
       tasks[idx] = { ...t, status: "failed", output: `Failed: ${e.message}`, delivered_at: new Date().toISOString() };

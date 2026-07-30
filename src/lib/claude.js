@@ -5,9 +5,17 @@ import { formatSnapshotForChat, formatSnapshotForSeat } from "./snapshot.js";
 import { buildSkillsBlock } from "../LearnPanel.jsx";
 
 // ─── Model registry — every layer starts on the cheapest model ───────────────
-// Keep these THREE places in lockstep or Opus/Sonnet break in confusing ways:
-//   1. here, 2. netlify/functions/claude.js ALLOWED_MODELS (the proxy rejects
-//   anything not on its list with "unsupported model"), 3. mini-worker.js.
+// Keep these FIVE places in lockstep or Opus/Sonnet break in confusing ways
+// (this comment said THREE and listed three; the last two were already drifting
+// on dated snapshots when the spend audit found them):
+//   1. here
+//   2. netlify/functions/claude.js ALLOWED_MODELS — the proxy rejects anything
+//      not on its list with "unsupported model"
+//   3. netlify/functions/mini-worker.js MODEL_IDS
+//   4. netlify/functions/audit.js  (hardcoded haiku at the call site)
+//   5. netlify/functions/auto-fix.js + board-work-background.js (same)
+// scripts/spend-smoke.mjs now asserts every id resolves through the allowlist
+// and that no file pins a dated snapshot, so drift fails the build.
 // History worth not repeating: `opus` sat on claude-opus-4-1 until it was 12
 // days from its 2026-08-05 retirement. A retired id 404s, and callClaude()
 // collapses that into "The board couldn't be reached — check your API key",
@@ -27,8 +35,38 @@ export const MODEL_META = [
 ];
 // $ per 1M tokens. Opus 4.8 is $5/$25 — a third of the Opus 4.1 pricing this
 // table used to carry, so the old estimate discouraged escalating for no reason.
-const PRICING = { haiku: { in: 1, out: 5 }, sonnet: { in: 3, out: 15 }, opus: { in: 5, out: 25 } };
-const estCost = (mk, i, o) => (i / 1e6) * (PRICING[mk]?.in || 1) + (o / 1e6) * (PRICING[mk]?.out || 5);
+//
+// THREE copies of this block exist — here, netlify/functions/mini-worker.js, and
+// (keyed by model id instead of layer) netlify/lib/upstream/llm.js. They are NOT
+// extracted into a shared module on purpose: under this repo's "type":"module" +
+// esbuild bundling, a required helper's `module.exports` clobbers the function
+// bundle's exports and the function deploys with no handler (see the note in
+// audit.js). scripts/spend-smoke.mjs asserts all three agree instead.
+//
+// Sonnet 5 runs on INTRODUCTORY pricing ($2/$10) through 2026-08-31, then
+// reverts to list ($3/$15). Billing the list rate before then overstated every
+// Sonnet row by 50%. Cost is computed at write time, so historical usage_log
+// rows correctly keep whichever rate was in force when the call was made.
+const SONNET_INTRO_ENDS = Date.parse("2026-09-01T00:00:00Z");
+const PRICING = {
+  haiku: { in: 1, out: 5 },
+  sonnet: { in: 3, out: 15, introIn: 2, introOut: 10, introUntil: SONNET_INTRO_ENDS },
+  opus: { in: 5, out: 25 },
+};
+// Unknown layer keys resolve to Haiku here because callClaude() resolves an
+// unknown modelKey to the Haiku *model* — the estimate has to follow the call.
+const rateFor = (mk, at = Date.now()) => {
+  const p = PRICING[mk] || PRICING.haiku;
+  return p.introUntil && at < p.introUntil ? { in: p.introIn, out: p.introOut } : { in: p.in, out: p.out };
+};
+// Cache tokens bill at 1.25x input (write) and 0.1x input (read). Nothing sets
+// cache_control today so both are 0 — but `input_tokens` is the UNCACHED
+// remainder, not total input, so the day caching is switched on anywhere this
+// would silently undercount. Priced now so it can't.
+const estCost = (mk, i, o, cacheWrite = 0, cacheRead = 0) => {
+  const p = rateFor(mk);
+  return ((i + cacheWrite * 1.25 + cacheRead * 0.1) * p.in + o * p.out) / 1e6;
+};
 // Model layers, post-board: the Mind tab is the tool now. `mind` powers the
 // neural mind's reasoning/synthesis (Pulse, strategy); `delegate` is Mini Me's
 // task runs (it also reads settings.mini.model — the Systems row keeps them in
@@ -85,8 +123,13 @@ export async function callClaude({ system, messages, modelKey = "haiku", maxToke
       return null;
     }
     const text = data.content?.map(b => b.type === "text" ? b.text : "").join("") || "";
-    const inTok = data.usage?.input_tokens || 0, outTok = data.usage?.output_tokens || 0;
-    const cost = estCost(modelKey, inTok, outTok);
+    // input_tokens is the UNCACHED remainder; total input = it + the two cache
+    // counters. Summing them into inTok keeps the token column honest and
+    // matches what the Upstream ledger already reports.
+    const u = data.usage || {};
+    const cacheWrite = u.cache_creation_input_tokens || 0, cacheRead = u.cache_read_input_tokens || 0;
+    const inTok = (u.input_tokens || 0) + cacheWrite + cacheRead, outTok = u.output_tokens || 0;
+    const cost = estCost(modelKey, u.input_tokens || 0, outTok, cacheWrite, cacheRead);
     const ms = Date.now() - t0;
     obs.log({ fn, model, inTok, outTok, cost, ms, ok: !!text });
     logUsage({ fn, kind: "anthropic", model: modelKey, in_tokens: inTok, out_tokens: outTok, cost_usd: cost, ms, ok: !!text });

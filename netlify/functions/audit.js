@@ -18,19 +18,61 @@ const json = (code, body) => ({ statusCode: code, headers: { "Content-Type": "ap
 // workout-import.js; btc.js / mini-worker.js work precisely because they are
 // self-contained. Do NOT refactor these back into a shared module.
 // Degrades open when the service key is absent so `netlify dev` still runs.
+// Returns { denied } to refuse, or { userId } to proceed. It used to verify the
+// token and throw the identity away; usage_log needs it, so the id now rides
+// back out. userId is null when the service key is absent (the degrade-open
+// path) — spend simply goes unlogged there, same as it always did locally.
 async function denyUnlessSignedIn(event) {
   const url = process.env.SUPABASE_URL, service = process.env.SUPABASE_SERVICE_ROLE_KEY;
-  if (!url || !service) return null;
+  if (!url || !service) return { userId: null };
   const h = event.headers || {};
   const token = String(h.authorization || h.Authorization || "").replace(/^Bearer\s+/i, "").trim();
-  if (!token) return json(401, { success: false, error: "sign in first" });
+  if (!token) return { denied: json(401, { success: false, error: "sign in first" }) };
   try {
     const who = await fetch(`${url}/auth/v1/user`, { headers: { apikey: service, Authorization: `Bearer ${token}` } });
-    if (!who.ok) return json(401, { success: false, error: "session expired — refresh and try again" });
+    if (!who.ok) return { denied: json(401, { success: false, error: "session expired — refresh and try again" }) };
+    const u = await who.json();
+    return { userId: u?.id || null };
   } catch {
-    return json(503, { success: false, error: "couldn't verify your session — try again in a moment" });
+    return { denied: json(503, { success: false, error: "couldn't verify your session — try again in a moment" }) };
   }
-  return null;
+}
+
+// Spend accounting. This function bills the owner's Anthropic key on every
+// call and wrote NOTHING to usage_log — callFn logged a kind:"call" row with no
+// tokens and no cost, so Systems → Usage showed the audit happening at $0.
+// Inlined for the same bundling reason as the session gate above; the pricing
+// table is asserted against src/lib/claude.js by scripts/spend-smoke.mjs.
+const SONNET_INTRO_ENDS = Date.parse("2026-09-01T00:00:00Z");
+const PRICING = {
+  haiku: { in: 1, out: 5 },
+  sonnet: { in: 3, out: 15, introIn: 2, introOut: 10, introUntil: SONNET_INTRO_ENDS },
+  opus: { in: 5, out: 25 },
+};
+const rateFor = (mk, at = Date.now()) => {
+  const p = PRICING[mk] || PRICING.haiku;
+  return p.introUntil && at < p.introUntil ? { in: p.introIn, out: p.introOut } : { in: p.in, out: p.out };
+};
+const estCost = (mk, i, o, cacheWrite = 0, cacheRead = 0) => {
+  const p = rateFor(mk);
+  return ((i + cacheWrite * 1.25 + cacheRead * 0.1) * p.in + o * p.out) / 1e6;
+};
+/** Fire-and-forget usage row. Never awaited, never throws into the caller —
+ *  accounting must not be able to fail an audit. */
+function logSpend(userId, { modelKey, usage, ms, ok, detail }) {
+  const url = process.env.SUPABASE_URL, service = process.env.SUPABASE_SERVICE_ROLE_KEY;
+  if (!url || !service || !userId) return;
+  const u = usage || {};
+  const cacheWrite = u.cache_creation_input_tokens || 0, cacheRead = u.cache_read_input_tokens || 0;
+  const inTok = (u.input_tokens || 0) + cacheWrite + cacheRead;
+  const outTok = u.output_tokens || 0;
+  try {
+    fetch(`${url}/rest/v1/usage_log`, {
+      method: "POST",
+      headers: { apikey: service, Authorization: `Bearer ${service}`, "Content-Type": "application/json", "Content-Profile": "boardroom", Prefer: "return=minimal" },
+      body: JSON.stringify({ user_id: userId, fn: "audit", kind: "anthropic", model: modelKey, in_tokens: inTok, out_tokens: outTok, cost_usd: estCost(modelKey, u.input_tokens || 0, outTok, cacheWrite, cacheRead), ms, ok, detail: detail ? String(detail).slice(0, 500) : undefined }),
+    }).catch(() => {});
+  } catch { /* accounting is best-effort */ }
 }
 
 // Mirrors fetch-page.js — keep the two in sync.
@@ -54,8 +96,9 @@ exports.handler = async (event) => {
   if (body.ping) return json(200, { success: true, service: "audit", configured: !!key, missing: key ? undefined : "ANTHROPIC_API_KEY" });
   if (!key) return json(500, { error: "ANTHROPIC_API_KEY not set" });
 
-  const denied = await denyUnlessSignedIn(event);
-  if (denied) return denied;
+  const gate = await denyUnlessSignedIn(event);
+  if (gate.denied) return gate.denied;
+  const userId = gate.userId;
 
   if (!body.url) return json(400, { error: "url is required" });
   const problem = badUrl(String(body.url).trim());
@@ -75,6 +118,7 @@ exports.handler = async (event) => {
 
     // 2. Ask Haiku for findings as strict JSON
     const system = `You audit websites for a solo founder. Given raw HTML and HTTP status, return ONLY a JSON array (no markdown, no prose) of 0-4 findings. Each finding: {"severity":"high"|"medium"|"low","area":"seo"|"performance"|"conversion"|"content"|"technical","finding":"one specific sentence","suggestion":"one actionable sentence"}. Only report things actually visible in the HTML. If the site looks healthy, return [].`;
+    const aiT0 = Date.now();
     const aiRes = await fetch("https://api.anthropic.com/v1/messages", {
       method: "POST",
       headers: { "Content-Type": "application/json", "x-api-key": key, "anthropic-version": "2023-06-01" },
@@ -86,6 +130,7 @@ exports.handler = async (event) => {
       }),
     });
     const aiData = await aiRes.json();
+    logSpend(userId, { modelKey: "haiku", usage: aiData.usage, ms: Date.now() - aiT0, ok: aiRes.ok, detail: aiRes.ok ? undefined : (aiData?.error?.message || `HTTP ${aiRes.status}`) });
     const text = (aiData.content || []).map(b => b.type === "text" ? b.text : "").join("");
     let findings = [];
     try { findings = JSON.parse(text.replace(/```json|```/g, "").trim()); } catch {}

@@ -6,7 +6,32 @@
 //      SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, BOARD_USER_ID (memory — server-side
 //      ONLY; the service-role key bypasses RLS and must never reach any client)
 
-const HAIKU = "claude-haiku-4-5-20251001";
+// Alias, not the dated snapshot this used to pin: same model, but the alias is
+// what MODEL_IDS and the proxy allowlist carry, so a model move is one id to
+// change rather than two spellings to hunt for.
+const HAIKU = "claude-haiku-4-5";
+
+// Spend accounting. A Discord slash command runs 2-7 Anthropic calls through
+// here and, until now, wrote NO row anywhere — this was the only spend path in
+// the app that could fire without opening it, and the only one entirely absent
+// from Systems -> Usage. Attributed to BOARD_USER_ID (the owner), since Discord
+// carries no Supabase session. Inlined; scripts/spend-smoke.mjs asserts the
+// table matches src/lib/claude.js.
+// Sonnet 5 is on introductory pricing ($2/$10) through 2026-08-31.
+const SONNET_INTRO_ENDS = Date.parse("2026-09-01T00:00:00Z");
+const PRICING = {
+  haiku: { in: 1, out: 5 },
+  sonnet: { in: 3, out: 15, introIn: 2, introOut: 10, introUntil: SONNET_INTRO_ENDS },
+  opus: { in: 5, out: 25 },
+};
+const rateFor = (mk, at = Date.now()) => {
+  const p = PRICING[mk] || PRICING.haiku;
+  return p.introUntil && at < p.introUntil ? { in: p.introIn, out: p.introOut } : { in: p.in, out: p.out };
+};
+const estCost = (mk, i, o, cacheWrite = 0, cacheRead = 0) => {
+  const p = rateFor(mk);
+  return ((i + cacheWrite * 1.25 + cacheRead * 0.1) * p.in + o * p.out) / 1e6;
+};
 
 const BOARD = [
   { key: "clarify", name: "Clarify Lead", charter: "You run Clarify Paid Search — a boutique Google Ads agency targeting high-value local service verticals (legal, med spa, dental, home services). You own the outreach pipeline, client delivery, and agency growth. You think in pipeline value, reply rates, and retainer economics. Direct about what will and won't move revenue.", domains: "agency, outreach, paid search, Google Ads, clients, prospecting, Clarify" },
@@ -17,13 +42,28 @@ const BOARD = [
 ];
 const CHIEF = "You are the Chief of Staff for Cameron's board room — the single point above five specialist seats. Direct, synthesizing, honest — pressure-testing over validation. When seats conflict, name the conflict. You are replying inside Discord: keep it under 1800 characters, plain text.";
 
-async function claude(system, userContent, maxTokens = 700) {
+async function claude(system, userContent, maxTokens = 700, cfg = null, stage = "board") {
+  const t0 = Date.now();
   const res = await fetch("https://api.anthropic.com/v1/messages", {
     method: "POST",
     headers: { "Content-Type": "application/json", "x-api-key": process.env.ANTHROPIC_API_KEY, "anthropic-version": "2023-06-01" },
     body: JSON.stringify({ model: HAIKU, max_tokens: maxTokens, system, messages: [{ role: "user", content: userContent }] }),
   });
   const data = await res.json();
+  // Fire-and-forget, and deliberately NOT awaited: a Discord reply must not wait
+  // on the ledger, and a ledger failure must never cost the user their answer.
+  if (cfg) {
+    const u = data.usage || {};
+    const cacheWrite = u.cache_creation_input_tokens || 0, cacheRead = u.cache_read_input_tokens || 0;
+    const outTok = u.output_tokens || 0;
+    sbInsert(cfg, "usage_log", [{
+      user_id: cfg.uid, fn: `discord_${stage}`, kind: "anthropic", model: "haiku",
+      in_tokens: (u.input_tokens || 0) + cacheWrite + cacheRead, out_tokens: outTok,
+      cost_usd: estCost("haiku", u.input_tokens || 0, outTok, cacheWrite, cacheRead),
+      ms: Date.now() - t0, ok: res.ok,
+      detail: res.ok ? undefined : String(data?.error?.message || `HTTP ${res.status}`).slice(0, 500),
+    }]);
+  }
   return data.content?.map(b => b.type === "text" ? b.text : "").join("") || "";
 }
 
@@ -73,7 +113,7 @@ export default async (req) => {
     // 1. Route
     const routeRaw = await claude(
       `You are a router. Seats: ${BOARD.map(b => `${b.key}: ${b.domains}`).join("; ")}. Respond ONLY JSON: {"seats":["key",...]}. 0 seats if the Chief alone suffices; fewer is better.`,
-      question, 100
+      question, 100, cfg, "route"
     );
     let seats = [];
     try { seats = (JSON.parse(routeRaw.replace(/```json|```/g, "").trim()).seats || []).filter(k => BOARD.some(b => b.key === k)); } catch {}
@@ -82,7 +122,7 @@ export default async (req) => {
     const takes = await Promise.all(seats.map(async (k) => {
       const seat = BOARD.find(b => b.key === k);
       const notes = seatNotes[k] ? `\n\nCurrent context from Cameron (treat as ground truth):\n${seatNotes[k]}` : "";
-      const take = await claude(`${seat.charter}${notes}\nGive your seat's take to the Chief of Staff: 2-4 sentences, include disagreement or risk. No preamble.`, question, 250);
+      const take = await claude(`${seat.charter}${notes}\nGive your seat's take to the Chief of Staff: 2-4 sentences, include disagreement or risk. No preamble.`, question, 250, cfg, `seat_${k}`);
       return take ? `[${seat.name}]: ${take}` : null;
     }));
     const board = takes.filter(Boolean).join("\n\n");
@@ -90,7 +130,7 @@ export default async (req) => {
     // 3. Synthesize with shared history.
     answer = await claude(
       CHIEF + historyBlock + (board ? `\n\nBoard takes:\n${board}\n\nSynthesize with attribution; surface conflicts; end with YOUR recommendation.` : ""),
-      question, 600
+      question, 600, cfg, "chief"
     );
     if (seats.length) answer = `*Consulted: ${seats.map(k => BOARD.find(b => b.key === k).name).join(", ")}*\n\n${answer}`;
     if (!memoryOn) answer += "\n\n*⚠ memory not connected — set SUPABASE_URL / SUPABASE_SERVICE_ROLE_KEY / BOARD_USER_ID*";

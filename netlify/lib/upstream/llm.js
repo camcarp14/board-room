@@ -23,11 +23,25 @@ export const MODELS = {
   fallback: 'claude-opus-4-8',
 };
 
-const PRICE = {
+// $ per 1M tokens, keyed by model id (the other two copies — src/lib/claude.js
+// and netlify/functions/mini-worker.js — are keyed by layer name instead).
+// scripts/spend-smoke.mjs asserts all three agree on every shared model.
+//
+// Sonnet 5 runs on INTRODUCTORY pricing ($2/$10) through 2026-08-31, then
+// reverts to list ($3/$15). Upstream routes every web-search stage and judge to
+// Sonnet, so billing list before then overstated the most expensive surface in
+// the app by 50%. Rates resolve at call time, so a run's recorded cost keeps
+// whichever rate was in force when it happened.
+const SONNET_INTRO_ENDS = Date.parse('2026-09-01T00:00:00Z');
+const PRICE_TABLE = {
   'claude-fable-5': { in: 10, out: 50 },
-  'claude-sonnet-5': { in: 3, out: 15 },
+  'claude-sonnet-5': { in: 3, out: 15, introIn: 2, introOut: 10, introUntil: SONNET_INTRO_ENDS },
   'claude-haiku-4-5': { in: 1, out: 5 },
   'claude-opus-4-8': { in: 5, out: 25 },
+};
+const priceFor = (model, at = Date.now()) => {
+  const p = PRICE_TABLE[model] || PRICE_TABLE[MODELS.sonnet];
+  return p.introUntil && at < p.introUntil ? { in: p.introIn, out: p.introOut } : { in: p.in, out: p.out };
 };
 const SEARCH_COST = 0.01; // $10 / 1k searches
 
@@ -62,7 +76,7 @@ export function ledgerTotal(ledger) {
   for (const e of ledger.entries) {
     inputTokens += e.input + e.cacheRead + e.cacheWrite;
     outputTokens += e.output;
-    const p = PRICE[e.model] || PRICE[MODELS.sonnet];
+    const p = priceFor(e.model);
     const cost = (e.input * p.in + e.cacheWrite * p.in * 1.25 + e.cacheRead * p.in * 0.1 + e.output * p.out) / 1e6;
     estCostUsd += cost;
     byModel[e.model] = (byModel[e.model] || 0) + cost;

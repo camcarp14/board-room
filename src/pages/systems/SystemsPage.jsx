@@ -34,9 +34,15 @@ export const SYSTEMS_SUBTABS = [
 /* ═══ Usage ════════════════════════════════════════════════════════════════ */
 
 // Usage — durable, cross-device log of every Anthropic call and every
-// Netlify function hit, read from usage_log (populated by callClaude/callFn
-// client-side, plus mini-worker and audit server-side for scheduled/
-// cost-bearing calls those make outside a browser session).
+// Netlify function hit, read from usage_log.
+//
+// Writers, all six of them: callClaude + callFn client-side, and server-side
+// mini-worker, audit, auto-fix, board-work-background (the Discord path, which
+// attributes to BOARD_USER_ID since Discord carries no session) and the
+// Upstream ledger. The last three used to write nothing — audit and auto-fix
+// showed as kind:"call" rows at $0, and Discord left no row at all — so the
+// cost boxes below, which filter kind === "anthropic", understated real spend.
+// The schema and the usage_summary aggregate live in supabase-usage-fix.sql.
 const USAGE_WINDOWS = [["24h", 1], ["7d", 7], ["30d", 30], ["All", 3650]];
 const LOG_STEP = 40; // in-page log cap — "Show more" extends it, no nested scroller
 
