@@ -15,8 +15,8 @@
 //
 // Run by `npm run verify`.
 
-import { eventId, takeKey, hasPassed, isSettled, displayLine, watchRowState, expectsNumber, RESULT_MAX_TRIES, RESULT_SETTLE_MS } from "../src/pages/brief/watchState.js";
-import { normalizeVerdict } from "../netlify/functions/econ-result.js";
+import { eventId, takeKey, hasPassed, isSettled, displayLine, watchRowState, expectsNumber, RESULT_SETTLE_MS, CLAIM_STALE_MS } from "../src/pages/brief/watchState.js";
+import { normalizeVerdict, selectUnresolved, pruneStore, MAX_PER_RUN, RESULT_KEEP } from "../netlify/functions/econ-resolve-background.js";
 
 let failed = 0;
 const check = (name, cond, detail = "") => {
@@ -51,8 +51,9 @@ check("past the grace period is settled", isSettled({ at: at(-(RESULT_SETTLE_MS 
 const passedRows = [
   ["numeric, nothing known", watchRowState(funds, undefined, undefined, NOW)],
   ["numeric, lookup in flight", watchRowState(funds, "loading", undefined, NOW)],
-  ["numeric, pending once", watchRowState(funds, { status: "pending", tries: 1 }, undefined, NOW)],
-  ["numeric, pending out of tries", watchRowState(funds, { status: "pending", tries: RESULT_MAX_TRIES }, undefined, NOW)],
+  ["numeric, claim in flight", watchRowState(funds, { status: "claimed", at: NOW - 1000 }, undefined, NOW)],
+  ["numeric, resolver gave up", watchRowState(funds, { status: "unresolved", at: NOW - 1000 }, undefined, NOW)],
+  ["numeric, claim orphaned by a crash", watchRowState(funds, { status: "claimed", at: NOW - CLAIM_STALE_MS - 1 }, undefined, NOW)],
   ["non-numeric, nothing known", watchRowState(statement, undefined, undefined, NOW)],
   ["non-numeric, resolved", watchRowState(presser, { status: "no_number", take: "Powell kept optionality; no cut signalled." }, undefined, NOW)],
   ["numeric, released", watchRowState(funds, { status: "released", actual: "3.75%", take: "Held at 3.75% — in line, muted." }, undefined, NOW)],
@@ -73,11 +74,29 @@ check("an upcoming row ignores a stray result", watchRowState(cpiTomorrow, { sta
 check("released → Result", watchRowState(funds, { status: "released", actual: "3.75%", take: "t" }, undefined, NOW).badge === "Result");
 check("released shows the actual first", displayLine(funds, "3.75%").startsWith("Federal Funds Rate — actual 3.75% — forecast"));
 check("no figure coming → Landed, not Awaiting", watchRowState(statement, { status: "no_number", take: "t" }, undefined, NOW).badge === "Landed");
-check("out of tries → Unconfirmed", watchRowState(funds, { status: "pending", tries: RESULT_MAX_TRIES }, undefined, NOW).badge === "Unconfirmed");
-check("out of tries, numeric → names the missing number",
-  /couldn't confirm the published number/i.test(watchRowState(funds, { status: "pending", tries: RESULT_MAX_TRIES }, undefined, NOW).note));
-check("out of tries, non-numeric → doesn't mention a number",
-  !/number/i.test(watchRowState(statement, { status: "pending", tries: RESULT_MAX_TRIES }, undefined, NOW).note));
+check("resolver gave up → Unconfirmed", watchRowState(funds, { status: "unresolved" }, undefined, NOW).badge === "Unconfirmed");
+check("unresolved, numeric → names the missing number",
+  /couldn't confirm the published number/i.test(watchRowState(funds, { status: "unresolved" }, undefined, NOW).note));
+check("unresolved, non-numeric → doesn't mention a number",
+  !/number/i.test(watchRowState(statement, { status: "unresolved" }, undefined, NOW).note));
+
+// ─── THE REGRESSION THAT PROMPTED THIS FILE'S SECOND PASS ────────────────────
+// Three states used to pulse — in flight, waiting to retry, and inside the
+// settle window — so a lookup that had died looked exactly like one still
+// working. Every failure read as "stuck loading", because that is what it was.
+// Exactly one state may animate now: a lookup genuinely in flight.
+check("a live claim pulses", watchRowState(funds, { status: "claimed", at: NOW - 1000 }, undefined, NOW).pulse === true);
+check("an orphaned claim does NOT pulse",
+  watchRowState(funds, { status: "claimed", at: NOW - CLAIM_STALE_MS - 1 }, undefined, NOW).pulse === false);
+check("an orphaned claim settles on Unconfirmed",
+  watchRowState(funds, { status: "claimed", at: NOW - CLAIM_STALE_MS - 1 }, undefined, NOW).badge === "Unconfirmed");
+check("giving up does NOT pulse", watchRowState(funds, { status: "unresolved" }, undefined, NOW).pulse === false);
+check("no verdict and no live poll does NOT pulse",
+  watchRowState(funds, { status: "unresolved" }, undefined, NOW).pulse === false);
+check("only in-flight animates", (() => {
+  const terminal = [{ status: "unresolved" }, { status: "released", actual: "3.75%", take: "t" }, { status: "no_number", take: "t" }];
+  return terminal.every((r) => watchRowState(funds, r, undefined, NOW).pulse === false);
+})());
 check("in flight pulses", watchRowState(funds, "loading", undefined, NOW).pulse === true);
 check("released does not pulse", watchRowState(funds, { status: "released", actual: "3.75%", take: "t" }, undefined, NOW).pulse === false);
 check("just-passed → settling copy", /due any minute/i.test(watchRowState({ ...funds, at: at(-min(2)) }, undefined, undefined, NOW).note));
@@ -114,6 +133,57 @@ check("a non-numeric event claimed 'released' with no figure becomes no_number",
 check("a long take is capped at 180 chars", normalizeVerdict({ status: "no_number", take: "x".repeat(400) }, { numeric: false }).take.length <= 180);
 check("whitespace and newlines collapse to one line", normalizeVerdict({ status: "no_number", take: " held  the\n line " }, { numeric: false }).take === "held the line");
 check("surrounding quotes are stripped", normalizeVerdict({ status: "no_number", take: `"held the line"` }, { numeric: false }).take === "held the line");
+
+// ─── 5. the spend ceiling ────────────────────────────────────────────────────
+// The old design paid per event, per device, per page load, with up to four
+// retries — and every retry was billed even though it timed out. usage_log
+// recorded fifteen consecutive paid failures. These are the caps that replaced
+// it, asserted here because a ceiling nothing checks is a wish.
+const past = (n) => new Date(NOW - n * 60000).toISOString();
+const ev = (id, mins = 60) => ({ id: `${past(mins)}|${id}`, title: id, at: past(mins) });
+
+check("nothing to do when everything is resolved", selectUnresolved(
+  [ev("a"), ev("b")],
+  { [ev("a").id]: { status: "released", actual: "1%" }, [ev("b").id]: { status: "no_number" } },
+  NOW,
+).length === 0);
+
+// The one that stops the bleeding: a lookup that failed is recorded, not retried.
+check("an event we already failed to resolve is never re-asked",
+  selectUnresolved([ev("a")], { [ev("a").id]: { status: "unresolved" } }, NOW).length === 0);
+
+check("a fresh claim is left to the invocation that owns it",
+  selectUnresolved([ev("a")], { [ev("a").id]: { status: "claimed", at: NOW - 1000 } }, NOW).length === 0);
+check("a stale claim is picked back up", selectUnresolved(
+  [ev("a")], { [ev("a").id]: { status: "claimed", at: NOW - CLAIM_STALE_MS - 1 } }, NOW,
+).length === 1);
+
+check(`no more than ${MAX_PER_RUN} events are priced out per invocation`,
+  selectUnresolved(Array.from({ length: 40 }, (_, i) => ev(`e${i}`)), {}, NOW).length === MAX_PER_RUN);
+check("an event that hasn't happened is never looked up",
+  selectUnresolved([{ id: "x", title: "x", at: new Date(NOW + 3600000).toISOString() }], {}, NOW).length === 0);
+check("an ancient event is not looked up",
+  selectUnresolved([ev("old", 60 * 24 * 20)], {}, NOW).length === 0);
+check("a malformed event is skipped, not sent to the model",
+  selectUnresolved([{ title: "no id" }, { id: "no at", title: "t" }, null], {}, NOW).length === 0);
+check("a missing event list costs nothing", selectUnresolved(null, {}, NOW).length === 0 && selectUnresolved(undefined, null, NOW).length === 0);
+
+check("the verdict store is pruned to the newest entries", (() => {
+  const big = Object.fromEntries(Array.from({ length: RESULT_KEEP + 25 }, (_, i) => [
+    `${new Date(NOW - i * 86400000).toISOString()}|e${i}`, { status: "released" },
+  ]));
+  const kept = pruneStore(big);
+  return Object.keys(kept).length === RESULT_KEEP;
+})());
+check("pruning keeps the NEWEST, not an arbitrary slice", (() => {
+  const big = Object.fromEntries(Array.from({ length: RESULT_KEEP + 5 }, (_, i) => [
+    `${new Date(NOW - i * 86400000).toISOString()}|e${i}`, { status: "released", i },
+  ]));
+  const kept = pruneStore(big);
+  return Object.values(kept).every((v) => v.i < RESULT_KEEP);
+})());
+check("a small store is returned untouched", Object.keys(pruneStore({ a: 1 })).length === 1);
+check("an empty store prunes to empty", Object.keys(pruneStore(null)).length === 0);
 
 console.log(failed ? `\nWATCH SMOKE FAILED (${failed})` : "\nWATCH SMOKE PASS");
 process.exit(failed ? 1 : 0);

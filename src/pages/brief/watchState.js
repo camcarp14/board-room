@@ -25,16 +25,14 @@
 
 /** Grace period after the scheduled time before a lookup is worth spending. */
 export const RESULT_SETTLE_MS = 10 * 60 * 1000;
-/** Attempts per page load for one event. A pending print gets a few looks; a
- *  permanently unfindable one must not become a call every 5 minutes forever. */
-export const RESULT_MAX_TRIES = 4;
-/** Spacing before re-asking an event the lookup said is genuinely not out yet.
- *  The Brief refreshes every 5 minutes; a print does not arrive that often. */
-export const RESULT_RECHECK_MS = 20 * 60 * 1000;
-/** Spacing after a FAILED lookup (timeout, network, 5xx). A failure says nothing
- *  about whether the number is out, so it must not inherit the long wait — short
- *  enough that the next scheduled refresh picks it straight back up. */
-export const RESULT_RETRY_MS = 90 * 1000;
+/** How long the card waits for the background resolver before it stops saying
+ *  "checking" and settles. Resolution runs off the request path now, so this is a
+ *  patience budget, not a retry budget — nothing is re-paid for when it lapses. */
+export const POLL_EVERY_MS = 20 * 1000;
+export const POLL_MAX = 9; // ≈3 minutes, then the row settles for good
+/** A claim older than this was orphaned by a crashed invocation, so the row must
+ *  stop reading as in-flight rather than pulse forever waiting on a dead worker. */
+export const CLAIM_STALE_MS = 5 * 60 * 1000;
 
 /** The event's identity. Server-provided; the fallback covers an older payload. */
 export const eventId = (e) => e?.id || `${e?.at || ""}|${e?.title || e?.text || ""}`;
@@ -114,9 +112,14 @@ export function watchRowState(e, result, take, now = Date.now()) {
     return { phase: "blocked", badge: "Landed", badgeColor: "var(--sub)", bg: "var(--surface-2)", line: displayLine(e, null), note: `Happened — ${r.detail || "the result lookup isn't available"}.`, pulse: false };
   }
 
-  // Everything below is "it happened and we don't have the answer yet". The
-  // distinction that matters is whether we're still trying.
-  if (loading) {
+  // Everything below is "it happened and we don't have the answer yet".
+  //
+  // ONLY A LOOKUP GENUINELY IN FLIGHT PULSES. Three separate states used to
+  // animate — in-flight, waiting-to-retry, and within the settle window — which
+  // made a dead lookup indistinguishable from a live one. Every failure looked
+  // like loading, forever, and that is precisely what shipped broken.
+  const claimLive = r?.status === "claimed" && now - (r.at || 0) < CLAIM_STALE_MS;
+  if (loading || claimLive) {
     return { phase: "looking", badge: "Awaiting", badgeColor: "var(--faint)", bg: "var(--surface-2)", line: displayLine(e, null), note: "Checking what printed…", pulse: true };
   }
 
@@ -124,16 +127,9 @@ export function watchRowState(e, result, take, now = Date.now()) {
     return { phase: "settling", badge: "Awaiting", badgeColor: "var(--faint)", bg: "var(--surface-2)", line: displayLine(e, null), note: "Due any minute — checking as soon as it lands.", pulse: true };
   }
 
-  const exhausted = (r?.tries || 0) >= RESULT_MAX_TRIES;
-  if (!exhausted) {
-    return {
-      phase: "unresolved",
-      badge: "Awaiting", badgeColor: "var(--faint)", bg: "var(--surface-2)",
-      line: displayLine(e, null),
-      note: expectsNumber(e) ? "No published figure yet — checking again shortly." : "Happened — pulling what was said.",
-      pulse: true,
-    };
-  }
+  // Terminal. Reached when the resolver recorded `unresolved`, when a claim went
+  // stale, or when the card ran out of patience — and it is STILL, because a
+  // motionless row is how you tell "we don't know" from "still working".
   return {
     phase: "unresolved",
     badge: "Unconfirmed", badgeColor: "var(--faint)", bg: "var(--surface-2)",
