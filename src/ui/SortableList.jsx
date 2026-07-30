@@ -26,6 +26,11 @@ import { useRef, useState, useCallback, useEffect } from "react";
 const LIFT_MS = 300;  // hold this long to pick a row up
 const SLOP_PX = 8;    // move more than this first and it's a scroll, not a grab
 
+// Never arm a lift inside these — holding a text cursor still for 300ms while
+// deciding what to type must not pick the row up. Callers extend it with
+// `ignoreWithin` (the Brief adds its inner scrollers).
+const NEVER_DRAG = "input, textarea, select, [contenteditable='true'], [data-no-drag]";
+
 export function SortableList({
   items,
   onReorder,          // (idsInNewOrder) => void — fired once, on drop
@@ -33,10 +38,18 @@ export function SortableList({
   keyOf = (i) => i.id,
   children,           // (item, { dragging, anyDragging }) => node
   style,
+  className,
+  ignoreWithin,       // extra selector; a pointerdown inside it is not a grab
+  // (itemNodes, items) => node. Default renders the sequence straight into the
+  // container. The Brief passes a packer that deals the same sequence into
+  // masonry columns — the nodes keep their identity and their measured boxes,
+  // so the nearest-centre hit test below works across columns unchanged.
+  layout,
 }) {
   const [dragKey, setDragKey] = useState(null);
   const [live, setLive] = useState(null); // preview order of keys while dragging
   const nodes = useRef(new Map());        // key -> element, for midpoint tests
+  const root = useRef(null);              // this instance's container, for nesting
   const lift = useRef(null);              // { timer, key, y, moved }
   const suppressClick = useRef(false);    // a drag must not also open the editor
   const committed = useRef(null);
@@ -77,6 +90,15 @@ export function SortableList({
 
   const onPointerDown = (key) => (e) => {
     if (disabled || e.button > 0 || !e.isPrimary) return;
+    // Nesting: the Brief's cards are draggable AND one of them (Notes) is itself
+    // a SortableList. Both containers see the same bubbling pointerdown, so
+    // without this a hold on a note lifted the note and the whole Notes card at
+    // once. Whichever sortable is nearest the target owns the gesture, which
+    // makes the inner list win — the behaviour you'd expect from grabbing the
+    // thing you're actually pointing at.
+    const owner = e.target?.closest?.("[data-sortable]");
+    if (owner && owner !== root.current) return;
+    if (e.target?.closest?.(ignoreWithin ? `${NEVER_DRAG}, ${ignoreWithin}` : NEVER_DRAG)) return;
     const el = e.currentTarget;
     lift.current = {
       key, y: e.clientY, moved: false,
@@ -140,8 +162,40 @@ export function SortableList({
     onReorder?.(cur);
   };
 
+  const itemNodes = ordered.map((item) => {
+    const key = keyOf(item);
+    const dragging = key === dragKey;
+    return (
+      <div
+        key={key}
+        ref={(el) => { if (el) nodes.current.set(key, el); else nodes.current.delete(key); }}
+        onPointerDown={onPointerDown(key)}
+        onKeyDown={onKeyDown(key)}
+        style={{
+          minWidth: 0,
+          // The lift: raised off the page, slightly larger, and above its
+          // neighbours so it reads as held rather than merely highlighted.
+          position: "relative",
+          zIndex: dragging ? 2 : undefined,
+          transform: dragging ? "scale(1.02)" : undefined,
+          boxShadow: dragging ? "var(--shadow-float)" : undefined,
+          borderRadius: dragging ? 12 : undefined,
+          background: dragging ? "var(--surface)" : undefined,
+          opacity: dragKey && !dragging ? 0.62 : 1,
+          cursor: dragging ? "grabbing" : undefined,
+          transition: "transform var(--dur-1) var(--ease-out), opacity var(--dur-1) ease, box-shadow var(--dur-2) var(--ease-out)",
+        }}
+      >
+        {children(item, { dragging, anyDragging: !!dragKey })}
+      </div>
+    );
+  });
+
   return (
     <div
+      ref={root}
+      data-sortable="1"
+      className={className}
       style={{
         display: "flex", flexDirection: "column", minWidth: 0,
         // Only while dragging: the scroller must keep working the rest of the time.
@@ -159,34 +213,7 @@ export function SortableList({
         e.stopPropagation();
       }}
     >
-      {ordered.map((item) => {
-        const key = keyOf(item);
-        const dragging = key === dragKey;
-        return (
-          <div
-            key={key}
-            ref={(el) => { if (el) nodes.current.set(key, el); else nodes.current.delete(key); }}
-            onPointerDown={onPointerDown(key)}
-            onKeyDown={onKeyDown(key)}
-            style={{
-              minWidth: 0,
-              // The lift: raised off the page, slightly larger, and above its
-              // neighbours so it reads as held rather than merely highlighted.
-              position: "relative",
-              zIndex: dragging ? 2 : undefined,
-              transform: dragging ? "scale(1.02)" : undefined,
-              boxShadow: dragging ? "var(--shadow-float)" : undefined,
-              borderRadius: dragging ? 12 : undefined,
-              background: dragging ? "var(--surface)" : undefined,
-              opacity: dragKey && !dragging ? 0.62 : 1,
-              cursor: dragging ? "grabbing" : undefined,
-              transition: "transform var(--dur-1) var(--ease-out), opacity var(--dur-1) ease, box-shadow var(--dur-2) var(--ease-out)",
-            }}
-          >
-            {children(item, { dragging, anyDragging: !!dragKey })}
-          </div>
-        );
-      })}
+      {layout ? layout(itemNodes, ordered) : itemNodes}
     </div>
   );
 }

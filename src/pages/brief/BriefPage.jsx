@@ -9,6 +9,8 @@ import { CollapsibleCard, StatTile, Button, Dot, Delta } from "../../ui/kit.jsx"
 import { IcChevronRight, IcExternal } from "../../ui/icons.jsx";
 import { StancePill, StatusTag, CARD_STATES } from "../../ui/shared.jsx";
 import { NumTween, Sparkline } from "../../ui/primitives.jsx";
+import { SortableList } from "../../ui/SortableList.jsx";
+import { applyBriefOrder, orderOf, packColumns } from "../../lib/brief-order.js";
 import GscLineChart from "../../GscLineChart.jsx";
 // Lazy — pulls lightweight-charts (~a quarter of the old bundle) into its own
 // chunk that loads only when you actually open a price chart.
@@ -628,7 +630,7 @@ export function MorningBriefPage({ btc, isMobile, settings, updateSetting, onOpe
     <CollapsibleCard {...coll("wire")} pad={pad} tight title="The Wire" trailing={<StatusTag status={wireStatus} />}>
       {wireStatus.state === "live" ? (
         wire.length ? (
-          <div className="brief-scroll" style={{ display: "flex", flexDirection: "column", maxHeight: 320, overflowY: "auto" }}>
+          <div className="brief-scroll" style={{ display: "flex", flexDirection: "column", maxHeight: 480, overflowY: "auto" }}>
             {wire.map((w, i) => (
               // The whole ROW used to be the <a>, so on a phone any scroll-nudge or
               // mis-tap while reading launched an article. Only the timestamp opens
@@ -687,24 +689,52 @@ export function MorningBriefPage({ btc, isMobile, settings, updateSetting, onOpe
   // Side effect worth knowing: at three columns that makes Birthdays a column-top
   // and pushes Markets to second in its column. Markets is still above the fold,
   // and the phone is the surface that matters here.
-  const allCards = [
-    { c: card_notes, w: 3 }, { c: card_minicalendar, w: 2.5 }, { c: card_birthdays, w: 1.5 },
-    { c: card_markets, w: 2.5 }, { c: card_watch, w: 3 }, { c: card_wire, w: 3 },
-    { c: card_gsc, w: 2.5 }, { c: card_meetings, w: 2 }, { c: card_clarify, w: 1.5 },
-    { c: card_zts, w: 1.5 }, { c: card_shopify, w: 1.5 },
+  //
+  // `id` is the persistence key for the manual order (app_settings.brief_order),
+  // so these strings are permanent: renaming one silently resets that card to its
+  // default slot for everyone who had moved it.
+  const DEFAULT_CARDS = [
+    { id: "notes", c: card_notes, w: 3 }, { id: "minicalendar", c: card_minicalendar, w: 2.5 }, { id: "birthdays", c: card_birthdays, w: 1.5 },
+    { id: "markets", c: card_markets, w: 2.5 }, { id: "watch", c: card_watch, w: 3 },
+    // 4.5, not 3: the feed is 480px tall now (50% up from 320), and the weight is
+    // what stops the packer from stacking it under another tall card.
+    { id: "wire", c: card_wire, w: 4.5 },
+    { id: "gsc", c: card_gsc, w: 2.5 }, { id: "meetings", c: card_meetings, w: 2 }, { id: "clarify", c: card_clarify, w: 1.5 },
+    { id: "zts", c: card_zts, w: 1.5 }, { id: "shopify", c: card_shopify, w: 1.5 },
   ];
-  const columns = Array.from({ length: nCols }, () => []);
-  const loads = Array.from({ length: nCols }, () => 0);
-  allCards.forEach(({ c, w }, i) => {
-    const target = loads.indexOf(Math.min(...loads)); // ties resolve left — stable
-    columns[target].push(<div key={i} style={{ marginBottom: 8 }}>{c}</div>);
-    loads[target] += w;
-  });
+  // Your arrangement, if you have one. See lib/brief-order.js for why a card the
+  // saved order has never seen keeps its default slot instead of jumping to top.
+  const cards = applyBriefOrder(DEFAULT_CARDS, settings?.brief_order);
   return (
     <div style={{ flex: 1, padding: isMobile ? "2px 12px 20px" : "6px 0 0", minWidth: 0 }}>
-      <div className="stagger" style={{ maxWidth: maxW, width: "100%", margin: "0 auto", minWidth: 0, display: "flex", gap: 8, alignItems: "flex-start" }}>
-        {columns.map((col, i) => <div key={i} style={{ flex: 1, minWidth: 0 }}>{col}</div>)}
-      </div>
+      {/* Hold a card for a moment, then drag it anywhere — including into another
+          column. Deliberately no edit toggle, no drag handles, no reorder mode:
+          the affordance IS the hold, so at rest the Brief looks exactly as it
+          always did. The same gesture already moves notes, so there's one thing
+          to learn. Alt+↑/↓ on a focused card does it from the keyboard.
+          ignoreWithin keeps the inner feeds scrollable — a hold inside The Wire
+          or Watch This Week is a scroll, not a grab — and the nested Notes list
+          claims its own holds through the [data-sortable] ownership rule. */}
+      <SortableList
+        className="stagger"
+        items={cards}
+        onReorder={(ids) => updateSetting?.("brief_order", ids)}
+        ignoreWithin=".brief-scroll, .pillrow"
+        style={{ maxWidth: maxW, width: "100%", margin: "0 auto", minWidth: 0, display: "flex", flexDirection: "row", gap: 8, alignItems: "flex-start" }}
+        layout={(itemNodes, ordered) => {
+          // Pack the NODES, not the cards: packColumns takes the weights off the
+          // ordered cards and we deal the matching rendered node into the same
+          // slot, so the sequence the drag produced is the sequence dealt out.
+          const withNodes = ordered.map((card, i) => ({ ...card, node: itemNodes[i] }));
+          return packColumns(withNodes, nCols).map((col, i) => (
+            <div key={i} style={{ flex: 1, minWidth: 0 }}>
+              {col.map((card) => <div key={card.id} style={{ marginBottom: 8 }}>{card.node}</div>)}
+            </div>
+          ));
+        }}
+      >
+        {(card) => card.c}
+      </SortableList>
       {(btcChartOpen || tickerChart) && (
         <Suspense fallback={null}>
           {btcChartOpen && <BtcChartModal isMobile={isMobile} onClose={() => setBtcChartOpen(false)} callFnFull={callFnFull} />}
