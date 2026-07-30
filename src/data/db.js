@@ -194,6 +194,13 @@ export const db = {
     const { error } = await supabase.from("grocery_items").update({ checked }).eq("id", id);
     if (error) throw error;
   },
+  // Quantity lives inside the item text ("2x milk") because grocery_items has no
+  // qty column — so bumping a count is a text rewrite. This is also how an add
+  // that matches an existing row merges instead of opening a duplicate line.
+  async updateGroceryItem(id, patch) {
+    const { error } = await supabase.from("grocery_items").update(patch).eq("id", id);
+    if (error) throw error;
+  },
   async deleteGroceryItem(id) {
     const { error } = await supabase.from("grocery_items").delete().eq("id", id);
     if (error) throw error;
