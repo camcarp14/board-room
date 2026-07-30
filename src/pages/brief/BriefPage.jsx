@@ -3,7 +3,7 @@
 // No fabricated fallback numbers anywhere on this page. Each card is either
 // live (real data), not connected (with exact setup instructions), or error
 // (with the actual failure). Empty dashes beat plausible-looking fake data.
-import { useState, useEffect, useCallback, useRef, lazy, Suspense } from "react";
+import { useState, useEffect, useCallback, useMemo, useRef, lazy, Suspense } from "react";
 import { T } from "../../theme.js";
 import { CollapsibleCard, StatTile, Button, Dot, Delta } from "../../ui/kit.jsx";
 import { IcChevronRight, IcExternal } from "../../ui/icons.jsx";
@@ -21,22 +21,22 @@ import { updateSnapshot, getSnapshot } from "../../lib/snapshot.js";
 import { db } from "../../data/db.js";
 import { nextBirthdayOccurrence, localDayKey } from "../../lib/dates.js";
 import { NotesTile } from "./NotesTile.jsx";
+import { eventId, takeKey, hasPassed, isSettled, watchRowState, POLL_EVERY_MS, POLL_MAX, CLAIM_STALE_MS } from "./watchState.js";
+import { useEconResults, useResolveEconEvents } from "../../data/econ.js";
 import { EVENT_CATEGORIES } from "../personal/CalendarPanel.jsx"; // canonical category → color map (mini-calendar pills)
 
 const GSC_EMPTY = { impressions: "—", impressionsD: "", clicks: "—", clicksD: "", pos: "—", posD: "", series: Array(14).fill(0), daily: [], note: "" };
 const STOCKS_EMPTY = { gold: { value: "—", price: "—", up: true }, nvda: { value: "—", price: "—", up: true }, mstr: { value: "—", price: "—", up: true }, strc: { value: "—", price: "—", up: true } };
 
 const ROW_CAP = 5; // Business Meetings shows the first N in-page; the rest behind "Show all"
-// AI takes are keyed by a STABLE event identity (its time + text), not list
+// AI takes are keyed by a STABLE event identity (see watchState.js), not list
 // position — the econ feed re-sorts and drops old events on refresh, so an
 // index key would leave a cached take displayed under a different event. They
 // also persist to localStorage so returning to the Brief doesn't re-spend the
 // calls (or re-flash "Reading the likely impact…") for takes that haven't changed.
 const TAKES_LS = "br_event_takes";
-// Include isPast: when an event flips from upcoming to a posted result the feed
-// often keeps the same time+text, so without this the forward-looking take
-// stays cached and never regenerates against the actual print.
-const takeKey = (e) => `${e.isPast ? "p" : "f"}|${e.time || ""}|${(e.text || "").trim()}`;
+// Post-event verdicts are NOT cached here. They live in app_settings, written by
+// econ-resolve-background, so one lookup serves every device — see data/econ.js.
 // A take that fails is allowed to retry — but the effect below re-runs on every
 // 5-minute refresh with a freshly-allocated `events` array, so without a ceiling
 // one event the model reliably chokes on becomes a permanent ~288-call-a-day
@@ -119,6 +119,8 @@ export function MorningBriefPage({ btc, isMobile, settings, updateSetting, onOpe
   const [eventAnalysis, setEventAnalysis] = useState(() => { // takeKey(e) -> take | "loading" | "error"; hydrated from localStorage
     try { return JSON.parse(localStorage.getItem(TAKES_LS) || "{}") || {}; } catch { return {}; }
   });
+  const { data: econ } = useEconResults();   // eventId -> verdict, shared across devices
+  const resolveEcon = useResolveEconEvents();
   const [btcChartOpen, setBtcChartOpen] = useState(false);
   const [tickerChart, setTickerChart] = useState(null); // {key,label} of the watchlist ticker whose chart is open
   const [meetingsAll, setMeetingsAll] = useState(false);
@@ -128,16 +130,17 @@ export function MorningBriefPage({ btc, isMobile, settings, updateSetting, onOpe
     try { return JSON.parse(localStorage.getItem("br_brief_collapsed") || "{}") || {}; } catch { return {}; }
   });
 
-  // Auto-generates a single, tidy one-sentence take (Bitcoin + stocks
-  // together, not separate lines) for every Watch This Week event as soon
-  // as the events load — no click needed, and each is cached by index so
-  // it only ever generates once per event per session.
+  // FORWARD-looking lean, for events that haven't happened yet: one tidy clause
+  // (Bitcoin + stocks together, not separate lines), generated as soon as the
+  // events load and cached per event so it only ever costs one Haiku call.
+  //
+  // Nothing that has already happened comes through here. A past event's take
+  // has to be written against the number that actually printed, and the number
+  // isn't in the calendar feed — that's resolveEventResult's job below. Asking
+  // Haiku for a "how it landed" take with only a forecast in hand is precisely
+  // the old bug where a pre-event guess got rendered as if it were the result.
   const fetchEventTake = async (e) => {
-    // Three states: released (past AND the actual number is in), pending (its
-    // time passed but no number yet), upcoming. Only released/upcoming get an AI
-    // take — never fabricate an "outcome" for a pending print (the source of the
-    // old bug where the pre-event guess was shown as if it were the result).
-    if (e.isPast && !e.actual) return;
+    if (hasPassed(e)) return;
     const k = takeKey(e);
     if (eventAnalysis[k] && eventAnalysis[k] !== "error") return; // have a take (or one in flight)
     // Errors may retry, but only up to TAKE_MAX_TRIES per page load — see the
@@ -148,20 +151,88 @@ export function MorningBriefPage({ btc, isMobile, settings, updateSetting, onOpe
     setEventAnalysis(prev => ({ ...prev, [k]: "loading" }));
     // The reader already understands markets — give a terse directional read,
     // not an explainer. One short clause, ~12 words, no preamble, no hedging.
-    const system = (e.isPast && e.actual)
-      // Released: the text carries "actual X — forecast Y — prior Z" — react to
-      // how it ACTUALLY landed, not what was expected beforehand.
-      ? `You're given a US economic release with its ACTUAL result alongside the forecast/prior. Reply with ONE terse clause (≈12 words max) on how it landed and the market read — lead with the surprise (beat/miss/in line) and the risk direction for Bitcoin and equities. e.g. "Hot 0.6% vs 0.0% — risk-off, both sold." No preamble, no hedging, no disclaimers, no "BTC:"/"Stocks:" labels, no markdown.`
-      : `Given an upcoming US econ event (with forecast/prior if shown), reply with ONE terse clause (≈12 words max) on the likely directional lean for Bitcoin and equities — shorthand for someone who already knows markets. e.g. "Hot print risks risk-off; both lower." No preamble, no explanation, no hedging, no disclaimers, no labels, no markdown — just the lean.`;
+    const system = `Given an upcoming US econ event (with forecast/prior if shown), reply with ONE terse clause (≈12 words max) on the likely directional lean for Bitcoin and equities — shorthand for someone who already knows markets. e.g. "Hot print risks risk-off; both lower." No preamble, no explanation, no hedging, no disclaimers, no labels, no markdown — just the lean.`;
     const raw = await callClaude({ system, messages: [{ role: "user", content: e.text }], modelKey: "haiku", maxTokens: 48, fn: "event_impact" });
     if (raw && raw.trim()) setEventAnalysis(prev => ({ ...prev, [k]: raw.trim() }));
     else setEventAnalysis(prev => ({ ...prev, [k]: "error" }));
   };
+
+  // POST-EVENT: what actually printed, and how it landed.
+  //
+  // The calendar feed carries forecast and prior and nothing else — no released
+  // number, ever (see netlify/functions/calendar.js) — so a past event's result
+  // has to be looked up. That lookup used to happen HERE, synchronously, once per
+  // event per device per page load with retries. It never once succeeded: a web
+  // search plus an answer takes 10-20 seconds and the function had seconds, so
+  // every call died on its own timeout, and an aborted call is still a billed
+  // call. The card pulsed "checking" forever while quietly spending.
+  //
+  // Now the work is off the request path entirely and the answers are shared:
+  // econ-resolve-background resolves whatever is unresolved and writes verdicts
+  // to app_settings, which useEconResults reads. This component's whole job is
+  // to fire ONE trigger per page load and then wait.
+  //
+  // That is the spend fix, and it is structural rather than a promise: the
+  // trigger carries the whole list, the resolver caps how many it will price out
+  // per invocation, it claims rows before calling anything so two devices can't
+  // both pay, and a verdict it could not establish is recorded so it is never
+  // asked again. Nothing on this page can spend by re-rendering.
+  const econTriggered = useRef(false);
+  const [pollTicks, setPollTicks] = useState(0);
+
+  // Past events with no verdict yet — the trigger's payload, and the poll's
+  // stop condition. A stale claim counts as unresolved: the invocation that
+  // claimed it crashed, so somebody has to ask again.
+  const unresolvedPast = useMemo(() => {
+    if (eventsStatus.state !== "live") return [];
+    const now = Date.now();
+    return events.filter((e) => {
+      if (!hasPassed(e, now) || !isSettled(e, now)) return false;
+      const r = econ?.[eventId(e)];
+      if (!r) return true;
+      if (r.status === "claimed") return now - (r.at || 0) >= CLAIM_STALE_MS;
+      return false; // released, no_number and unresolved are all final
+    });
+  }, [events, eventsStatus.state, econ]);
+
+  useEffect(() => {
+    if (econTriggered.current || !unresolvedPast.length) return;
+    econTriggered.current = true; // once per page load, for the whole card
+    resolveEcon.trigger(unresolvedPast.map((e) => ({
+      id: eventId(e), title: e.title, at: e.at,
+      forecast: e.forecast, previous: e.previous, numeric: e.numeric,
+    })));
+    setPollTicks(1);
+  }, [unresolvedPast]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Poll for the verdicts the background invocation is writing. Reads only — the
+  // cost was paid by the single trigger above — and it gives up after POLL_MAX so
+  // a row settles on "Unconfirmed" instead of animating indefinitely.
+  useEffect(() => {
+    if (!pollTicks || pollTicks > POLL_MAX || !unresolvedPast.length) return;
+    const t = setTimeout(() => { resolveEcon.refetch(); setPollTicks((n) => n + 1); }, POLL_EVERY_MS);
+    return () => clearTimeout(t);
+  }, [pollTicks, unresolvedPast.length]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const stillLooking = pollTicks > 0 && pollTicks <= POLL_MAX;
+
+  /**
+   * What a past row should render from. A missing verdict is only "loading"
+   * while the poll is actually alive; once it lapses the row is told plainly
+   * that we don't know, which is what stops the forever-pulse.
+   */
+  const resultFor = (e) => {
+    const r = econ?.[eventId(e)];
+    if (r) return r;
+    return stillLooking ? "loading" : { status: "unresolved" };
+  };
+
   useEffect(() => {
     if (eventsStatus.state !== "live" || !events.length) return;
-    // The card now scrolls (no "show all"), so generate a take for every event —
-    // each is a cheap Haiku call cached in localStorage, fetched once per event.
-    events.forEach((e) => fetchEventTake(e));
+    // Upcoming events get the cheap forward take (one Haiku call each, ~$0.0002,
+    // cached in localStorage). Past events are handled by the trigger above.
+    const now = Date.now();
+    events.forEach((e) => { if (!hasPassed(e, now)) fetchEventTake(e); });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [eventsStatus.state, events]);
   // Persist resolved takes (not transient loading/error) so a return to the
@@ -403,10 +474,11 @@ export function MorningBriefPage({ btc, isMobile, settings, updateSetting, onOpe
       trailing={<><span className="t-cap" style={{ color: "var(--faint)" }}>CT time</span><StatusTag status={eventsStatus} /></>}>
       <div className="brief-scroll" style={{ display: "flex", flexDirection: "column", gap: 8, maxHeight: 340, overflowY: "auto" }}>
         {eventsStatus.state === "live" ? (
-          events.length ? <>{events.map((e, i) => {
-            const analysis = eventAnalysis[takeKey(e)];
-            const released = e.isPast && !!e.actual; // has the real number
-            const pending = e.isPast && !e.actual;   // time passed, number not out yet
+          events.length ? <>{events.map((e) => {
+            // Every phrase, badge and tone on the row comes from one pure
+            // function — see watchState.js for why the "check back after the
+            // print lands" state could never resolve, and what replaced it.
+            const row = watchRowState(e, resultFor(e), eventAnalysis[takeKey(e)]);
             return (
               // Stacked, not squeezed: the time + Result badge share the top
               // line; the event title gets the full width below it (aligned
@@ -414,27 +486,22 @@ export function MorningBriefPage({ btc, isMobile, settings, updateSetting, onOpe
               // phone instead of wrapping the title into a narrow middle column.
               // Stable identity, not list position: this feed re-sorts and drops
               // old events every refresh, so an index key hands React a reused
-              // node for a different event. takeKey() is already the identity the
-              // cached AI takes are stored under.
-              <div key={takeKey(e)} style={{ background: released ? "var(--green-a06)" : "var(--surface-2)", borderRadius: 12, padding: "11px 13px", display: "flex", flexDirection: "column", gap: 5, flexShrink: 0 }}>
+              // node for a different event.
+              <div key={eventId(e)} style={{ background: row.bg, borderRadius: 12, padding: "11px 13px", display: "flex", flexDirection: "column", gap: 5, flexShrink: 0 }}>
                 <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
                   <Dot tone={e.color} />
                   <span className="t-cap t-num" style={{ color: "var(--faint)", whiteSpace: "nowrap" }}>{e.time}</span>
                   <span style={{ flex: 1 }} />
-                  {released && <span className="t-cap" style={{ color: "var(--green)", fontWeight: 600, flex: "none" }}>Result</span>}
-                  {pending && <span className="t-cap" style={{ color: "var(--faint)", fontWeight: 600, flex: "none" }}>Awaiting</span>}
+                  {row.badge && <span className="t-cap" style={{ color: row.badgeColor, fontWeight: 600, flex: "none" }}>{row.badge}</span>}
                 </div>
-                <div className="t-call" style={{ lineHeight: 1.4, paddingLeft: 17 }}>{e.text}</div>
+                <div className="t-call" style={{ lineHeight: 1.4, paddingLeft: 17 }}>{row.line}</div>
                 <div className="t-foot" style={{ color: "var(--faint)", paddingLeft: 17, lineHeight: 1.5 }}>
-                  {pending ? "Number's not out yet — check back after the print lands."
-                    : analysis === "loading" || !analysis ? <span style={{ animation: "pulse 1.4s infinite" }}>{released ? "Reading how it landed…" : "Reading the likely impact…"}</span>
-                    : analysis === "error" ? "Couldn't get a read on this one."
-                    : analysis}
+                  {row.pulse ? <span style={{ animation: "pulse 1.4s infinite" }}>{row.note}</span> : row.note}
                 </div>
               </div>
             );
           })}
-          </> : <div className="t-foot" style={{ color: "var(--faint)", padding: "6px 0" }}>No high/medium-impact US events in the last 12 hours or next 7 days.</div>
+          </> : <div className="t-foot" style={{ color: "var(--faint)", padding: "6px 0" }}>No high/medium-impact US events in the last 18 hours or next 7 days.</div>
         ) : <FeedFallbackRow status={eventsStatus} />}
       </div>
       {freshOrStale(eventsStatus)}

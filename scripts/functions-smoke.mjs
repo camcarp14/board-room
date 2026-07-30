@@ -38,6 +38,58 @@ const EXTERNALS = ["tweetnacl"];
 // it can be asserted here. Keep these to logic that would otherwise be
 // untestable — anything richer belongs in src/ with its own smoke.
 const EXTRA = {
+  // The econ feed has no `actual` field, so the only thing calendar.js can say
+  // about a released event is what KIND of event it was. Get that wrong and the
+  // Brief shows "awaiting a number" for a press conference — forever, because no
+  // number is coming. These are the rows that were actually on the card.
+  calendar: (mod) => {
+    const { isNumericRow, windowRows, toEvent } = mod;
+    if (typeof isNumericRow !== "function" || typeof windowRows !== "function" || typeof toEvent !== "function") {
+      return [["calendar exports isNumericRow + windowRows + toEvent", false, "not exported"]];
+    }
+    const NOW = Date.parse("2026-07-29T23:37:00-05:00");
+    const hrs = (n) => new Date(NOW + n * 3600000).toISOString();
+    const row = (title, extra = {}) => ({ title, country: "USD", impact: "High", date: hrs(-1), forecast: null, previous: null, ...extra });
+    const ids = (rows) => windowRows(rows, NOW).map((x) => x.r.title).join(",");
+    return [
+      ["a figure is expected when the feed quotes one", isNumericRow(row("Federal Funds Rate", { forecast: "3.75%", previous: "3.75%" }))],
+      ["no forecast and no prior ⇒ no figure is coming", !isNumericRow(row("FOMC Statement"))],
+      ["a press conference never carries a figure", !isNumericRow(row("FOMC Press Conference"))],
+      ["meeting minutes never carry a figure", !isNumericRow(row("FOMC Meeting Minutes", { previous: "0.2%" }))],
+      ["a speech never carries a figure", !isNumericRow(row("FOMC Member Waller Speaks"))],
+      ["a bond auction never carries a figure", !isNumericRow(row("10-y Bond Auction", { previous: "4.21|2.5" }))],
+      ["an ordinary release still expects a figure", isNumericRow(row("Core CPI m/m", { forecast: "0.3%", previous: "0.2%" }))],
+      ["non-USD rows are dropped", ids([row("Keep", { forecast: "1" }), { ...row("Drop"), country: "EUR" }]) === "Keep"],
+      ["low-impact rows are dropped", ids([row("Keep"), { ...row("Drop"), impact: "Low" }]) === "Keep"],
+      ["rows before the look-back are dropped", ids([row("Keep"), { ...row("Drop"), date: hrs(-19) }]) === "Keep"],
+      ["rows past +7 days are dropped", ids([row("Keep"), { ...row("Drop"), date: hrs(24 * 8) }]) === "Keep"],
+      ["an 18h-old release is still on the card", ids([{ ...row("Keep"), date: hrs(-17) }]) === "Keep"],
+      ["an unparseable date is dropped, not NaN-sorted", ids([row("Keep"), { ...row("Drop"), date: "not a date" }]) === "Keep"],
+      // The reason past rows get their own cap: an ascending sort under one
+      // shared cap let a busy morning push the whole rest of the week off.
+      ["a flood of past rows can't crowd out what's ahead", (() => {
+        const past = Array.from({ length: 30 }, (_, i) => ({ ...row(`p${i}`), date: hrs(-1) }));
+        const ahead = Array.from({ length: 10 }, (_, i) => ({ ...row(`a${i}`), date: hrs(24 + i) }));
+        const out = windowRows([...past, ...ahead], NOW).map((x) => x.r.title);
+        return out.filter((t) => t.startsWith("a")).length === 10 && out.filter((t) => t.startsWith("p")).length === 8;
+      })()],
+      ["events come back oldest-first", (() => {
+        const out = windowRows([{ ...row("later"), date: hrs(5) }, { ...row("sooner"), date: hrs(2) }], NOW);
+        return out.map((x) => x.r.title).join(",") === "sooner,later";
+      })()],
+      ["toEvent ships `at` so the client can re-derive isPast", (() => {
+        const e = toEvent({ r: row("Core CPI m/m", { forecast: "0.3%", previous: "0.2%" }), t: NOW - 3600000 }, NOW);
+        return e.at === new Date(NOW - 3600000).toISOString() && e.isPast === true && e.numeric === true
+          && e.id === `${e.at}|Core CPI m/m` && e.text === "Core CPI m/m — forecast 0.3% — prior 0.2%";
+      })()],
+      // The bug in one assertion: nothing may claim to carry a released figure,
+      // because this feed has never had one.
+      ["no row ever claims an actual", (() => {
+        const e = toEvent({ r: { ...row("Federal Funds Rate", { forecast: "3.75%", previous: "3.75%" }), actual: "3.75%" }, t: NOW - 3600000 }, NOW);
+        return e.actual === undefined && !/actual/.test(e.text);
+      })()],
+    ];
+  },
   "mini-worker": (mod) => {
     const m = mod.mergeTasks;
     if (typeof m !== "function") return [["mini-worker exports mergeTasks", false, "not exported"]];

@@ -1,15 +1,17 @@
 // ─── Summon (⌘K) ──────────────────────────────────────────────────────────────
-// One keystroke — or one thumb — to anywhere: pages, notes, skills, and quick
-// actions (jot a note, queue a Mini Me task) without leaving what you're doing.
-// Keyboard grammar preserved exactly: "n:" files a note, "t:" queues a task,
-// "a:" convenes the board; ↑↓ + ↵ navigate. Touch gets the same power as
-// visible controls: quick-action buttons up top, 44pt rows below.
+// One keystroke — or one thumb — to anywhere: pages, notes, and jotting a note
+// without leaving what you're doing. Keyboard grammar: "n:" files a note; ↑↓ + ↵
+// navigate. Touch gets the same power as visible controls: a quick-action button
+// up top, 44pt rows below.
+//
+// Everything that pointed at Mind is gone with it — the Mini Me / Learn / Board
+// chat / Seats destinations, the "Teach a skill" and "Ask the Mind" actions, the
+// skill search rows, and the "t:" and "a:" commands. A palette that offers to
+// take you somewhere that no longer exists is worse than a smaller palette.
 import { useState, useEffect, useRef, useMemo } from "react";
 import { db } from "../data/db.js";
-import { supabase } from "../lib/supabase.js";
-import { makeSdb as makeSkillsDb } from "../LearnPanel.jsx";
 import { Button, Dot } from "../ui/kit.jsx";
-import { IcSearch, IcNote, IcSpark, IcChevronRight } from "../ui/icons.jsx";
+import { IcSearch, IcNote, IcChevronRight } from "../ui/icons.jsx";
 
 const SUMMON_PLACES = [
   { label: "Brief", page: "brief", hint: "markets · wires · stores" },
@@ -21,23 +23,19 @@ const SUMMON_PLACES = [
   { label: "Birthdays", page: "personal", sub: "birthdays", hint: "personal" },
   { label: "Movies", page: "personal", sub: "movies", hint: "watchlist" },
   { label: "Food", page: "personal", sub: "food", hint: "meals" },
-  { label: "Mini Me", page: "boardroom", sub: "mini", hint: "queue · run" },
-  { label: "Learn", page: "boardroom", sub: "learn", hint: "skills" },
-  { label: "Board chat", page: "boardroom", sub: "chat", hint: "ask the seats" },
-  { label: "Seats", page: "boardroom", sub: "seats", hint: "the five" },
-  { label: "Assets", page: "assets", hint: "properties · auditor" },
+  { label: "Grocery", page: "grocery", hint: "the list · aisles · cart" },
+  { label: "Assets", page: "assets", hint: "usage · properties · auditor" },
   // Systems folded into Assets — jump straight onto its Status sub-tab.
   { label: "Systems", page: "assets", sub: "status", hint: "usage · status · deploy" },
 ];
 
-export function Summon({ onClose, onGo, onJot, onQueueTask, onAsk, isMobile }) {
+export function Summon({ onClose, onGo, onJot, isMobile }) {
   const [q, setQ] = useState("");
   const [idx, setIdx] = useState(0);
-  const [mode, setMode] = useState(null); // null | "jot" | "task"
+  const [mode, setMode] = useState(null); // null | "jot" — the note sheet; "task" went with Mind
   const [modeText, setModeText] = useState("");
   const [flash, setFlash] = useState(null); // confirmation line before close
   const [notes, setNotes] = useState([]);
-  const [skills, setSkills] = useState([]);
   const inputRef = useRef(null);
   const listRef = useRef(null);
   const closeTimer = useRef(null);
@@ -45,7 +43,6 @@ export function Summon({ onClose, onGo, onJot, onQueueTask, onAsk, isMobile }) {
 
   useEffect(() => {
     db.loadNotes().then(({ rows }) => setNotes(rows || [])).catch(() => {});
-    makeSkillsDb(supabase).load().then(setSkills).catch(() => {});
   }, []);
   // Focus the field on open/mode change — but not on touch devices, where the
   // keyboard would cover the list the user came here to tap.
@@ -55,12 +52,12 @@ export function Summon({ onClose, onGo, onJot, onQueueTask, onAsk, isMobile }) {
   const hit = (s) => (s || "").toLowerCase().includes(needle);
   const noteTitle = (n) => n.title?.trim() || (n.body || "").split("\n").map(l => l.trim()).find(Boolean)?.slice(0, 60) || "Untitled note";
 
-  // Quick-file grammar: "n: milk" files a note on Enter, "t:" queues Mini Me,
-  // "a:" convenes the board — thought to filed in one line, no menu hop.
+  // Quick-file grammar: "n: milk" files a note on Enter — thought to filed in
+  // one line, no menu hop.
   const fileCmd = async (kind, text) => {
     try {
-      if (kind === "jot") { await onJot(text); setFlash("Filed to Notes"); }
-      else { await onQueueTask(text); setFlash("Queued for Mini Me"); }
+      await onJot(text);
+      setFlash("Filed to Notes");
       setQ("");
       closeTimer.current = setTimeout(onClose, 650);
     } catch (e) { setFlash(e.message || "Couldn't save — try again."); }
@@ -68,33 +65,15 @@ export function Summon({ onClose, onGo, onJot, onQueueTask, onAsk, isMobile }) {
 
   const rows = useMemo(() => {
     const noteCmd = q.match(/^(?:n|note|jot)\s*:\s*(\S[\s\S]*)$/i);
-    const taskCmd = q.match(/^(?:t|task|mini)\s*:\s*(\S[\s\S]*)$/i);
-    const askCmd = q.match(/^(?:a|ask)\s*:\s*(\S[\s\S]*)$/i);
-    if (noteCmd || taskCmd || askCmd) {
-      const cmds = [];
-      if (noteCmd) cmds.push({ kind: "cmd", label: `Jot to Notes — “${noteCmd[1].trim()}”`, hint: "↵ files it", run: () => fileCmd("jot", noteCmd[1].trim()) });
-      if (taskCmd) cmds.push({ kind: "cmd", label: `Queue for Mini Me — “${taskCmd[1].trim()}”`, hint: "↵ queues it", run: () => fileCmd("task", taskCmd[1].trim()) });
-      if (askCmd) cmds.push({ kind: "cmd", label: `Ask the Mind — “${askCmd[1].trim()}”`, hint: "pulse ↵", run: () => onAsk?.(askCmd[1].trim()) });
-      return cmds;
+    if (noteCmd) {
+      return [{ kind: "cmd", label: `Jot to Notes — “${noteCmd[1].trim()}”`, hint: "↵ files it", run: () => fileCmd("jot", noteCmd[1].trim()) }];
     }
-    const actions = [
-      { kind: "act", label: "Teach a skill", hint: "/learn", go: { page: "boardroom", sub: "learn" } },
-      { kind: "act", label: "Ask the Mind", hint: "open the mind", go: { page: "boardroom", sub: "neural" } },
-    ].filter(a => !needle || hit(a.label) || hit(a.hint));
     const places = SUMMON_PLACES.filter(p => !needle || hit(p.label) || hit(p.hint))
       .map(p => ({ kind: "go", label: p.label, hint: p.hint, go: p }));
     const noteRows = (needle ? notes.filter(n => hit(n.title) || hit(n.body)) : notes.slice(0, 3))
       .slice(0, 5).map(n => ({ kind: "note", label: noteTitle(n), hint: "note", go: { page: "personal", sub: "notes", noteId: n.id } }));
-    const skillRows = (needle ? skills.filter(s => hit(s.title) || hit(s.description) || hit(s.content)) : [])
-      .slice(0, 5).map(s => ({ kind: "skill", label: s.title, hint: "skill", go: { page: "boardroom", sub: "learn", skillId: s.id } }));
-    // Anything typed can simply be asked — the question lands in the Room
-    // already sent. Kept last so jump-to muscle memory ("cal" ↵) still wins;
-    // when nothing else matches, asking IS the Enter action.
-    const askRows = needle.length >= 3 && onAsk
-      ? [{ kind: "ask", label: `Ask the Mind — “${q.trim()}”`, hint: "pulse ↵", run: () => onAsk(q.trim()) }]
-      : [];
-    return [...actions, ...places, ...noteRows, ...skillRows, ...askRows];
-  }, [q, needle, notes, skills]); // eslint-disable-line react-hooks/exhaustive-deps
+    return [...places, ...noteRows];
+  }, [q, needle, notes]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => { setIdx(0); }, [needle]);
   useEffect(() => {
@@ -111,8 +90,8 @@ export function Summon({ onClose, onGo, onJot, onQueueTask, onAsk, isMobile }) {
     const t = modeText.trim();
     if (!t) return;
     try {
-      if (mode === "jot") { await onJot(t); setFlash("Saved to Notes"); }
-      else { await onQueueTask(t); setFlash("Queued for Mini Me"); }
+      await onJot(t);
+      setFlash("Saved to Notes");
       setModeText("");
       closeTimer.current = setTimeout(onClose, 650);
     } catch (e) { setFlash(e.message || "Couldn't save — try again."); }
@@ -126,7 +105,7 @@ export function Summon({ onClose, onGo, onJot, onQueueTask, onAsk, isMobile }) {
     else if (e.key === "Enter") { e.preventDefault(); choose(rows[idx]); }
   };
 
-  const sectionOf = (r) => r.kind === "act" ? "Actions" : r.kind === "go" ? "Go to" : r.kind === "note" ? "Notes" : r.kind === "ask" ? "Or just ask" : r.kind === "cmd" ? "Quick file" : "Skills";
+  const sectionOf = (r) => r.kind === "go" ? "Go to" : r.kind === "note" ? "Notes" : "Quick file";
   const ok = flash && !/couldn|try again/i.test(flash);
 
   return (
@@ -136,15 +115,15 @@ export function Summon({ onClose, onGo, onJot, onQueueTask, onAsk, isMobile }) {
 
         {mode ? (
           <div style={{ padding: 16 }}>
-            <div className="t-head" style={{ padding: "2px 2px 12px" }}>{mode === "jot" ? "Jot a Note" : "Queue a Task"}</div>
+            <div className="t-head" style={{ padding: "2px 2px 12px" }}>Jot a Note</div>
             <textarea ref={inputRef} value={modeText} onChange={e => setModeText(e.target.value)} rows={3} className="field"
-              placeholder={mode === "jot" ? "The thought, as it comes." : "What should Mini Me take on?"}
+              placeholder="The thought, as it comes."
               onKeyDown={e => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); e.stopPropagation(); commitMode(); } }}
               style={{ resize: "none", lineHeight: 1.55 }} />
             {flash && <div className="t-foot" style={{ marginTop: 10, color: ok ? "var(--green)" : "var(--red)" }}>{flash}</div>}
             <div style={{ display: "flex", gap: 8, marginTop: 12 }}>
               <Button kind="quiet" size="md" style={{ flex: 1 }} onClick={() => { setMode(null); setFlash(null); }}>Back</Button>
-              <Button kind="primary" size="md" style={{ flex: 2 }} disabled={!modeText.trim()} onClick={commitMode}>{mode === "jot" ? "Save note" : "Queue it"}</Button>
+              <Button kind="primary" size="md" style={{ flex: 2 }} disabled={!modeText.trim()} onClick={commitMode}>Save note</Button>
             </div>
           </div>
         ) : (
@@ -152,7 +131,7 @@ export function Summon({ onClose, onGo, onJot, onQueueTask, onAsk, isMobile }) {
             <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "6px 16px 0", flex: "none" }}>
               <IcSearch size={18} style={{ color: "var(--faint)", flex: "none" }} />
               <input ref={inputRef} value={q} onChange={e => setQ(e.target.value)} enterKeyHint="go"
-                placeholder={isMobile ? "Jump, search, or ask…" : "Jump, jot, search — or just ask the mind…"}
+                placeholder={isMobile ? "Jump or search…" : "Jump, jot, search…"}
                 style={{ border: "none", outline: "none", background: "transparent", padding: "15px 0", fontSize: 16, color: "var(--ink)", fontFamily: "inherit", flex: 1, minWidth: 0 }} />
               {!isMobile && <kbd style={{ flex: "none" }}>esc</kbd>}
             </div>
@@ -163,9 +142,6 @@ export function Summon({ onClose, onGo, onJot, onQueueTask, onAsk, isMobile }) {
               <div style={{ display: "flex", gap: 8, padding: "12px 12px 2px", flex: "none" }}>
                 <Button kind="quiet" size="md" style={{ flex: 1, justifyContent: "flex-start", gap: 9 }} onClick={() => { setMode("jot"); setQ(""); setFlash(null); }}>
                   <IcNote size={17} style={{ color: "var(--accent)" }} /> Jot a note
-                </Button>
-                <Button kind="quiet" size="md" style={{ flex: 1, justifyContent: "flex-start", gap: 9 }} onClick={() => { setMode("task"); setQ(""); setFlash(null); }}>
-                  <IcSpark size={17} style={{ color: "var(--accent)" }} /> Queue a task
                 </Button>
               </div>
             )}
