@@ -24,7 +24,6 @@ const TrainPage = lazy(() => import("./pages/train/TrainPage.jsx").then(m => ({ 
 const GroceryPage = lazy(() => import("./pages/grocery/GroceryPage.jsx").then(m => ({ default: m.GroceryPage })));
 const PropertiesPage = lazy(() => import("./pages/assets/AssetsPage.jsx").then(m => ({ default: m.PropertiesPage })));
 const UpstreamPage = lazy(() => import("./pages/upstream/UpstreamPage.jsx").then(m => ({ default: m.UpstreamPage })));
-const IdeasPage = lazy(() => import("./pages/ideas/IdeasPage.jsx").then(m => ({ default: m.IdeasPage })));
 
 // ════════════════════════════════════════════════════════════════════════════
 // THE BOARD ROOM — SESSION edition.
@@ -440,7 +439,6 @@ export default function App() {
       case "train": return <TrainPage isMobile={isMobile} settings={settings} updateSetting={updateSetting} jump={jump} />;
       case "grocery": return <GroceryPage isMobile={isMobile} />;
       case "assets": return <PropertiesPage isMobile={isMobile} settings={settings} updateSetting={updateSetting} session={session} btc={btc} jump={jump} onWorkerRun={refreshData} onSkillsChanged={refreshSkills} skills={skills} />;
-      case "ideas": return <IdeasPage isMobile={isMobile} />;
       case "upstream": return <UpstreamPage isMobile={isMobile} />;
       default: return null;
     }
