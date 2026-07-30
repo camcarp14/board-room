@@ -3,7 +3,7 @@
 // No fabricated fallback numbers anywhere on this page. Each card is either
 // live (real data), not connected (with exact setup instructions), or error
 // (with the actual failure). Empty dashes beat plausible-looking fake data.
-import { useState, useEffect, useCallback, useRef, lazy, Suspense } from "react";
+import { useState, useEffect, useCallback, useMemo, useRef, lazy, Suspense } from "react";
 import { T } from "../../theme.js";
 import { CollapsibleCard, StatTile, Button, Dot, Delta } from "../../ui/kit.jsx";
 import { IcChevronRight, IcExternal } from "../../ui/icons.jsx";
@@ -19,7 +19,8 @@ import { updateSnapshot, getSnapshot } from "../../lib/snapshot.js";
 import { db } from "../../data/db.js";
 import { nextBirthdayOccurrence, localDayKey } from "../../lib/dates.js";
 import { NotesTile } from "./NotesTile.jsx";
-import { eventId, takeKey, hasPassed, isSettled, watchRowState, RESULT_MAX_TRIES, RESULT_RECHECK_MS, RESULT_RETRY_MS } from "./watchState.js";
+import { eventId, takeKey, hasPassed, isSettled, watchRowState, POLL_EVERY_MS, POLL_MAX, CLAIM_STALE_MS } from "./watchState.js";
+import { useEconResults, useResolveEconEvents } from "../../data/econ.js";
 import { EVENT_CATEGORIES } from "../personal/CalendarPanel.jsx"; // canonical category → color map (mini-calendar pills)
 
 const GSC_EMPTY = { impressions: "—", impressionsD: "", clicks: "—", clicksD: "", pos: "—", posD: "", series: Array(14).fill(0), daily: [], note: "" };
@@ -32,19 +33,14 @@ const ROW_CAP = 5; // Business Meetings shows the first N in-page; the rest behi
 // also persist to localStorage so returning to the Brief doesn't re-spend the
 // calls (or re-flash "Reading the likely impact…") for takes that haven't changed.
 const TAKES_LS = "br_event_takes";
-// Resolved post-event results live in their own store, keyed on identity alone.
-// Only settled verdicts (released / no figure coming) are persisted — "we
-// haven't found it yet" is the absence of an answer and must not survive a
-// reload and stop the next look from happening.
-const RESULTS_LS = "br_event_results";
+// Post-event verdicts are NOT cached here. They live in app_settings, written by
+// econ-resolve-background, so one lookup serves every device — see data/econ.js.
 // A take that fails is allowed to retry — but the effect below re-runs on every
 // 5-minute refresh with a freshly-allocated `events` array, so without a ceiling
 // one event the model reliably chokes on becomes a permanent ~288-call-a-day
 // loop with a zero success rate. Two more tries, then leave it alone.
 const TAKE_MAX_TRIES = 3;
 const takeTries = new Map(); // takeKey -> attempts, this page load only
-const resultTries = new Map(); // eventId -> attempts, this page load only
-const resultNextTry = new Map(); // eventId -> earliest ts for the next attempt
 
 // The { ping: true } probe answers one question — is the env var set — and that
 // can only change on deploy. Asking it before every call meant two function
@@ -121,9 +117,8 @@ export function MorningBriefPage({ btc, isMobile, settings, updateSetting, onOpe
   const [eventAnalysis, setEventAnalysis] = useState(() => { // takeKey(e) -> take | "loading" | "error"; hydrated from localStorage
     try { return JSON.parse(localStorage.getItem(TAKES_LS) || "{}") || {}; } catch { return {}; }
   });
-  const [eventResults, setEventResults] = useState(() => { // eventId(e) -> verdict | "loading"; only settled verdicts are stored
-    try { return JSON.parse(localStorage.getItem(RESULTS_LS) || "{}") || {}; } catch { return {}; }
-  });
+  const { data: econ } = useEconResults();   // eventId -> verdict, shared across devices
+  const resolveEcon = useResolveEconEvents();
   const [btcChartOpen, setBtcChartOpen] = useState(false);
   const [tickerChart, setTickerChart] = useState(null); // {key,label} of the watchlist ticker whose chart is open
   const [meetingsAll, setMeetingsAll] = useState(false);
@@ -163,62 +158,79 @@ export function MorningBriefPage({ btc, isMobile, settings, updateSetting, onOpe
   // POST-EVENT: what actually printed, and how it landed.
   //
   // The calendar feed carries forecast and prior and nothing else — no released
-  // number, ever (see netlify/functions/calendar.js). So a past event's result
-  // gets looked up once, per event, by econ-result.js, and remembered. Without
-  // this the card had no reachable post-event state at all: it said "check back
-  // after the print lands" until the row aged out, hours later, still saying it.
+  // number, ever (see netlify/functions/calendar.js) — so a past event's result
+  // has to be looked up. That lookup used to happen HERE, synchronously, once per
+  // event per device per page load with retries. It never once succeeded: a web
+  // search plus an answer takes 10-20 seconds and the function had seconds, so
+  // every call died on its own timeout, and an aborted call is still a billed
+  // call. The card pulsed "checking" forever while quietly spending.
   //
-  // Every gate here is a spend gate. One lookup per event, not per refresh; not
-  // until the print has had ten minutes to actually exist; a settled verdict is
-  // never re-asked; and a pending one waits 20 minutes rather than riding the
-  // Brief's 5-minute tick — capped at RESULT_MAX_TRIES per page load.
+  // Now the work is off the request path entirely and the answers are shared:
+  // econ-resolve-background resolves whatever is unresolved and writes verdicts
+  // to app_settings, which useEconResults reads. This component's whole job is
+  // to fire ONE trigger per page load and then wait.
   //
-  // The gates are these module-level Maps, not the state above: several past
-  // events resolve concurrently off one effect, and `eventResults` there is the
-  // snapshot from the render that scheduled it. Only a synchronous, shared
-  // record stops two rows from spending the same lookup twice.
-  const resolveEventResult = async (e) => {
-    const k = eventId(e);
-    const have = eventResults[k];
-    if (have === "loading") return;
-    if (have && typeof have === "object" && (have.status === "released" || have.status === "no_number" || have.status === "blocked")) return;
-    const tries = resultTries.get(k) || 0;
-    if (tries >= RESULT_MAX_TRIES) return;
-    if (tries > 0 && Date.now() < (resultNextTry.get(k) || 0)) return;
-    resultTries.set(k, tries + 1);
-    resultNextTry.set(k, Date.now() + RESULT_RECHECK_MS); // pessimistic until the answer says otherwise
-    setEventResults(prev => ({ ...prev, [k]: "loading" }));
-    // Memoized per page load, so this is one extra invocation on the first past
-    // event and free thereafter — and it turns "not deployed"/"no API key" into
-    // a row that says so instead of four silent failures.
-    const ping = await pingOnce("econ-result");
-    if (ping.status === 404 || ping.data?.configured === false) {
-      const detail = ping.status === 404 ? "the result lookup isn't deployed yet" : "the result lookup needs ANTHROPIC_API_KEY";
-      return setEventResults(prev => ({ ...prev, [k]: { status: "blocked", detail } }));
-    }
-    const res = await callFnFull("econ-result", { title: e.title, at: e.at, forecast: e.forecast, previous: e.previous, numeric: e.numeric });
-    if (res.ok && res.data?.success) {
-      setEventResults(prev => ({ ...prev, [k]: { status: res.data.status, actual: res.data.actual || null, take: res.data.take || "", tries: tries + 1 } }));
-      return;
-    }
-    // A timeout or a 5xx says nothing about whether the number is out — the
-    // lookup runs on an ~8.5s budget under Netlify's 10s ceiling and can simply
-    // run out of road. Don't make that inherit the 20-minute wait meant for
-    // "genuinely not published yet"; let the next refresh have another go.
-    resultNextTry.set(k, Date.now() + RESULT_RETRY_MS);
-    setEventResults(prev => ({ ...prev, [k]: { status: "pending", tries: tries + 1 } }));
+  // That is the spend fix, and it is structural rather than a promise: the
+  // trigger carries the whole list, the resolver caps how many it will price out
+  // per invocation, it claims rows before calling anything so two devices can't
+  // both pay, and a verdict it could not establish is recorded so it is never
+  // asked again. Nothing on this page can spend by re-rendering.
+  const econTriggered = useRef(false);
+  const [pollTicks, setPollTicks] = useState(0);
+
+  // Past events with no verdict yet — the trigger's payload, and the poll's
+  // stop condition. A stale claim counts as unresolved: the invocation that
+  // claimed it crashed, so somebody has to ask again.
+  const unresolvedPast = useMemo(() => {
+    if (eventsStatus.state !== "live") return [];
+    const now = Date.now();
+    return events.filter((e) => {
+      if (!hasPassed(e, now) || !isSettled(e, now)) return false;
+      const r = econ?.[eventId(e)];
+      if (!r) return true;
+      if (r.status === "claimed") return now - (r.at || 0) >= CLAIM_STALE_MS;
+      return false; // released, no_number and unresolved are all final
+    });
+  }, [events, eventsStatus.state, econ]);
+
+  useEffect(() => {
+    if (econTriggered.current || !unresolvedPast.length) return;
+    econTriggered.current = true; // once per page load, for the whole card
+    resolveEcon.trigger(unresolvedPast.map((e) => ({
+      id: eventId(e), title: e.title, at: e.at,
+      forecast: e.forecast, previous: e.previous, numeric: e.numeric,
+    })));
+    setPollTicks(1);
+  }, [unresolvedPast]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Poll for the verdicts the background invocation is writing. Reads only — the
+  // cost was paid by the single trigger above — and it gives up after POLL_MAX so
+  // a row settles on "Unconfirmed" instead of animating indefinitely.
+  useEffect(() => {
+    if (!pollTicks || pollTicks > POLL_MAX || !unresolvedPast.length) return;
+    const t = setTimeout(() => { resolveEcon.refetch(); setPollTicks((n) => n + 1); }, POLL_EVERY_MS);
+    return () => clearTimeout(t);
+  }, [pollTicks, unresolvedPast.length]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const stillLooking = pollTicks > 0 && pollTicks <= POLL_MAX;
+
+  /**
+   * What a past row should render from. A missing verdict is only "loading"
+   * while the poll is actually alive; once it lapses the row is told plainly
+   * that we don't know, which is what stops the forever-pulse.
+   */
+  const resultFor = (e) => {
+    const r = econ?.[eventId(e)];
+    if (r) return r;
+    return stillLooking ? "loading" : { status: "unresolved" };
   };
 
   useEffect(() => {
     if (eventsStatus.state !== "live" || !events.length) return;
-    // The card scrolls (no "show all"), so every row gets its line: upcoming
-    // events get the cheap forward take, and anything that's happened gets its
-    // result resolved once the print has had a moment to land.
+    // Upcoming events get the cheap forward take (one Haiku call each, ~$0.0002,
+    // cached in localStorage). Past events are handled by the trigger above.
     const now = Date.now();
-    events.forEach((e) => {
-      if (!hasPassed(e, now)) fetchEventTake(e);
-      else if (isSettled(e, now)) resolveEventResult(e);
-    });
+    events.forEach((e) => { if (!hasPassed(e, now)) fetchEventTake(e); });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [eventsStatus.state, events]);
   // Persist resolved takes (not transient loading/error) so a return to the
@@ -229,17 +241,6 @@ export function MorningBriefPage({ btc, isMobile, settings, updateSetting, onOpe
       localStorage.setItem(TAKES_LS, JSON.stringify(Object.fromEntries(keep)));
     } catch { /* storage full / unavailable — takes just won't persist */ }
   }, [eventAnalysis]);
-  // Same, for results — but ONLY the two verdicts that can never change. A
-  // "pending" or "blocked" row persisted here would be a stale answer that
-  // outlives its cause and permanently suppresses the next lookup.
-  useEffect(() => {
-    try {
-      const keep = Object.entries(eventResults)
-        .filter(([, v]) => v && typeof v === "object" && (v.status === "released" || v.status === "no_number"))
-        .slice(-60);
-      localStorage.setItem(RESULTS_LS, JSON.stringify(Object.fromEntries(keep)));
-    } catch { /* storage full / unavailable — results just won't persist */ }
-  }, [eventResults]);
 
   const [briefRefreshedAt, setBriefRefreshedAt] = useState(null); // shared freshness stamp for every card fetched in the batch below
   const freshnessLabel = (ts) => ts ? `Updated ${new Date(ts).toLocaleTimeString("en-US", { timeZone: "America/Chicago", hour: "numeric", minute: "2-digit" })} CT` : "Updating…";
@@ -475,7 +476,7 @@ export function MorningBriefPage({ btc, isMobile, settings, updateSetting, onOpe
             // Every phrase, badge and tone on the row comes from one pure
             // function — see watchState.js for why the "check back after the
             // print lands" state could never resolve, and what replaced it.
-            const row = watchRowState(e, eventResults[eventId(e)], eventAnalysis[takeKey(e)]);
+            const row = watchRowState(e, resultFor(e), eventAnalysis[takeKey(e)]);
             return (
               // Stacked, not squeezed: the time + Result badge share the top
               // line; the event title gets the full width below it (aligned
