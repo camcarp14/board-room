@@ -428,6 +428,39 @@ kbd {
   background: var(--ink-a05); border: none; border-radius: 5px; padding: 2px 6px;
 }
 
+/* ── grocery: aisle headers, cart progress, the check ─────────────────────────
+   The list is the one surface used one-handed while walking, so its feedback has
+   to be instant and physical. Rows already inherit .cell.tappable's hover and
+   press states; these add the parts a shopping list specifically needs. The
+   reduced-motion block below neutralises all of it for free — the catch-all
+   covers any new keyframe without needing its own line. */
+.gro-rail { height: 3px; border-radius: 999px; background: var(--ink-a06); overflow: hidden; }
+.gro-rail > i {
+  display: block; height: 100%; border-radius: 999px; background: var(--green);
+  transition: width var(--dur-3) var(--ease-out);
+}
+/* The tick overshoots and settles — checking something off should feel like a
+   physical act, not a class toggle. */
+.gro-tick { animation: gro-pop var(--dur-2) var(--ease-spring) both; }
+@keyframes gro-pop { from { transform: scale(0.2); opacity: 0 } to { transform: scale(1); opacity: 1 } }
+/* Quantity stepper. The "+" sits quietly at qty 1 and gains a "−" partner from 2
+   up, so an ordinary one-of-something row keeps a single extra control. */
+.gro-step {
+  display: inline-flex; align-items: center; flex: none;
+  background: var(--ink-a04); border-radius: 999px; padding: 2px;
+}
+.gro-step button {
+  width: 30px; height: 30px; border: 0; padding: 0; margin: 0; background: none; cursor: pointer;
+  color: var(--sub); border-radius: 999px; display: inline-flex; align-items: center; justify-content: center;
+  font: inherit; font-size: 15px; line-height: 1;
+  transition: background var(--dur-1) ease, color var(--dur-1) ease;
+}
+@media (hover: hover) { .gro-step button:hover { background: var(--ink-a06); color: var(--ink); } }
+.gro-step .gro-qty {
+  min-width: 17px; text-align: center; font-size: 13px; font-weight: 600;
+  color: var(--ink); font-variant-numeric: tabular-nums;
+}
+
 /* ── the mandate: motion is optional to the user's nervous system ──────────── */
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation-duration: 0.01ms !important; animation-delay: 0s !important; transition-duration: 0.01ms !important; }

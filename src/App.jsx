@@ -322,31 +322,23 @@ export default function App() {
   // by anything on a page that wants to point somewhere (e.g. the Word's chips).
   const jumpTo = (target) => {
     // Three migrations honored here: Workout graduated from Personal to its own
-    // Train tab; Systems folded into Assets; and Mind (boardroom) folded into
-    // Assets as its first sub-tab. A boardroom deep link keeps its inner sub via
-    // `boardSub`, which the Assets page re-hydrates into a boardroom-shaped jump.
+    // Train tab; Systems folded into Assets; and Mind (boardroom) was removed
+    // outright. A stale boardroom link can no longer be honored, so it lands on
+    // Assets with no sub-tab — which means Usage. Dropping `sub` matters: an
+    // unknown key would be ignored anyway, but carrying "mind" forward would
+    // imply the tab still exists.
     let t = target.page === "personal" && target.sub === "workout" ? { ...target, page: "train", sub: undefined } : target;
     if (t.page === "systems") t = { ...t, page: "assets", sub: t.sub || "status" };
-    if (t.page === "boardroom") t = { ...t, page: "assets", sub: "mind", boardSub: t.sub };
+    if (t.page === "boardroom") t = { ...t, page: "assets", sub: undefined };
     goToPage(t.page);
     setJump({ t: Date.now(), ...t });
   };
   const summonGo = (target) => { setSummon(false); jumpTo(target); };
-  // Free text in Summon → the question lands in the Room already sent — the
-  // board convenes while the page slides over. (send is defined below; it only
-  // runs on click, well after initialization.)
-  // Summon's free-text "ask" now goes to the Mind: open the neural canvas and
-  // hand the question to its Pulse (MindPanel fires it once off jump.ask).
-  const summonAsk = (q) => { setSummon(false); jumpTo({ page: "boardroom", sub: "neural", ask: q }); };
   const summonJot = async (text) => {
     await db.saveNote({ id: crypto.randomUUID(), title: "", body: text });
     queryClient.invalidateQueries({ queryKey: ["notes"] }); // jots show up in Notes surfaces immediately, not after the cache goes stale
   };
-  const summonQueueTask = async (text) => {
-    const t = { id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`, text, status: "queued", queued_at: Date.now() };
-    updateSetting("mini_tasks", [t, ...(settings?.mini_tasks || [])]);
-  };
-  const summonEl = summon ? <Summon onClose={() => setSummon(false)} onGo={summonGo} onJot={summonJot} onQueueTask={summonQueueTask} onAsk={summonAsk} isMobile={isMobile} /> : null;
+  const summonEl = summon ? <Summon onClose={() => setSummon(false)} onGo={summonGo} onJot={summonJot} isMobile={isMobile} /> : null;
   const goToCalendar = () => { setPersonalJumpTo(Date.now()); goToPage("personal"); }; // timestamp so re-tapping still re-triggers even if already on Personal
 
   const send = async (textOverride) => {
@@ -434,11 +426,11 @@ export default function App() {
 
   const renderPageInner = (key) => {
     switch (key) {
-      case "brief": return <MorningBriefPage btc={btc} isMobile={isMobile} settings={settings} updateSetting={updateSetting} onOpenCalendar={goToCalendar} onAddEvent={(date) => jumpTo({ page: "personal", sub: "calendar", newEventDate: date })} onOpenNotes={(noteId) => summonGo({ page: "personal", sub: "notes", noteId })} onOpenQueue={() => jumpTo({ page: "boardroom", sub: "mini" })} onOpenBirthdays={() => jumpTo({ page: "personal", sub: "birthdays" })} refreshSignal={briefRefreshSignal} />;
+      case "brief": return <MorningBriefPage btc={btc} isMobile={isMobile} settings={settings} updateSetting={updateSetting} onOpenCalendar={goToCalendar} onAddEvent={(date) => jumpTo({ page: "personal", sub: "calendar", newEventDate: date })} onOpenNotes={(noteId) => summonGo({ page: "personal", sub: "notes", noteId })} onOpenBirthdays={() => jumpTo({ page: "personal", sub: "birthdays" })} refreshSignal={briefRefreshSignal} />;
       case "personal": return <PersonalPage isMobile={isMobile} jumpSignal={personalJumpTo} jump={jump} settings={settings} updateSetting={updateSetting} />;
       case "train": return <TrainPage isMobile={isMobile} settings={settings} updateSetting={updateSetting} jump={jump} />;
       case "grocery": return <GroceryPage isMobile={isMobile} />;
-      case "assets": return <PropertiesPage isMobile={isMobile} settings={settings} updateSetting={updateSetting} session={session} btc={btc} jump={jump} onWorkerRun={refreshData} onSkillsChanged={refreshSkills} skills={skills} />;
+      case "assets": return <PropertiesPage isMobile={isMobile} settings={settings} updateSetting={updateSetting} session={session} btc={btc} jump={jump} />;
       case "upstream": return <UpstreamPage isMobile={isMobile} />;
       default: return null;
     }

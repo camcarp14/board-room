@@ -15,10 +15,9 @@ export const NAV = [
   // shop, one-handed. Two taps deep inside Personal → Food was the wrong depth
   // for that, whatever its topical home.
   { key: "grocery", label: "Grocery" },
-  // Mind and Systems both fold into Assets — Mind is the Assets page's first
-  // sub-tab (with its own Mind/Neurons/Learn sub-sub-tabs), Systems supplies the
-  // Usage/Status/Deploy/Supabase/Miner sub-tabs. App.jsx redirects any stray
-  // "boardroom"/"systems" deep link to the right Assets sub-tab.
+  // Systems folded into Assets, supplying its Usage/Status/Deploy/Supabase/Miner
+  // sub-tabs; the page lands on Usage. Mind was removed from the app entirely.
+  // App.jsx redirects any stray "systems"/"boardroom" deep link here.
   { key: "assets", label: "Assets" },
   // Upstream is built and deployed but hidden from nav while the pipeline settles.
   // To bring it back, uncomment this line — the page, route, HEADERS entry and the
@@ -36,10 +35,12 @@ export const HEADERS = {
   personal: { title: "Personal", sub: () => "Notes, calendar, and life admin" },
   train: { title: "Train", sub: () => "Log it. Beat last time." },
   grocery: { title: "Grocery", sub: () => "What to buy, and what's already in the cart" },
-  boardroom: { title: "Mind", sub: () => "The mind behind the delegate" },
   assets: { title: "Assets", sub: () => "Everything you own, and what runs it" },
-  // Kept as a defensive fallback: App.jsx redirects "systems" → "assets", so the
-  // shell should never actually read this — but a header lookup must never crash.
+  // Both kept as defensive fallbacks: App.jsx redirects "systems" and the retired
+  // "boardroom" to "assets", so the shell should never actually read either — but
+  // a header lookup must never crash, and a stale saved link must not render a
+  // page titled after a tab that no longer exists.
   systems: { title: "Assets", sub: () => "Everything you own, and what runs it" },
+  boardroom: { title: "Assets", sub: () => "Everything you own, and what runs it" },
   upstream: { title: "Upstream", sub: () => "Non-consensus questions · NOSTRADAMUS" },
 };

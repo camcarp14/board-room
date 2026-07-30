@@ -1,10 +1,18 @@
 // ─── Assets — the ventures, and the machine room that runs them ──────────────
-// One page, six tabs. "Properties" is the venture roll-up (live-checked sites,
-// command-center links, and the AI site auditor). The rest — Usage, Status,
-// Deploy, Supabase, Miner — used to be a separate Systems tab; they were folded
-// in here so everything you own and everything that runs it live in one place.
-// The connections hook is hosted at the page level so Status results survive a
-// hop to another tab and back.
+// One page, six tabs, landing on Usage. "Properties" is the venture roll-up
+// (live-checked sites, command-center links, and the AI site auditor). The rest
+// — Usage, Status, Deploy, Supabase, Miner — used to be a separate Systems tab;
+// they were folded in here so everything you own and everything that runs it
+// live in one place. The connections hook is hosted at the page level so Status
+// results survive a hop to another tab and back.
+//
+// Mind used to be the first tab here and the page's landing. It has been removed
+// from the app's surface entirely — not hidden behind a flag, and not left as a
+// deep-linkable key — so BoardPage/MiniMePage/LearnPanel are no longer reachable
+// from any UI. The modules and the Supabase tables are untouched, so this is a
+// one-import-and-one-array reversal if it's ever wanted back. Note that skills
+// still load from the database and still shape prompts (buildSkillsBlock); only
+// the editor for them is gone.
 
 import { useState, useEffect, useRef } from "react";
 import {
@@ -18,7 +26,6 @@ import { PROPERTIES } from "./properties.js";
 import {
   SYSTEMS_SUBTABS, useConnections, UsageTab, StatusTab, DeployTab, SupabaseTab, MinerPanel,
 } from "../systems/SystemsPage.jsx";
-import { BoardRoomPage } from "../board/BoardPage.jsx";
 
 // Re-exported for any older importers — PROPERTIES now lives in ./properties.js.
 export { PROPERTIES } from "./properties.js";
@@ -28,10 +35,16 @@ const hostOf = (u) => { try { return new URL(u).hostname; } catch { return u || 
 // <a target="_blank" rel="noopener"> links — keep the noopener.
 const openExternal = (u) => window.open(u, "_blank", "noopener");
 
-// Assets is now a tabbed page: Mind first (the folded-in Mind tab, with its own
-// Mind/Neurons/Learn sub-sub-tabs), then Properties, then the folded-in systems
-// tabs. Keys are stable — Summon and muscle memory point at them.
-const ASSETS_SUBTABS = [{ key: "mind", label: "Mind" }, { key: "properties", label: "Properties" }, ...SYSTEMS_SUBTABS];
+// Usage first, and it is what the page lands on. Mind used to hold that slot —
+// it's gone from the app entirely now, not merely hidden here, so there is no
+// "mind" key left to deep-link to. Properties keeps second place; the rest of
+// the folded-in systems tabs keep their own order. Keys are stable — Summon and
+// muscle memory point at them.
+const ASSETS_SUBTABS = [
+  SYSTEMS_SUBTABS[0], // Usage
+  { key: "properties", label: "Properties" },
+  ...SYSTEMS_SUBTABS.slice(1),
+];
 
 /* Trailing status for a property row: response code in mono + a semantic dot.
    States: checking (pulse) → live/down once site-status answers, or an honest
@@ -169,20 +182,14 @@ function PropertiesTab({ isMobile, settings, updateSetting, session }) {
 
 // ─── The page ─────────────────────────────────────────────────────────────────
 // Named PropertiesPage for the App.jsx route it has always answered to.
-export function PropertiesPage({ isMobile, settings, updateSetting, session, btc, jump, onWorkerRun, onSkillsChanged, skills }) {
-  const [sub, setSub] = useState("mind"); // Mind is the first sub-tab and the default landing
-  // Summon / deep links can open straight onto a sub-tab (systems or Mind).
+export function PropertiesPage({ isMobile, settings, updateSetting, session, btc, jump }) {
+  const [sub, setSub] = useState("usage"); // Usage is the first sub-tab and the default landing
+  // Summon / deep links can open straight onto a sub-tab. An unknown key (a
+  // saved link to the retired "mind" tab) is ignored rather than blanking the
+  // page — you land on Usage.
   useEffect(() => {
     if (jump?.sub && ASSETS_SUBTABS.some(t => t.key === jump.sub)) setSub(jump.sub);
   }, [jump]);
-
-  // Mind deep links (Summon "Mini Me"/"Learn", the Brief's queue chip, Ask the
-  // Mind) arrive transformed to { sub: "mind", boardSub }. Re-hydrate a
-  // boardroom-shaped jump so the embedded BoardRoomPage — unchanged — still
-  // consumes them. Null when the current jump isn't aimed at Mind.
-  const boardJump = jump?.sub === "mind"
-    ? { page: "boardroom", sub: jump.boardSub || "mini", skillId: jump.skillId, ask: jump.ask, t: jump.t }
-    : null;
 
   // Connections hook hosted here (not inside StatusTab) so results survive a
   // hop to another sub-tab and back. Lazy-started the first time Status shows —
@@ -204,23 +211,8 @@ export function PropertiesPage({ isMobile, settings, updateSetting, session, btc
             active pill centered. */}
         <PillRow options={ASSETS_SUBTABS} value={sub} onChange={setSub} style={{ marginBottom: 14, flex: "none" }} />
 
-        {/* key={sub} re-mounts and animates the content on every tab switch.
-            flex:1 lets a full-height sub-tab (Mind's canvas) fill; the others
-            top-align inside it as before. */}
+        {/* key={sub} re-mounts and animates the content on every tab switch. */}
         <div key={sub} className="pagefade" style={{ display: "flex", flexDirection: "column", minWidth: 0, flex: 1, minHeight: 0 }}>
-          {/* Mind — the folded-in tab, with its own Mind/Neurons/Learn sub-sub-tabs.
-              Negative horizontal margin on mobile cancels the Assets 16px inset so
-              the Mind page keeps its own edge-to-edge padding, exactly as it read
-              when it was a top-level tab. */}
-          {sub === "mind" && (
-            <div style={{ display: "flex", flexDirection: "column", flex: 1, minHeight: 0, margin: isMobile ? "0 -16px" : 0 }}>
-              <BoardRoomPage
-                settings={settings} updateSetting={updateSetting} session={session}
-                onWorkerRun={onWorkerRun} onSkillsChanged={onSkillsChanged} skills={skills}
-                jump={boardJump} isMobile={isMobile}
-              />
-            </div>
-          )}
           {sub === "properties" && <PropertiesTab isMobile={isMobile} settings={settings} updateSetting={updateSetting} session={session} />}
           {sub === "usage" && <UsageTab settings={settings} updateSetting={updateSetting} isMobile={isMobile} />}
           {sub === "status" && <StatusTab checks={conn.checks} lastRun={conn.lastRun} running={conn.running} runAll={conn.runAll} isMobile={isMobile} />}

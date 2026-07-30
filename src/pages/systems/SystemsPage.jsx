@@ -240,7 +240,8 @@ const CONN_META = {
   fn_btc: { name: "btc", desc: "proxies BTC price + sparkline — avoids mobile-carrier IP rate limiting" },
   fn_btc_candles: { name: "btc-candles", desc: "BTC/USD candles via Kraken public API (5m/15m/30m/1d/1w) — no key needed" },
   fn_markets: { name: "markets", desc: "Gold, NVDA, MSTR, STRC quotes via Yahoo's public endpoint (unofficial)" },
-  fn_calendar: { name: "calendar", desc: "US econ calendar, today through +7 days (unofficial free feed)" },
+  fn_calendar: { name: "calendar", desc: "US econ calendar, last 18h through +7 days (unofficial free feed — forecast/prior only, no actuals)" },
+  fn_econ_result: { name: "econ-result", desc: "resolves what a released econ event actually printed — one web-searched Claude lookup per event, cached" },
   fn_calendar_events: { name: "calendar-events", desc: "upcoming meetings — parses the linked iCal URL" },
   fn_clarify_pipeline: { name: "clarify-pipeline", desc: "Clarify outreach pipeline stats (the shared Pentagon Supabase project)" },
   fn_zts_pipeline: { name: "zts-pipeline", desc: "ZTS creator pipeline stats (the shared Pentagon Supabase project, zts schema)" },
@@ -328,7 +329,7 @@ export function useConnections({ session, btc }) {
     // Netlify functions — this key→name mapping must stay in sync with
     // CONN_GROUPS keys and CONN_META. (fn_btc_candles used to be missing
     // here, leaving its row stuck on "checking" forever — fixed.)
-    const fns = [["fn_health", "health"], ["fn_mini", "mini-worker"], ["fn_btc", "btc"], ["fn_btc_candles", "btc-candles"], ["fn_markets", "markets"], ["fn_ticker_candles", "ticker-candles"], ["fn_wire", "wire"], ["fn_tmdb", "tmdb"], ["fn_export_data", "export-data"], ["fn_calendar", "calendar"], ["fn_calendar_events", "calendar-events"], ["fn_site_status", "site-status"], ["fn_gsc", "gsc"], ["fn_shopify", "shopify"], ["fn_clarify_pipeline", "clarify-pipeline"], ["fn_zts_pipeline", "zts-pipeline"], ["fn_deploy", "deploy"], ["fn_dbadmin", "db-admin"], ["fn_audit", "audit"], ["fn_autofix", "auto-fix"]];
+    const fns = [["fn_health", "health"], ["fn_mini", "mini-worker"], ["fn_btc", "btc"], ["fn_btc_candles", "btc-candles"], ["fn_markets", "markets"], ["fn_ticker_candles", "ticker-candles"], ["fn_wire", "wire"], ["fn_tmdb", "tmdb"], ["fn_export_data", "export-data"], ["fn_calendar", "calendar"], ["fn_econ_result", "econ-result"], ["fn_calendar_events", "calendar-events"], ["fn_site_status", "site-status"], ["fn_gsc", "gsc"], ["fn_shopify", "shopify"], ["fn_clarify_pipeline", "clarify-pipeline"], ["fn_zts_pipeline", "zts-pipeline"], ["fn_deploy", "deploy"], ["fn_dbadmin", "db-admin"], ["fn_audit", "audit"], ["fn_autofix", "auto-fix"]];
     if (!IS_DEPLOYED) {
       // netlify dev serves functions locally; try health first to decide —
       // if it's dead, mark ALL fns "local" instead of hammering 20 dead
