@@ -20,6 +20,12 @@ export const NAV = [
   // Usage/Status/Deploy/Supabase/Miner sub-tabs. App.jsx redirects any stray
   // "boardroom"/"systems" deep link to the right Assets sub-tab.
   { key: "assets", label: "Assets" },
+  // Ideas is a reading surface, not a system panel, which is why it sits at the
+  // top level rather than under Assets: it is checked the way Brief is checked,
+  // and two taps deep is the wrong depth for something you skim. The pipeline
+  // behind it (github.com/camcarp14/Scanner) writes to the same Pentagon
+  // project, so this page reads Postgres directly — no second copy of the data.
+  { key: "ideas", label: "Ideas" },
   // Upstream is built and deployed but hidden from nav while the pipeline settles.
   // To bring it back, uncomment this line — the page, route, HEADERS entry and the
   // Supabase tables are all still wired.
@@ -38,6 +44,7 @@ export const HEADERS = {
   grocery: { title: "Grocery", sub: () => "What to buy, and what's already in the cart" },
   boardroom: { title: "Mind", sub: () => "The mind behind the delegate" },
   assets: { title: "Assets", sub: () => "Everything you own, and what runs it" },
+  ideas: { title: "Ideas", sub: () => "What showed up on GitHub, worth a look" },
   // Kept as a defensive fallback: App.jsx redirects "systems" → "assets", so the
   // shell should never actually read this — but a header lookup must never crash.
   systems: { title: "Assets", sub: () => "Everything you own, and what runs it" },

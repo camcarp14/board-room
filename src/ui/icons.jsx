@@ -168,6 +168,22 @@ export const IcUpstreamFill = (p = {}) => (
   </svg>
 );
 
+export const IcIdeas = (p = {}) => ( // a lit filament — the found idea
+  <svg {...base(p)}>
+    <path d="M9.4 16.2a6 6 0 1 1 5.2 0" />
+    <line x1="9.6" y1="18.6" x2="14.4" y2="18.6" />
+    <line x1="10.4" y1="21" x2="13.6" y2="21" />
+    <path d="M12 13.4V9.8" />
+  </svg>
+);
+export const IcIdeasFill = (p = {}) => (
+  <svg {...base(p)}>
+    <path d="M12 2.6a6 6 0 0 0-2.6 11.4v2.2h5.2V14A6 6 0 0 0 12 2.6z" fill="currentColor" stroke="none" />
+    <line x1="9.6" y1="18.6" x2="14.4" y2="18.6" strokeWidth="2.4" />
+    <line x1="10.4" y1="21" x2="13.6" y2="21" strokeWidth="2.4" />
+  </svg>
+);
+
 /* ── tab registry — one place decides what the tabs look like ──────────────── */
 export const NAV_ICONS = {
   brief: { line: IcBrief, fill: IcBriefFill },
@@ -176,6 +192,7 @@ export const NAV_ICONS = {
   grocery: { line: IcGrocery, fill: IcGroceryFill },
   boardroom: { line: IcBoard, fill: IcBoardFill },
   assets: { line: IcAssets, fill: IcAssetsFill },
+  ideas: { line: IcIdeas, fill: IcIdeasFill },
   systems: { line: IcSystems, fill: IcSystemsFill },
   upstream: { line: IcUpstream, fill: IcUpstreamFill },
 };
