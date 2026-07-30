@@ -1,7 +1,8 @@
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { db } from "./db.js";
 import {
-  parseItem, formatItem, findDuplicate, bumpFrequency, STAPLES_KEY,
+  parseItem, formatItem, bumpFrequency, STAPLES_KEY,
+  planAdd, applyAdd, requestFor, isTempId, TMP_PREFIX,
 } from "../features/food/groceryLogic.js";
 
 const GROCERIES = ["groceries"];
@@ -55,56 +56,96 @@ function useOptimisticGrocery(apply, mutationFn) {
 }
 
 /**
+ * A row still carrying a temporary id has nothing on the server to change yet,
+ * so any request built from one is a guaranteed 400. GroceryPanel disables the
+ * controls on such a row; this is the second line of defence, for the tap that
+ * beats the re-render.
+ */
+function useGuardedOptimistic(apply, mutationFn, idOf) {
+  const m = useOptimisticGrocery(apply, mutationFn);
+  // mutateAsync is wrapped too, not because anything calls it today but because
+  // it is the obvious way for the next edit to bypass the guard entirely.
+  return {
+    ...m,
+    mutate: (vars, opts) => { if (!isTempId(idOf(vars))) m.mutate(vars, opts); },
+    mutateAsync: (vars, opts) => (isTempId(idOf(vars)) ? Promise.resolve() : m.mutateAsync(vars, opts)),
+  };
+}
+
+// Date.now() alone collides when two items go in inside the same millisecond,
+// and two rows sharing an id makes the wrong one get replaced on success.
+let tmpSeq = 0;
+const nextTmpId = () => `${TMP_PREFIX}${Date.now()}-${++tmpSeq}`;
+
+/**
  * Add — or merge. `mutate(text)` where text is whatever was typed.
  *
  * If the list already has that item (case-, plural- and quantity-insensitively),
  * this bumps its quantity and unchecks it rather than inserting a second row.
  * Adding milk twice should mean "two milks", not two lines that both say milk.
+ *
+ * The merge-or-insert decision is made HERE, in mutate(), against the list as it
+ * stands before onMutate has touched it — NOT inside mutationFn, which runs after
+ * onMutate and would see the optimistic row this add just created. That ordering
+ * mistake broke every add on the list; planAdd()'s docstring has the full story.
+ * The rule this shape enforces: mutationFn reads the plan and nothing else.
  */
 export function useAddGrocery() {
   const qc = useQueryClient();
-  return useOptimisticGrocery(
-    (prev, text) => {
-      const dup = findDuplicate(prev, text);
-      if (dup) {
-        const merged = formatItem(parseItem(dup.item).qty + parseItem(text).qty, parseItem(dup.item).name);
-        return prev.map((it) => (it.id === dup.id ? { ...it, item: merged, checked: false } : it));
-      }
-      // Temp id, replaced by onSettled's refetch. Prefixed so a stray render
-      // can't mistake it for a real row id.
-      return [...prev, { id: `tmp-${Date.now()}`, item: String(text).trim(), checked: false, created_at: new Date().toISOString() }];
+  const m = useMutation({
+    mutationFn: (plan) => {
+      const r = requestFor(plan);
+      return r.op === "update" ? db.updateGroceryItem(r.id, r.patch) : db.addGroceryItem(r.item);
     },
-    async (text) => {
-      const items = qc.getQueryData(GROCERIES) || [];
-      const dup = findDuplicate(items, text);
-      if (dup) {
-        const merged = formatItem(parseItem(dup.item).qty + parseItem(text).qty, parseItem(dup.item).name);
-        return db.updateGroceryItem(dup.id, { item: merged, checked: false });
-      }
-      return db.addGroceryItem(String(text).trim());
+    onMutate: async (plan) => {
+      await qc.cancelQueries({ queryKey: GROCERIES });
+      const prev = qc.getQueryData(GROCERIES) || [];
+      qc.setQueryData(GROCERIES, applyAdd(prev, plan, new Date().toISOString()));
+      return { prev };
     },
-  );
+    onError: (_e, _plan, ctx) => { if (ctx?.prev) qc.setQueryData(GROCERIES, ctx.prev); },
+    // Swap the temporary row for the real one the insert returned, so the row
+    // becomes tappable the moment the write lands rather than when the refetch
+    // does. Without this the row sits inert for a second round trip.
+    onSuccess: (row, plan) => {
+      if (plan.kind !== "insert" || !row?.id) return;
+      qc.setQueryData(GROCERIES, (prev) => (prev || []).map((it) => (it.id === plan.id ? row : it)));
+    },
+    onSettled: () => qc.invalidateQueries({ queryKey: GROCERIES }),
+  });
+
+  // Both entry points plan, so neither can hand raw text to a mutationFn that
+  // expects a plan. mutate(text) keeps the signature the panel already calls.
+  const plan = (text) => planAdd(qc.getQueryData(GROCERIES) || [], text, nextTmpId());
+  return {
+    ...m,
+    mutate: (text, opts) => { const p = plan(text); if (p) m.mutate(p, opts); },
+    mutateAsync: (text, opts) => { const p = plan(text); return p ? m.mutateAsync(p, opts) : Promise.resolve(); },
+  };
 }
 
 export function useToggleGrocery() {
-  return useOptimisticGrocery(
+  return useGuardedOptimistic(
     (prev, { id, checked }) => prev.map((it) => (it.id === id ? { ...it, checked } : it)),
     ({ id, checked }) => db.toggleGroceryItem(id, checked),
+    (v) => v?.id,
   );
 }
 
 export function useDeleteGrocery() {
-  return useOptimisticGrocery(
+  return useGuardedOptimistic(
     (prev, id) => prev.filter((it) => it.id !== id),
     (id) => db.deleteGroceryItem(id),
+    (id) => id,
   );
 }
 
 /** Change an item's quantity in place — the stepper on a row. */
 export function useSetGroceryQty() {
-  return useOptimisticGrocery(
+  return useGuardedOptimistic(
     (prev, { id, qty }) => prev.map((it) => (it.id === id ? { ...it, item: formatItem(qty, parseItem(it.item).name) } : it)),
     ({ id, qty, item }) => db.updateGroceryItem(id, { item: formatItem(qty, parseItem(item).name) }),
+    (v) => v?.id,
   );
 }
 
@@ -118,7 +159,10 @@ export function useClearCheckedGroceries() {
   return useMutation({
     mutationFn: async (items) => {
       const tally = bumpFrequency(qc.getQueryData(GROCERY_FREQ) || {}, items);
-      await Promise.all(items.map((g) => db.deleteGroceryItem(g.id)));
+      // One un-landed row in the cart would 400 and take the whole clear down
+      // with it, tally included. It leaves the screen either way — Promise.all
+      // rejects on the first failure, so this is not a place to be optimistic.
+      await Promise.all(items.filter((g) => !isTempId(g.id)).map((g) => db.deleteGroceryItem(g.id)));
       await db.saveSetting(STAPLES_KEY, tally);
       return tally;
     },

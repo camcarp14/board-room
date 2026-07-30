@@ -207,6 +207,77 @@ export function findDuplicate(items, text) {
   return (items || []).find((it) => canonicalName(it.item) === key) || null;
 }
 
+// ─── The add, decided once ────────────────────────────────────────────────────
+// An optimistic add has to put something on screen before the server has given
+// it an id, so it invents one. The prefix is what keeps that visible: a
+// temporary id is a uuid column's worth of nothing, and any request built around
+// one — PATCH /grocery_items?id=eq.tmp-1785391991627 — comes back 400.
+export const TMP_PREFIX = "tmp-";
+export const isTempId = (id) => typeof id === "string" && id.startsWith(TMP_PREFIX);
+
+/**
+ * What an add MEANS: merge into a row already on the list, or insert a new one.
+ *
+ * THE MOMENT THIS IS CALLED IS THE WHOLE POINT. It must see the list as it stands
+ * *before* anything optimistic has been written to it.
+ *
+ * The first version of the optimistic list decided this inside react-query's
+ * mutation function, which runs AFTER onMutate. So the duplicate lookup saw the
+ * row onMutate had just invented, matched the new item against itself, and
+ * issued a merge against a temporary id. Every add — duplicate or not — became
+ * `PATCH ?id=eq.tmp-…` → 400 → rollback, and the list silently refused every
+ * item for four days. Nothing threw, nothing logged, the row just faded out.
+ *
+ * Returning a plan is what makes that unrepeatable. One decision, taken once,
+ * from one snapshot; the optimistic patch (applyAdd) and the request
+ * (requestFor) are both derived from it, so they cannot disagree and neither
+ * needs to read the list again.
+ *
+ * @param items  the list BEFORE this add
+ * @param text   whatever was typed
+ * @param tmpId  id to carry the optimistic row until the insert answers
+ * @returns {null|{kind:"insert"|"merge", id:string, item:string, typed:string}}
+ */
+export function planAdd(items, text, tmpId = `${TMP_PREFIX}0`) {
+  const typed = String(text ?? "").trim();
+  if (!typed) return null;
+  const dup = findDuplicate(items, typed);
+  // A duplicate whose own insert hasn't landed yet has no server row to merge
+  // into, so it gets an insert instead. Two lines both saying milk is a cosmetic
+  // annoyance the stepper fixes in one tap; a request against a temporary id is
+  // an item that never saves.
+  if (dup && !isTempId(dup.id)) {
+    const { qty, name } = parseItem(dup.item);
+    return { kind: "merge", id: dup.id, item: formatItem(qty + parseItem(typed).qty, name), typed };
+  }
+  return { kind: "insert", id: tmpId, item: typed, typed };
+}
+
+/**
+ * The plan applied to the list — the optimistic half of the same decision.
+ * `at` is passed in rather than read off the clock so this stays pure.
+ */
+export function applyAdd(items, plan, at) {
+  const list = items || [];
+  if (!plan) return list;
+  if (plan.kind === "merge") {
+    return list.map((it) => (it.id === plan.id ? { ...it, item: plan.item, checked: false } : it));
+  }
+  return [...list, { id: plan.id, item: plan.item, checked: false, created_at: at }];
+}
+
+/**
+ * The plan as the request to send — the other half. Split out from the mutation
+ * function so the id that goes over the wire is inspectable by a test that runs
+ * without React, which is the one thing the old code had no way to check.
+ */
+export function requestFor(plan) {
+  if (!plan) return null;
+  return plan.kind === "merge"
+    ? { op: "update", id: plan.id, patch: { item: plan.item, checked: false } }
+    : { op: "insert", item: plan.item };
+}
+
 /**
  * The whole list, arranged for shopping.
  *

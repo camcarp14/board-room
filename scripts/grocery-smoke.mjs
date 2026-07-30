@@ -17,6 +17,7 @@
 import {
   AISLES, aisleOf, aisleMeta, parseItem, formatItem, canonicalName,
   findDuplicate, groupList, bumpFrequency, frequentSuggestions, STAPLE_MIN_BUYS,
+  planAdd, applyAdd, requestFor, isTempId, TMP_PREFIX,
 } from "../src/features/food/groceryLogic.js";
 
 let failed = 0;
@@ -151,6 +152,101 @@ check("a missing tally yields no suggestions rather than throwing",
   frequentSuggestions(null, null).length === 0 && frequentSuggestions(undefined, []).length === 0);
 check("garbage entries are skipped, not rendered",
   frequentSuggestions({ x: null, y: { label: "Y" } }, []).length === 0);
+
+// ─── 6. the add pipeline: one decision, taken before anything is written ───────
+// This section exists because of a bug none of the five above could see. They all
+// test pure functions in isolation; the list broke in the SEAM between them.
+//
+// react-query runs onMutate (the optimistic cache write) before mutationFn (the
+// request). The shipped code decided merge-vs-insert inside mutationFn, reading
+// the cache — so it saw the list AFTER the optimistic row had been written to it,
+// matched the new item against itself, and sent a merge aimed at a temporary id.
+// Every add became `PATCH /grocery_items?id=eq.tmp-1785391991627` → 400 →
+// rollback → item gone. Four days, from a phone in a shop, with nothing on screen
+// to say anything had failed.
+//
+// So these assertions are about ORDER, and about what goes over the WIRE — not
+// about any one function's answer.
+
+const NOW = "2026-07-30T12:00:00.000Z";
+
+// The lifecycle, with the one ordering fact that matters preserved: decide from
+// the pre-write list, then write, then send.
+const runAdd = (list, text, tmpId) => {
+  const plan = planAdd(list, text, tmpId);
+  if (!plan) return { plan: null, list, request: null };
+  return { plan, list: applyAdd(list, plan, NOW), request: requestFor(plan) };
+};
+
+{
+  const a = runAdd([], "Milk", `${TMP_PREFIX}1`);
+  check("a new item is an insert", a.plan.kind === "insert" && a.request.op === "insert");
+  check("the insert sends the text that was typed", a.request.item === "Milk");
+  check("the optimistic row shows up at once", a.list.length === 1 && a.list[0].item === "Milk");
+  check("the optimistic row is unchecked and dated", a.list[0].checked === false && a.list[0].created_at === NOW);
+  check("the optimistic row carries a temporary id", isTempId(a.list[0].id));
+}
+
+// THE INVARIANT. For any starting list and anything typed, a single add never
+// sends a request against an id the server has never seen. Nothing else in this
+// file would have caught the shipped bug; this is the assertion that does.
+{
+  const LISTS = [
+    [],
+    [{ id: "real-1", item: "Milk", checked: false }],
+    [{ id: `${TMP_PREFIX}9`, item: "Milk", checked: false }],           // an add still in flight
+    [{ id: "real-1", item: "2x Milk", checked: true }, { id: `${TMP_PREFIX}9`, item: "Eggs", checked: false }],
+  ];
+  const TEXTS = ["Milk", "milk", "Milks", "2x milk", "Eggs", "egg", "Bread"];
+  let bad = null;
+  LISTS.forEach((list, i) => TEXTS.forEach((text) => {
+    const r = runAdd(list, text, `${TMP_PREFIX}new`);
+    if (r.request?.op === "update" && isTempId(r.request.id)) bad = `list ${i} + "${text}" → PATCH ${r.request.id}`;
+  }));
+  check("no add, on any list, sends a request against a temporary id", !bad, bad || "");
+
+  // A duplicate that hasn't landed yet gets an insert rather than being dropped —
+  // a second line saying milk is a stepper tap to fix; a lost item is not.
+  check("an add matching an in-flight row still reaches the server",
+    runAdd(LISTS[2], "Milk", `${TMP_PREFIX}new`).request.op === "insert");
+}
+
+// Proof the invariant above has teeth: the shipped decision function,
+// reconstructed, shown failing it. Without this, "the test would have caught it"
+// is a claim rather than a checked fact — and if a refactor ever makes this
+// reconstruction pass, the reconstruction has stopped modelling the old code and
+// the invariant is no longer guarding anything.
+{
+  const shipped = (list, text, tmpId) => {
+    const written = applyAdd(list, { kind: "insert", id: tmpId, item: text, typed: text }, NOW);
+    const dup = findDuplicate(written, text);        // ← reads the list it just wrote
+    return dup ? { op: "update", id: dup.id } : { op: "insert", item: text };
+  };
+  const r = shipped([], "Milk", `${TMP_PREFIX}1`);
+  check("the shipped decision function does fail that invariant",
+    r.op === "update" && isTempId(r.id),
+    "the reconstruction no longer reproduces the bug — check it still models the old code");
+}
+
+// Merging, which is the behaviour the rebuild was actually for.
+{
+  const r = runAdd([{ id: "real-1", item: "Milk", checked: true }], "milk", `${TMP_PREFIX}1`);
+  check("an item already on the list merges into its real id", r.request.op === "update" && r.request.id === "real-1");
+  check("the merge sums the quantities", r.request.patch.item === "2x Milk");
+  check("the merge unchecks the row — you need it again", r.request.patch.checked === false);
+  check("merging adds no second row", r.list.length === 1 && r.list[0].item === "2x Milk");
+  check("what the row shows and what the request sends are the same string",
+    r.list[0].item === r.request.patch.item);
+  check("a quantified add adds to a quantified row",
+    runAdd([{ id: "real-1", item: "2x Milk", checked: false }], "3x milk", `${TMP_PREFIX}1`).request.patch.item === "5x Milk");
+}
+
+check("blank text plans nothing at all", planAdd([], "   ", `${TMP_PREFIX}1`) === null && requestFor(null) === null);
+check("the plan keeps the typed text, so a failed add can be retried",
+  planAdd([], "  Milk  ", `${TMP_PREFIX}1`).typed === "Milk");
+check("a real uuid is never mistaken for a temporary id",
+  !isTempId("0d2f6286-1780-49aa-9d48-d4a7dac2ce66") && !isTempId(undefined) && !isTempId(null)
+  && !isTempId({}) && isTempId(`${TMP_PREFIX}1`));
 
 console.log(failed ? `\nGROCERY SMOKE FAILED (${failed})` : "\nGROCERY SMOKE PASS");
 process.exit(failed ? 1 : 0);

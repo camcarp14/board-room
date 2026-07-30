@@ -32,19 +32,25 @@ import {
 import { Card, Button, Field, EmptyState, Pill, Dot, useConfirm, IcCheck } from "../../ui/kit.jsx";
 import { IcClose, IcGrocery, IcChevronDown } from "../../ui/icons.jsx";
 import { NumTween } from "../../ui/primitives.jsx";
-import { groupList, parseItem, frequentSuggestions } from "./groceryLogic.js";
+import { groupList, parseItem, frequentSuggestions, isTempId } from "./groceryLogic.js";
 
 // Lets a <button> wear the kit's .cell-body anatomy — rows keep separate stepper
 // and delete controls, so the whole cell can't be one <button> itself.
 const rowBtn = { background: "none", border: 0, padding: 0, margin: 0, font: "inherit", color: "inherit", textAlign: "left", cursor: "pointer", alignSelf: "stretch", justifyContent: "center" };
 
 /* One row. Checkbox is the row body (the big target); stepper and delete sit
-   outside it so a tap on either can't also toggle the item. */
-function Row({ it, onToggle, onQty, onDelete }) {
+   outside it so a tap on either can't also toggle the item.
+
+   `pending` is a row whose insert is still in flight: it has a temporary id, so
+   there is no server row to check off, renumber or delete yet, and every request
+   built from that id comes back 400. It reads as slightly faded and ignores taps
+   for the one round trip it takes to become real. */
+function Row({ it, pending, onToggle, onQty, onDelete }) {
   const { qty, name } = parseItem(it.item);
   return (
-    <div className="cell tappable" style={{ paddingRight: 6, minHeight: 54, gap: 8 }}>
-      <button className="cell-body" onClick={onToggle} role="checkbox" aria-checked={!!it.checked}
+    <div className="cell tappable" style={{ paddingRight: 6, minHeight: 54, gap: 8, ...(pending ? { opacity: 0.5 } : null) }}
+      aria-busy={pending || undefined}>
+      <button className="cell-body" onClick={onToggle} role="checkbox" aria-checked={!!it.checked} disabled={pending}
         style={{ ...rowBtn, flexDirection: "row", alignItems: "center", gap: 13 }}>
         <span aria-hidden style={{
           width: 24, height: 24, borderRadius: "50%", flex: "none",
@@ -68,13 +74,13 @@ function Row({ it, onToggle, onQty, onDelete }) {
       {!it.checked && (
         <span className="gro-step">
           {qty > 1 && (
-            <button aria-label={`One fewer ${name}`} onClick={() => onQty(qty - 1)}>−</button>
+            <button aria-label={`One fewer ${name}`} onClick={() => onQty(qty - 1)} disabled={pending}>−</button>
           )}
           <span className="gro-qty" aria-label={`Quantity ${qty}`}>{qty}</span>
-          <button aria-label={`One more ${name}`} onClick={() => onQty(qty + 1)}>+</button>
+          <button aria-label={`One more ${name}`} onClick={() => onQty(qty + 1)} disabled={pending}>+</button>
         </span>
       )}
-      <button className="icon-btn" aria-label={`Delete ${name}`} onClick={onDelete}><IcClose size={15} /></button>
+      <button className="icon-btn" aria-label={`Delete ${name}`} onClick={onDelete} disabled={pending}><IcClose size={15} /></button>
     </div>
   );
 }
@@ -187,6 +193,21 @@ export function GroceryPanel({ isMobile }) {
           <Button kind={newItem.trim() ? "primary" : "quiet"} size="md" onClick={() => add()} disabled={!newItem.trim()} style={{ flex: "none" }}>Add</Button>
         </div>
 
+        {/* A rejected add rolls the row back off the list, which on its own looks
+            identical to never having typed it — that is precisely how the list
+            managed to refuse every item for four days without anyone seeing an
+            error. So say what failed, keep the text so it isn't retyped, and
+            offer the retry. */}
+        {addMut.isError && (
+          <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+            <span className="t-cap" style={{ color: "var(--red)", flex: 1, minWidth: 0 }}>
+              “{addMut.variables?.typed}” didn’t save
+              {addMut.error?.message ? ` — ${addMut.error.message}` : ""}
+            </span>
+            <Button kind="tinted" size="sm" onClick={() => add(addMut.variables?.typed)} style={{ flex: "none" }}>Retry</Button>
+          </div>
+        )}
+
         {/* Learned from cleared carts, so it stays empty until you've actually
             shopped twice — no cold-start guesses about what you buy. */}
         {suggestions.length > 0 && (
@@ -222,7 +243,7 @@ export function GroceryPanel({ isMobile }) {
                     <AisleHead label={sec.label} tone={sec.tone} count={sec.items.length} />
                   </div>
                   {sec.items.map((it) => (
-                    <Row key={it.id} it={it}
+                    <Row key={it.id} it={it} pending={isTempId(it.id)}
                       onToggle={() => toggle(it)}
                       onQty={(q) => setQty(it, q)}
                       onDelete={() => delMut.mutate(it.id)} />
@@ -248,7 +269,7 @@ export function GroceryPanel({ isMobile }) {
                 <div className={`expand${cartOpen ? " open" : ""}`} style={{ margin: "0 -16px" }}>
                   <div>
                     {cart.map((it) => (
-                      <Row key={it.id} it={it}
+                      <Row key={it.id} it={it} pending={isTempId(it.id)}
                         onToggle={() => toggle(it)}
                         onQty={(q) => setQty(it, q)}
                         onDelete={() => delMut.mutate(it.id)} />
