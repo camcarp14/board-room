@@ -8,7 +8,29 @@ async function accessToken() {
   return data?.session?.access_token || null;
 }
 
+// ─── PAUSED ──────────────────────────────────────────────────────────────────
+// The UI half of the pause. The REAL gate is in
+// netlify/functions/upstream-run-background.js — that one is what stops tokens,
+// because it also refuses stale tabs and direct POSTs that never touch this
+// file. This copy exists so the pages can say so plainly and stop firing
+// requests that are only going to be declined.
+//
+// Both must be flipped together to reconnect. They are two declarations rather
+// than one shared import on purpose: this repo's Netlify bundling turns a
+// required helper's module.exports into the function bundle's exports and
+// deploys it with NO handler (see netlify/functions/audit.js — a 502 the repo
+// has already paid for once). So the copies are enforced by
+// scripts/upstream-paused-smoke.mjs instead of eliminated.
+export const ENGINES_PAUSED = true;
+export const PAUSED_TITLE = "Paused — not connected";
+export const PAUSED_NOTE =
+  "UPSTREAM and Nostradamus are disconnected and will not run or spend anything. "
+  + "They need to be reconnected before they can be used again.";
+
 export async function startJob(kind, extra = {}) {
+  // Belt and braces. The server refuses anyway; this just avoids a round trip
+  // and gives the pages the same message whether or not the request goes out.
+  if (ENGINES_PAUSED) throw new Error(PAUSED_NOTE);
   const token = await accessToken();
   if (!token) throw new Error("Not signed in");
   const runId = crypto.randomUUID();

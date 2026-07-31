@@ -19,9 +19,30 @@ import { IcRefresh, IcChevronDown, IcExternal, IcSearch, IcTrash } from "../../u
 import {
   startJob, fetchRuns, fetchRun, fetchPredictions, resolvePrediction,
   deleteRun, deletePrediction, calibration, fmtDuration, daysUntil, hostOf,
+  ENGINES_PAUSED, PAUSED_TITLE, PAUSED_NOTE,
 } from "../../lib/upstream.js";
 
 /* ── primitives ─────────────────────────────────────────────────────────────── */
+
+/* The paused notice. Amber, not red: nothing is broken and nothing was lost —
+   the engines are switched off and will work again once reconnected. It sits
+   ABOVE each tool's description rather than replacing it, so the page still
+   explains what the thing does while making clear it won't do it right now.
+   Everything already run stays readable underneath; only launching is off. */
+function PausedBanner() {
+  if (!ENGINES_PAUSED) return null;
+  return (
+    <Card pad="lg" style={{ marginBottom: 12, borderLeft: "3px solid var(--amber)" }}>
+      <p style={{ margin: "0 0 4px", fontWeight: 700, fontSize: 14.5, color: "var(--amber)" }}>
+        {PAUSED_TITLE}
+      </p>
+      <p style={{ margin: 0, fontSize: 13, color: "var(--sub)", lineHeight: 1.6 }}>
+        {PAUSED_NOTE} Past runs and predictions below are unaffected — you can still read,
+        resolve and delete them.
+      </p>
+    </Card>
+  );
+}
 
 const VERDICT = {
   povs_shipped: { tone: "var(--accent)", label: "POVS SHIPPED" },
@@ -478,8 +499,15 @@ function PredictionCard({ p, actions }) {
 
       {actions && !closed && (
         <div style={{ display: "flex", gap: 8, marginTop: 12, flexWrap: "wrap", alignItems: "center" }}>
-          <Button kind="quiet" size="md" disabled={actions.checking === p.id} onClick={() => actions.onCheckTell(p.id)}>
-            {actions.checking === p.id ? <><Spinner size={12} /> checking…</> : last ? "Re-check the tell" : "Check the tell"}
+          {/* Checking a tell is a sonnet call with web search — it spends, so it
+              is paused with the rest. Resolve/reopen/delete stay live: they are
+              local bookkeeping on predictions you already paid for. */}
+          <Button kind="quiet" size="md" disabled={ENGINES_PAUSED || actions.checking === p.id}
+            title={ENGINES_PAUSED ? PAUSED_NOTE : undefined}
+            onClick={() => actions.onCheckTell(p.id)}>
+            {ENGINES_PAUSED ? "Tell check paused"
+              : actions.checking === p.id ? <><Spinner size={12} /> checking…</>
+              : last ? "Re-check the tell" : "Check the tell"}
           </Button>
           <Button kind="quiet" size="md" onClick={() => setResolving(!resolving)}>Resolve…</Button>
           <span style={{ flex: 1 }} />
@@ -741,6 +769,7 @@ function EngineTab() {
   return (
     <>
       {confirmEl}
+      <PausedBanner />
       <Card pad="lg">
         <p style={{ margin: "0 0 4px", fontWeight: 700, fontSize: 15.5 }}>What should you actually be asking?</p>
         <p style={{ margin: "0 0 12px", fontSize: 13, color: "var(--sub)", lineHeight: 1.6 }}>
@@ -749,13 +778,17 @@ function EngineTab() {
           on each. If the standard questions are already the right ones, it says so.
         </p>
         <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-          <Field value={domain} onChange={(e) => setDomain(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") launch(); }}
-            placeholder="a domain or situation…" style={{ flex: 1, minWidth: 200 }} />
-          <Button kind="primary" size="lg" disabled={launching || active} onClick={() => launch()}>
-            {launching ? <><Spinner size={13} /> starting…</> : active ? "run in progress" : "Run"}
+          <Field value={domain} onChange={(e) => setDomain(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter" && !ENGINES_PAUSED) launch(); }}
+            placeholder={ENGINES_PAUSED ? "paused — reconnect to run" : "a domain or situation…"}
+            disabled={ENGINES_PAUSED} style={{ flex: 1, minWidth: 200 }} />
+          <Button kind="primary" size="lg" disabled={ENGINES_PAUSED || launching || active} onClick={() => launch()}
+            title={ENGINES_PAUSED ? PAUSED_NOTE : undefined}>
+            {ENGINES_PAUSED ? "Paused" : launching ? <><Spinner size={13} /> starting…</> : active ? "run in progress" : "Run"}
           </Button>
         </div>
-        {!active && !launching && (
+        {/* Example chips fill a field that is disabled while paused — a control
+            that visibly does nothing reads as a bug, so it goes away entirely. */}
+        {!active && !launching && !ENGINES_PAUSED && (
           <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginTop: 10 }}>
             {EXAMPLES.map((ex) => (
               <button key={ex} onClick={() => setDomain(ex)} style={{
@@ -928,6 +961,7 @@ function NostradamusTab() {
   return (
     <>
       {confirmEl}
+      <PausedBanner />
       <Card pad="lg">
         <p style={{ margin: "0 0 4px", fontWeight: 700, fontSize: 15.5 }}>Nostradamus</p>
         <p style={{ margin: "0 0 12px", fontSize: 13, color: "var(--sub)", lineHeight: 1.6 }}>
@@ -935,8 +969,9 @@ function NostradamusTab() {
           ships predictions measurably outside that — each dated, with the earliest signal you could go
           check yourself. Everything here gets scored as reality lands.
         </p>
-        <Button kind="primary" size="lg" disabled={launching || active} onClick={consult}>
-          {launching ? <><Spinner size={13} /> consulting…</> : active ? "consult in progress" : "Consult"}
+        <Button kind="primary" size="lg" disabled={ENGINES_PAUSED || launching || active} onClick={consult}
+          title={ENGINES_PAUSED ? PAUSED_NOTE : undefined}>
+          {ENGINES_PAUSED ? "Paused" : launching ? <><Spinner size={13} /> consulting…</> : active ? "consult in progress" : "Consult"}
         </Button>
       </Card>
 
