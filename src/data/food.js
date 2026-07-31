@@ -140,11 +140,34 @@ export function useDeleteGrocery() {
   );
 }
 
-/** Change an item's quantity in place — the stepper on a row. */
+/** Change an item's quantity in place — the stepper on a row.
+ *
+ *  Re-formats from the WHOLE parse, not just the name: quantity, store and
+ *  pinned section all live in the same string, so rebuilding it from `name`
+ *  alone (which is what this used to do) would drop "@Costco" on the floor
+ *  every time you tapped +. */
+const reQty = (item, qty) => { const p = parseItem(item); return formatItem(qty, p.name, p); };
+
 export function useSetGroceryQty() {
   return useGuardedOptimistic(
-    (prev, { id, qty }) => prev.map((it) => (it.id === id ? { ...it, item: formatItem(qty, parseItem(it.item).name) } : it)),
-    ({ id, qty, item }) => db.updateGroceryItem(id, { item: formatItem(qty, parseItem(item).name) }),
+    (prev, { id, qty }) => prev.map((it) => (it.id === id ? { ...it, item: reQty(it.item, qty) } : it)),
+    ({ id, qty, item }) => db.updateGroceryItem(id, { item: reQty(item, qty) }),
+    (v) => v?.id,
+  );
+}
+
+/**
+ * Edit a row in place — the name, its store, its pinned section, all at once.
+ *
+ * Takes the already-composed item string (the panel builds it with formatItem)
+ * so this stays the same shape as every other mutation here: one optimistic
+ * write, one request, one rollback. Quantity rides along inside that string,
+ * which is why the editor can change it too without a second round trip.
+ */
+export function useEditGrocery() {
+  return useGuardedOptimistic(
+    (prev, { id, item }) => prev.map((it) => (it.id === id ? { ...it, item } : it)),
+    ({ id, item }) => db.updateGroceryItem(id, { item }),
     (v) => v?.id,
   );
 }

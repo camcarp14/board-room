@@ -11,13 +11,12 @@
 import { useState, useEffect } from "react";
 import {
   Card, SectionHeader, CellGroup, Cell, StatTile, Button, Pill,
-  Segmented, Field, Dot, Grid, EmptyState,
+  Segmented, Field, Dot, EmptyState,
 } from "../../ui/kit.jsx";
-import { Segmented as ModelPicker } from "../../ui/primitives.jsx"; // the MODEL_META picker
+import { IcChevronDown } from "../../ui/icons.jsx";
 import { supabase, ANTHROPIC_API_KEY } from "../../lib/supabase.js";
 import { pingFn, callFn } from "../../lib/functions.js";
-import { callClaude, DEFAULT_MODELS, MODEL_META } from "../../lib/claude.js";
-import { obs } from "../../lib/storage.js";
+import { callClaude } from "../../lib/claude.js";
 import { PROPERTIES } from "../assets/properties.js";
 import { MinerPanel } from "./MinerPanel.jsx";
 
@@ -46,6 +45,81 @@ export const SYSTEMS_SUBTABS = [
 const USAGE_WINDOWS = [["24h", 1], ["7d", 7], ["30d", 30], ["All", 3650]];
 const LOG_STEP = 40; // in-page log cap — "Show more" extends it, no nested scroller
 
+// ── What each row actually IS ────────────────────────────────────────────────
+// `usage_log.fn` is a wire identifier — "gsc", "briefing_update", "fn_econ".
+// Reading a spend table written in those is guesswork six months later, and
+// guessing wrong about which line is costing money is the one failure this
+// table exists to prevent. So every fn gets a plain-English name for the PULL
+// it performs, and the raw id stays on the row underneath so a line here is
+// still greppable against the code.
+//
+// An fn with no entry falls back to its raw id rather than being hidden — a new
+// caller must show up as itself, not vanish from the accounting.
+const USAGE_META = {
+  // Netlify function hits (kind = 'call')
+  btc: { label: "Bitcoin price + sparkline" },
+  "btc-candles": { label: "Bitcoin candles · Kraken" },
+  markets: { label: "Gold, NVDA, MSTR, STRC quotes" },
+  "ticker-candles": { label: "Watchlist ticker charts" },
+  wire: { label: "Crypto headlines · CoinDesk + Cointelegraph" },
+  calendar: { label: "US econ calendar" },
+  "calendar-events": { label: "Meetings from your iCal" },
+  "econ-resolve-background": { label: "Econ prints resolved" },
+  gsc: { label: "Search Console · zerotosecure.com", tool: "Zero To Secure" },
+  shopify: { label: "Shopify orders + visits", tool: "Zero To Secure" },
+  "zts-pipeline": { label: "ZTS creator pipeline", tool: "Zero To Secure" },
+  "clarify-pipeline": { label: "Clarify outreach pipeline", tool: "Clarify Paid Search" },
+  "site-status": { label: "Property uptime checks" },
+  tmdb: { label: "Movie poster + year lookup" },
+  "export-data": { label: "Backup export" },
+  deploy: { label: "Netlify build trigger" },
+  "db-admin": { label: "Supabase maintenance command" },
+  health: { label: "Server key/config probe" },
+  claude: { label: "Claude proxy" },
+  trmnl: { label: "TRMNL e-ink render" },
+  "workout-import": { label: "Workout import" },
+  "fetch-page": { label: "Page fetched for Learn" },
+  "discord-board": { label: "Discord command" },
+  "board-work-background": { label: "Discord board work" },
+  "upstream-run-background": { label: "UPSTREAM run" },
+  // Model calls (kind = 'anthropic')
+  chief: { label: "Chief · chat reply" },
+  route: { label: "Chief · intent routing" },
+  mind_pulse: { label: "Mind · pulse" },
+  mind_chat: { label: "Mind · chat" },
+  briefing_update: { label: "Brief · narrative refresh" },
+  event_impact: { label: "Watch This Week · one-line take" },
+  meal_idea: { label: "Meal suggestion" },
+  learn_skill: { label: "Skill learned" },
+  oversight: { label: "Oversight review" },
+  parse_calendar_image: { label: "Calendar screenshot → events" },
+  parse_birthdays: { label: "Birthday list parsed" },
+  conn_check: { label: "Status tab · Anthropic ping" },
+  "mini-worker": { label: "Mini Me · task run" },
+  audit: { label: "AI site audit" },
+  "auto-fix": { label: "AI fix proposal" },
+  upstream: { label: "UPSTREAM pipeline" },
+  "upstream-tell": { label: "UPSTREAM tell" },
+  nostradamus: { label: "Nostradamus run" },
+};
+// Discord writes fn as `discord_<stage>`, so the stage is data, not a fixed key.
+const usageLabel = (fn) => USAGE_META[fn]?.label
+  || (/^discord_/.test(fn || "") ? `Discord · ${String(fn).slice(8).replace(/_/g, " ")}` : fn);
+
+// ── The Pentagon, by tool ────────────────────────────────────────────────────
+// ZTS, Clarify, Runway and Macro were consolidated into one app (see
+// assets/properties.js), so "which venture is this call for" is no longer
+// answerable from the URL — every one of them is the-pentagon.netlify.app. The
+// attribution therefore lives here, on the PULL: `usageLabel`'s `tool` field
+// says which venture a given fn fetches for.
+//
+// Honest about its own scope, which is the only way a roll-up like this is
+// worth having: this counts Board Room's pulls FOR each tool. It is not the
+// Pentagon app's own spend — that app logs to its own project and Board Room
+// has no read on it. Tools that Board Room doesn't pull for show a real zero
+// rather than being dropped, so "no line here" can't be mistaken for "no data".
+const PENTAGON_TOOLS = ["Zero To Secure", "Clarify Paid Search", "Macro Command Center", "Runway"];
+
 function UsageCard({ isMobile }) {
   const [summary, setSummary] = useState(null); // null = loading; accurate totals via server-side aggregation, not capped by row count
   const [recentRows, setRecentRows] = useState(null); // separate, smaller fetch — only for the raw log detail view below
@@ -54,6 +128,7 @@ function UsageCard({ isMobile }) {
   const [retryNonce, setRetryNonce] = useState(0);
   const [showLog, setShowLog] = useState(false);
   const [logShown, setLogShown] = useState(LOG_STEP);
+  const [fnsOpen, setFnsOpen] = useState(false);
 
   const load = async () => {
     setSummary(null); setRecentRows(null); setErr(null); setLogShown(LOG_STEP);
@@ -85,12 +160,31 @@ function UsageCard({ isMobile }) {
   const totalOut = anthropicRows.reduce((s, r) => s + Number(r.out_tokens || 0), 0);
   const byFn = {};
   (summary || []).forEach(r => {
-    byFn[r.fn] = byFn[r.fn] || { calls: 0, cost: 0, failed: 0 };
+    byFn[r.fn] = byFn[r.fn] || { calls: 0, cost: 0, failed: 0, inTok: 0, outTok: 0 };
     byFn[r.fn].calls += Number(r.calls);
     byFn[r.fn].cost += Number(r.cost_usd || 0);
     byFn[r.fn].failed += Number(r.failed);
+    byFn[r.fn].inTok += Number(r.in_tokens || 0);
+    byFn[r.fn].outTok += Number(r.out_tokens || 0);
   });
-  const topFns = Object.entries(byFn).sort((a, b) => (b[1].cost - a[1].cost) || (b[1].calls - a[1].calls)).slice(0, 8);
+  // Every fn, not a top-8 slice. A spend table that silently truncates is the
+  // same failure as one that reads $0.000 — the row you're hunting is exactly
+  // the one that fell off the end. Long tails collapse behind a disclosure
+  // instead, so the default view stays short without lying about what it holds.
+  const allFns = Object.entries(byFn).sort((a, b) => (b[1].cost - a[1].cost) || (b[1].calls - a[1].calls));
+  const topFns = fnsOpen ? allFns : allFns.slice(0, 8);
+
+  // Pentagon roll-up: fold every fn that serves a tool into that tool's row.
+  const byTool = Object.fromEntries(PENTAGON_TOOLS.map(t => [t, { calls: 0, cost: 0, failed: 0, fns: [] }]));
+  Object.entries(byFn).forEach(([fn, s]) => {
+    const tool = USAGE_META[fn]?.tool;
+    if (!tool || !byTool[tool]) return;
+    byTool[tool].calls += s.calls;
+    byTool[tool].cost += s.cost;
+    byTool[tool].failed += s.failed;
+    byTool[tool].fns.push(fn);
+  });
+  const pentagonCalls = Object.values(byTool).reduce((n, t) => n + t.calls, 0);
   const fmtK = (n) => n > 999 ? (n / 1000).toFixed(1) + "K" : String(n);
   const ago = (ts) => { const s = Math.floor((Date.now() - new Date(ts).getTime()) / 1000); if (s < 60) return `${s}s`; if (s < 3600) return `${Math.floor(s / 60)}m`; if (s < 86400) return `${Math.floor(s / 3600)}h`; return `${Math.floor(s / 86400)}d`; };
 
@@ -125,18 +219,73 @@ function UsageCard({ isMobile }) {
             <StatTile value={summary === null ? "…" : String(failed)} label="Failed calls" valueTone={failed ? "var(--red)" : "var(--green)"} />
           </div>
 
-          <div className="t-label" style={{ padding: "16px 2px 6px" }}>By feature</div>
+          <div className="t-label" style={{ padding: "16px 2px 6px" }}>What ran</div>
           <div style={{ display: "flex", flexDirection: "column" }}>
             {summary === null && <div className="t-foot" style={{ color: "var(--faint)", textAlign: "center", padding: "10px 0" }}>Loading…</div>}
             {summary !== null && topFns.length === 0 && <div className="t-foot" style={{ color: "var(--faint)", textAlign: "center", padding: "10px 0" }}>No calls logged in this window yet.</div>}
+            {/* Two lines, not one wide row: the name of the pull earns the full
+                width on a phone, and the numbers sit under it where they can be
+                read without truncating anything. */}
             {topFns.map(([fn, s], i) => (
-              <div key={fn} style={{ display: "flex", alignItems: "center", gap: 10, minHeight: 40, padding: "6px 2px", borderTop: i > 0 ? "0.5px solid var(--line)" : "none" }}>
-                <span className="t-num" style={{ fontSize: 12.5, color: "var(--ink)", flex: 1, minWidth: 0, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{fn}</span>
-                {s.failed > 0 && <span className="t-num" style={{ fontSize: 11, color: "var(--red)", flex: "none" }}>{s.failed} failed</span>}
-                <span className="t-num" style={{ fontSize: 11, color: "var(--faint)", flex: "none" }}>{s.calls} calls</span>
-                <span className="t-num" style={{ fontSize: 12.5, fontWeight: 600, color: "var(--ink)", flex: "none", width: 56, textAlign: "right" }}>{s.cost > 0 ? "$" + s.cost.toFixed(3) : "—"}</span>
+              <div key={fn} style={{ display: "flex", flexDirection: "column", gap: 2, padding: "8px 2px", borderTop: i > 0 ? "0.5px solid var(--line)" : "none" }}>
+                <div style={{ display: "flex", alignItems: "baseline", gap: 10 }}>
+                  <span className="t-call" style={{ color: "var(--ink)", flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{usageLabel(fn)}</span>
+                  <span className="t-num" style={{ fontSize: 12.5, fontWeight: 600, color: "var(--ink)", flex: "none" }}>{s.cost > 0 ? "$" + s.cost.toFixed(3) : "—"}</span>
+                </div>
+                <div style={{ display: "flex", alignItems: "baseline", gap: 8, flexWrap: "wrap" }}>
+                  {/* The raw id stays: a line in this table has to be greppable
+                      against the code that wrote it. */}
+                  <span className="t-num" style={{ fontSize: 11, color: "var(--faint)", flex: "none" }}>{fn}</span>
+                  <span className="t-num" style={{ fontSize: 11, color: "var(--faint)", flex: "none" }}>· {s.calls} call{s.calls === 1 ? "" : "s"}</span>
+                  {(s.inTok > 0 || s.outTok > 0) && (
+                    <span className="t-num" style={{ fontSize: 11, color: "var(--faint)", flex: "none" }}>· {fmtK(s.inTok)}/{fmtK(s.outTok)} tok</span>
+                  )}
+                  {s.failed > 0 && <span className="t-num" style={{ fontSize: 11, color: "var(--red)", flex: "none" }}>· {s.failed} failed</span>}
+                </div>
               </div>
             ))}
+            {allFns.length > 8 && (
+              <Button kind="plain" size="sm" onClick={() => setFnsOpen(o => !o)} style={{ alignSelf: "flex-start", paddingLeft: 0 }}>
+                {fnsOpen ? "Show top 8 only" : `Show all ${allFns.length}`}
+                <IcChevronDown size={12} style={{ transform: fnsOpen ? "rotate(180deg)" : "none", transition: "transform var(--dur-2) var(--ease-out)" }} />
+              </Button>
+            )}
+          </div>
+
+          {/* ── The Pentagon, by tool ──
+              The four ventures share one app and one URL now, so this is the
+              only place left that answers "what is Board Room spending on each
+              of them". */}
+          <div className="t-label" style={{ padding: "18px 2px 6px" }}>The Pentagon · by tool</div>
+          <div style={{ display: "flex", flexDirection: "column" }}>
+            {summary === null ? (
+              <div className="t-foot" style={{ color: "var(--faint)", textAlign: "center", padding: "10px 0" }}>Loading…</div>
+            ) : PENTAGON_TOOLS.map((tool, i) => {
+              const s = byTool[tool];
+              const dead = s.calls === 0;
+              return (
+                <div key={tool} style={{ display: "flex", flexDirection: "column", gap: 2, padding: "8px 2px", borderTop: i > 0 ? "0.5px solid var(--line)" : "none", opacity: dead ? 0.55 : 1 }}>
+                  <div style={{ display: "flex", alignItems: "baseline", gap: 10 }}>
+                    <span className="t-call" style={{ color: "var(--ink)", flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{tool}</span>
+                    <span className="t-num" style={{ fontSize: 12.5, fontWeight: 600, color: dead ? "var(--faint)" : "var(--ink)", flex: "none" }}>{s.cost > 0 ? "$" + s.cost.toFixed(3) : "—"}</span>
+                  </div>
+                  <div style={{ display: "flex", alignItems: "baseline", gap: 8, flexWrap: "wrap" }}>
+                    <span className="t-num" style={{ fontSize: 11, color: "var(--faint)", flex: "none" }}>
+                      {/* Raw ids here, not labels: several labels contain a "·"
+                          of their own ("Search Console · zerotosecure.com"), and
+                          joining those with another one turns the line to mush. */}
+                      {dead ? "no pulls from Board Room" : `${s.calls} call${s.calls === 1 ? "" : "s"} · ${s.fns.join(", ")}`}
+                    </span>
+                    {s.failed > 0 && <span className="t-num" style={{ fontSize: 11, color: "var(--red)", flex: "none" }}>· {s.failed} failed</span>}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+          <div className="t-foot" style={{ color: "var(--faint)", padding: "8px 2px 0", lineHeight: 1.5 }}>
+            {summary === null ? "" : pentagonCalls === 0
+              ? "Nothing pulled for a Pentagon tool in this window."
+              : "Counts what Board Room fetches for each tool — not the Pentagon app's own spend, which logs to its own project."}
           </div>
 
           <Button kind="quiet" size="md" full onClick={() => setShowLog(!showLog)} style={{ marginTop: 12 }}>
@@ -149,7 +298,7 @@ function UsageCard({ isMobile }) {
                 <div key={i} style={{ display: "flex", alignItems: "center", gap: 9, minHeight: 32, padding: "5px 2px", borderTop: i > 0 ? "0.5px solid var(--line)" : "none" }}>
                   <Dot tone={r.ok ? "var(--green)" : "var(--red)"} size={6} />
                   <span className="t-num" style={{ fontSize: 11, color: "var(--faint)", flex: "none", width: 32 }}>{ago(r.created_at)}</span>
-                  <span className="t-num" style={{ fontSize: 11.5, color: "var(--ink)", flex: 1, minWidth: 0, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{r.fn}{r.model ? ` · ${r.model}` : ""}{!r.ok && r.detail ? ` · ${r.detail}` : ""}</span>
+                  <span className="t-call" style={{ fontSize: 11.5, color: "var(--ink)", flex: 1, minWidth: 0, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{usageLabel(r.fn)}{r.model ? ` · ${r.model}` : ""}{!r.ok && r.detail ? ` · ${r.detail}` : ""}</span>
                   <span className="t-num" style={{ fontSize: 11, color: "var(--faint)", flex: "none" }}>{r.ms ? `${r.ms}ms` : ""}</span>
                   <span className="t-num" style={{ fontSize: 11, color: "var(--sub)", flex: "none", width: 52, textAlign: "right" }}>{r.cost_usd ? "$" + r.cost_usd.toFixed(4) : ""}</span>
                 </div>
@@ -168,59 +317,25 @@ function UsageCard({ isMobile }) {
   );
 }
 
-// Usage sub-tab — Model Control (per-layer model picker + cost estimate) beside
-// the durable usage log.
-export function UsageTab({ settings, updateSetting, isMobile }) {
-  const models = { ...DEFAULT_MODELS, ...(settings?.models || {}) };
-  // The board is gone; the Mind tab is the tool now. Two layers: the Mind's own
-  // reasoning/synthesis (Pulse, strategy) stored in settings.models.mind, and the
-  // Mini Me delegate's task runs — which live in settings.mini.model, so this row
-  // stays the single source of truth the delegate already reads.
-  const delegateModel = settings?.mini?.model || "haiku";
-  // Estimate: base cost per layer times the model's MODEL_META mult (mult 1 =
-  // Haiku). A mind pulse is one reasoning+synthesis call; a delegate run is one
-  // task execution.
-  const mult = k => (MODEL_META.find(m => m.key === k) || {}).mult || 1;
-  const est = 0.010 * mult(models.mind) + 0.008 * mult(delegateModel);
-  // "Today" line reads obs — the per-browser localStorage tracker (see the
-  // comment in telemetry.js). Distinct from the durable usage_log; never
-  // merge the two.
-  const spendToday = obs.all().filter(l => new Date(l.ts).toDateString() === new Date().toDateString());
-  const inTok = spendToday.reduce((s, l) => s + (l.inTok || 0), 0), outTok = spendToday.reduce((s, l) => s + (l.outTok || 0), 0);
-  const cost = spendToday.reduce((s, l) => s + (l.cost || 0), 0);
-  const fmtK = n => n > 999 ? Math.round(n / 1000) + "K" : String(n);
-  const layers = [
-    { key: "mind", name: "Mind", desc: "reasoning & synthesis — the neural mind thinking",
-      value: models.mind, onChange: (k) => updateSetting("models", { ...models, mind: k }) },
-    { key: "delegate", name: "Delegate", desc: "Mini Me — runs your queued tasks",
-      value: delegateModel, onChange: (k) => updateSetting("mini", { ...(settings?.mini || {}), model: k }) },
-  ];
-
-  return (
-    <Grid min={isMobile ? 320 : 380} gap={12}>
-      <div>
-        <SectionHeader title="Model Control" trailing="Tokens" />
-        <Card pad="md">
-          <div className="t-foot" style={{ color: "var(--sub)" }}>Start cheap. Escalate a layer only when the answers need it.</div>
-          {layers.map(r => (
-            <div key={r.key} style={{ display: "flex", flexDirection: "column", gap: 8, marginTop: 14 }}>
-              <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", gap: 10 }}>
-                <span className="t-call" style={{ fontWeight: 600 }}>{r.name}</span>
-                <span className="t-cap" style={{ color: "var(--faint)", textAlign: "right" }}>{r.desc}</span>
-              </div>
-              <ModelPicker value={r.value} onChange={r.onChange} />
-            </div>
-          ))}
-          <div style={{ marginTop: 14, background: "var(--surface-2)", borderRadius: 12, padding: "12px 14px", display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10 }}>
-            <span className="t-foot" style={{ color: "var(--sub)" }}>Est. per pulse + delegate task</span>
-            <span className="t-num" style={{ fontSize: 15, fontWeight: 600, color: "var(--ink)" }}>${est.toFixed(3)}</span>
-          </div>
-          <div className="t-cap t-num" style={{ marginTop: 10, color: "var(--faint)" }}>Today · {fmtK(inTok)} in · {fmtK(outTok)} out · ${cost.toFixed(2)}</div>
-        </Card>
-      </div>
-      <UsageCard isMobile={isMobile} />
-    </Grid>
-  );
+// Usage sub-tab — the durable usage log, and nothing else.
+//
+// Model Control lived here: a per-layer model picker (Mind + Mini Me delegate)
+// over a cost estimate. It has been removed. Those two layers are the thinking
+// surfaces, and the thinking surfaces are gone from the app — the Mind tab was
+// retired (see the AssetsPage header) and Mini Me with it, so the picker was
+// steering runs that no longer happen and quoting an estimate for them. What is
+// left on this page is monitoring, so it should read as monitoring.
+//
+// Deliberately NOT deleted from settings: `settings.models` and `settings.mini`
+// still hold whatever was last chosen, and the delegate still reads
+// settings.mini.model if it is ever run again. Removing the control does not
+// reset the account's stored choice, which is what makes this reversible.
+//
+// The obs/localStorage "Today" line went with it — it was a second, per-browser
+// spend number sitting beside the durable cross-device one, and two numbers for
+// the same question that disagree by design is worse than one.
+export function UsageTab({ isMobile }) {
+  return <UsageCard isMobile={isMobile} />;
 }
 
 /* ═══ Status — connection health machinery ═════════════════════════════════ */
@@ -368,9 +483,74 @@ function ConnStatus({ check }) {
   );
 }
 
+/* One group, folded down to a line you can act on.
+   The tally IS the summary — "17 live · 2 down" answers the only question this
+   tab is ever opened to answer, and the twenty rows behind it are the follow-up
+   you need about twice a year. */
+function ConnGroup({ group, checks, open, onToggle }) {
+  const rows = group.keys.map(k => ({ k, meta: CONN_META[k], check: checks[k] }));
+  const n = (s) => rows.filter(r => r.check?.status === s).length;
+  const bad = n("down"), part = n("warn"), live = n("ok"), idle = n("off") + n("local");
+  const checking = rows.filter(r => !r.check || r.check.status === "checking").length;
+
+  // Read left to right in severity order, and say nothing about states that
+  // aren't happening — "0 down" is noise on a healthy group.
+  const bits = [];
+  if (checking) bits.push({ t: `${checking} checking`, c: "var(--sub)" });
+  if (bad) bits.push({ t: `${bad} down`, c: "var(--red)" });
+  if (part) bits.push({ t: `${part} partial`, c: "var(--amber)" });
+  if (live) bits.push({ t: `${live} live`, c: "var(--green)" });
+  if (idle) bits.push({ t: `${idle} not set`, c: "var(--faint)" });
+
+  return (
+    <div>
+      <button onClick={onToggle} aria-expanded={open}
+        style={{ width: "100%", display: "flex", alignItems: "center", gap: 10, background: "none", border: 0, padding: "12px 4px", font: "inherit", color: "inherit", textAlign: "left", cursor: "pointer" }}>
+        <Dot tone={bad ? "var(--red)" : part ? "var(--amber)" : checking ? "var(--sub)" : live ? "var(--green)" : "var(--faint)"} size={7} pulse={checking > 0} />
+        <span className="t-label" style={{ flex: "none" }}>{group.title}</span>
+        <span style={{ display: "flex", alignItems: "baseline", gap: 7, flex: 1, minWidth: 0, flexWrap: "wrap" }}>
+          {bits.map((b, i) => (
+            <span key={i} className="t-cap t-num" style={{ color: b.c, fontWeight: b.c === "var(--faint)" ? 400 : 600 }}>{b.t}</span>
+          ))}
+        </span>
+        <IcChevronDown size={13} style={{ flex: "none", color: "var(--faint)", transform: open ? "rotate(180deg)" : "none", transition: "transform var(--dur-2) var(--ease-out)" }} />
+      </button>
+      <div className={`expand${open ? " open" : ""}`}>
+        <div style={{ paddingBottom: 4 }}>
+          <CellGroup>
+            {rows.map(({ k, meta, check }) => (
+              <Cell
+                key={k}
+                title={meta.name}
+                sub={check?.detail || meta.desc}
+                trailing={
+                  <span style={{ display: "inline-flex", alignItems: "center", gap: 8, flex: "none" }}>
+                    {typeof check?.ms === "number" && <span className="t-num" style={{ fontSize: 11, color: "var(--faint)" }}>{check.ms}ms</span>}
+                    <ConnStatus check={check} />
+                  </span>
+                }
+              />
+            ))}
+          </CellGroup>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // Status sub-tab — connection roll-up + per-pipe health. The connections hook
 // lives in the parent (Assets page) so results persist across sub-tab switches;
 // this tab is pure presentation over the passed-in state.
+//
+// CONSOLIDATED, NOT TRUNCATED. This used to render all twenty-five pipes as
+// open cells, which on a phone is a screen and a half of rows that say "Live" —
+// the two that don't are the entire point and they were the hardest to find.
+// Groups now collapse to a tally and open on a tap.
+//
+// The one rule that makes it safe: a group holding anything DOWN OR PARTIAL
+// opens itself. Consolidation must never be the reason a failure went unseen,
+// so trouble is never behind a disclosure — you only ever have to tap to see
+// things that are fine.
 export function StatusTab({ checks, lastRun, running, runAll, isMobile }) {
   const vals = Object.values(checks);
   const counts = {
@@ -380,6 +560,13 @@ export function StatusTab({ checks, lastRun, running, runAll, isMobile }) {
     off: vals.filter(c => c?.status === "off" || c?.status === "local").length,
   };
   const agoCheck = (ts) => { if (!ts) return "—"; const s = Math.floor((Date.now() - ts) / 1000); return s < 60 ? `${s}s ago` : `${Math.floor(s / 60)}m ago`; };
+
+  // null = "nobody has chosen yet", so the auto-open rule below governs. Once
+  // you toggle a group it holds whatever you set, including closed on a group
+  // that's failing — an explicit choice outranks the automatic one.
+  const [openMap, setOpenMap] = useState({});
+  const troubled = (g) => g.keys.some(k => checks[k]?.status === "down" || checks[k]?.status === "warn");
+  const isOpen = (g) => (openMap[g.title] != null ? openMap[g.title] : troubled(g));
 
   return (
     <>
@@ -396,34 +583,17 @@ export function StatusTab({ checks, lastRun, running, runAll, isMobile }) {
         </div>
       </Card>
 
-      <Grid min={320} gap={12} style={{ marginTop: 12 }}>
-        {CONN_GROUPS.map(g => (
-          // The long functions group spans the full row on tablet;
-          // the small groups sit side by side.
-          <div key={g.title} style={g.keys.length > 6 ? { gridColumn: "1 / -1" } : undefined}>
-            <SectionHeader title={g.title} />
-            <CellGroup>
-              {g.keys.map(k => {
-                const meta = CONN_META[k];
-                const check = checks[k];
-                return (
-                  <Cell
-                    key={k}
-                    title={meta.name}
-                    sub={check?.detail || meta.desc}
-                    trailing={
-                      <span style={{ display: "inline-flex", alignItems: "center", gap: 8, flex: "none" }}>
-                        {typeof check?.ms === "number" && <span className="t-num" style={{ fontSize: 11, color: "var(--faint)" }}>{check.ms}ms</span>}
-                        <ConnStatus check={check} />
-                      </span>
-                    }
-                  />
-                );
-              })}
-            </CellGroup>
+      <Card pad="md" style={{ marginTop: 12, display: "flex", flexDirection: "column" }}>
+        {CONN_GROUPS.map((g, i) => (
+          <div key={g.title} style={{ borderTop: i > 0 ? "0.5px solid var(--line)" : "none" }}>
+            <ConnGroup group={g} checks={checks} open={isOpen(g)}
+              onToggle={() => setOpenMap(m => ({ ...m, [g.title]: !isOpen(g) }))} />
           </div>
         ))}
-      </Grid>
+        <div className="t-foot" style={{ color: "var(--faint)", paddingTop: 8, lineHeight: 1.5 }}>
+          Anything down or partial opens on its own. Tap a group to see what's behind a clean tally.
+        </div>
+      </Card>
     </>
   );
 }

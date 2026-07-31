@@ -17,6 +17,7 @@
 import {
   AISLES, aisleOf, aisleMeta, parseItem, formatItem, canonicalName,
   findDuplicate, groupList, bumpFrequency, frequentSuggestions, STAPLE_MIN_BUYS,
+  titleCase, storesOf, inStore, applyOrder,
   planAdd, applyAdd, requestFor, isTempId, TMP_PREFIX,
 } from "../src/features/food/groceryLogic.js";
 
@@ -61,8 +62,10 @@ check("aisleMeta falls back to other", aisleMeta("nope").key === "other");
 check("other is last in the walk", AISLES[AISLES.length - 1].key === "other");
 
 // ─── 2. quantities: only the explicit forms, and they round-trip ──────────────
-const QTY = [["2x milk", 2, "milk"], ["2 x milk", 2, "milk"], ["12x eggs", 12, "eggs"],
-  ["milk x2", 2, "milk"], ["milk x 2", 2, "milk"], ["2×milk", 2, "milk"]];
+// Names come back Title Cased — that is the display rule, applied in parseItem
+// so it reaches rows written long before the rule existed.
+const QTY = [["2x milk", 2, "Milk"], ["2 x milk", 2, "Milk"], ["12x eggs", 12, "Eggs"],
+  ["milk x2", 2, "Milk"], ["milk x 2", 2, "Milk"], ["2×milk", 2, "Milk"]];
 for (const [text, qty, name] of QTY) {
   const p = parseItem(text);
   check(`"${text}" → ${qty} × ${name}`, p.qty === qty && p.name === name, JSON.stringify(p));
@@ -71,16 +74,69 @@ for (const [text, qty, name] of QTY) {
 // parsing them as a quantity silently renames the item on screen.
 for (const text of ["2% milk", "1lb ground beef", "12 eggs", "7up", "5 guys", "100 calorie packs"]) {
   const p = parseItem(text);
-  check(`"${text}" is left alone`, p.qty === 1 && p.name === text, JSON.stringify(p));
+  check(`"${text}" keeps its words`, p.qty === 1 && p.name === titleCase(text), JSON.stringify(p));
 }
-check("format is the inverse of parse", ["milk", "2x milk", "12x eggs"].every((s) => {
+check("format is the inverse of parse", ["Milk", "2x Milk", "12x Eggs"].every((s) => {
   const { qty, name } = parseItem(s);
   return formatItem(qty, name) === s;
 }));
-check("qty 1 formats without a multiplier", formatItem(1, "milk") === "milk");
-check("qty below 1 clamps rather than storing 0x", formatItem(0, "milk") === "milk" && formatItem(-3, "milk") === "milk");
-check("a non-numeric qty falls back to 1", formatItem(undefined, "milk") === "milk" && formatItem(NaN, "milk") === "milk");
+check("qty 1 formats without a multiplier", formatItem(1, "milk") === "Milk");
+check("qty below 1 clamps rather than storing 0x", formatItem(0, "milk") === "Milk" && formatItem(-3, "milk") === "Milk");
+check("a non-numeric qty falls back to 1", formatItem(undefined, "milk") === "Milk" && formatItem(NaN, "milk") === "Milk");
 check("empty text parses to empty, not a crash", parseItem("").name === "" && parseItem(undefined).qty === 1);
+
+// ─── 2b. Title Case: capitalise words, vandalise nothing ─────────────────────
+check("every word gets its capital", titleCase("greek yogurt") === "Greek Yogurt");
+check("an existing capital is left alone, not lowercased",
+  titleCase("BBQ sauce") === "BBQ Sauce", titleCase("BBQ sauce"));
+// The regression that shipped for exactly one build: matching "first letter
+// after a non-letter" capitalises the letter sitting against a DIGIT too.
+check("a unit glued to a number is not a word", titleCase("1lb ground beef") === "1lb Ground Beef", titleCase("1lb ground beef"));
+check("7up stays 7up", titleCase("7up") === "7up", titleCase("7up"));
+check("a percentage keeps its number", titleCase("2% milk") === "2% Milk", titleCase("2% milk"));
+check("punctuation still breaks a word", titleCase("half-and-half") === "Half-And-Half", titleCase("half-and-half"));
+check("titleCase is idempotent", titleCase(titleCase("greek yogurt")) === titleCase("greek yogurt"));
+check("titleCase survives empty and null", titleCase("") === "" && titleCase(null) === "" && titleCase(undefined) === "");
+
+// ─── 2c. stores and sections live in the text, like quantity ─────────────────
+{
+  const p = parseItem("2x milk @costco");
+  check("a store tag parses off the name", p.qty === 2 && p.name === "Milk" && p.store === "Costco", JSON.stringify(p));
+}
+{
+  const p = parseItem("ice cream #freezer @whole foods");
+  check("a section and a multi-word store both parse",
+    p.name === "Ice Cream" && p.section === "Freezer" && p.store === "Whole Foods", JSON.stringify(p));
+}
+check("an untagged item has empty tags, not undefined",
+  parseItem("Milk").store === "" && parseItem("Milk").section === "");
+// A row that lost its whole name to a stray tag would be untappable and
+// unreadable — far worse than an item literally called "@costco".
+check("a bare tag keeps its text as the name",
+  parseItem("@costco").name.toLowerCase() === "@costco" && parseItem("@costco").store === "",
+  JSON.stringify(parseItem("@costco")));
+check("tags round-trip through formatItem", (() => {
+  const s = "2x Milk #Freezer @Costco";
+  const p = parseItem(s);
+  return formatItem(p.qty, p.name, p) === s;
+})(), formatItem(2, "Milk", { store: "Costco", section: "Freezer" }));
+check("formatItem still works with no tags at all", formatItem(2, "milk") === "2x Milk");
+// The stepper rebuilds the string on every tap; dropping the tag there would
+// quietly move the item to "any store" the first time you pressed +.
+check("bumping quantity keeps the store", (() => {
+  const p = parseItem("Milk @Costco");
+  return formatItem(p.qty + 1, p.name, p) === "2x Milk @Costco";
+})());
+check("the same item at two stores is NOT a duplicate",
+  canonicalName("Milk @Costco") !== canonicalName("Milk @HEB"));
+check("the same item at the same store IS a duplicate",
+  canonicalName("2x milk @costco") === canonicalName("Milk @Costco"));
+check("a section is not part of identity",
+  canonicalName("Milk #Freezer") === canonicalName("Milk"));
+check("findDuplicate respects the store", (() => {
+  const l = [{ id: "a", item: "Milk @Costco" }];
+  return findDuplicate(l, "milk @costco")?.id === "a" && findDuplicate(l, "milk @heb") === null;
+})());
 
 // ─── 3. duplicates: the second identical row is the thing to prevent ──────────
 const list = [
@@ -128,6 +184,69 @@ check("an all-checked list has no sections but keeps its cart", (() => {
   const a = groupList([{ id: "x", item: "Milk", checked: true }]);
   return a.sections.length === 0 && a.cart.length === 1 && a.remaining === 0;
 })());
+
+// ─── 4b. stores filter, sections pin, drags stick ────────────────────────────
+const shops = [
+  { id: "1", item: "Bananas", checked: false },              // no store — every shop
+  { id: "2", item: "Milk @Costco", checked: false },
+  { id: "3", item: "Sourdough @HEB", checked: false },
+  { id: "4", item: "Ice cream #Freezer @Costco", checked: false },
+];
+check("every store lands in the picker, sorted and Title Cased",
+  storesOf(shops).join(",") === "Costco,HEB", storesOf(shops).join(","));
+check("a store you named but haven't shopped survives",
+  storesOf([], ["aldi"]).join(",") === "Aldi", storesOf([], ["aldi"]).join(","));
+check("the same store cased two ways is one store",
+  storesOf([{ item: "Milk @costco" }], ["Costco"]).length === 1);
+check("storesOf tolerates nulls", storesOf(null, null).length === 0);
+// The staple rule: bread is bread. An untagged item belonging to only "All"
+// would hide itself the moment you picked a shop, and you'd find out at the till.
+check("an untagged item shows under every store",
+  inStore("Bananas", "Costco") && inStore("Bananas", "") && inStore("Bananas", "HEB"));
+check("a tagged item shows only under its own store",
+  inStore("Milk @Costco", "Costco") && !inStore("Milk @Costco", "HEB"));
+check("the store match is case-insensitive", inStore("Milk @Costco", "costco"));
+{
+  const c = groupList(shops, { store: "Costco" });
+  const ids = c.sections.flatMap((s) => s.items.map((i) => i.id)).sort().join(",");
+  check("filtering to a store keeps its items plus the untagged ones", ids === "1,2,4", ids);
+  check("the other store's items are gone", !ids.includes("3"));
+  check("counts follow the filter", c.total === 3 && c.remaining === 3, `${c.total}/${c.remaining}`);
+  // A named section beats the guessed aisle and sorts above it — you said where
+  // it goes, so the lexicon doesn't get a vote.
+  check("a pinned section becomes its own heading at the top",
+    c.sections[0].label === "Freezer" && c.sections[0].pinned === true,
+    c.sections.map((s) => s.label).join(","));
+  check("the pinned item left its guessed aisle",
+    !c.sections.some((s) => !s.pinned && s.items.some((i) => i.id === "4")));
+}
+check("no filter shows everything", groupList(shops, { store: "" }).total === 4);
+
+// applyOrder — the drag, persisted. Same unknown-id rule as the Brief's cards:
+// an id the saved order has never seen keeps its default slot rather than
+// jumping to an end, so adding an item can't reshuffle what you placed.
+const ordered = [{ id: "a" }, { id: "b" }, { id: "c" }];
+check("a saved order is honoured", applyOrder(ordered, ["c", "a", "b"]).map((i) => i.id).join(",") === "c,a,b");
+check("no saved order changes nothing", applyOrder(ordered, []).map((i) => i.id).join(",") === "a,b,c");
+// "b" was never dragged, so it holds its DEFAULT index (1) — it lands second,
+// not last. That's the whole point of the rule: adding an item drops it near
+// where it would have been, instead of on top of rows you deliberately placed.
+check("an unknown id keeps its default slot",
+  applyOrder(ordered, ["c", "a"]).map((i) => i.id).join(",") === "c,b,a",
+  applyOrder(ordered, ["c", "a"]).map((i) => i.id).join(","));
+check("ids for deleted rows leave no hole",
+  applyOrder(ordered, ["zz", "c", "yy", "a", "b"]).map((i) => i.id).join(",") === "c,a,b");
+check("a duplicated id doesn't duplicate the row",
+  applyOrder(ordered, ["b", "b", "a", "c"]).map((i) => i.id).join(",") === "b,a,c");
+check("the order applies inside a section, not across the walk", (() => {
+  // "2" and "5" are both produce; the saved order must not lift produce above
+  // the aisle order or drag a bakery item into it.
+  const o = groupList(shop, { order: ["5", "2"] });
+  return o.sections[0].key === "produce" && o.sections[0].items.map((i) => i.id).join(",") === "5,2";
+})());
+check("the cart is orderable too",
+  groupList([{ id: "p", item: "Eggs", checked: true }, { id: "q", item: "Milk", checked: true }], { order: ["q", "p"] })
+    .cart.map((i) => i.id).join(",") === "q,p");
 
 // ─── 5. frequency: learned from what you CLEAR, suggested only when useful ────
 let tally = bumpFrequency({}, [{ item: "Eggs" }, { item: "2x Milk" }]);

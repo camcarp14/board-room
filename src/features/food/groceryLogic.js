@@ -43,6 +43,35 @@ const AISLE_BY_KEY = Object.fromEntries(AISLES.map((a) => [a.key, a]));
 export const aisleMeta = (key) => AISLE_BY_KEY[key] || AISLE_BY_KEY.other;
 
 /**
+ * Title Case, applied to everything on the way in AND on the way out.
+ *
+ * A shopping list you typed one-handed is all lowercase, and reading "milk,
+ * greek yogurt, paper towels" is worse than reading "Milk, Greek Yogurt, Paper
+ * Towels" — so this is a formatting rule, not a preference toggle.
+ *
+ * It capitalises the first letter of each word and TOUCHES NOTHING ELSE, which
+ * is the difference between a helper and a vandal: lowercasing the remainder
+ * (the usual one-liner) turns "BBQ Sauce" into "Bbq Sauce" and "2% Milk" into
+ * "2% milk".
+ *
+ * A word starts at the string's start or after a character that is neither a
+ * letter nor a DIGIT. The digit half of that is what keeps units intact: match
+ * on "the first letter after a non-letter" alone and "1lb ground beef" becomes
+ * "1Lb Ground Beef" and "7up" becomes "7Up" — both wrong, and both things you
+ * actually write on a shopping list. Punctuation still breaks a word, so
+ * "half-and-half" comes out "Half-And-Half" and "(organic) milk" gets its
+ * bracketed word too.
+ *
+ * Applied at BOTH ends on purpose. On the way in so what's stored is what you'd
+ * want to read; on the way out so the hundreds of rows already in the table look
+ * right immediately, with no backfill and nothing to migrate.
+ */
+const WORD_START = /(^|[^A-Za-zÀ-ÖØ-öø-ÿ0-9])([a-zà-öø-ÿ])/g;
+export function titleCase(text) {
+  return String(text ?? "").replace(WORD_START, (_m, before, letter) => before + letter.toUpperCase());
+}
+
+/**
  * Keyword → aisle.
  *
  * Matched LONGEST PHRASE FIRST, which is the whole reason this is a flat list of
@@ -151,7 +180,46 @@ export function aisleOf(text) {
 }
 
 /**
- * Split a stored item string into { qty, name }.
+ * Store and section, stored the only place there is room for them: the text.
+ *
+ * `grocery_items` still has no column for either (see the header), so a store
+ * is a trailing "@Costco" and a pinned section a trailing "#Freezer" — the same
+ * trick "2x milk" already plays with quantity, and it inherits the same
+ * property: nothing stored can be corrupted by a change here, because none of
+ * this is stored as structure. Rename a store and every row re-reads.
+ *
+ * Tags run to the END of the string and a store name may contain spaces
+ * ("@Whole Foods"), so the split is positional rather than word-based: the name
+ * is everything before the first " @" or " #", and each tag runs to the next
+ * one. Typing the tag yourself works exactly as well as picking it in the UI,
+ * which is the point of choosing a syntax a person can type.
+ *
+ * A string that is ONLY a tag ("@costco") keeps its full text as the name. An
+ * item called "@" is nonsense, but a row that silently loses its whole name is
+ * worse than nonsense.
+ */
+function splitTags(raw) {
+  const at = raw.search(/\s[@#]/);
+  if (at < 0) return { base: raw, store: "", section: "" };
+  const base = raw.slice(0, at).trim();
+  if (!base) return { base: raw, store: "", section: "" };
+  let store = "", section = "";
+  // No leading \s in THIS pattern, unlike the search above. The value class
+  // [^@#]+ is greedy and swallows the space that separates one tag from the
+  // next, so requiring whitespace before the marker matched the first tag and
+  // then went blind: "#freezer @whole foods" parsed the section and dropped the
+  // store entirely. Everything from `at` onward is already known to be tag
+  // territory, so the marker alone is enough to anchor on.
+  for (const m of raw.slice(at).matchAll(/([@#])\s*([^@#]+)/g)) {
+    const val = m[2].trim();
+    if (!val) continue;
+    if (m[1] === "@") store = val; else section = val;
+  }
+  return { base, store, section };
+}
+
+/**
+ * Split a stored item string into { qty, name, store, section }.
  *
  * ONLY the explicit multiplier forms are recognised — "2x milk", "2 x milk",
  * "milk x2", "milk x 2". A bare leading number is deliberately NOT a quantity:
@@ -159,30 +227,44 @@ export function aisleOf(text) {
  * mean four different things, and guessing wrong renames the item on screen.
  * An unrecognised string comes back as { qty: 1, name: <the whole string> },
  * which is exactly how the list behaved before quantities existed.
+ *
+ * `name` is Title Cased here, which is what makes the rule apply to every row
+ * already in the table rather than only to what gets typed from now on.
  */
 export function parseItem(text) {
-  const raw = String(text ?? "").trim();
-  if (!raw) return { qty: 1, name: "" };
+  const whole = String(text ?? "").trim();
+  if (!whole) return { qty: 1, name: "", store: "", section: "" };
+  const { base: raw, store, section } = splitTags(whole);
+  const tags = { store: titleCase(store), section: titleCase(section) };
   const lead = raw.match(/^(\d{1,3})\s*[x×]\s+(.*)$/i) || raw.match(/^(\d{1,3})[x×]\s*(.+)$/i);
   if (lead) {
     const qty = parseInt(lead[1], 10);
     const name = lead[2].trim();
-    if (qty >= 1 && name) return { qty, name };
+    if (qty >= 1 && name) return { qty, name: titleCase(name), ...tags };
   }
   const trail = raw.match(/^(.*?)\s+[x×]\s*(\d{1,3})$/i);
   if (trail) {
     const qty = parseInt(trail[2], 10);
     const name = trail[1].trim();
-    if (qty >= 1 && name) return { qty, name };
+    if (qty >= 1 && name) return { qty, name: titleCase(name), ...tags };
   }
-  return { qty: 1, name: raw };
+  return { qty: 1, name: titleCase(raw), ...tags };
 }
 
-/** { qty, name } → the string we store. Inverse of parseItem for qty ≥ 1. */
-export function formatItem(qty, name) {
-  const n = String(name ?? "").trim();
+/**
+ * { qty, name, store, section } → the string we store. Inverse of parseItem for
+ * qty ≥ 1. The third argument is optional so the older two-argument calls (the
+ * quantity stepper) keep meaning exactly what they meant.
+ */
+export function formatItem(qty, name, tags) {
+  const n = titleCase(String(name ?? "").trim());
   const q = Number.isFinite(qty) ? Math.max(1, Math.round(qty)) : 1;
-  return q > 1 ? `${q}x ${n}` : n;
+  const store = titleCase(String(tags?.store ?? "").trim());
+  const section = titleCase(String(tags?.section ?? "").trim());
+  let out = q > 1 ? `${q}x ${n}` : n;
+  if (section) out += ` #${section}`;
+  if (store) out += ` @${store}`;
+  return out;
 }
 
 /**
@@ -190,10 +272,18 @@ export function formatItem(qty, name) {
  * Case- and quantity-insensitive, and singular/plural-insensitive so adding
  * "egg" to a list that already has "Eggs" bumps the count instead of opening a
  * second line three aisles away.
+ *
+ * The STORE is part of the key, because milk at Costco and milk at the corner
+ * shop are two errands, not one item bought twice. Merging them would silently
+ * drop one of the two stops. The section deliberately is NOT part of the key —
+ * it's a display preference, and two rows that differ only by which heading
+ * they sit under are the duplicate this function exists to prevent.
  */
 export function canonicalName(text) {
-  const n = parseItem(text).name.toLowerCase().replace(/\s+/g, " ").replace(/[.,;!]+$/, "").trim();
-  return n.replace(/(?:ies)$/, "y").replace(/(?:es|s)$/, "");
+  const { name, store } = parseItem(text);
+  const n = name.toLowerCase().replace(/\s+/g, " ").replace(/[.,;!]+$/, "").trim();
+  const stem = n.replace(/(?:ies)$/, "y").replace(/(?:es|s)$/, "");
+  return store ? `${stem}@${store.toLowerCase()}` : stem;
 }
 
 /**
@@ -247,10 +337,17 @@ export function planAdd(items, text, tmpId = `${TMP_PREFIX}0`) {
   // annoyance the stepper fixes in one tap; a request against a temporary id is
   // an item that never saves.
   if (dup && !isTempId(dup.id)) {
-    const { qty, name } = parseItem(dup.item);
-    return { kind: "merge", id: dup.id, item: formatItem(qty + parseItem(typed).qty, name), typed };
+    // Re-format from the EXISTING row, not the typed text: a bump must not
+    // silently strip the store or the pinned section off a row that already had
+    // them ("2x Milk @Costco" + "milk" is three milks at Costco, not three
+    // milks nowhere).
+    const { qty, name, store, section } = parseItem(dup.item);
+    return { kind: "merge", id: dup.id, item: formatItem(qty + parseItem(typed).qty, name, { store, section }), typed };
   }
-  return { kind: "insert", id: tmpId, item: typed, typed };
+  // Normalised on the way in, so what lands in the table is already Title Cased
+  // with its tags in canonical order — the row you see is the row that is stored.
+  const p = parseItem(typed);
+  return { kind: "insert", id: tmpId, item: formatItem(p.qty, p.name, p), typed };
 }
 
 /**
@@ -279,27 +376,105 @@ export function requestFor(plan) {
 }
 
 /**
+ * Every store on the list, plus any you've named but not shopped yet.
+ *
+ * Derived from the items first (so a store can never go missing while it still
+ * has something in it) and unioned with the saved list (so a store you just
+ * created survives having nothing in it yet). Compared case-insensitively but
+ * displayed as written — "costco" and "Costco" are one store.
+ */
+export function storesOf(items, saved) {
+  const seen = new Map();
+  for (const name of [...(saved || []), ...(items || []).map((it) => parseItem(it.item).store)]) {
+    const label = titleCase(String(name ?? "").trim());
+    if (label && !seen.has(label.toLowerCase())) seen.set(label.toLowerCase(), label);
+  }
+  return [...seen.values()].sort((a, b) => a.localeCompare(b));
+}
+
+/**
+ * Does this item belong to the store being shopped? "" means every store.
+ *
+ * An item with NO store belongs to all of them. Bread is bread — you'll buy it
+ * wherever you end up, and a staple that hid itself the moment you picked a
+ * shop is a bug you'd only discover at the till.
+ */
+export const inStore = (item, store) => {
+  if (!store) return true;
+  const s = parseItem(item).store;
+  return !s || s.toLowerCase() === String(store).toLowerCase();
+};
+
+/**
+ * The manual order, applied. Ids the saved order has never seen keep their
+ * default position rather than jumping to an end — same rule, and the same
+ * reasoning, as the Brief's card order (see lib/brief-order.js).
+ */
+export function applyOrder(list, orderIds) {
+  const rank = new Map();
+  (Array.isArray(orderIds) ? orderIds : []).forEach((id, i) => { if (!rank.has(id)) rank.set(id, i); });
+  if (!rank.size) return list;
+  const known = list.filter((it) => rank.has(it.id)).sort((a, b) => rank.get(a.id) - rank.get(b.id));
+  const out = known.slice();
+  list.forEach((it, defaultIdx) => {
+    if (rank.has(it.id)) return;
+    out.splice(Math.min(defaultIdx, out.length), 0, it);
+  });
+  return out;
+}
+
+/**
  * The whole list, arranged for shopping.
  *
- * Returns ordered aisle sections of what's still to get, the cart (checked
- * items) as one bucket at the bottom, and the counts the header reads from.
- * Within a section items keep the order they came in — the query sorts by
- * created_at, and re-sorting alphabetically on top of the aisle grouping would
- * make the list reshuffle under your thumb every time you add something.
+ * Returns ordered sections of what's still to get, the cart (checked items) as
+ * one bucket at the bottom, and the counts the header reads from.
+ *
+ * THREE ORGANISING RULES, in priority order, because they answer different
+ * questions and only one of them can win at a time:
+ *
+ *   1. STORE filters. You are standing in one shop; the others are noise. An
+ *      item with no store belongs to every shop (bread is bread), so it shows
+ *      under every filter rather than only under "All" — a staple that hid
+ *      itself the moment you picked a store would be a bug you'd discover at
+ *      the till.
+ *   2. A PINNED SECTION ("#Freezer") beats the guessed aisle, and pinned
+ *      sections sort to the top. You named it, so you meant it; the lexicon is
+ *      only there for everything you didn't.
+ *   3. Otherwise the AISLE, in walk order — the original feature, untouched.
+ *
+ * Within a section the manual drag order wins, falling back to insertion order.
+ * Sorting alphabetically on top of that would reshuffle the list under your
+ * thumb every time you added something.
+ *
+ * `opts` is optional so every existing two-argument-free caller keeps working.
  */
-export function groupList(items) {
-  const all = items || [];
-  const cart = all.filter((it) => it.checked);
+export function groupList(items, opts) {
+  const store = opts?.store || "";
+  const order = opts?.order;
+  const all = (items || []).filter((it) => inStore(it.item, store));
+  const cart = applyOrder(all.filter((it) => it.checked), order);
   const todo = all.filter((it) => !it.checked);
+
+  const pinned = new Map();   // label → items, for "#Freezer" style overrides
   const byAisle = new Map();
   for (const it of todo) {
-    const key = aisleOf(it.item);
-    if (!byAisle.has(key)) byAisle.set(key, []);
-    byAisle.get(key).push(it);
+    const { section } = parseItem(it.item);
+    if (section) {
+      if (!pinned.has(section)) pinned.set(section, []);
+      pinned.get(section).push(it);
+    } else {
+      const key = aisleOf(it.item);
+      if (!byAisle.has(key)) byAisle.set(key, []);
+      byAisle.get(key).push(it);
+    }
   }
-  const sections = AISLES
-    .filter((a) => byAisle.has(a.key))
-    .map((a) => ({ ...a, items: byAisle.get(a.key) }));
+  const sections = [
+    ...[...pinned.entries()]
+      .sort((a, b) => a[0].localeCompare(b[0]))
+      .map(([label, list]) => ({ key: `pin:${label}`, label, tone: "var(--accent)", pinned: true, items: list })),
+    ...AISLES.filter((a) => byAisle.has(a.key)).map((a) => ({ ...a, items: byAisle.get(a.key) })),
+  ].map((s) => ({ ...s, items: applyOrder(s.items, order) }));
+
   return { sections, cart, remaining: todo.length, total: all.length };
 }
 

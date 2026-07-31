@@ -17,14 +17,14 @@
 import { useState, useEffect, useRef } from "react";
 import {
   Card, SectionHeader, CellGroup, Cell, Button, Pill, Field, Dot, Switch,
-  EmptyState, Grid, PillRow,
+  EmptyState, Grid, Segmented,
 } from "../../ui/kit.jsx";
 import { IcExternal, IcChevronDown, IcSearch } from "../../ui/icons.jsx";
 import { callFn } from "../../lib/functions.js";
 import { db } from "../../data/db.js";
 import { PROPERTIES } from "./properties.js";
 import {
-  SYSTEMS_SUBTABS, useConnections, UsageTab, StatusTab, DeployTab, SupabaseTab, MinerPanel,
+  SYSTEMS_SUBTABS, useConnections, UsageTab, StatusTab, MinerPanel,
 } from "../systems/SystemsPage.jsx";
 
 // Re-exported for any older importers — PROPERTIES now lives in ./properties.js.
@@ -35,15 +35,29 @@ const hostOf = (u) => { try { return new URL(u).hostname; } catch { return u || 
 // <a target="_blank" rel="noopener"> links — keep the noopener.
 const openExternal = (u) => window.open(u, "_blank", "noopener");
 
-// Usage first, and it is what the page lands on. Mind used to hold that slot —
-// it's gone from the app entirely now, not merely hidden here, so there is no
-// "mind" key left to deep-link to. Properties keeps second place; the rest of
-// the folded-in systems tabs keep their own order. Keys are stable — Summon and
-// muscle memory point at them.
+// Three tabs: Usage, Status, Miner. Usage is what the page lands on.
+//
+// Four have been retired from the pill row, for the same reason each time — the
+// page is for MONITORING what runs, and each of these was a control surface
+// that had stopped controlling anything worth the space:
+//   · Mind        removed from the app entirely (see the header) — no key left.
+//   · Properties  the venture roll-up + AI auditor.
+//   · Deploy      per-property Netlify build triggers.
+//   · Supabase    the allowlisted maintenance console.
+//
+// Properties/Deploy/Supabase are HIDDEN, not deleted: DeployTab and SupabaseTab
+// are still exported from SystemsPage and PropertiesTab still lives below, so
+// restoring any of them is one entry in this array plus one line in the switch.
+// Worth knowing before you want it back: hiding Properties also takes the site
+// auditor and the propose-a-fix flow off the app's surface — the netlify
+// functions behind them (audit, auto-fix) are untouched and still deployed.
+//
+// Keys are stable — Summon and muscle memory point at them. A deep link to a
+// retired key lands on Usage rather than blanking the page (see the jump guard).
 const ASSETS_SUBTABS = [
-  SYSTEMS_SUBTABS[0], // Usage
-  { key: "properties", label: "Properties" },
-  ...SYSTEMS_SUBTABS.slice(1),
+  SYSTEMS_SUBTABS[0],                      // Usage
+  SYSTEMS_SUBTABS.find(t => t.key === "status"),
+  SYSTEMS_SUBTABS.find(t => t.key === "miner"),
 ];
 
 /* Trailing status for a property row: response code in mono + a semantic dot.
@@ -206,18 +220,15 @@ export function PropertiesPage({ isMobile, settings, updateSetting, session, btc
   return (
     <div style={{ flex: 1, display: "flex", flexDirection: "column", padding: isMobile ? "4px 16px 24px" : "6px 0 40px" }}>
       <div style={{ width: "100%", maxWidth: 1020, margin: "0 auto", display: "flex", flexDirection: "column", minWidth: 0, flex: 1 }}>
-        {/* PillRow, not Segmented: seven sub-tabs is well past Segmented's ≤4
-            equal-width ceiling (DESIGN.md §6). PillRow scrolls and keeps the
-            active pill centered. */}
-        <PillRow options={ASSETS_SUBTABS} value={sub} onChange={setSub} style={{ marginBottom: 14, flex: "none" }} />
+        {/* Segmented now, not PillRow: three tabs is inside Segmented's ≤4
+            equal-width ceiling (DESIGN.md §6), and equal thirds that all fit on
+            screen beat a scroller with nothing to scroll. */}
+        <Segmented options={ASSETS_SUBTABS} value={sub} onChange={setSub} style={{ marginBottom: 14, flex: "none" }} />
 
         {/* key={sub} re-mounts and animates the content on every tab switch. */}
         <div key={sub} className="pagefade" style={{ display: "flex", flexDirection: "column", minWidth: 0, flex: 1, minHeight: 0 }}>
-          {sub === "properties" && <PropertiesTab isMobile={isMobile} settings={settings} updateSetting={updateSetting} session={session} />}
-          {sub === "usage" && <UsageTab settings={settings} updateSetting={updateSetting} isMobile={isMobile} />}
+          {sub === "usage" && <UsageTab isMobile={isMobile} />}
           {sub === "status" && <StatusTab checks={conn.checks} lastRun={conn.lastRun} running={conn.running} runAll={conn.runAll} isMobile={isMobile} />}
-          {sub === "deploy" && <DeployTab isMobile={isMobile} />}
-          {sub === "supabase" && <SupabaseTab />}
           {/* `active` gates the 5s poll — it stops the moment you leave the sub-tab. */}
           {sub === "miner" && <MinerPanel active={sub === "miner"} isMobile={isMobile} />}
         </div>
