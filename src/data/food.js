@@ -2,7 +2,7 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { db } from "./db.js";
 import {
   parseItem, formatItem, bumpFrequency, STAPLES_KEY,
-  planAdd, applyAdd, requestFor, isTempId, TMP_PREFIX,
+  planAdd, applyAdd, requestFor, isTempId, TMP_PREFIX, applyRetag,
 } from "../features/food/groceryLogic.js";
 
 const GROCERIES = ["groceries"];
@@ -170,6 +170,40 @@ export function useEditGrocery() {
     ({ id, item }) => db.updateGroceryItem(id, { item }),
     (v) => v?.id,
   );
+}
+
+/**
+ * Rename a store, or remove it — one plan, many rows.
+ *
+ * Because the store is part of each item's text, this is a bulk rewrite: N
+ * updates and however many deletes the merge produced (see planRetag). Rows
+ * whose insert is still in flight are dropped from the plan rather than sent —
+ * a temporary id is a guaranteed 400, and one of those inside Promise.all takes
+ * the whole rename down with it.
+ *
+ * Not Promise.allSettled: a half-applied rename is worse than a failed one,
+ * because you'd be left with items split across the old and new name and no
+ * indication of which. Failing whole means the rollback restores the list you
+ * had, and you can just try again.
+ */
+export function useRetagGroceryStore() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async (plan) => {
+      await Promise.all([
+        ...plan.updates.map((u) => db.updateGroceryItem(u.id, { item: u.item })),
+        ...plan.deletes.map((id) => db.deleteGroceryItem(id)),
+      ]);
+    },
+    onMutate: async (plan) => {
+      await qc.cancelQueries({ queryKey: GROCERIES });
+      const prev = qc.getQueryData(GROCERIES) || [];
+      qc.setQueryData(GROCERIES, applyRetag(prev, plan));
+      return { prev };
+    },
+    onError: (_e, _plan, ctx) => { if (ctx?.prev) qc.setQueryData(GROCERIES, ctx.prev); },
+    onSettled: () => qc.invalidateQueries({ queryKey: GROCERIES }),
+  });
 }
 
 /**

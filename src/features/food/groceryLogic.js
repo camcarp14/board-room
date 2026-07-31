@@ -406,6 +406,76 @@ export const inStore = (item, store) => {
 };
 
 /**
+ * Renaming or removing a store, planned as one operation.
+ *
+ * The store lives IN THE TEXT, so renaming one isn't a settings edit — it is a
+ * rewrite of every item tagged with it. That has a consequence worth being
+ * deliberate about: the rewrite can land a row on top of one that already
+ * exists. Rename "HEB" to "Costco" while both shops have milk on the list and
+ * you get two rows that both say Milk at Costco — precisely the duplicate the
+ * whole add path exists to prevent, arriving through the back door.
+ *
+ * So this MERGES rather than colliding: quantities add up, the redundant row is
+ * deleted, and the surviving row is the one that was already at the
+ * destination. Removing a store is the same operation with an empty
+ * destination — the items lose their tag and stay on the list, because deleting
+ * someone's groceries to tidy up a label would be indefensible.
+ *
+ * Checked state is part of the merge key. An item you've already put in the
+ * trolley must not be absorbed into one you haven't; they're the same words but
+ * not the same fact.
+ *
+ * Pure, and returns a plan rather than performing it — same shape and the same
+ * reason as planAdd: the optimistic write and the requests are both derived
+ * from ONE decision, so they cannot disagree.
+ *
+ * @returns {{updates: Array<{id, item}>, deletes: string[]}}
+ */
+export function planRetag(items, from, to) {
+  const list = items || [];
+  const f = titleCase(String(from ?? "").trim()).toLowerCase();
+  if (!f) return { updates: [], deletes: [] };
+  const dest = titleCase(String(to ?? "").trim());
+  const keyFor = (name, store, checked) => `${canonicalName(formatItem(1, name, { store }))}|${checked ? 1 : 0}`;
+
+  const entries = new Map();
+  const moving = [];
+  for (const it of list) {
+    const p = parseItem(it.item);
+    if (p.store.toLowerCase() === f) { moving.push({ it, p }); continue; }
+    const k = keyFor(p.name, p.store, it.checked);
+    if (!entries.has(k)) entries.set(k, { id: it.id, orig: it.item, ...p, checked: it.checked, touched: false });
+  }
+  if (!moving.length) return { updates: [], deletes: [] };
+
+  const deletes = [];
+  for (const { it, p } of moving) {
+    const k = keyFor(p.name, dest, it.checked);
+    const hit = entries.get(k);
+    if (hit) { hit.qty += p.qty; hit.touched = true; deletes.push(it.id); }
+    else entries.set(k, { id: it.id, orig: it.item, ...p, store: dest, checked: it.checked, touched: true });
+  }
+
+  // Strings are emitted only after every merge has landed, so a row that
+  // absorbed two others carries the full count rather than the first one.
+  const updates = [];
+  for (const e of entries.values()) {
+    if (!e.touched) continue;
+    const item = formatItem(e.qty, e.name, { store: e.store, section: e.section });
+    if (item !== e.orig) updates.push({ id: e.id, item });
+  }
+  return { updates, deletes };
+}
+
+/** The retag plan applied to a list — the optimistic half of the same decision. */
+export function applyRetag(items, plan) {
+  const gone = new Set(plan?.deletes || []);
+  const patch = new Map((plan?.updates || []).map((u) => [u.id, u.item]));
+  return (items || []).filter((it) => !gone.has(it.id))
+    .map((it) => (patch.has(it.id) ? { ...it, item: patch.get(it.id) } : it));
+}
+
+/**
  * The manual order, applied. Ids the saved order has never seen keep their
  * default position rather than jumping to an end — same rule, and the same
  * reasoning, as the Brief's card order (see lib/brief-order.js).

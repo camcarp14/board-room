@@ -17,7 +17,7 @@
 import {
   AISLES, aisleOf, aisleMeta, parseItem, formatItem, canonicalName,
   findDuplicate, groupList, bumpFrequency, frequentSuggestions, STAPLE_MIN_BUYS,
-  titleCase, storesOf, inStore, applyOrder,
+  titleCase, storesOf, inStore, applyOrder, planRetag, applyRetag,
   planAdd, applyAdd, requestFor, isTempId, TMP_PREFIX,
 } from "../src/features/food/groceryLogic.js";
 
@@ -221,6 +221,77 @@ check("the store match is case-insensitive", inStore("Milk @Costco", "costco"));
     !c.sections.some((s) => !s.pinned && s.items.some((i) => i.id === "4")));
 }
 check("no filter shows everything", groupList(shops, { store: "" }).total === 4);
+
+// ─── 4c. renaming and removing a store ───────────────────────────────────────
+// The store is part of each item's TEXT, so a rename is a bulk rewrite, and a
+// rewrite can land a row on top of one that already exists.
+const twoShops = [
+  { id: "a", item: "Milk @Costco", checked: false },
+  { id: "b", item: "2x Milk @HEB", checked: false },
+  { id: "c", item: "Bananas", checked: false },
+  { id: "d", item: "Ice Cream #Freezer @HEB", checked: false },
+  { id: "e", item: "Milk @HEB", checked: true },
+];
+{
+  const plan = planRetag(twoShops, "HEB", "H-E-B");
+  const items = applyRetag(twoShops, plan).map(i => i.item);
+  check("a plain rename retags every item at that store",
+    items.includes("2x Milk @H-E-B") && items.includes("Ice Cream #Freezer @H-E-B"), items.join(" | "));
+  check("a rename touches nothing at another store", items.includes("Milk @Costco"));
+  check("a rename touches nothing untagged", items.includes("Bananas"));
+  check("a pinned section survives a rename", items.some(i => i.includes("#Freezer @H-E-B")));
+  check("a plain rename deletes nothing", plan.deletes.length === 0, JSON.stringify(plan.deletes));
+}
+{
+  // The back-door duplicate: rename HEB onto Costco and both shops' milk
+  // becomes Milk-at-Costco. Two rows saying the same thing is exactly what the
+  // add path exists to prevent, so the rename has to merge instead.
+  const plan = planRetag(twoShops, "HEB", "Costco");
+  const items = applyRetag(twoShops, plan);
+  const names = items.map(i => i.item);
+  // Unchecked only: the checked "Milk @HEB" also becomes Milk-at-Costco, and it
+  // is SUPPOSED to sit alongside rather than merge (see the checked-state check
+  // below), so counting every row that says Milk at Costco would score the
+  // correct behaviour as a duplicate.
+  check("a colliding rename merges instead of duplicating",
+    items.filter(i => !i.checked && /Milk @Costco$/.test(i.item)).length === 1, names.join(" | "));
+  check("the merge sums the quantities", names.includes("3x Milk @Costco"), names.join(" | "));
+  check("the redundant row is deleted", plan.deletes.includes("b"), JSON.stringify(plan.deletes));
+  check("the surviving row is the one already at the destination",
+    items.some(i => i.id === "a" && i.item === "3x Milk @Costco"));
+  // Same words, different fact: one is in the trolley and one isn't.
+  check("a checked row never merges into an unchecked one",
+    items.some(i => i.id === "e" && i.checked && /Milk @Costco/.test(i.item)) && !plan.deletes.includes("e"));
+}
+{
+  // Removing a store must not remove the shopping.
+  const plan = planRetag(twoShops, "HEB", "");
+  const items = applyRetag(twoShops, plan);
+  check("removing a store untags its items rather than deleting them",
+    items.length === twoShops.length - plan.deletes.length && items.some(i => i.item === "2x Milk"),
+    items.map(i => i.item).join(" | "));
+  check("an untagged collision still merges", plan.deletes.length >= 0);
+  check("a removed store's pinned section survives", items.some(i => i.item === "Ice Cream #Freezer"));
+}
+check("the store to rename is matched case-insensitively",
+  planRetag(twoShops, "heb", "Aldi").updates.length === planRetag(twoShops, "HEB", "Aldi").updates.length);
+check("renaming a store with no items is a no-op plan", (() => {
+  const p = planRetag(twoShops, "Aldi", "Kroger");
+  return p.updates.length === 0 && p.deletes.length === 0;
+})());
+check("an empty source store is refused rather than retagging everything", (() => {
+  const p = planRetag(twoShops, "", "Costco");
+  return p.updates.length === 0 && p.deletes.length === 0;
+})());
+check("planRetag tolerates a null list", (() => {
+  const p = planRetag(null, "HEB", "Aldi");
+  return p.updates.length === 0 && p.deletes.length === 0;
+})());
+check("applyRetag on an empty plan changes nothing",
+  applyRetag(twoShops, { updates: [], deletes: [] }).length === twoShops.length);
+check("the renamed store then appears in the picker under its new name",
+  storesOf(applyRetag(twoShops, planRetag(twoShops, "HEB", "Aldi"))).join(",") === "Aldi,Costco",
+  storesOf(applyRetag(twoShops, planRetag(twoShops, "HEB", "Aldi"))).join(","));
 
 // applyOrder — the drag, persisted. Same unknown-id rule as the Brief's cards:
 // an id the saved order has never seen keeps its default slot rather than
