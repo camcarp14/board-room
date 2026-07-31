@@ -2,7 +2,9 @@
 -- usage_log + usage_summary — the spend ledger behind Systems → Usage.
 --
 -- This file is idempotent: run it in the Supabase SQL editor as many times as
--- you like. It creates what's missing and leaves what's already there alone.
+-- you like. The table, index and policies are created only if absent. The
+-- aggregate is the one exception — it is dropped and recreated every run, which
+-- is deliberate (see the note above it) and safe: it holds no data.
 --
 -- WHY IT EXISTS. Systems → Usage points you here by name when the aggregate is
 -- missing ("Run supabase-usage-fix.sql in the Supabase SQL editor"), and until
@@ -37,9 +39,13 @@ create schema if not exists boardroom;
 -- which is what makes historical rows survive a price change (Sonnet 5's
 -- introductory pricing ends 2026-08-31). It is not billing truth — reconcile
 -- against the Anthropic console for that.
+-- id/user_id defaults match what production already has (uuid + auth.uid()),
+-- not what a clean-sheet design would pick. `create table if not exists` is a
+-- no-op against the live table, so a divergence here would only ever show up on
+-- a fresh database — as a schema that silently disagrees with production.
 create table if not exists boardroom.usage_log (
-  id          bigint generated always as identity primary key,
-  user_id     uuid        not null references auth.users(id) on delete cascade,
+  id          uuid        primary key default gen_random_uuid(),
+  user_id     uuid        not null default auth.uid() references auth.users(id) on delete cascade,
   fn          text        not null,
   kind        text        not null default 'anthropic',
   model       text,
@@ -58,17 +64,23 @@ create index if not exists usage_log_user_created_idx
   on boardroom.usage_log (user_id, created_at desc);
 
 -- ── row-level security ─────────────────────────────────────────────────────
--- Reads are the user's own rows only. There is deliberately NO insert policy
--- for authenticated clients: every writer either goes through the service-role
--- key (which bypasses RLS) or is the client's own session insert via
--- telemetry.js, which the policy below permits for its own user_id.
+-- Reads are the user's own rows only. The insert policy is scoped the same way
+-- rather than being a blanket grant: the server-side writers use the
+-- service-role key and bypass RLS entirely, so the only thing this policy has to
+-- admit is telemetry.js inserting under the caller's own session.
 alter table boardroom.usage_log enable row level security;
 
+-- These guards test for a policy on the COMMAND, never on a policy NAME. The
+-- name check was a real bug: production's policies are called "own rows select"
+-- and "own rows insert" (created by hand, long before this file existed), so
+-- name-matching found nothing and the script cheerfully added a second,
+-- identically-scoped policy under its own name. Permissive policies OR together,
+-- so nothing broke visibly — it just quietly doubled the policy set every run.
 do $$
 begin
   if not exists (
     select 1 from pg_policies
-    where schemaname = 'boardroom' and tablename = 'usage_log' and policyname = 'usage_log_select_own'
+    where schemaname = 'boardroom' and tablename = 'usage_log' and cmd = 'SELECT'
   ) then
     create policy usage_log_select_own on boardroom.usage_log
       for select using (auth.uid() = user_id);
@@ -76,16 +88,19 @@ begin
 
   if not exists (
     select 1 from pg_policies
-    where schemaname = 'boardroom' and tablename = 'usage_log' and policyname = 'usage_log_insert_own'
+    where schemaname = 'boardroom' and tablename = 'usage_log' and cmd = 'INSERT'
   ) then
     create policy usage_log_insert_own on boardroom.usage_log
       for insert with check (auth.uid() = user_id);
   end if;
 
-  -- Systems → Database offers "clear usage_log > 30d"; that runs as the user.
+  -- Systems → Database offers "clear usage_log > 30d"; that runs as the user, so
+  -- without a DELETE policy RLS filters every row out and the sweep deletes
+  -- nothing at all — silently, since a 0-row delete is not an error. Production
+  -- ran without this policy until 2026-07-31.
   if not exists (
     select 1 from pg_policies
-    where schemaname = 'boardroom' and tablename = 'usage_log' and policyname = 'usage_log_delete_own'
+    where schemaname = 'boardroom' and tablename = 'usage_log' and cmd = 'DELETE'
   ) then
     create policy usage_log_delete_own on boardroom.usage_log
       for delete using (auth.uid() = user_id);
@@ -102,7 +117,15 @@ end $$;
 -- anthropic-only cost/token total, and an all-kinds call/failure count from a
 -- single round trip. SECURITY INVOKER (the default) keeps RLS in force, so a
 -- caller can only ever aggregate their own rows.
-create or replace function boardroom.usage_summary(since_ts timestamptz)
+-- DROP, not `create or replace`. Replace cannot change a function's return type
+-- (Postgres 42P13), and production already had a 7-column usage_summary — no
+-- model, no ms_avg — so the replace failed outright and took the whole script's
+-- transaction down with it. Dropping first is what makes this file idempotent
+-- against a database that has an older version of the aggregate, which is the
+-- only interesting case: a database that has none was never the hard one.
+drop function if exists boardroom.usage_summary(timestamptz);
+
+create function boardroom.usage_summary(since_ts timestamptz)
 returns table (
   fn         text,
   kind       text,

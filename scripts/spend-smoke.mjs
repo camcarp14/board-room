@@ -180,12 +180,33 @@ check("supabase-usage-fix.sql exists (the UI names this file by path)", existsSy
 if (existsSync(SQL_PATH)) {
   const sql = read(SQL_PATH);
   check("it creates usage_log", /create table if not exists boardroom\.usage_log/i.test(sql));
-  check("it creates the usage_summary aggregate", /create or replace function boardroom\.usage_summary/i.test(sql));
+  // Both halves, in order. `create or replace` alone was the original bug: it
+  // cannot change a function's return type, so against a database holding an
+  // older usage_summary the whole script aborted with 42P13. Asserting the drop
+  // is what stops that regressing — and asserting it comes FIRST is what stops
+  // someone "fixing" it by appending a drop after the create.
+  const dropAt = sql.search(/drop function if exists boardroom\.usage_summary\(timestamptz\)/i);
+  const createAt = sql.search(/create function boardroom\.usage_summary/i);
+  check("it drops the old usage_summary before creating it", dropAt >= 0 && createAt > dropAt);
+  check("it does not use create-or-replace on usage_summary (42P13)",
+    !/create or replace function boardroom\.usage_summary/i.test(sql));
   // The client pins db.schema and the functions send Content-Profile: boardroom.
   // public-schema DDL would apply cleanly and still leave the app talking to a
   // table that isn't there.
   check("it targets the boardroom schema, not public", !/create table if not exists public\.usage_log/i.test(sql) && /create schema if not exists boardroom/i.test(sql));
   check("RLS is on", /alter table boardroom\.usage_log enable row level security/i.test(sql));
+  // The policy guards must test the COMMAND, not the policy NAME. Production's
+  // policies were hand-made and called "own rows select" / "own rows insert", so
+  // a name-based `if not exists` matched nothing and added a duplicate policy on
+  // every run. Permissive policies OR together, so this never threw — it just
+  // silently grew the policy set, which is exactly the kind of drift nobody
+  // notices until an audit.
+  check("policy guards key off cmd, not policyname",
+    /and cmd = 'SELECT'/i.test(sql) && !/and policyname = 'usage_log_/i.test(sql));
+  // The retention sweep on Systems → Database runs as the user. Without a DELETE
+  // policy RLS filters every row out and it deletes nothing, silently.
+  check("a DELETE policy exists (the 30d sweep is a no-op without it)",
+    /create policy \w+ on boardroom\.usage_log\s+for delete/i.test(sql));
   check("the aggregate is granted to authenticated", /grant execute on function boardroom\.usage_summary/i.test(sql));
   // Every column the readers and writers name must exist in the DDL.
   const cols = ["user_id", "fn", "kind", "model", "in_tokens", "out_tokens", "cost_usd", "ms", "ok", "detail", "created_at"];
