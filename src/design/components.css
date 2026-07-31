@@ -212,6 +212,38 @@ button:active:not(:disabled) { transform: scale(0.97); }
 .brief-scroll::-webkit-scrollbar-thumb { background: var(--line); border-radius: 4px; border: 2px solid transparent; background-clip: padding-box; }
 .brief-scroll:hover::-webkit-scrollbar-thumb { background: var(--faint); background-clip: padding-box; }
 
+/* Thumb rails — the way OUT of a tall inner feed on a phone.
+   The Wire is 480px and Watch This Week 340px, so on a phone the two of them
+   own most of the screen, and every one of those pixels is inside a scroller:
+   a thumb landing there scrolls the FEED, and `overscroll-behavior: contain`
+   (which is what stops the page lurching the moment a feed runs out) means it
+   never hands the gesture back. The page became unreachable through its own
+   content.
+   The fix is a lane, not a cap. The feed bleeds out to the card's edges and
+   gives back a strip down each side that is NOT part of the scroller, so a
+   swipe there falls through to #page-scroll like any other empty pixel. The
+   strip is a sibling, not an overlay, so it costs no tap targets — the Wire's
+   timestamp links stay reachable to their last pixel.
+   The arithmetic is the point: 26px of rail minus the 12px of card padding
+   the feed reclaims is a real cost of only 14px a side, while the rail lands
+   flush against the 12px page gutter to make one continuous ~38px lane down
+   both edges of the screen. Wide enough for a thumb, cheap enough that the
+   headlines still wrap where they did.
+   Phones only. A mouse wheel doesn't need somewhere to stand. */
+.feed-rails { position: relative; }
+@media (max-width: 760px) {
+  .feed-rails { --rail: 26px; margin-inline: -12px; }
+  .feed-rails > .brief-scroll { margin-inline: var(--rail); }
+  /* The affordance: a pair of faint troughs that read as the feed's edge and
+     mark where the page still lives. Decorative — never in the touch path. */
+  .feed-rails::before, .feed-rails::after {
+    content: ""; position: absolute; top: 14px; bottom: 14px; width: 2px;
+    border-radius: 1px; background: var(--line); opacity: .5; pointer-events: none;
+  }
+  .feed-rails::before { left: calc(var(--rail) / 2 - 1px); }
+  .feed-rails::after { right: calc(var(--rail) / 2 - 1px); }
+}
+
 /* ═══ THE KIT ════════════════════════════════════════════════════════════════ */
 
 /* cards — one material, no outlines */

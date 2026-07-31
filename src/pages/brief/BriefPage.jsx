@@ -472,37 +472,42 @@ export function MorningBriefPage({ btc, isMobile, settings, updateSetting, onOpe
   const card_watch = (
     <CollapsibleCard {...coll("watch")} pad={pad} title="Watch This Week" tight
       trailing={<><span className="t-cap" style={{ color: "var(--faint)" }}>CT time</span><StatusTag status={eventsStatus} /></>}>
-      <div className="brief-scroll" style={{ display: "flex", flexDirection: "column", gap: 8, maxHeight: 340, overflowY: "auto" }}>
-        {eventsStatus.state === "live" ? (
-          events.length ? <>{events.map((e) => {
-            // Every phrase, badge and tone on the row comes from one pure
-            // function — see watchState.js for why the "check back after the
-            // print lands" state could never resolve, and what replaced it.
-            const row = watchRowState(e, resultFor(e), eventAnalysis[takeKey(e)]);
-            return (
-              // Stacked, not squeezed: the time + Result badge share the top
-              // line; the event title gets the full width below it (aligned
-              // under the time), then the one-line take. Reads cleanly on a
-              // phone instead of wrapping the title into a narrow middle column.
-              // Stable identity, not list position: this feed re-sorts and drops
-              // old events every refresh, so an index key hands React a reused
-              // node for a different event.
-              <div key={eventId(e)} style={{ background: row.bg, borderRadius: 12, padding: "11px 13px", display: "flex", flexDirection: "column", gap: 5, flexShrink: 0 }}>
-                <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                  <Dot tone={e.color} />
-                  <span className="t-cap t-num" style={{ color: "var(--faint)", whiteSpace: "nowrap" }}>{e.time}</span>
-                  <span style={{ flex: 1 }} />
-                  {row.badge && <span className="t-cap" style={{ color: row.badgeColor, fontWeight: 600, flex: "none" }}>{row.badge}</span>}
+      {/* .feed-rails gives the phone a strip down each side of the feed that
+          isn't part of the scroller, so a thumb there scrolls the PAGE. See
+          components.css — the feed bleeds into the card padding to pay for it. */}
+      <div className="feed-rails">
+        <div className="brief-scroll" style={{ display: "flex", flexDirection: "column", gap: 8, maxHeight: 340, overflowY: "auto" }}>
+          {eventsStatus.state === "live" ? (
+            events.length ? <>{events.map((e) => {
+              // Every phrase, badge and tone on the row comes from one pure
+              // function — see watchState.js for why the "check back after the
+              // print lands" state could never resolve, and what replaced it.
+              const row = watchRowState(e, resultFor(e), eventAnalysis[takeKey(e)]);
+              return (
+                // Stacked, not squeezed: the time + Result badge share the top
+                // line; the event title gets the full width below it (aligned
+                // under the time), then the one-line take. Reads cleanly on a
+                // phone instead of wrapping the title into a narrow middle column.
+                // Stable identity, not list position: this feed re-sorts and drops
+                // old events every refresh, so an index key hands React a reused
+                // node for a different event.
+                <div key={eventId(e)} style={{ background: row.bg, borderRadius: 12, padding: "11px 13px", display: "flex", flexDirection: "column", gap: 5, flexShrink: 0 }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                    <Dot tone={e.color} />
+                    <span className="t-cap t-num" style={{ color: "var(--faint)", whiteSpace: "nowrap" }}>{e.time}</span>
+                    <span style={{ flex: 1 }} />
+                    {row.badge && <span className="t-cap" style={{ color: row.badgeColor, fontWeight: 600, flex: "none" }}>{row.badge}</span>}
+                  </div>
+                  <div className="t-call" style={{ lineHeight: 1.4, paddingLeft: 17 }}>{row.line}</div>
+                  <div className="t-foot" style={{ color: "var(--faint)", paddingLeft: 17, lineHeight: 1.5 }}>
+                    {row.pulse ? <span style={{ animation: "pulse 1.4s infinite" }}>{row.note}</span> : row.note}
+                  </div>
                 </div>
-                <div className="t-call" style={{ lineHeight: 1.4, paddingLeft: 17 }}>{row.line}</div>
-                <div className="t-foot" style={{ color: "var(--faint)", paddingLeft: 17, lineHeight: 1.5 }}>
-                  {row.pulse ? <span style={{ animation: "pulse 1.4s infinite" }}>{row.note}</span> : row.note}
-                </div>
-              </div>
-            );
-          })}
-          </> : <div className="t-foot" style={{ color: "var(--faint)", padding: "6px 0" }}>No high/medium-impact US events in the last 18 hours or next 7 days.</div>
-        ) : <FeedFallbackRow status={eventsStatus} />}
+              );
+            })}
+            </> : <div className="t-foot" style={{ color: "var(--faint)", padding: "6px 0" }}>No high/medium-impact US events in the last 18 hours or next 7 days.</div>
+          ) : <FeedFallbackRow status={eventsStatus} />}
+        </div>
       </div>
       {freshOrStale(eventsStatus)}
     </CollapsibleCard>
@@ -697,35 +702,40 @@ export function MorningBriefPage({ btc, isMobile, settings, updateSetting, onOpe
     <CollapsibleCard {...coll("wire")} pad={pad} tight title="The Wire" trailing={<StatusTag status={wireStatus} />}>
       {wireStatus.state === "live" ? (
         wire.length ? (
-          <div className="brief-scroll" style={{ display: "flex", flexDirection: "column", maxHeight: 480, overflowY: "auto" }}>
-            {wire.map((w, i) => (
-              // The whole ROW used to be the <a>, so on a phone any scroll-nudge or
-              // mis-tap while reading launched an article. Only the timestamp opens
-              // it now; the headline is inert (and selectable, so a headline can be
-              // copied). Still a real <a>, not an onClick — long-press, open-in-new-
-              // tab and copy-link all keep working.
-              <div key={w.link || `${w.time}|${w.text}`}
-                title={w.tag ? `${w.tag} · ${w.text}` : w.text}
-                style={{ display: "flex", alignItems: "baseline", gap: 8, minHeight: 34, flexShrink: 0, padding: "6px 0", borderTop: i === 0 ? "none" : "0.5px solid var(--line)" }}>
-                {/* Category is just the colored dot next to the time — the text
-                    label (WIRE/REGULATORY/…) is dropped so each headline gets the
-                    full remaining width and wraps to fewer lines. */}
-                {w.link ? (
-                  <a className="wire-open" href={w.link} target="_blank" rel="noreferrer"
-                    title="Open article" aria-label={`Open article: ${w.text}`}>
-                    <Dot tone={w.tagColor} size={6} />
-                    <span className="t-cap t-num">{w.time}</span>
-                    <IcExternal size={9} aria-hidden />
-                  </a>
-                ) : (
-                  <span style={{ display: "inline-flex", alignItems: "center", gap: 6, flex: "none" }}>
-                    <Dot tone={w.tagColor} size={6} />
-                    <span className="t-cap t-num" style={{ color: "var(--faint)" }}>{w.time}</span>
-                  </span>
-                )}
-                <span className="t-call" style={{ minWidth: 0, flex: 1, lineHeight: 1.4 }}>{w.text}</span>
-              </div>
-            ))}
+          // .feed-rails keeps a thumb-width strip down each side OUTSIDE this
+          // scroller, so on a phone there's always somewhere to swipe the page
+          // itself. See components.css.
+          <div className="feed-rails">
+            <div className="brief-scroll" style={{ display: "flex", flexDirection: "column", maxHeight: 480, overflowY: "auto" }}>
+              {wire.map((w, i) => (
+                // The whole ROW used to be the <a>, so on a phone any scroll-nudge or
+                // mis-tap while reading launched an article. Only the timestamp opens
+                // it now; the headline is inert (and selectable, so a headline can be
+                // copied). Still a real <a>, not an onClick — long-press, open-in-new-
+                // tab and copy-link all keep working.
+                <div key={w.link || `${w.time}|${w.text}`}
+                  title={w.tag ? `${w.tag} · ${w.text}` : w.text}
+                  style={{ display: "flex", alignItems: "baseline", gap: 8, minHeight: 34, flexShrink: 0, padding: "6px 0", borderTop: i === 0 ? "none" : "0.5px solid var(--line)" }}>
+                  {/* Category is just the colored dot next to the time — the text
+                      label (WIRE/REGULATORY/…) is dropped so each headline gets the
+                      full remaining width and wraps to fewer lines. */}
+                  {w.link ? (
+                    <a className="wire-open" href={w.link} target="_blank" rel="noreferrer"
+                      title="Open article" aria-label={`Open article: ${w.text}`}>
+                      <Dot tone={w.tagColor} size={6} />
+                      <span className="t-cap t-num">{w.time}</span>
+                      <IcExternal size={9} aria-hidden />
+                    </a>
+                  ) : (
+                    <span style={{ display: "inline-flex", alignItems: "center", gap: 6, flex: "none" }}>
+                      <Dot tone={w.tagColor} size={6} />
+                      <span className="t-cap t-num" style={{ color: "var(--faint)" }}>{w.time}</span>
+                    </span>
+                  )}
+                  <span className="t-call" style={{ minWidth: 0, flex: 1, lineHeight: 1.4 }}>{w.text}</span>
+                </div>
+              ))}
+            </div>
           </div>
         ) : <div className="t-foot" style={{ color: "var(--faint)", padding: "6px 0" }}>No headlines returned this cycle.</div>
       ) : <FeedFallbackRow status={wireStatus} />}

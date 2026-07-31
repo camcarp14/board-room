@@ -132,5 +132,27 @@ check("The Wire's feed is 480px (50% up from 320)", /maxHeight: 480/.test(brief)
 const wireW = brief.match(/id: "wire", c: card_wire, w: ([\d.]+)/)?.[1];
 check("The Wire's packing weight grew with it", Number(wireW) >= 4, `w: ${wireW}`);
 
+// ── the thumb rails ──────────────────────────────────────────────────────────
+// Both tall feeds are inner scrollers with `overscroll-behavior: contain`, so
+// between them they can own the whole phone screen and leave no pixel that
+// scrolls the PAGE. .feed-rails is the escape lane; a feed that loses its
+// wrapper silently re-traps the thumb, which is invisible in a diff and
+// obvious the moment you hold the phone. Pin both ends: the wrapper here, the
+// geometry that makes the lane thumb-wide in the stylesheet.
+const scrollers = (brief.match(/className="brief-scroll"/g) || []).length;
+const railed = (brief.match(/className="feed-rails"/g) || []).length;
+check("every capped feed is wrapped in a thumb rail", scrollers === 2 && railed === 2,
+  `${scrollers} scroller(s), ${railed} rail wrapper(s)`);
+const css = readFileSync("src/design/components.css", "utf8");
+const rails = css.match(/@media \(max-width: 760px\) \{\s*\.feed-rails \{([^}]*)\}/);
+check("the rails only exist on the phone", !!rails);
+// 26px of rail against the card's 12px of padding = a real cost of 14px a
+// side, and a lane that meets the 12px page gutter at ~38px. Both numbers
+// matter: shrink the rail and the thumb misses, grow it and the headlines wrap.
+check("the rail is thumb-wide and paid for by the card padding",
+  /--rail: 26px/.test(rails?.[1] || "") && /margin-inline: -12px/.test(rails?.[1] || ""), rails?.[1]);
+check("the feed is inset by the rail, not overlaid by it",
+  /\.feed-rails > \.brief-scroll \{ margin-inline: var\(--rail\)/.test(css));
+
 console.log(failed ? `\n${failed} brief-order check(s) failed` : "\nbrief-order: all checks passed");
 process.exit(failed ? 1 : 0);
