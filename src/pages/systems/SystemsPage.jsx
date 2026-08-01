@@ -342,11 +342,21 @@ export function UsageTab({ isMobile }) {
 
 const IS_DEPLOYED = typeof window !== "undefined" && window.location.hostname !== "localhost";
 
+// `bulk` marks a group that stays folded no matter what. Core, AI and Market
+// data are five rows between them — cheap to show, and they're the pipes that
+// actually break in ways you can do something about. Netlify functions is
+// twenty-one rows that are almost always all Live, and it dwarfed the three
+// groups worth reading; it now stays shut and you open it when you want it.
+//
+// Nothing is hidden by that: the group's own tally still spells out "1 down" in
+// red on the collapsed header, so a broken function is visible at a glance —
+// you just have to tap to see WHICH. That's the trade, and it's the right way
+// round for a list this size.
 const CONN_GROUPS = [
   { title: "Core", keys: ["supabase_env", "supabase_auth", "supabase_db"] },
   { title: "AI", keys: ["anthropic"] },
   { title: "Market data", keys: ["coingecko"] },
-  { title: "Netlify functions", keys: ["fn_health", "fn_mini", "fn_btc", "fn_btc_candles", "fn_markets", "fn_ticker_candles", "fn_wire", "fn_tmdb", "fn_export_data", "fn_calendar", "fn_calendar_events", "fn_site_status", "fn_gsc", "fn_shopify", "fn_clarify_pipeline", "fn_zts_pipeline", "fn_deploy", "fn_dbadmin", "fn_audit", "fn_autofix"] },
+  { title: "Netlify functions", bulk: true, keys: ["fn_health", "fn_mini", "fn_btc", "fn_btc_candles", "fn_markets", "fn_ticker_candles", "fn_wire", "fn_tmdb", "fn_export_data", "fn_calendar", "fn_calendar_events", "fn_site_status", "fn_gsc", "fn_shopify", "fn_clarify_pipeline", "fn_zts_pipeline", "fn_deploy", "fn_dbadmin", "fn_audit", "fn_autofix"] },
 ];
 const CONN_META = {
   supabase_env: { name: "Supabase · config", desc: "VITE_SUPABASE_URL + anon key present at build time" },
@@ -545,12 +555,12 @@ function ConnGroup({ group, checks, open, onToggle }) {
 // CONSOLIDATED, NOT TRUNCATED. This used to render all twenty-five pipes as
 // open cells, which on a phone is a screen and a half of rows that say "Live" —
 // the two that don't are the entire point and they were the hardest to find.
-// Groups now collapse to a tally and open on a tap.
 //
-// The one rule that makes it safe: a group holding anything DOWN OR PARTIAL
-// opens itself. Consolidation must never be the reason a failure went unseen,
-// so trouble is never behind a disclosure — you only ever have to tap to see
-// things that are fine.
+// So the three small groups (Core, AI, Market data — five rows total) are open,
+// and the twenty-one Netlify functions are folded behind their tally. Every
+// group's header carries its own counts either way, so a failure is never
+// silent; the fold only decides whether you can see which row it was without
+// tapping. For five rows that's worth showing; for twenty-one it isn't.
 export function StatusTab({ checks, lastRun, running, runAll, isMobile }) {
   const vals = Object.values(checks);
   const counts = {
@@ -561,12 +571,12 @@ export function StatusTab({ checks, lastRun, running, runAll, isMobile }) {
   };
   const agoCheck = (ts) => { if (!ts) return "—"; const s = Math.floor((Date.now() - ts) / 1000); return s < 60 ? `${s}s ago` : `${Math.floor(s / 60)}m ago`; };
 
-  // null = "nobody has chosen yet", so the auto-open rule below governs. Once
-  // you toggle a group it holds whatever you set, including closed on a group
-  // that's failing — an explicit choice outranks the automatic one.
+  // null = "nobody has chosen yet", so the default below governs: small groups
+  // open, the bulk group shut. Once you toggle a group it holds whatever you
+  // set — an explicit choice outranks the default in both directions, so the
+  // function list can be pinned open for as long as you're working in it.
   const [openMap, setOpenMap] = useState({});
-  const troubled = (g) => g.keys.some(k => checks[k]?.status === "down" || checks[k]?.status === "warn");
-  const isOpen = (g) => (openMap[g.title] != null ? openMap[g.title] : troubled(g));
+  const isOpen = (g) => (openMap[g.title] != null ? openMap[g.title] : !g.bulk);
 
   return (
     <>
@@ -591,7 +601,7 @@ export function StatusTab({ checks, lastRun, running, runAll, isMobile }) {
           </div>
         ))}
         <div className="t-foot" style={{ color: "var(--faint)", paddingTop: 8, lineHeight: 1.5 }}>
-          Anything down or partial opens on its own. Tap a group to see what's behind a clean tally.
+          Every group counts its own pipes here. Tap one to see which row is which.
         </div>
       </Card>
     </>

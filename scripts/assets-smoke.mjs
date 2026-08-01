@@ -107,11 +107,26 @@ check("every attributed pull points at a listed tool", attributed.every(t => too
 check("at least one pull is attributed", attributed.length > 0);
 
 // ── 5. Status consolidates without hiding trouble ────────────────────────────
-// The whole safety of collapsing groups rests on this rule.
-check("a failing group opens itself",
-  /const troubled = \(g\) => g\.keys\.some\(k => checks\[k\]\?\.status === "down" \|\| checks\[k\]\?\.status === "warn"\)/.test(systems));
-check("an explicit toggle outranks the automatic open",
-  /openMap\[g\.title\] != null \? openMap\[g\.title\] : troubled\(g\)/.test(systems));
+// Exactly one group folds by default — the twenty-one Netlify functions. If
+// `bulk` ever spread to Core, AI or Market data the tab would open showing
+// nothing but four headers, which is consolidation past the point of use.
+const groups = [...systems.matchAll(/\{ title: "([^"]+)",( bulk: (true),)? keys:/g)].map(m => [m[1], m[3] === "true"]);
+check("Status still has its four groups", groups.length === 4, groups.map(g => g[0]).join(","));
+check("only the function list folds by default",
+  groups.filter(([, bulk]) => bulk).map(([t]) => t).join(",") === "Netlify functions",
+  groups.map(([t, b]) => `${t}:${b}`).join(" "));
+check("Core, AI and Market data open by default",
+  groups.filter(([, bulk]) => !bulk).map(([t]) => t).join(",") === "Core,AI,Market data",
+  groups.map(([t, b]) => `${t}:${b}`).join(" "));
+check("an explicit toggle outranks the default, in both directions",
+  /openMap\[g\.title\] != null \? openMap\[g\.title\] : !g\.bulk/.test(systems));
+// Folding is only defensible while the header still reports failures. If the
+// red count stopped rendering, a down function inside a shut group would be
+// genuinely invisible — which is the one outcome this layout must not have.
+check("a collapsed header still counts what's down",
+  /if \(bad\) bits\.push\(\{ t: `\$\{bad\} down`, c: "var\(--red\)" \}\)/.test(systems));
+check("the down count is outside the collapsible body",
+  systems.indexOf("bits.map(") < systems.indexOf('className={`expand${open ? " open" : ""}`}'));
 
 console.log(failed ? `\n${failed} assets check(s) failed` : "\nassets: all checks passed");
 process.exit(failed ? 1 : 0);

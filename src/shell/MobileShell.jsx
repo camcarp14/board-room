@@ -8,11 +8,11 @@ import { useState, useRef } from "react";
 import { NAV, HEADERS } from "./nav.js";
 import { TopStatus } from "./TopStatus.jsx";
 import { ViewportDiag } from "./ViewportDiag.jsx";
-import { NAV_ICONS, IcSearch, IcSettings } from "../ui/icons.jsx";
+import { NAV_ICONS, IcSettings } from "../ui/icons.jsx";
 import { LargeTitle } from "../ui/kit.jsx";
 import { IS_STANDALONE, useVisualViewport } from "../hooks/index.js";
 
-export function MobileShell({ page, navDir, onNavigate, onSummon, onOpenSettings, now, dataStamp, refreshing, onRefresh, children }) {
+export function MobileShell({ page, navDir, onNavigate, onOpenSettings, now, dataStamp, refreshing, onRefresh, children }) {
   const { vvh, envTop } = useVisualViewport();
   const diagTaps = useRef({ n: 0, t: 0 });
   const [diagOpen, setDiagOpen] = useState(false);
@@ -52,9 +52,6 @@ export function MobileShell({ page, navDir, onNavigate, onSummon, onOpenSettings
     <div className="nav-actions">
       <button className="icon-btn" onClick={onOpenSettings} aria-label="Settings" title="Settings">
         <IcSettings size={19} />
-      </button>
-      <button className="icon-btn" onClick={onSummon} aria-label="Summon — search everything" title="Summon">
-        <IcSearch size={19} />
       </button>
       <TopStatus now={now} dataStamp={dataStamp} refreshing={refreshing} onRefresh={onRefresh} compact />
     </div>

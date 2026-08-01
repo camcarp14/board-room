@@ -8,11 +8,11 @@
 // gets the difference back.
 import { NAV, HEADERS } from "./nav.js";
 import { TopStatus } from "./TopStatus.jsx";
-import { NAV_ICONS, IcSearch, IcSettings } from "../ui/icons.jsx";
+import { NAV_ICONS, IcSettings } from "../ui/icons.jsx";
 import { NumTween, Sparkline } from "../ui/primitives.jsx";
 import { Delta } from "../ui/kit.jsx";
 
-export function SidebarShell({ page, onNavigate, onSummon, onOpenSettings, btc, session, totalSpend, callCount, now, dataStamp, refreshing, onRefresh, children }) {
+export function SidebarShell({ page, onNavigate, onOpenSettings, btc, session, totalSpend, callCount, now, dataStamp, refreshing, onRefresh, children }) {
   const head = HEADERS[page];
 
   return (
@@ -75,10 +75,6 @@ export function SidebarShell({ page, onNavigate, onSummon, onOpenSettings, btc, 
             <div className="t-foot" style={{ marginTop: 2 }}>{head.sub(new Date(now))}</div>
           </div>
           <div style={{ display: "flex", alignItems: "center", gap: 14, flex: "none", paddingBottom: 2 }}>
-            <button onClick={onSummon} aria-label="Summon — search everything"
-              style={{ display: "inline-flex", alignItems: "center", gap: 8, height: 36, padding: "0 12px", background: "var(--ink-a05)", border: "none", borderRadius: 10, color: "var(--sub)", fontSize: 13, cursor: "pointer" }}>
-              <IcSearch size={15} /> Summon <kbd>⌘K</kbd>
-            </button>
             {/* Honest label: this reads the `obs` localStorage ring, which is
                 capped at 300 entries and persists across launches — so it's
                 neither "this session" nor complete. The durable cross-device

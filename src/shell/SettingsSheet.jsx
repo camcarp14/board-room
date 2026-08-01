@@ -203,11 +203,6 @@ export function SettingsSheet({ onClose, session, theme, calUrl, onSaveCalUrl, i
             <Cell title="Sign out" destructive onClick={signOut} />
           </CellGroup>
 
-          {!isMobile && (
-            <div className="t-cap" style={{ color: "var(--faint)", padding: "16px 4px 0", lineHeight: 1.5 }}>
-              ⌘K opens Summon from anywhere.
-            </div>
-          )}
         </div>
       </Sheet>
       {confirmEl}

@@ -9,7 +9,6 @@ import { useThemeController, useIsMobile, useBitcoinPrice } from "./hooks/index.
 import { NAV } from "./shell/nav.js";
 import { MobileShell } from "./shell/MobileShell.jsx";
 import { SidebarShell } from "./shell/SidebarShell.jsx";
-import { Summon } from "./shell/Summon.jsx";
 import { BootScreen, LoginScreen, SetupNotice } from "./shell/Boot.jsx";
 import { Ambient } from "./shell/Ambient.jsx";
 import { SettingsSheet } from "./shell/SettingsSheet.jsx";
@@ -307,20 +306,18 @@ export default function App() {
   const [settingsOpen, setSettingsOpen] = useState(false);
   useEffect(() => { if (!session) setSettingsOpen(false); }, [session]);
 
-  // Summon (⌘K) — global jump + quick capture
-  const [summon, setSummon] = useState(false);
+  // Summon — the ⌘K overlay that searched every page and took a quick note —
+  // has been removed, along with its search buttons in both shells and the ⌘K
+  // hint in Settings. It was a second way to reach pages the nav already
+  // reaches in one tap, and a second way to write a note the Notes tab already
+  // writes; on a phone it was an icon in the top bar that never got used.
+  //
+  // What it drove STAYS, because it was never Summon's alone: `jump` and
+  // `jumpTo` are the deep-link primitive the Brief, the Word's chips and the
+  // page sub-tabs all point through. Only the overlay is gone.
   const [jump, setJump] = useState(null); // { t, page, sub, noteId?, skillId? }
-  useEffect(() => {
-    const onKey = (e) => {
-      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "k") { e.preventDefault(); setSummon(s => !s); }
-      if (e.key === "Escape") setSummon(false);
-    };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, []);
-  useEffect(() => { if (!session) setSummon(false); }, [session]);
-  // One deep-link primitive: page + optional sub-tab/entity, used by Summon and
-  // by anything on a page that wants to point somewhere (e.g. the Word's chips).
+  // One deep-link primitive: page + optional sub-tab/entity, used by anything
+  // that wants to point somewhere else (e.g. the Word's chips, the Brief).
   const jumpTo = (target) => {
     // Three migrations honored here: Workout graduated from Personal to its own
     // Train tab; Systems folded into Assets; and Mind (boardroom) was removed
@@ -334,12 +331,6 @@ export default function App() {
     goToPage(t.page);
     setJump({ t: Date.now(), ...t });
   };
-  const summonGo = (target) => { setSummon(false); jumpTo(target); };
-  const summonJot = async (text) => {
-    await db.saveNote({ id: crypto.randomUUID(), title: "", body: text });
-    queryClient.invalidateQueries({ queryKey: ["notes"] }); // jots show up in Notes surfaces immediately, not after the cache goes stale
-  };
-  const summonEl = summon ? <Summon onClose={() => setSummon(false)} onGo={summonGo} onJot={summonJot} isMobile={isMobile} /> : null;
   const goToCalendar = () => { setPersonalJumpTo(Date.now()); goToPage("personal"); }; // timestamp so re-tapping still re-triggers even if already on Personal
 
   const send = async (textOverride) => {
@@ -436,7 +427,7 @@ export default function App() {
 
   const renderPageInner = (key) => {
     switch (key) {
-      case "brief": return <MorningBriefPage btc={btc} isMobile={isMobile} settings={settings} updateSetting={updateSetting} onOpenCalendar={goToCalendar} onAddEvent={(date) => jumpTo({ page: "personal", sub: "calendar", newEventDate: date })} onOpenNotes={(noteId) => summonGo({ page: "personal", sub: "notes", noteId })} onOpenBirthdays={() => jumpTo({ page: "personal", sub: "birthdays" })} refreshSignal={briefRefreshSignal} />;
+      case "brief": return <MorningBriefPage btc={btc} isMobile={isMobile} settings={settings} updateSetting={updateSetting} onOpenCalendar={goToCalendar} onAddEvent={(date) => jumpTo({ page: "personal", sub: "calendar", newEventDate: date })} onOpenNotes={(noteId) => jumpTo({ page: "personal", sub: "notes", noteId })} onOpenBirthdays={() => jumpTo({ page: "personal", sub: "birthdays" })} refreshSignal={briefRefreshSignal} />;
       case "personal": return <PersonalPage isMobile={isMobile} jumpSignal={personalJumpTo} jump={jump} settings={settings} updateSetting={updateSetting} />;
       case "train": return <TrainPage isMobile={isMobile} settings={settings} updateSetting={updateSetting} jump={jump} />;
       case "grocery": return <GroceryPage isMobile={isMobile} settings={settings} updateSetting={updateSetting} />;
@@ -470,11 +461,10 @@ export default function App() {
   // ═══ SHELLS ═══
   // One nav state, two chromes: MobileShell (glass nav bar + tab bar, all the
   // iOS-standalone geometry) and SidebarShell (iPadOS sidebar + content well).
-  const shellProps = { page, theme, onNavigate: goToPage, onSummon: () => setSummon(true), onOpenSettings: () => setSettingsOpen(true), now, dataStamp, refreshing, onRefresh: refreshData };
+  const shellProps = { page, theme, onNavigate: goToPage, onOpenSettings: () => setSettingsOpen(true), now, dataStamp, refreshing, onRefresh: refreshData };
   const overlays = (
     <>
       {confirmEl}
-      {summonEl}
       {settingsOpen && (
         <SettingsSheet
           onClose={() => setSettingsOpen(false)}
