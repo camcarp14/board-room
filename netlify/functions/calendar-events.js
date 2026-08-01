@@ -7,22 +7,81 @@
 // codebase (see wire.js for the same approach with RSS).
 const json = (code, body) => ({ statusCode: code, headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
 
+// Calendar URLs are user-provided secrets, so this function has to fetch them
+// server-side. Restrict that fetch to public HTTP(S) hosts and re-check every
+// redirect; otherwise a signed-in browser can turn this endpoint into a probe
+// for the function network.
+const PRIVATE_HOST = /^(localhost|0\.0\.0\.0|127\.|10\.|192\.168\.|169\.254\.|172\.(1[6-9]|2\d|3[01])\.)/i;
+function badUrl(raw) {
+  let u;
+  try { u = new URL(raw); } catch { return "that's not a valid calendar URL"; }
+  if (u.protocol !== "http:" && u.protocol !== "https:") return "only http(s) calendar URLs are supported";
+  if (u.username || u.password) return "calendar URLs cannot include credentials";
+  const host = u.hostname.replace(/^\[|\]$/g, "").toLowerCase();
+  if (
+    PRIVATE_HOST.test(host) || host === "::" || host === "::1" ||
+    host.startsWith("::ffff:") || host.startsWith("fe80:") ||
+    host.startsWith("fc") || host.startsWith("fd") ||
+    host.endsWith(".local") || host.endsWith(".internal") || !host.includes(".")
+  ) return "that calendar host isn't reachable from here";
+  return null;
+}
+
+async function fetchPublicUrl(raw, init) {
+  let url = raw;
+  for (let hop = 0; hop <= 3; hop++) {
+    const problem = badUrl(url);
+    if (problem) throw new Error(problem);
+    const res = await fetch(url, { ...init, redirect: "manual" });
+    if (res.status < 300 || res.status >= 400) return res;
+    const location = res.headers.get("location");
+    if (!location) return res;
+    if (hop === 3) throw new Error("calendar redirected too many times");
+    url = new URL(location, url).toString();
+  }
+}
+
+async function readTextLimited(res, maxBytes = 1000000) {
+  if (!res.body?.getReader) {
+    const text = await res.text();
+    if (Buffer.byteLength(text, "utf8") > maxBytes) throw new Error("calendar feed is too large");
+    return text;
+  }
+  const reader = res.body.getReader();
+  const chunks = [];
+  let bytes = 0;
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      bytes += value.length;
+      if (bytes > maxBytes) throw new Error("calendar feed is too large");
+      chunks.push(value);
+    }
+  } finally {
+    try { await reader.cancel(); } catch { /* already consumed */ }
+  }
+  return Buffer.concat(chunks.map((chunk) => Buffer.from(chunk))).toString("utf8");
+}
+
 // Session gate, inlined ON PURPOSE. Under this repo's "type":"module" + esbuild
 // bundling, `module.exports` inside a required helper clobbers the bundle's
 // exports before `exports.handler` is assigned and the function deploys with NO
 // handler — a 502 on every call. See the same note in tmdb.js and
 // workout-import.js; btc.js / mini-worker.js work precisely because they are
 // self-contained. Do NOT refactor these back into a shared module.
-// Degrades open when the service key is absent so `netlify dev` still runs.
 async function denyUnlessSignedIn(event) {
   const url = process.env.SUPABASE_URL, service = process.env.SUPABASE_SERVICE_ROLE_KEY;
-  if (!url || !service) return null;
+  const owner = String(process.env.BOARD_USER_ID || "").trim();
+  if (!url || !service || !owner) return json(503, { success: false, error: "server owner is not configured" });
   const h = event.headers || {};
   const token = String(h.authorization || h.Authorization || "").replace(/^Bearer\s+/i, "").trim();
   if (!token) return json(401, { success: false, error: "sign in first" });
   try {
     const who = await fetch(`${url}/auth/v1/user`, { headers: { apikey: service, Authorization: `Bearer ${token}` } });
     if (!who.ok) return json(401, { success: false, error: "session expired — refresh and try again" });
+    const u = await who.json();
+    if (u?.id !== owner) return json(403, { success: false, error: "this account is not allowed to use Board Room" });
   } catch {
     return json(503, { success: false, error: "couldn't verify your session — try again in a moment" });
   }
@@ -80,10 +139,19 @@ exports.handler = async (event) => {
   if (denied) return denied;
   if (!body.url) return json(200, { success: false, error: "no calendar linked yet — add one in the sidebar" });
 
+  const url = String(body.url).trim();
+  const problem = badUrl(url);
+  if (problem) return json(400, { success: false, error: problem });
+
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 10000);
   try {
-    const res = await fetch(body.url, { headers: { "User-Agent": "Mozilla/5.0 (compatible; BoardRoom/1.0)" } });
+    const res = await fetchPublicUrl(url, {
+      signal: controller.signal,
+      headers: { "User-Agent": "Mozilla/5.0 (compatible; BoardRoom/1.0)", Accept: "text/calendar,text/plain;q=0.9,*/*;q=0.1" },
+    });
     if (!res.ok) return json(200, { success: false, error: `calendar returned HTTP ${res.status} — check the link is still valid` });
-    const text = await res.text();
+    const text = await readTextLimited(res);
     if (!text.includes("BEGIN:VCALENDAR")) return json(200, { success: false, error: "that URL didn't return an iCal feed — use a .ics link (e.g. Google Calendar's \"Secret address in iCal format\"), not the calendar's web page" });
 
     const now = Date.now();
@@ -102,6 +170,11 @@ exports.handler = async (event) => {
 
     return json(200, { success: true, events });
   } catch (e) {
-    return json(200, { success: false, error: e.message });
+    return json(200, { success: false, error: e.name === "AbortError" ? "calendar took too long to respond" : e.message });
+  } finally {
+    clearTimeout(timer);
   }
 };
+
+// Exported only for functions-smoke.mjs. Netlify reads `handler`.
+exports.badUrl = badUrl;
