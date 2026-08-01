@@ -112,6 +112,36 @@ button:active:not(:disabled) { transform: scale(0.97); }
 .lt-block { padding: 2px 16px 6px; display: flex; align-items: flex-end; justify-content: space-between; gap: 12px; }
 .lt-sub { margin-top: 2px; font-size: 12.5px; line-height: 1.35; color: var(--sub); }
 
+/* ── the status-bar strip ────────────────────────────────────────────────────
+   Reserves the notch and paints NOTHING in dark, so the ambient wash carries
+   straight to the top edge of the screen and the clock sits in the room rather
+   than on a lid. See MobileShell.
+
+   Light palettes need one thing. iOS draws status-bar glyphs WHITE under
+   black-translucent with no way to ask for dark ones, and white on Porcelain's
+   #F4F3F0 ground is invisible — you'd lose the time and the battery entirely.
+   So a scrim, and specifically a gradient one: no edge anywhere, which is the
+   difference between depth and the hard cap this whole change exists to remove.
+
+   The stops are measured, not eyeballed. The clock and battery sit around 22px
+   down a 59px inset, so the scrim has to still be at full strength THERE — the
+   first version fell off by 62% and left 2.2:1 at the glyph line, which is
+   illegible and looked fine in a screenshot. Holding ~0.55 through the top 60%
+   puts every light palette at 4.5:1 or better against white; the fade lives in
+   the last third, below anything iOS draws. Verified per palette by sampling
+   the rendered pixel at the glyph line.
+
+   Dark palettes get nothing at all — white on a dark room is already right, and
+   a scrim there would be the grey bar we started with. */
+.statuscap { flex: none; height: env(safe-area-inset-top); }
+[data-theme="day"] .statuscap {
+  background: linear-gradient(to bottom,
+    rgba(0, 0, 0, 0.58) 0,
+    rgba(0, 0, 0, 0.55) 60%,
+    rgba(0, 0, 0, 0.18) 84%,
+    rgba(0, 0, 0, 0) 100%);
+}
+
 /* ── tab bar — native grammar; the safe-area padding lives INSIDE each tab
    so icons sit above the home indicator. Anatomy (in-flow last flex child,
    .lbx collapse) is load-bearing on iOS standalone — do not reposition. ── */
@@ -126,7 +156,16 @@ button:active:not(:disabled) { transform: scale(0.97); }
   flex: 1; position: relative; background: none; border: none;
   cursor: pointer; display: flex; flex-direction: column; align-items: center;
   justify-content: flex-start; gap: 3px;
-  padding: 8px 0 calc(8px + env(safe-area-inset-bottom));
+  /* 6 + 25 icon + 3 gap + 10 label + 5 = 49px, which is the native iOS tab bar
+     to the point, plus the home-indicator inset. It was 54 — five pixels of
+     nothing, on the axis a phone has least of.
+
+     The inset padding stays INSIDE the button rather than on .dock, which is
+     what makes the band below the labels live tap area: a thumb landing in the
+     gap above the home indicator still hits the tab it's under. That strip
+     can't hold controls of its own — iOS owns the swipe-up gesture there and
+     anything tappable would fight it — but it doesn't have to be dead either. */
+  padding: 6px 0 calc(5px + env(safe-area-inset-bottom));
   color: var(--faint);
   -webkit-user-select: none; user-select: none;
 }
@@ -140,7 +179,7 @@ button:active:not(:disabled) { transform: scale(0.97); }
 .dock-tab.active .dock-icon { animation: tabpop var(--dur-3) var(--ease-spring) both; }
 @keyframes tabpop { from { transform: scale(0.84); } to { transform: scale(1); } }
 .dock-label { font-size: 10px; font-weight: 600; letter-spacing: 0.01em; line-height: 1; white-space: nowrap; max-width: 100%; overflow: hidden; }
-.lbx .dock-tab { padding: 8px 0; } /* letterboxed standalone — OS already cleared the indicator */
+.lbx .dock-tab { padding: 6px 0 5px; } /* letterboxed standalone — OS already cleared the indicator */
 
 /* ═══ CHROME — sidebar (tablet / desktop) ════════════════════════════════════ */
 /* A 236px rail, not 300: four destinations in a flat list (no section headers —

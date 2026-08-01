@@ -63,8 +63,16 @@ export function MobileShell({ page, navDir, onNavigate, onOpenSettings, now, dat
   return (
     <div className={letterboxed ? "lbx" : undefined} style={{ position: "fixed", top: 0, left: 0, right: 0, height: shellHeight, display: "flex", flexDirection: "column", color: "var(--ink)", overflow: "hidden" }}>
       {/* Notch reservation ONLY — the status-bar zone, no header bar. Content
-          starts right below it; the title + controls live in the scroller. */}
-      <div style={{ flex: "none", height: "env(safe-area-inset-top)", background: "var(--bg)" }} />
+          starts right below it; the title + controls live in the scroller.
+
+          TRANSPARENT, not var(--bg). Now that the window runs under the status
+          bar (index.html), whatever is behind the shell paints this strip — and
+          what's behind the shell is the ambient wash, which is a gradient. A
+          flat --bg fill here would have swapped iOS's grey cap for our own: the
+          same hard edge, one shade closer. Letting it through is the only way
+          the top of the screen is genuinely the same surface as the rest.
+          .statuscap carries the one thing it does need — see components.css. */}
+      <div className="statuscap" />
 
       <div id="page-scroll" style={{ flex: 1, minHeight: 0, overflowY: "auto", display: "flex", flexDirection: "column", touchAction: "pan-y" }}>
         <div key={page} className={navDir === "l" ? "pageslide-l" : navDir === "r" ? "pageslide-r" : "pagefade"} style={{ display: "flex", flexDirection: "column", flex: 1, paddingBottom: 20 }}>

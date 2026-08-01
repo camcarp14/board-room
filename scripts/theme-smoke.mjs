@@ -161,5 +161,73 @@ if (gm) {
   }
 }
 
+// ─── The status-bar strip, and the top of the screen ─────────────────────────
+// The bar at the top used to be a different colour from the app: with
+// "black" iOS sizes the window BELOW the status bar and paints that strip flat
+// black itself, which matches a near-black palette and clashes with every other
+// one. Nothing in CSS could reach it — env(safe-area-inset-top) is 0 in that
+// mode and the strip is outside the web view entirely.
+//
+// Under "black-translucent" the window runs under the status bar, so the app's
+// own ground paints it and there is no seam by construction. Every piece of that
+// has to stay true together, and each one fails silently on its own:
+const chrome = readFileSync("src/design/components.css", "utf8");
+const shell = readFileSync("src/shell/MobileShell.jsx", "utf8");
+
+check("the window extends under the status bar",
+  /apple-mobile-web-app-status-bar-style"\s+content="black-translucent"/.test(html),
+  html.match(/apple-mobile-web-app-status-bar-style"[^>]*/)?.[0]);
+// Without viewport-fit=cover every env(safe-area-inset-*) reads 0 and the app
+// draws UNDER the notch with no reservation — the title lands beneath the clock.
+check("the viewport opts into the safe areas", /viewport-fit=cover/.test(html));
+check("the shell reserves the strip", /className="statuscap"/.test(shell));
+// The point of the whole change. An opaque fill here just swaps iOS's grey cap
+// for one of ours: same hard edge, one shade closer. It must stay transparent so
+// the ambient wash — which is a gradient — carries through it.
+check("…and paints nothing there, so the room shows through",
+  !/statuscap[^}]*background/.test(chrome.replace(/\[data-theme="day"\][^}]*\}/g, "")),
+  "an opaque statuscap re-creates the bar it replaced");
+check("the strip is exactly the inset tall",
+  /\.statuscap \{[^}]*height: env\(safe-area-inset-top\)/.test(chrome));
+
+// iOS draws status-bar glyphs WHITE under black-translucent, with no way to ask
+// for dark ones. On a light palette that is invisible unless something darkens
+// the strip — and the first attempt faded out ABOVE the clock, measuring 2.2:1
+// at the glyph line while looking perfectly fine in a screenshot.
+{
+  const day = chrome.match(/\[data-theme="day"\] \.statuscap \{([\s\S]*?)\}/)?.[1] || "";
+  check("light palettes scrim the strip so the clock stays readable", /linear-gradient/.test(day));
+  const stops = [...day.matchAll(/rgba\(0, 0, 0, ([\d.]+)\)(?:\s+(\d+)%)?/g)]
+    .map((m) => ({ a: parseFloat(m[1]), at: m[2] === undefined ? null : parseInt(m[2], 10) }));
+  check("…at full strength where the glyphs actually are, not just at the top",
+    stops.some((s) => s.a >= 0.5 && s.at !== null && s.at >= 50),
+    "the scrim fades out before ~22px down a 59px inset — measured 6:1 at the glyph line when correct");
+  check("…and fading to nothing by the bottom, so it has no edge",
+    stops.some((s) => s.a === 0), day.trim());
+}
+// Dark palettes must get NO scrim: white on a dark room is already right, and a
+// scrim there would be the grey bar this replaced.
+check("dark palettes are left alone", !/\[data-theme="night"\] \.statuscap/.test(chrome));
+
+// The recorded risk of black-translucent: an older iOS anchored the window at
+// the top while sizing it short, leaving dead space at the BOTTOM. This is the
+// detection and the collapse that make the failure mode survivable.
+check("the letterbox fallback is still wired", /letterboxed/.test(shell) && /\.lbx \.dock-tab/.test(chrome));
+
+// The tab bar's safe-area padding stays INSIDE the button, which is what makes
+// the band above the home indicator live tap area instead of dead chrome.
+//
+// Read the RULE BODY first rather than pattern-matching across the file. The
+// obvious one-liner (/\.dock-tab \{[\s\S]*?padding:[^;]*env\(…\)/) passes even
+// after the inset is moved off the tab, because the lazy match walks straight
+// through the closing brace and finds .sheet-foot's padding thirty rules later.
+// It looked like a check and asserted nothing.
+{
+  const rule = chrome.match(/\n\.dock-tab \{([\s\S]*?)\n\}/)?.[1] || "";
+  check("the .dock-tab rule is readable", !!rule.trim());
+  check("the home-indicator band is part of the tab's tap target",
+    /padding:[^;]*env\(safe-area-inset-bottom\)/.test(rule), rule.match(/padding:[^;]*/)?.[0]);
+}
+
 console.log(`\n${failed ? `${failed} FAILURE(S)` : "THEME SMOKE: ALL CLEAN"}`);
 if (failed) { console.error("THEME SMOKE FAILED"); process.exit(1); }
