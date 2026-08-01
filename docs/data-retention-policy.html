@@ -1,0 +1,190 @@
+<!doctype html>
+<!-- ─── Data Retention and Disposal Policy — the document source ────────────────
+     Plaid's security questionnaire asks for this as an uploaded file, so the
+     deliverable is the PDF beside it. This is the source it was printed from —
+     open it in a browser and Print → Save as PDF; the @page rule sets Letter
+     and the margins. Kept in the repo so the next revision is an edit rather
+     than a rewrite, and so the document and the code it describes move
+     together.
+
+     EVERY STATEMENT HERE HAS TO BE TRUE OF THE CODE. It is submitted as
+     evidence, so it describes mechanisms that exist — the /item/remove call on
+     disconnect, the cascade on the user foreign key, the token table with RLS
+     and no policy, balances never being written down — each of which is pinned
+     by an assertion in the smoke tests. -->
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>Board Room — Data Retention and Disposal Policy</title>
+<style>
+  @page { size: letter; margin: 0.8in 0.85in; }
+  :root { --ink: #16171a; --sub: #43474d; --line: #d8d8d4; --band: #f2f2ef; }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; color: var(--sub); background: #fff;
+    font: 10pt/1.5 "Helvetica Neue", Helvetica, Arial, sans-serif;
+    -webkit-print-color-adjust: exact; print-color-adjust: exact;
+  }
+  h1 { font-size: 19pt; line-height: 1.2; color: var(--ink); margin: 0 0 4px; letter-spacing: -0.01em; }
+  h2 { font-size: 11.5pt; color: var(--ink); margin: 20px 0 6px; page-break-after: avoid; }
+  p { margin: 0 0 8px; }
+  .meta { font-size: 8.5pt; line-height: 1.45; }
+  hr { border: 0; border-top: 0.7px solid var(--line); margin: 10px 0 4px; }
+  ul { margin: 0 0 8px; padding-left: 18px; }
+  li { margin-bottom: 5px; }
+  code { font-family: "SF Mono", Menlo, Consolas, monospace; font-size: 9pt; color: var(--ink); }
+  strong { color: var(--ink); font-weight: 600; }
+  table { width: 100%; border-collapse: collapse; margin: 10px 0 12px; font-size: 8.2pt; line-height: 1.4; }
+  th, td { border: 0.6px solid var(--line); padding: 6px 7px; text-align: left; vertical-align: top; }
+  th { background: var(--band); color: var(--ink); font-weight: 600; }
+  tr { page-break-inside: avoid; }
+  .sig { margin-top: 14px; }
+</style>
+</head>
+<body>
+
+<h1>Data Retention and Disposal Policy</h1>
+<p class="meta">Board Room · Version 1.0 · Effective 1 August 2026 · Next scheduled review 1 August 2027<br />
+Owner and sole operator: cam.carp14@gmail.com</p>
+<hr />
+
+<h2>1. Purpose and scope</h2>
+<p>This policy defines how long Board Room retains data, how that data is disposed of, and the technical
+mechanisms that enforce both. It covers all data held by the application, including financial account and
+transaction data received through the Plaid API.</p>
+<p>Board Room is a private, single-user application. Its only user is its owner, who is also the only
+individual whose personal or financial data it holds. It has no customers, no employees and no contractors,
+and it does not process data on behalf of any other person or organisation. The scope of this policy is
+therefore one production environment, one database and one user account.</p>
+
+<h2>2. Roles and responsibilities</h2>
+<p>The owner is solely responsible for the operation of the application, for the enforcement of this policy,
+and for responding to any deletion request. No other party has access to the production systems. Contact for
+all matters covered here: cam.carp14@gmail.com.</p>
+
+<h2>3. Data inventory and retention periods</h2>
+<p>Retention is by purpose, not by calendar: financial data is kept only while it is useful to the person it
+describes, and is destroyed immediately on request. No category of data is retained for a secondary purpose
+after deletion, and none is retained for analytics, resale, model training or advertising, because none of
+those activities take place.</p>
+<table>
+  <thead><tr>
+    <th style="width:19%">Data</th><th style="width:17%">Source</th><th style="width:22%">Where it is held</th>
+    <th style="width:19%">Retention</th><th style="width:23%">Disposal</th>
+  </tr></thead>
+  <tbody>
+    <tr>
+      <td>Transactions — date, amount, description, merchant, category</td>
+      <td>Plaid <code>/transactions/sync</code>, or a CSV export from the bank</td>
+      <td>Managed PostgreSQL (Supabase), encrypted at rest</td>
+      <td>Until the owner deletes them, or the user account is deleted</td>
+      <td>Hard <code>DELETE</code>; no soft-delete flag, no archive table</td>
+    </tr>
+    <tr>
+      <td>Account balances and metadata (name, type, last four digits)</td>
+      <td>Plaid <code>/accounts/get</code></td>
+      <td><strong>Not stored.</strong> Held in page memory only</td>
+      <td>Duration of the page view</td>
+      <td>Discarded when the page closes; nothing to erase</td>
+    </tr>
+    <tr>
+      <td>Plaid access token and item identifier</td>
+      <td>Plaid <code>/item/public_token/exchange</code></td>
+      <td>Managed PostgreSQL, in a table with row-level security enabled and <em>no policy</em>, all
+        privileges revoked from browser-facing roles</td>
+      <td>Until the institution is disconnected, or the user account is deleted</td>
+      <td>Revoked at Plaid via <code>/item/remove</code>, then deleted from the database</td>
+    </tr>
+    <tr>
+      <td>Authentication data — email address, password hash</td>
+      <td>Entered by the owner</td>
+      <td>Supabase Auth</td>
+      <td>Life of the account</td>
+      <td>Deleted with the account</td>
+    </tr>
+    <tr>
+      <td>Application data — lists, notes, budgets, dates</td>
+      <td>Entered by the owner</td>
+      <td>Managed PostgreSQL</td>
+      <td>Until deleted by the owner</td>
+      <td>Hard <code>DELETE</code></td>
+    </tr>
+  </tbody>
+</table>
+<p>Bank credentials are never retained, because they are never received. They are entered into Plaid Link,
+which authenticates with the financial institution directly; this application receives only an access token,
+and never a username, password or one-time code.</p>
+
+<h2>4. Disposal procedures</h2>
+<p>Deletion is a function of the application rather than a manual database operation, so it is available on
+demand and leaves nothing behind:</p>
+<ul>
+  <li><strong>Disconnecting an institution</strong> calls Plaid's <code>/item/remove</code>, ending Plaid's
+    access to that institution, and deletes the stored access token in the same operation. No further data
+    can be retrieved for that institution afterwards.</li>
+  <li><strong>Removing an account's transactions</strong> deletes those rows outright. There is no recycle
+    bin, no tombstone and no archived copy.</li>
+  <li><strong>Deleting the user account</strong> removes every associated row: each table holding user data
+    declares its user reference <code>on delete cascade</code>, so erasure is a database-enforced
+    consequence rather than a cleanup step that could be forgotten.</li>
+  <li><strong>Balances</strong> are never written to storage by design — a stored balance goes stale
+    silently and is then read as current — so there is no balance data to dispose of.</li>
+</ul>
+<p>Disposal is immediate and irreversible in the production database. Copies may persist in the hosting
+providers' encrypted point-in-time backups until those age out on the providers' own schedules; they are not
+accessible to the application and are used for no purpose other than disaster recovery.</p>
+
+<h2>5. Technical enforcement</h2>
+<p>The controls below are properties of the system rather than practices to be remembered, which is what
+makes this policy enforced rather than merely defined:</p>
+<ul>
+  <li>Row-level security is enabled on every table holding user data, scoped so a signed-in session can read
+    only rows belonging to that user.</li>
+  <li>Plaid access tokens sit in a table with row-level security enabled and <em>no policy at all</em>, with
+    all privileges revoked from the anonymous and authenticated database roles. They are readable only by
+    the server-side function that uses them, and are never transmitted to the browser.</li>
+  <li>The Plaid client secret exists only as an environment variable on the server-side functions. It is not
+    in the source repository and not in the client bundle; automated secret scanning fails any build that
+    would publish it.</li>
+  <li>All data in transit is protected by TLS 1.2 or better. Data at rest is encrypted by the database
+    provider using AES-256.</li>
+  <li>Access to the systems that store or process this data — the database, the hosting platform, the source
+    repository and the Plaid dashboard — is limited to the sole owner and protected by multi-factor
+    authentication.</li>
+  <li>Automated tests run on every build assert the retention-relevant properties directly: that balances are
+    never persisted, that disconnection calls <code>/item/remove</code>, and that the token table grants
+    nothing to browser-facing roles. A change that broke one of them would fail the build.</li>
+</ul>
+
+<h2>6. Service providers</h2>
+<p>Three processors are used, each under its own published terms: <strong>Plaid Inc.</strong> (connectivity
+to financial institutions), <strong>Supabase</strong> (database and authentication, SOC 2 Type II) and
+<strong>Netlify</strong> (hosting and server-side functions, SOC 2 Type II). No data is shared with any
+other party. There is no analytics provider, no advertising network, no data broker, and no tracking of any
+kind.</p>
+
+<h2>7. Legal and regulatory compliance</h2>
+<p>The application holds the personal and financial data of one individual — its owner — and does not process
+the data of any other data subject, sell data, or share it for cross-context behavioural advertising. Where
+data protection laws such as the California Consumer Privacy Act or the General Data Protection Regulation
+would apply, the rights they confer — access, correction, portability and erasure — are exercisable at any
+time by the owner directly within the application, and erasure is honoured immediately by the mechanisms in
+section 4. Financial data obtained through Plaid is used solely to present the owner's own account activity
+back to them, consistent with the permitted use granted at the time of connection.</p>
+
+<h2>8. Review</h2>
+<p>This policy is reviewed at least annually, and additionally whenever the application's handling of data
+changes — a new data source, a new storage location, or a change to how anything is deleted. The
+public-facing privacy notice that summarises it is published at
+<code>https://board-room.netlify.app/privacy</code> and is revised in the same change.</p>
+<table>
+  <thead><tr><th style="width:12%">Version</th><th style="width:20%">Date</th><th>Change</th><th style="width:24%">Approved by</th></tr></thead>
+  <tbody><tr><td>1.0</td><td>1 August 2026</td><td>Initial policy.</td><td>Owner and sole operator</td></tr></tbody>
+</table>
+
+<hr />
+<p class="meta sig">Approved and in force as of 1 August 2026.<br />
+Board Room — Owner and Sole Operator · cam.carp14@gmail.com</p>
+
+</body>
+</html>
