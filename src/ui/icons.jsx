@@ -63,6 +63,31 @@ export const IcGrocery = (p = {}) => ( // shopping bag — the list you shop fro
     <path d="M9 7.8V6.4a3 3 0 0 1 6 0v1.4" />
   </svg>
 );
+export const IcCreed = (p = {}) => ( // shooting star — the thing you're aiming at
+  // A star with a trail, not a target or a trophy: the Creed is what you're
+  // steering by rather than a box to tick, and a wish on a falling star is the
+  // one piece of iconography everybody already reads as "what I want".
+  <svg {...base(p)}>
+    <path d="M15.2 4.1l1.85 3.75 4.15.6-3 2.93.71 4.12-3.71-1.95-3.71 1.95.71-4.12-3-2.93 4.15-.6L15.2 4.1Z" />
+    {/* Three tapering strokes: the trail reads as motion at 24px, where a single
+        line just reads as a stray mark next to the star. */}
+    <line x1="8.4" y1="14.6" x2="3.6" y2="19.4" />
+    <line x1="10.9" y1="18.1" x2="8.5" y2="20.5" />
+    <line x1="4.9" y1="12.6" x2="2.6" y2="14.9" />
+  </svg>
+);
+export const IcCreedFill = (p = {}) => (
+  <svg {...solid(p)}>
+    <path d="M15.2 3.6l1.98 4.01 4.43.64a.6.6 0 0 1 .33 1.03l-3.2 3.12.75 4.4a.6.6 0 0 1-.87.63l-3.96-2.08-3.96 2.08a.6.6 0 0 1-.87-.63l.75-4.4-3.2-3.12a.6.6 0 0 1 .33-1.03l4.43-.64L14.66 3.6a.6.6 0 0 1 .54-.34c.23 0 .44.13.54.34Z" />
+    {/* The trail stays a stroke so the filled form still reads as motion rather
+        than a solid wedge — same trick the Grocery bag's handle plays. */}
+    <g fill="none" stroke="currentColor" strokeWidth={p.weight || 1.9} strokeLinecap="round">
+      <line x1="8.4" y1="14.6" x2="3.6" y2="19.4" />
+      <line x1="10.9" y1="18.1" x2="8.5" y2="20.5" />
+      <line x1="4.9" y1="12.6" x2="2.6" y2="14.9" />
+    </g>
+  </svg>
+);
 export const IcGroceryFill = (p = {}) => (
   <svg {...solid(p)}>
     <path d="M4.4 7.6h15.2l-1.1 11.7a2.2 2.2 0 0 1-2.2 2H7.7a2.2 2.2 0 0 1-2.2-2L4.4 7.6Z" />
@@ -173,6 +198,7 @@ export const NAV_ICONS = {
   brief: { line: IcBrief, fill: IcBriefFill },
   personal: { line: IcPersonal, fill: IcPersonalFill },
   train: { line: IcTrain, fill: IcTrainFill },
+  creed: { line: IcCreed, fill: IcCreedFill },
   grocery: { line: IcGrocery, fill: IcGroceryFill },
   boardroom: { line: IcBoard, fill: IcBoardFill },
   assets: { line: IcAssets, fill: IcAssetsFill },

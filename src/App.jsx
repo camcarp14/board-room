@@ -23,6 +23,7 @@ import { SeatNotesModal } from "./pages/board/SeatNotesModal.jsx";
 const PersonalPage = lazy(() => import("./pages/personal/PersonalPage.jsx").then(m => ({ default: m.PersonalPage })));
 const TrainPage = lazy(() => import("./pages/train/TrainPage.jsx").then(m => ({ default: m.TrainPage })));
 const GroceryPage = lazy(() => import("./pages/grocery/GroceryPage.jsx").then(m => ({ default: m.GroceryPage })));
+const CreedPage = lazy(() => import("./pages/creed/CreedPage.jsx").then(m => ({ default: m.CreedPage })));
 const UpstreamPage = lazy(() => import("./pages/upstream/UpstreamPage.jsx").then(m => ({ default: m.UpstreamPage })));
 
 // ════════════════════════════════════════════════════════════════════════════
@@ -333,7 +334,11 @@ export default function App() {
     // Assets with no sub-tab — which means Usage. Dropping `sub` matters: an
     // unknown key would be ignored anyway, but carrying "mind" forward would
     // imply the tab still exists.
+    // Two graduations, both remapped so old deep links still land: Workout became
+    // Train, Creed became its own tab. Dropping `sub` matters — carrying it
+    // forward would imply the section still exists inside Personal.
     let t = target.page === "personal" && target.sub === "workout" ? { ...target, page: "train", sub: undefined } : target;
+    if (t.page === "personal" && t.sub === "creed") t = { ...t, page: "creed", sub: undefined };
     if (t.page === "assets" || t.page === "systems" || t.page === "boardroom") t = { ...t, page: "brief", sub: undefined };
     goToPage(t.page);
     setJump({ t: Date.now(), ...t });
@@ -436,6 +441,7 @@ export default function App() {
       case "brief": return <MorningBriefPage btc={btc} isMobile={isMobile} settings={settings} updateSetting={updateSetting} onOpenCalendar={goToCalendar} onAddEvent={(date) => jumpTo({ page: "personal", sub: "calendar", newEventDate: date })} onOpenNotes={(noteId) => jumpTo({ page: "personal", sub: "notes", noteId })} onOpenBirthdays={() => jumpTo({ page: "personal", sub: "birthdays" })} refreshSignal={briefRefreshSignal} />;
       case "personal": return <PersonalPage isMobile={isMobile} jumpSignal={personalJumpTo} jump={jump} settings={settings} updateSetting={updateSetting} />;
       case "train": return <TrainPage isMobile={isMobile} settings={settings} updateSetting={updateSetting} jump={jump} />;
+      case "creed": return <CreedPage isMobile={isMobile} />;
       case "grocery": return <GroceryPage isMobile={isMobile} settings={settings} updateSetting={updateSetting} />;
       case "upstream": return <UpstreamPage isMobile={isMobile} />;
       default: return null;

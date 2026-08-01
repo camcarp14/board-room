@@ -35,12 +35,12 @@ const UsageTab = lazy(() => import("../pages/systems/SystemsPage.jsx").then(m =>
 const StatusTab = lazy(() => import("../pages/systems/SystemsPage.jsx").then(m => ({ default: m.StatusTab })));
 const MinerPanel = lazy(() => import("../pages/systems/MinerPanel.jsx").then(m => ({ default: m.MinerPanel })));
 
-const SHEET_TABS = [{ key: "theme", label: "Theme" }, { key: "systems", label: "Systems" }];
+const SHEET_TABS = [{ key: "systems", label: "Systems" }, { key: "theme", label: "Theme" }];
 // Account sits with the systems panels rather than in Theme: your calendar feed
 // and your session are configuration, and Theme is strictly how it looks.
 const SYS_TABS = [
-  { key: "status", label: "Status" },
   { key: "usage", label: "Usage" },
+  { key: "status", label: "Status" },
   { key: "miner", label: "Miner" },
   { key: "account", label: "Account" },
 ];
@@ -83,8 +83,12 @@ function Swatch({ p, mode, selected }) {
 }
 
 export function SettingsSheet({ onClose, session, theme, calUrl, onSaveCalUrl, isMobile, conn }) {
-  const [tab, setTab] = useState("theme");   // the sheet opens from the sun/moon
-  const [sys, setSys] = useState("status");  // …so Theme is what it lands on
+  // Systems first, and Usage first within it. The sheet is opened from the
+  // sun/moon button, so Theme was the obvious landing — but the theme is set
+  // once and then never again, while "what has this been spending" is the thing
+  // worth a look. The icon is the door, not the destination.
+  const [tab, setTab] = useState("systems");
+  const [sys, setSys] = useState("usage");
   const [draft, setDraft] = useState(calUrl || "");
   const [saved, setSaved] = useState(false);
   const [confirmEl, confirm] = useConfirm();
@@ -109,7 +113,9 @@ export function SettingsSheet({ onClose, session, theme, calUrl, onSaveCalUrl, i
   };
 
   // Status fires ~25 network calls including a paid Anthropic ping, so it must
-  // not run because the SHEET opened — only when you actually land on it. The
+  // not run because the SHEET opened — only when you actually land on it. That
+  // guard matters more now that the sheet opens straight into Systems: without
+  // it, every tap of the sun/moon button would bill you for a Claude ping. The
   // hook itself lives in App, so results survive closing and reopening.
   const started = useRef(false);
   useEffect(() => {

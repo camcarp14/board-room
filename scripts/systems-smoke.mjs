@@ -44,9 +44,27 @@ const sheet = readFileSync("src/shell/SettingsSheet.jsx", "utf8");
 
 const navKeys = [...(nav.match(/export const NAV = \[([\s\S]*?)\n\];/)?.[1] || "")
   .matchAll(/^\s*\{ key: "(\w+)"/gm)].map(m => m[1]);
-check("the nav is Brief, Personal, Train, Grocery",
-  navKeys.join(",") === "brief,personal,train,grocery", navKeys.join(","));
+check("the nav is Brief, Personal, Train, Creed, Grocery",
+  navKeys.join(",") === "brief,personal,train,creed,grocery", navKeys.join(","));
 check("Assets is not a destination any more", !navKeys.includes("assets"));
+// Every nav key needs an icon pair and a header, or the tab bar renders a hole
+// and the large title comes up blank — both only visible by opening the app.
+const icons = readFileSync("src/ui/icons.jsx", "utf8");
+const iconKeys = new Set([...(icons.match(/export const NAV_ICONS = \{([\s\S]*?)\n\};/)?.[1] || "")
+  .matchAll(/^\s*(\w+):/gm)].map(m => m[1]));
+const headerKeys = new Set([...(nav.match(/export const HEADERS = \{[\s\S]*?\n\};/)?.[0] || "")
+  .matchAll(/^\s*(\w+):/gm)].map(m => m[1]));
+for (const k of navKeys) {
+  check(`"${k}" has an icon pair`, iconKeys.has(k));
+  check(`"${k}" has a page header`, headerKeys.has(k));
+}
+// Creed graduated out of Personal; a section left in both places is a panel you
+// can reach two ways that disagree about where it lives.
+const personal = readFileSync("src/pages/personal/PersonalPage.jsx", "utf8");
+check("Creed is gone from Personal's pill row", !/key: "creed"/.test(personal));
+check("…and Personal no longer mounts it", !/<CreedPanel/.test(personal));
+check("an old personal→creed deep link is remapped",
+  /t\.page === "personal" && t\.sub === "creed"/.test(app));
 // A header for a page nothing routes to is how a stale link renders a titled
 // blank; the redirect below is the only correct answer.
 check("no page header survives for the retired keys",
@@ -57,13 +75,16 @@ check("a saved assets/systems/boardroom link lands on the Brief",
 
 // ── 2. the Settings sheet, and the split that keeps it cheap ─────────────────
 const sheetTabs = [...(sheet.match(/const SHEET_TABS = \[([^\]]*)\]/)?.[1] || "").matchAll(/key: "(\w+)"/g)].map(m => m[1]);
-check("the sheet has exactly a Theme tab and a Systems tab",
-  sheetTabs.join(",") === "theme,systems", sheetTabs.join(","));
+check("Systems is the first tab, Theme second",
+  sheetTabs.join(",") === "systems,theme", sheetTabs.join(","));
 const sysTabs = [...(sheet.match(/const SYS_TABS = \[([\s\S]*?)\n\];/)?.[1] || "").matchAll(/key: "(\w+)"/g)].map(m => m[1]);
 check("Systems holds Status, Usage, Miner and Account",
   sysTabs.slice().sort().join(",") === "account,miner,status,usage", sysTabs.join(","));
-check("the sheet opens on Theme, not on the machine room",
-  /useState\("theme"\)/.test(sheet));
+check("the sheet lands on Systems → Usage",
+  /useState\("systems"\)/.test(sheet) && /useState\("usage"\)/.test(sheet));
+// Landing on Systems makes this guard load-bearing rather than merely tidy: a
+// paid Claude ping on every tap of the sun/moon button would be a real bill.
+check("Usage is the first Systems panel", sysTabs[0] === "usage", sysTabs.join(","));
 
 // THE BUNDLE INVARIANT. Both halves matter: the panels must be lazy, and App
 // must reach the hook WITHOUT touching SystemsPage — either one alone fails.

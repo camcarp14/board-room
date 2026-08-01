@@ -11,6 +11,11 @@ export const NAV = [
   { key: "brief", label: "Brief" },
   { key: "personal", label: "Personal" },
   { key: "train", label: "Train" },
+  // Creed came out of Personal for the same reason Grocery and Train did: it's
+  // something you consult against a decision, and three taps deep behind a pill
+  // row is the wrong depth for that. Filed between birthdays and movies it read
+  // as one more list; on the bar it reads as a standing commitment.
+  { key: "creed", label: "Creed" },
   // Grocery earns a top-level tab because of WHERE it gets used: standing in a
   // shop, one-handed. Two taps deep inside Personal → Food was the wrong depth
   // for that, whatever its topical home.
@@ -46,6 +51,7 @@ export const HEADERS = {
   brief: { title: "Brief", sub: (d) => DATE_LINE(d) },
   personal: { title: "Personal" },
   train: { title: "Train" },
+  creed: { title: "Creed" },
   grocery: { title: "Grocery" },
   upstream: { title: "Upstream" },
 };
