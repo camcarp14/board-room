@@ -22,17 +22,22 @@
 const json = (statusCode, data) => ({ statusCode, headers: { "Content-Type": "application/json" }, body: JSON.stringify(data) });
 const error = (statusCode, message) => json(statusCode, { error: message });
 
+const PLAID_ENV = () => (env("PLAID_ENV") || "sandbox").toLowerCase();
 const PLAID_HOST = () =>
-  (process.env.PLAID_ENV || "sandbox") === "production"
-    ? "https://production.plaid.com"
-    : "https://sandbox.plaid.com";
+  PLAID_ENV() === "production" ? "https://production.plaid.com" : "https://sandbox.plaid.com";
 
+// .trim() is not cosmetic. A key pasted from a dashboard very often carries a
+// trailing newline or a leading space, and Plaid rejects it with the same
+// "invalid client_id or secret provided" you'd get from a genuinely wrong key —
+// so an invisible character and a real mistake are indistinguishable from the
+// outside. Trimming removes one of those two possibilities for free.
+const env = (k) => String(process.env[k] ?? "").trim();
 function cfg() {
   return {
-    id: process.env.PLAID_CLIENT_ID,
-    secret: process.env.PLAID_SECRET,
-    url: process.env.SUPABASE_URL,
-    service: process.env.SUPABASE_SERVICE_ROLE_KEY,
+    id: env("PLAID_CLIENT_ID"),
+    secret: env("PLAID_SECRET"),
+    url: env("SUPABASE_URL"),
+    service: env("SUPABASE_SERVICE_ROLE_KEY"),
   };
 }
 
@@ -223,6 +228,25 @@ exports.handler = async (event) => {
       return json(200, { ok: true, connected: items.length, added, removed, accounts });
     }
 
+    // ── 3b. what is actually configured ────────────────────────────────────
+    // Shape only, never values: which environment we're talking to and how long
+    // each key is. That is enough to spot a truncated paste, a stray newline or
+    // a client_id and secret swapped round, and it leaks nothing — the whole
+    // point of the keys living in here is that they never come back out.
+    if (action === "diag") {
+      return json(200, {
+        ok: true,
+        env: PLAID_ENV(),
+        host: PLAID_HOST(),
+        clientIdLength: c.id.length,
+        secretLength: c.secret.length,
+        // Plaid's client_id is 24 hex characters; a secret is 30. Wrong lengths
+        // are almost always a swap or a partial copy.
+        looksLikeClientId: /^[a-f0-9]{24}$/i.test(c.id),
+        looksLikeSecret: /^[a-f0-9]{30}$/i.test(c.secret),
+      });
+    }
+
     // ── 4. what's connected ────────────────────────────────────────────────
     if (action === "status") {
       const items = await sb(`plaid_items?user_id=eq.${uid}&select=item_id,institution,synced_at`, {}, c) || [];
@@ -250,6 +274,19 @@ exports.handler = async (event) => {
     // Link, not by retrying — so it gets its own message rather than "failed".
     if (e.code === "ITEM_LOGIN_REQUIRED") {
       return json(409, { error: "Your bank needs you to sign in again. Reconnect the account.", code: e.code });
+    }
+    // THE ONE EVERY FIRST SETUP HITS. Plaid issues a SEPARATE SECRET PER
+    // ENVIRONMENT — the Keys page shows a Sandbox secret and a Production
+    // secret, and they are not interchangeable. Using the sandbox one against
+    // production.plaid.com returns exactly this, and Plaid's own message
+    // ("invalid client_id or secret provided") names neither the environment
+    // nor the mismatch, so it reads as "your keys are wrong" when the keys are
+    // usually fine and only pointed at the wrong host.
+    if (e.code === "INVALID_API_KEYS" || /invalid client_id or secret/i.test(e.message || "")) {
+      return json(400, {
+        error: `Plaid rejected the keys for the ${PLAID_ENV()} environment. Plaid issues a different secret for Sandbox and for Production — check PLAID_SECRET is the ${PLAID_ENV()} one, and that PLAID_ENV matches where your keys came from.`,
+        code: "INVALID_API_KEYS", env: PLAID_ENV(),
+      });
     }
     return json(e.status && e.status < 500 ? 400 : 502, { error: e.message || "Plaid request failed", code: e.code });
   }

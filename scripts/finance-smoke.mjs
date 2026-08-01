@@ -464,6 +464,48 @@ check("months come back newest first", monthsOf(ALL).join() === "2026-08");
   // A connect failure on the very first screen needs somewhere to appear, or it
   // is a button that does nothing.
   check("…and a connect error has somewhere to show", /linkErr/.test(empty));
+
+  // ONE error surface, rendered in both places. It was duplicated, and a message
+  // improved in only one of them is the kind of divergence nobody notices until
+  // the moment it matters.
+  check("the connect-error block is defined once and reused",
+    (ui.match(/\{linkErrorBlock\}/g) || []).length === 2 && /const linkErrorBlock =/.test(ui),
+    String((ui.match(/\{linkErrorBlock\}/g) || []).length));
+  check("it offers the config check, not just the message", /callPlaid\("diag"\)/.test(ui));
+
+  const fn = readFileSync("netlify/functions/plaid.js", "utf8");
+  // THE ERROR EVERY FIRST SETUP HITS. Plaid issues a separate secret per
+  // environment; the sandbox one against production.plaid.com returns "invalid
+  // client_id or secret provided", which names neither the environment nor the
+  // mismatch and reads as "your keys are wrong" when they usually aren't.
+  check("a rejected key names the ENVIRONMENT, not just 'invalid'",
+    /INVALID_API_KEYS/.test(fn) && /different secret for Sandbox and for Production/.test(fn));
+  // A pasted key very often carries a trailing newline, and Plaid rejects that
+  // identically to a wrong key — an invisible character and a real mistake
+  // become indistinguishable from outside.
+  check("env values are trimmed before use",
+    /const env = \(k\) => String\(process\.env\[k\] \?\? ""\)\.trim\(\)/.test(fn));
+  // The diagnostic must report SHAPE only. The entire reason the keys live in
+  // the function is that they never come back out.
+  // Scoped to the diag block itself. A file-wide search for "c.secret" flags the
+  // outbound call to Plaid, which legitimately sends it — so the check would
+  // have failed for the one place the secret is SUPPOSED to appear.
+  {
+    const diagBlock = fn.match(/if \(action === "diag"\) \{[\s\S]*?\n    \}/)?.[0] || "";
+    check("the diag block is findable", !!diagBlock);
+    // Match what a LEAK actually looks like — a bare value assignment, `x: c.id,`
+    // — rather than any mention of c.id at all. The block legitimately reads the
+    // key twice: once for .length and once inside a format test. Two earlier
+    // versions of this check failed on correct code, which is its own kind of
+    // useless: a test that cries wolf gets edited until it stops, and then it
+    // isn't checking anything.
+    check("the diagnostic reports shape, never values",
+      /clientIdLength/.test(diagBlock) && /secretLength/.test(diagBlock) &&
+      !/:\s*c\.(id|secret)\s*[,}]/.test(diagBlock),
+      (diagBlock.match(/:\s*c\.(id|secret)\s*[,}]/) || ["clean"])[0]);
+  }
+  check("…and is behind the session like everything else",
+    fn.indexOf("const who = await whoami") < fn.indexOf('action === "diag"'));
 }
 
 // ─── 12. the setup SQL has to be runnable, in the right schema ───────────────

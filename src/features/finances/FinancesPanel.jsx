@@ -268,6 +268,7 @@ export function FinancesPanel({ isMobile, settings, updateSetting }) {
   const [linking, setLinking] = useState(null);   // a human progress string
   const [linkErr, setLinkErr] = useState(null);
   const [plaidSql, setPlaidSql] = useState(false);
+  const [diag, setDiag] = useState(null);
   const [confirmEl, confirm] = useConfirm();
 
   const all = rows || [];
@@ -307,6 +308,56 @@ export function FinancesPanel({ isMobile, settings, updateSetting }) {
   };
 
   const refreshBanks = () => callPlaid("status").then(setBanks).catch(() => setBanks({ items: [], unavailable: true }));
+
+  /* The connect-failure surface, in ONE place because it is rendered twice — on
+     the empty first screen and in the Accounts card — and a message improved in
+     only one of them is the kind of thing nobody notices until it matters.
+
+     "Check config" reports SHAPE, never values: which Plaid environment the
+     function is talking to and whether each key is the right length and format.
+     That distinguishes the three causes of a rejected key — wrong environment, a
+     truncated paste, client_id and secret swapped — which Plaid's own message
+     ("invalid client_id or secret provided") does not. */
+  const linkErrorBlock = !linkErr ? null : (
+    <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+      <div style={{ display: "flex", alignItems: "flex-start", gap: 10 }}>
+        <span className="t-cap" style={{ color: "var(--red)", flex: 1, lineHeight: 1.45 }}>{linkErr}</span>
+        <Button kind="plain" size="sm" style={{ flex: "none" }}
+          onClick={() => callPlaid("diag").then(setDiag).catch((e) => setDiag({ error: e.message }))}>
+          Check config
+        </Button>
+        <Button kind="plain" size="sm" onClick={() => setPlaidSql((v) => !v)} style={{ flex: "none" }}>Setup SQL</Button>
+      </div>
+      {diag && (
+        <div className="t-cap" style={{ background: "var(--surface-2)", borderRadius: 12, padding: "10px 12px", lineHeight: 1.6, color: "var(--sub)" }}>
+          {diag.error ? <span style={{ color: "var(--red)" }}>{diag.error}</span> : (
+            <>
+              <div>Environment: <b>{diag.env}</b> → {diag.host}</div>
+              <div>Client ID: {diag.clientIdLength} chars {diag.looksLikeClientId ? "· looks right" : "· NOT the usual 24-character format"}</div>
+              <div>Secret: {diag.secretLength} chars {diag.looksLikeSecret ? "· looks right" : "· NOT the usual 30-character format"}</div>
+              {diag.looksLikeClientId && diag.looksLikeSecret && (
+                <div style={{ marginTop: 4 }}>
+                  Both keys are well-formed, so this is almost certainly the wrong <b>environment</b>: Plaid gives you
+                  a different secret for Sandbox and for Production. Copy the <b>{diag.env}</b> secret from Plaid →
+                  Developers → Keys, or change PLAID_ENV to match the one you have.
+                </div>
+              )}
+            </>
+          )}
+        </div>
+      )}
+      {plaidSql && (
+        <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+          <pre style={{
+            margin: 0, padding: 12, borderRadius: 12, background: "var(--surface-2)", overflowX: "auto",
+            font: "11px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace", color: "var(--sub)",
+          }}>{PLAID_SQL}</pre>
+          <Button kind="tinted" size="sm" style={{ alignSelf: "flex-start" }}
+            onClick={() => navigator.clipboard?.writeText(PLAID_SQL)}>Copy</Button>
+        </div>
+      )}
+    </div>
+  );
 
   /* Auto-sync. The point of connecting a bank was to stop doing this by hand, so
      opening the tab syncs if the last pull is more than SYNC_AFTER old.
@@ -427,22 +478,7 @@ export function FinancesPanel({ isMobile, settings, updateSetting }) {
 
           {/* The same error surface as the Accounts card — without it, a failure
               on the very first screen would have nowhere to appear. */}
-          {linkErr && (
-            <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-              <span className="t-cap" style={{ color: "var(--red)", flex: 1, lineHeight: 1.45 }}>{linkErr}</span>
-              <Button kind="plain" size="sm" onClick={() => setPlaidSql((v) => !v)}>Setup SQL</Button>
-            </div>
-          )}
-          {plaidSql && (
-            <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-              <pre style={{
-                margin: 0, padding: 12, borderRadius: 12, background: "var(--surface-2)", overflowX: "auto",
-                font: "11px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace", color: "var(--sub)",
-              }}>{PLAID_SQL}</pre>
-              <Button kind="tinted" size="sm" style={{ alignSelf: "flex-start" }}
-                onClick={() => navigator.clipboard?.writeText(PLAID_SQL)}>Copy</Button>
-            </div>
-          )}
+          {linkErrorBlock}
         </Card>
         {importing && <ImportSheet onClose={() => setImporting(false)}
           onDone={(n, r) => { setImporting(false); setReceipt({ n, skipped: r.skipped.length }); }} />}
@@ -626,25 +662,7 @@ export function FinancesPanel({ isMobile, settings, updateSetting }) {
           </span>
         )}
 
-        {linkErr && (
-          <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-            <span className="t-cap" style={{ color: "var(--red)", flex: 1, lineHeight: 1.45 }}>{linkErr}</span>
-            {/* The one error with a specific fix: the table this needs doesn't
-                exist yet, and the SQL for it is right here rather than in a
-                message telling you to go and find it. */}
-            <Button kind="plain" size="sm" onClick={() => setPlaidSql((v) => !v)}>Setup SQL</Button>
-          </div>
-        )}
-        {plaidSql && (
-          <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-            <pre style={{
-              margin: 0, padding: 12, borderRadius: 12, background: "var(--surface-2)", overflowX: "auto",
-              font: "11px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace", color: "var(--sub)",
-            }}>{PLAID_SQL}</pre>
-            <Button kind="tinted" size="sm" style={{ alignSelf: "flex-start" }}
-              onClick={() => navigator.clipboard?.writeText(PLAID_SQL)}>Copy</Button>
-          </div>
-        )}
+        {linkErrorBlock}
         {accounts.length === 0 ? (
           <span className="t-cap" style={{ color: "var(--faint)" }}>Nothing imported under a name yet.</span>
         ) : accounts.map((a) => (
