@@ -3,7 +3,23 @@
 // · navigations + everything else same-origin: network-first, cache fallback
 // · /.netlify/functions/* and cross-origin: never touched
 // Bump VERSION to invalidate old caches on deploy of this file.
-const VERSION = "br-v4"; // never cache HTML under asset URLs; waitUntil revalidation
+//
+// v5 exists to drop a stale PAGE_CACHE, not because the caching rules changed.
+// The shell cached under v4 belongs to a build whose main.jsx has no update
+// check in it (see below), and serving that shell one more time would delay the
+// fix by exactly the launch it exists to save. Changing this file at all also
+// installs a new worker, which fires `controllerchange` in the running page and
+// gets THIS deploy onto the device in one launch through the path that already
+// existed.
+//
+// WHY THE CHECK ISN'T IN HERE. The obvious version — compare the revalidated
+// shell against the served one and postMessage the page — does not work, and
+// looks like it does. The navigate handler runs BEFORE the new document exists,
+// so `clients.matchAll({type:"window"})` finds the outgoing page or nothing at
+// all, and the message is delivered to a document that is being torn down. It
+// passed every static check I wrote and failed the first time it met a browser.
+// The page asks instead (src/main.jsx), which needs no cooperation from here.
+const VERSION = "br-v5";
 const ASSET_CACHE = `${VERSION}-assets`;
 const PAGE_CACHE = `${VERSION}-pages`;
 
