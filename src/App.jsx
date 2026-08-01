@@ -24,6 +24,7 @@ const PersonalPage = lazy(() => import("./pages/personal/PersonalPage.jsx").then
 const TrainPage = lazy(() => import("./pages/train/TrainPage.jsx").then(m => ({ default: m.TrainPage })));
 const GroceryPage = lazy(() => import("./pages/grocery/GroceryPage.jsx").then(m => ({ default: m.GroceryPage })));
 const CreedPage = lazy(() => import("./pages/creed/CreedPage.jsx").then(m => ({ default: m.CreedPage })));
+const DreamsPage = lazy(() => import("./pages/dreams/DreamsPage.jsx").then(m => ({ default: m.DreamsPage })));
 const UpstreamPage = lazy(() => import("./pages/upstream/UpstreamPage.jsx").then(m => ({ default: m.UpstreamPage })));
 
 // ════════════════════════════════════════════════════════════════════════════
@@ -442,6 +443,7 @@ export default function App() {
       case "personal": return <PersonalPage isMobile={isMobile} jumpSignal={personalJumpTo} jump={jump} settings={settings} updateSetting={updateSetting} />;
       case "train": return <TrainPage isMobile={isMobile} settings={settings} updateSetting={updateSetting} jump={jump} />;
       case "creed": return <CreedPage isMobile={isMobile} />;
+      case "dreams": return <DreamsPage isMobile={isMobile} settings={settings} updateSetting={updateSetting} />;
       case "grocery": return <GroceryPage isMobile={isMobile} settings={settings} updateSetting={updateSetting} />;
       case "upstream": return <UpstreamPage isMobile={isMobile} />;
       default: return null;

@@ -285,6 +285,47 @@ export const db = {
     const { error } = await supabase.from("personal_birthdays").delete().eq("id", id);
     if (error) throw error;
   },
+  // ── Dream board ──
+  // ONE table, not two. A board is a text value on the tile rather than a row of
+  // its own, so a board can never be orphaned, renamed halfway, or left holding
+  // rows that point at a board that was deleted. The list of boards is derived
+  // from the tiles (see dreamLogic.boardsOf) and unioned with the names saved in
+  // app_settings, which is what lets a board you just created survive being
+  // empty. Exactly the shape the grocery list's stores landed on.
+  async loadDreamItems() {
+    const { data, error } = await supabase.from("dream_items")
+      .select("id,board,title,image_url,note,sort,created_at")
+      .order("sort", { ascending: true }).order("created_at", { ascending: true });
+    if (error) throw error;
+    return data || [];
+  },
+  async saveDreamItem(it) {
+    const user_id = await db.uid();
+    if (!user_id) throw new Error("Not signed in");
+    const row = {
+      id: it.id, user_id, board: it.board, title: it.title || "",
+      image_url: it.image_url || null, note: it.note || null,
+      sort: Number.isFinite(it.sort) ? it.sort : 0,
+      updated_at: new Date().toISOString(),
+    };
+    const { data, error } = await supabase.from("dream_items").upsert(row, { onConflict: "id" }).select().single();
+    if (error) throw error;
+    return data;
+  },
+  async deleteDreamItem(id) {
+    const { error } = await supabase.from("dream_items").delete().eq("id", id);
+    if (error) throw error;
+  },
+  /** Rename a board = rewrite every tile on it. See the note above on why the
+   *  board name lives on the tile. */
+  async renameDreamBoard(from, to) {
+    const { error } = await supabase.from("dream_items").update({ board: to, updated_at: new Date().toISOString() }).eq("board", from);
+    if (error) throw error;
+  },
+  async deleteDreamBoard(board) {
+    const { error } = await supabase.from("dream_items").delete().eq("board", board);
+    if (error) throw error;
+  },
 };
 
 // Postgres says 42P01 ("relation does not exist"); PostgREST/supabase-js says

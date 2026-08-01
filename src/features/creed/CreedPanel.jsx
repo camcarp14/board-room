@@ -133,11 +133,16 @@ export function CreedPanel({ isMobile }) {
   return (
     <section style={{ display: "flex", flexDirection: "column", gap: 12, minWidth: 0 }}>
       {/* ── the sanctum: one statement, engraved ── */}
+      {/* SIZED TO ITS CONTENT, not to a fixed 340px. It used to reserve most of a
+          phone screen to centre nine words in it, which pushed the filters and
+          every entry below the fold — the room's own contents were the thing you
+          had to scroll to reach. Generous padding still gives the statement air;
+          it just no longer buys emptiness by the inch. */}
       <Card pad="lg" onClick={current ? turn : undefined}
         style={{
-          position: "relative", minHeight: isMobile ? 340 : 400,
+          position: "relative",
           display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center",
-          textAlign: "center", padding: isMobile ? "40px 26px" : "52px 56px",
+          textAlign: "center", padding: isMobile ? "22px 22px 26px" : "30px 44px 34px",
           cursor: list.length > 1 ? "pointer" : "default",
           userSelect: "none", WebkitUserSelect: "none", // prevents iOS text-selection on tap-to-turn
           overflow: "hidden",
@@ -156,15 +161,19 @@ export function CreedPanel({ isMobile }) {
             onClear={(e) => { e.stopPropagation(); pick(""); }} />
         ) : (
           /* keyed + pagefade so every turn re-runs the entrance */
-          <div key={`${current.id}-${turned}`} className="pagefade" style={{ display: "flex", flexDirection: "column", alignItems: "center", maxWidth: 560 }}>
-            <span aria-hidden style={diamond(13, meta.tone, { marginBottom: 22, animation: "breathe 4s ease-in-out infinite" })} />
-            <span className="t-label" style={{ marginBottom: 16, color: meta.tone }}>
-              {meta.plate} · {roman(pos + 1)} / {roman(list.length)}
+          <div key={`${current.id}-${turned}`} className="pagefade" style={{ display: "flex", flexDirection: "column", alignItems: "center", maxWidth: 560, width: "100%" }}>
+            {/* Seal and label share a line now. Stacked, they cost ~35px of pure
+                chrome above a sentence that is the entire point of the card. */}
+            <span style={{ display: "inline-flex", alignItems: "center", gap: 9, marginBottom: 14 }}>
+              <span aria-hidden style={diamond(10, meta.tone, { animation: "breathe 4s ease-in-out infinite" })} />
+              <span className="t-label" style={{ color: meta.tone }}>
+                {meta.plate} · {roman(pos + 1)} / {roman(list.length)}
+              </span>
             </span>
             <div style={{
               fontWeight: 600, letterSpacing: "-0.015em", color: "var(--ink)", textWrap: "balance",
-              lineHeight: body.length > 140 ? 1.6 : 1.45, whiteSpace: "pre-line",
-              fontSize: body.length > 140 ? (isMobile ? 16.5 : 20) : body.length > 70 ? (isMobile ? 19 : 24) : (isMobile ? 22 : 28),
+              lineHeight: body.length > 140 ? 1.55 : 1.4, whiteSpace: "pre-line",
+              fontSize: body.length > 140 ? (isMobile ? 16 : 19) : body.length > 70 ? (isMobile ? 18.5 : 22) : (isMobile ? 21 : 26),
               ...(quote ? { fontStyle: "italic" } : null),
             }}>
               {quote ? `“${body}”` : body}
@@ -179,14 +188,12 @@ export function CreedPanel({ isMobile }) {
             )}
           </div>
         )}
-        {/* OUTSIDE the keyed .pagefade block, and that placement is the whole
-            point: .pagefade animates a transform, and a transformed element
-            becomes the containing block for its absolutely-positioned
-            descendants. Nested inside it, `bottom: 14` resolved against the
-            text rather than the card and printed "Tap to turn" straight
-            through the middle of the statement. */}
+        {/* In normal flow, not absolutely positioned. The card is content-sized
+            now, so there is no reserved floor to pin a hint to — and the old
+            absolute version was resolving against the .pagefade block's
+            transform anyway, which printed it through the statement. */}
         {current && list.length > 1 && (
-          <span className="t-cap" style={{ position: "absolute", bottom: 14, left: 0, right: 0, textAlign: "center", color: "var(--faint)" }}>Tap to turn</span>
+          <span className="t-cap" style={{ color: "var(--faint)", marginTop: 16 }}>Tap to turn</span>
         )}
       </Card>
 

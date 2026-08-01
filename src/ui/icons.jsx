@@ -83,6 +83,25 @@ export const IcCreedFill = (p = {}) => (
     <path d="M12.9 7.2c1.7-1.4 3.9-2.1 6.7-2.1a1.2 1.2 0 0 1 1.2 1.2v10.9a1.2 1.2 0 0 1-1.2 1.2c-2.6 0-4.6.6-6 1.8a.6.6 0 0 1-.7-.5V7.2Z" />
   </svg>
 );
+export const IcDreams = (p = {}) => ( // a board of pinned cards — the collage
+  // Three unequal panes inside a frame. Equal panes would read as a grid or a
+  // calendar; the ragged sizes are what say "collage", which is the one thing
+  // this icon has to distinguish itself from every other rectangle in the set.
+  <svg {...base(p)}>
+    <rect x="3.2" y="3.6" width="17.6" height="16.8" rx="2.6" />
+    <rect x="6.1" y="6.5" width="5.4" height="6.6" rx="1.1" />
+    <rect x="13.7" y="6.5" width="4.2" height="4.1" rx="1.1" />
+    <rect x="6.1" y="15.3" width="11.8" height="2.4" rx="1.1" />
+  </svg>
+);
+export const IcDreamsFill = (p = {}) => (
+  // The panes are knocked out as background-coloured shapes rather than drawn:
+  // a stroke over a solid fill in the same colour is invisible, and without the
+  // panes the filled form is just a rounded rectangle.
+  <svg {...solid(p)}>
+    <path d="M5.8 3.4h12.4a2.8 2.8 0 0 1 2.8 2.8v11.6a2.8 2.8 0 0 1-2.8 2.8H5.8A2.8 2.8 0 0 1 3 17.8V6.2a2.8 2.8 0 0 1 2.8-2.8Zm.9 3.5a.9.9 0 0 0-.9.9v4.8c0 .5.4.9.9.9h3.9c.5 0 .9-.4.9-.9V7.8a.9.9 0 0 0-.9-.9H6.7Zm7.1 0a.9.9 0 0 0-.9.9v2.4c0 .5.4.9.9.9h3.5c.5 0 .9-.4.9-.9V7.8a.9.9 0 0 0-.9-.9h-3.5Zm-7.1 8.4a.9.9 0 0 0 0 1.8h10.6a.9.9 0 0 0 0-1.8H6.7Z" />
+  </svg>
+);
 export const IcGroceryFill = (p = {}) => (
   <svg {...solid(p)}>
     <path d="M4.4 7.6h15.2l-1.1 11.7a2.2 2.2 0 0 1-2.2 2H7.7a2.2 2.2 0 0 1-2.2-2L4.4 7.6Z" />
@@ -194,6 +213,7 @@ export const NAV_ICONS = {
   personal: { line: IcPersonal, fill: IcPersonalFill },
   train: { line: IcTrain, fill: IcTrainFill },
   creed: { line: IcCreed, fill: IcCreedFill },
+  dreams: { line: IcDreams, fill: IcDreamsFill },
   grocery: { line: IcGrocery, fill: IcGroceryFill },
   boardroom: { line: IcBoard, fill: IcBoardFill },
   assets: { line: IcAssets, fill: IcAssetsFill },

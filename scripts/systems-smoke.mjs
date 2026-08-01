@@ -44,8 +44,11 @@ const sheet = readFileSync("src/shell/SettingsSheet.jsx", "utf8");
 
 const navKeys = [...(nav.match(/export const NAV = \[([\s\S]*?)\n\];/)?.[1] || "")
   .matchAll(/^\s*\{ key: "(\w+)"/gm)].map(m => m[1]);
-check("the nav is Brief, Personal, Train, Creed, Grocery",
-  navKeys.join(",") === "brief,personal,train,creed,grocery", navKeys.join(","));
+check("the nav is Brief, Personal, Train, Creed, Dreams, Grocery",
+  navKeys.join(",") === "brief,personal,train,creed,dreams,grocery", navKeys.join(","));
+// Six is the ceiling for a phone tab bar with readable labels. A seventh needs
+// a different chrome, not a smaller font.
+check("the tab bar stays at six or fewer", navKeys.length <= 6, String(navKeys.length));
 check("Assets is not a destination any more", !navKeys.includes("assets"));
 // Every nav key needs an icon pair and a header, or the tab bar renders a hole
 // and the large title comes up blank — both only visible by opening the app.
