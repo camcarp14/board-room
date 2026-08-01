@@ -15,14 +15,16 @@ exports.handler = async (event) => {
   if (body.ping) return json(200, { success: true, service: "deploy", configured: !!token, missing: token ? undefined : "NETLIFY_API_TOKEN" });
   if (!token) return json(500, { error: "NETLIFY_API_TOKEN not set" });
 
-  // Require a valid session before triggering builds with the Netlify token.
+  // Only the configured owner may trigger builds with the Netlify token.
   const supaUrl = process.env.SUPABASE_URL, service = process.env.SUPABASE_SERVICE_ROLE_KEY;
-  if (supaUrl && service) {
-    const auth = (event.headers.authorization || event.headers.Authorization || "").replace(/^Bearer\s+/i, "");
-    if (!auth) return json(401, { error: "sign in first" });
-    const who = await fetch(`${supaUrl}/auth/v1/user`, { headers: { apikey: service, Authorization: `Bearer ${auth}` } });
-    if (!who.ok) return json(401, { error: "session expired — refresh and try again" });
-  }
+  const owner = String(process.env.BOARD_USER_ID || "").trim();
+  if (!supaUrl || !service || !owner) return json(503, { error: "server owner is not configured" });
+  const auth = (event.headers.authorization || event.headers.Authorization || "").replace(/^Bearer\s+/i, "");
+  if (!auth) return json(401, { error: "sign in first" });
+  const who = await fetch(`${supaUrl}/auth/v1/user`, { headers: { apikey: service, Authorization: `Bearer ${auth}` } });
+  if (!who.ok) return json(401, { error: "session expired — refresh and try again" });
+  const user = await who.json().catch(() => null);
+  if (user?.id !== owner) return json(403, { error: "this account is not allowed to use Board Room" });
 
   if (!body.site) return json(400, { error: "site is required" });
   if (body.action && body.action !== "build") return json(400, { error: "only action:'build' is supported — zip deploys are disabled by design" });

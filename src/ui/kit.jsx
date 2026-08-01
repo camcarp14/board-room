@@ -234,6 +234,8 @@ const sheetStack = [];
 // Phone: bottom sheet with grabber. ≥761px: centered modal. Scrim closes it.
 export function Sheet({ onClose, title, headTrailing, footer, children, z = 300, bodyStyle, dismissible = true }) {
   const idRef = useRef(null);
+  const dialogRef = useRef(null);
+  const restoreFocusRef = useRef(null);
   if (!idRef.current) idRef.current = {};
   // Latest onClose/dismissible read through a ref so the keydown listener can be
   // registered once (stable stack order) without re-pushing on every rerender.
@@ -241,17 +243,42 @@ export function Sheet({ onClose, title, headTrailing, footer, children, z = 300,
   cbRef.current = { onClose, dismissible };
   useEffect(() => {
     const id = idRef.current;
+    restoreFocusRef.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
     sheetStack.push(id);
+    const focusable = () => [...(dialogRef.current?.querySelectorAll(
+      'button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])'
+    ) || [])].filter((el) => !el.hasAttribute("hidden"));
+    const focusInitial = () => {
+      const dialog = dialogRef.current;
+      if (!dialog) return;
+      const preferred = dialog.querySelector("[autofocus]");
+      (preferred || focusable()[0] || dialog).focus();
+    };
+    const focusTimer = window.setTimeout(focusInitial, 0);
     const onKey = (e) => {
-      if (e.key !== "Escape") return;
       const { onClose, dismissible } = cbRef.current;
-      if (dismissible && sheetStack[sheetStack.length - 1] === id) onClose?.();
+      if (sheetStack[sheetStack.length - 1] !== id) return;
+      if (e.key === "Escape") {
+        if (dismissible) onClose?.();
+        return;
+      }
+      if (e.key !== "Tab") return;
+      const items = focusable();
+      if (!items.length) { e.preventDefault(); dialogRef.current?.focus(); return; }
+      const first = items[0], last = items[items.length - 1];
+      if (e.shiftKey && (document.activeElement === first || !dialogRef.current?.contains(document.activeElement))) {
+        e.preventDefault(); last.focus();
+      } else if (!e.shiftKey && (document.activeElement === last || !dialogRef.current?.contains(document.activeElement))) {
+        e.preventDefault(); first.focus();
+      }
     };
     window.addEventListener("keydown", onKey);
     return () => {
+      window.clearTimeout(focusTimer);
       window.removeEventListener("keydown", onKey);
       const i = sheetStack.indexOf(id);
       if (i >= 0) sheetStack.splice(i, 1);
+      if (restoreFocusRef.current?.isConnected) restoreFocusRef.current.focus();
     };
   }, []);
   // Portaled to <body>: page wrappers animate with transform, which makes
@@ -261,7 +288,7 @@ export function Sheet({ onClose, title, headTrailing, footer, children, z = 300,
   return createPortal(
     <>
       <div className="sheet-scrim" style={{ zIndex: z }} onClick={dismissible ? onClose : undefined} />
-      <div className="sheet" style={{ zIndex: z + 1 }} role="dialog" aria-modal="true" aria-label={typeof title === "string" ? title : undefined}>
+      <div className="sheet" ref={dialogRef} style={{ zIndex: z + 1 }} role="dialog" aria-modal="true" aria-label={typeof title === "string" ? title : undefined} tabIndex={-1}>
         <div className="sheet-grab" />
         {(title != null || headTrailing != null) && (
           <div className="sheet-head">

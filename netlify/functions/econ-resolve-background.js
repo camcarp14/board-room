@@ -124,6 +124,7 @@ Reply with ONLY a JSON object. No prose, no markdown fence:
 /* ── Supabase, service-role, server-side only ─────────────────────────────── */
 const SUPA = process.env.SUPABASE_URL;
 const SERVICE = process.env.SUPABASE_SERVICE_ROLE_KEY;
+const OWNER = String(process.env.BOARD_USER_ID || "").trim();
 
 async function verifyUser(token) {
   if (!token) return null;
@@ -160,8 +161,8 @@ export default async (req) => {
   try { body = await req.json(); } catch { return json(400, { error: "invalid JSON" }); }
 
   const key = process.env.ANTHROPIC_API_KEY || process.env.VITE_ANTHROPIC_API_KEY;
-  if (body?.ping) return json(200, { success: true, service: "econ-resolve-background", configured: !!(key && SUPA && SERVICE), missing: key ? (SUPA && SERVICE ? undefined : "SUPABASE_URL + SUPABASE_SERVICE_ROLE_KEY") : "ANTHROPIC_API_KEY" });
-  if (!key || !SUPA || !SERVICE) return json(500, { error: "server is missing ANTHROPIC_API_KEY or the Supabase service credentials" });
+  if (body?.ping) return json(200, { success: true, service: "econ-resolve-background", configured: !!(key && SUPA && SERVICE && OWNER), missing: key ? (SUPA && SERVICE && OWNER ? undefined : "SUPABASE_URL + SUPABASE_SERVICE_ROLE_KEY + BOARD_USER_ID") : "ANTHROPIC_API_KEY" });
+  if (!key || !SUPA || !SERVICE || !OWNER) return json(503, { error: "server owner is not configured" });
 
   // Header first: callFn() in lib/functions.js already attaches the session as
   // `Authorization: Bearer …` on every request, so reading only body.accessToken
@@ -170,6 +171,7 @@ export default async (req) => {
   const token = (req.headers.get("authorization") || "").replace(/^Bearer\s+/i, "") || String(body?.accessToken || "");
   const userId = await verifyUser(token);
   if (!userId) return json(401, { error: "sign in first" });
+  if (userId !== OWNER) return json(403, { error: "this account is not allowed to use Board Room" });
 
   const store = await readStore(userId);
   const todo = selectUnresolved(body?.events, store);

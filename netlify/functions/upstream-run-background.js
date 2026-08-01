@@ -43,6 +43,9 @@ export default async (req) => {
 
   const userId = body?.accessToken ? await verifyUser(body.accessToken) : null;
   if (!userId) return json(401, { error: 'unauthorized' });
+  const owner = String(process.env.BOARD_USER_ID || '').trim();
+  if (!owner) return json(503, { error: 'server owner is not configured' });
+  if (userId !== owner) return json(403, { error: 'this account is not allowed to use Board Room' });
 
   const store = makeStore(userId);
   try {

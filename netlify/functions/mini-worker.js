@@ -54,7 +54,7 @@ const BUDGET_TASK_LIMIT = { "$1": 1, "$3": 3, "$10": 8 };
 const BUDGET_USD = { "$1": 1, "$3": 3, "$10": 10 };
 
 function env() {
-  return { anthropic: process.env.ANTHROPIC_API_KEY, url: process.env.SUPABASE_URL, service: process.env.SUPABASE_SERVICE_ROLE_KEY };
+  return { anthropic: process.env.ANTHROPIC_API_KEY, url: process.env.SUPABASE_URL, service: process.env.SUPABASE_SERVICE_ROLE_KEY, owner: String(process.env.BOARD_USER_ID || "").trim() };
 }
 function rest(cfg, path, opts = {}) {
   return fetch(`${cfg.url}/rest/v1/${path}`, {
@@ -278,10 +278,10 @@ exports.handler = async (event) => {
   let body = {};
   try { body = JSON.parse(event.body || "{}"); } catch {}
   const cfg = env();
-  const configured = !!(cfg.anthropic && cfg.url && cfg.service);
+  const configured = !!(cfg.anthropic && cfg.url && cfg.service && cfg.owner);
 
-  if (body.ping) return json(200, { success: true, service: "mini-worker", configured, missing: configured ? undefined : "ANTHROPIC_API_KEY / SUPABASE_URL / SUPABASE_SERVICE_ROLE_KEY" });
-  if (!configured) return json(500, { success: false, error: "worker env vars not set" });
+  if (body.ping) return json(200, { success: true, service: "mini-worker", configured, missing: configured ? undefined : "ANTHROPIC_API_KEY / SUPABASE_URL / SUPABASE_SERVICE_ROLE_KEY / BOARD_USER_ID" });
+  if (!configured) return json(503, { success: false, error: "server owner is not configured" });
 
   try {
     const auth = event.headers?.authorization || event.headers?.Authorization || "";
@@ -289,6 +289,7 @@ exports.handler = async (event) => {
     if (!token) return json(401, { success: false, error: "sign-in token required" });
     const userId = await verifyUser(cfg, token);
     if (!userId) return json(401, { success: false, error: "invalid or expired session — sign in again" });
+    if (userId !== cfg.owner) return json(403, { success: false, error: "this account is not allowed to use Board Room" });
 
     if (body.approve || body.reject) {
       const result = await approveOrReject(cfg, userId, body.approve || body.reject, !!body.approve);

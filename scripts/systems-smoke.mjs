@@ -41,6 +41,7 @@ const conns = readFileSync("src/pages/systems/connections.js", "utf8");
 const nav = readFileSync("src/shell/nav.js", "utf8");
 const app = readFileSync("src/App.jsx", "utf8");
 const sheet = readFileSync("src/shell/SettingsSheet.jsx", "utf8");
+const kit = readFileSync("src/ui/kit.jsx", "utf8");
 
 const navKeys = [...(nav.match(/export const NAV = \[([\s\S]*?)\n\];/)?.[1] || "")
   .matchAll(/^\s*\{ key: "(\w+)"/gm)].map(m => m[1]);
@@ -123,6 +124,10 @@ check("the status run waits for the Status panel, not the sheet",
   /if \(tab !== "systems" \|\| sys !== "status" \|\| started\.current/.test(sheet));
 check("the hook is hosted in App so a run survives closing the sheet",
   /const conn = useConnections\(\{ session, btc \}\)/.test(app) && /conn=\{conn\}/.test(app));
+check("sheets move focus inside and restore it on close",
+  /restoreFocusRef/.test(kit) && /focusInitial/.test(kit) && /restoreFocusRef\.current\?\.isConnected/.test(kit));
+check("only the top sheet traps Tab navigation",
+  /e\.key !== "Tab"/.test(kit) && /sheetStack\[sheetStack\.length - 1\] !== id/.test(kit) && /last\.focus\(\)/.test(kit));
 
 // ── 3. every logged fn has a plain-English name ──────────────────────────────
 const labelled = new Set([...systems.matchAll(/^\s+"?([\w.-]+)"?:\s*\{ label:/gm)].map(m => m[1]));

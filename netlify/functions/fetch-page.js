@@ -11,9 +11,29 @@ function badUrl(raw) {
   let u;
   try { u = new URL(raw); } catch { return "that's not a valid URL"; }
   if (u.protocol !== "http:" && u.protocol !== "https:") return "only http(s) URLs";
-  const host = u.hostname.replace(/^\[|\]$/g, "");
-  if (PRIVATE_HOST.test(host) || host === "::1" || host.endsWith(".local") || host.endsWith(".internal") || !host.includes(".")) return "that host isn't reachable from here";
+  if (u.username || u.password) return "URLs cannot include credentials";
+  const host = u.hostname.replace(/^\[|\]$/g, "").toLowerCase();
+  if (
+    PRIVATE_HOST.test(host) || host === "::" || host === "::1" ||
+    host.startsWith("::ffff:") || host.startsWith("fe80:") ||
+    host.startsWith("fc") || host.startsWith("fd") ||
+    host.endsWith(".local") || host.endsWith(".internal") || !host.includes(".")
+  ) return "that host isn't reachable from here";
   return null;
+}
+
+async function fetchPublicUrl(raw, init) {
+  let url = raw;
+  for (let hop = 0; hop <= 3; hop++) {
+    const problem = badUrl(url);
+    if (problem) throw new Error(problem);
+    const res = await fetch(url, { ...init, redirect: "manual" });
+    if (res.status < 300 || res.status >= 400) return res;
+    const location = res.headers.get("location");
+    if (!location) return res;
+    if (hop === 3) throw new Error("page redirected too many times");
+    url = new URL(location, url).toString();
+  }
 }
 
 // Cheap but effective HTML → text: drop non-content blocks, prefer
@@ -46,14 +66,16 @@ exports.handler = async (event) => {
 
   if (body.ping) return json(200, { success: true, service: "fetch-page", configured: true });
 
-  // Same auth posture as mini-worker: verify the caller's session when we can.
+  // Fetching arbitrary public pages is reserved for the configured owner.
   const supaUrl = process.env.SUPABASE_URL, service = process.env.SUPABASE_SERVICE_ROLE_KEY;
-  if (supaUrl && service) {
-    const token = (event.headers.authorization || event.headers.Authorization || "").replace(/^Bearer\s+/i, "");
-    if (!token) return json(401, { error: "sign in first" });
-    const res = await fetch(`${supaUrl}/auth/v1/user`, { headers: { apikey: service, Authorization: `Bearer ${token}` } });
-    if (!res.ok) return json(401, { error: "session expired — refresh and try again" });
-  }
+  const owner = String(process.env.BOARD_USER_ID || "").trim();
+  if (!supaUrl || !service || !owner) return json(503, { error: "server owner is not configured" });
+  const token = (event.headers.authorization || event.headers.Authorization || "").replace(/^Bearer\s+/i, "");
+  if (!token) return json(401, { error: "sign in first" });
+  const res = await fetch(`${supaUrl}/auth/v1/user`, { headers: { apikey: service, Authorization: `Bearer ${token}` } });
+  if (!res.ok) return json(401, { error: "session expired — refresh and try again" });
+  const user = await res.json().catch(() => null);
+  if (user?.id !== owner) return json(403, { error: "this account is not allowed to use Board Room" });
 
   const url = String(body.url || "").trim();
   const problem = badUrl(url);
@@ -62,9 +84,8 @@ exports.handler = async (event) => {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), 10000);
   try {
-    const res = await fetch(url, {
+    const res = await fetchPublicUrl(url, {
       signal: controller.signal,
-      redirect: "follow",
       headers: { "User-Agent": "Mozilla/5.0 (compatible; BoardRoomLearn/1.0)", Accept: "text/html,application/xhtml+xml,text/plain;q=0.9,*/*;q=0.5" },
     });
     clearTimeout(timer);
@@ -92,3 +113,6 @@ exports.handler = async (event) => {
     return json(504, { error: e.name === "AbortError" ? "page took too long to respond" : `couldn't reach that page: ${e.message}` });
   }
 };
+
+// Exported only for functions-smoke.mjs. Netlify reads `handler`.
+exports.badUrl = badUrl;

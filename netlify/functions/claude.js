@@ -25,16 +25,16 @@ exports.handler = async (event) => {
   }
   if (!key) return json(500, { error: "ANTHROPIC_API_KEY is not set on this site" });
 
-  // Require a valid Supabase session before spending the owner's API key —
-  // otherwise this is an open, guessable LLM proxy on a public domain. Same
-  // posture as fetch-page/mini-worker: enforced whenever the service key is set.
+  // Require the configured owner before spending the shared API key.
   const supaUrl = process.env.SUPABASE_URL, service = process.env.SUPABASE_SERVICE_ROLE_KEY;
-  if (supaUrl && service) {
-    const token = (event.headers.authorization || event.headers.Authorization || "").replace(/^Bearer\s+/i, "");
-    if (!token) return json(401, { error: "sign in first" });
-    const who = await fetch(`${supaUrl}/auth/v1/user`, { headers: { apikey: service, Authorization: `Bearer ${token}` } });
-    if (!who.ok) return json(401, { error: "session expired — refresh and try again" });
-  }
+  const owner = String(process.env.BOARD_USER_ID || "").trim();
+  if (!supaUrl || !service || !owner) return json(503, { error: "server owner is not configured" });
+  const token = (event.headers.authorization || event.headers.Authorization || "").replace(/^Bearer\s+/i, "");
+  if (!token) return json(401, { error: "sign in first" });
+  const who = await fetch(`${supaUrl}/auth/v1/user`, { headers: { apikey: service, Authorization: `Bearer ${token}` } });
+  if (!who.ok) return json(401, { error: "session expired — refresh and try again" });
+  const user = await who.json().catch(() => null);
+  if (user?.id !== owner) return json(403, { error: "this account is not allowed to use Board Room" });
 
   if (!ALLOWED_MODELS.has(body.model)) return json(400, { error: "unsupported model" });
 

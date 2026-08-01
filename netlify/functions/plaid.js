@@ -38,6 +38,7 @@ function cfg() {
     secret: env("PLAID_SECRET"),
     url: env("SUPABASE_URL"),
     service: env("SUPABASE_SERVICE_ROLE_KEY"),
+    owner: env("BOARD_USER_ID"),
   };
 }
 
@@ -53,6 +54,7 @@ async function whoami(event, c) {
     if (!r.ok) return { err: json(401, { error: "session expired — refresh and try again" }) };
     const u = await r.json();
     if (!u?.id) return { err: json(401, { error: "session expired — refresh and try again" }) };
+    if (u.id !== c.owner) return { err: json(403, { error: "this account is not allowed to use Board Room" }) };
     return { uid: u.id };
   } catch {
     return { err: json(503, { error: "couldn't verify your session — try again in a moment" }) };
@@ -157,7 +159,7 @@ exports.handler = async (event) => {
   if (event.httpMethod !== "POST") return error(405, "POST only");
   const c = cfg();
   if (!c.id || !c.secret) return error(503, "Plaid isn't configured — PLAID_CLIENT_ID and PLAID_SECRET are missing.");
-  if (!c.url || !c.service) return error(500, "SUPABASE_URL / SUPABASE_SERVICE_ROLE_KEY not configured");
+  if (!c.url || !c.service || !c.owner) return error(503, "server owner is not configured");
 
   const who = await whoami(event, c);
   if (who.err) return who.err;

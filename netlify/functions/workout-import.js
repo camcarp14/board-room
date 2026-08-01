@@ -27,7 +27,7 @@ const error = (statusCode, message) => json(statusCode, { error: message });
 const randomUUID = () => globalThis.crypto.randomUUID();
 
 function cfg() {
-  return { url: process.env.SUPABASE_URL, service: process.env.SUPABASE_SERVICE_ROLE_KEY };
+  return { url: process.env.SUPABASE_URL, service: process.env.SUPABASE_SERVICE_ROLE_KEY, owner: String(process.env.BOARD_USER_ID || "").trim() };
 }
 function rest(c, path, opts = {}) {
   return fetch(`${c.url}/rest/v1/${path}`, {
@@ -85,7 +85,7 @@ function normalizeWorkouts(list) {
 exports.handler = async (event) => {
   if (event.httpMethod !== "POST") return { statusCode: 405, body: "Method not allowed" };
   const c = cfg();
-  if (!c.url || !c.service) return error(500, "SUPABASE_URL / SUPABASE_SERVICE_ROLE_KEY not configured");
+  if (!c.url || !c.service || !c.owner) return error(503, "server owner is not configured");
 
   let body;
   try { body = JSON.parse(event.body || "{}"); } catch { return error(400, "body must be JSON"); }
@@ -100,6 +100,7 @@ exports.handler = async (event) => {
     const rows = await lookup.json();
     const user_id = rows?.[0]?.user_id;
     if (!user_id) return error(401, "unknown token");
+    if (user_id !== c.owner) return error(403, "this account is not allowed to use Board Room");
 
     const v = normalizeWorkouts(body.workouts ?? body);
     if (v.error) return error(400, v.error);
