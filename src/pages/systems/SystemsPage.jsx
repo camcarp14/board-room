@@ -102,9 +102,25 @@ const USAGE_META = {
   "upstream-tell": { label: "UPSTREAM tell" },
   nostradamus: { label: "Nostradamus run" },
 };
+// Not every writer is in this repo. The usage_log is shared, so ids this
+// codebase has never heard of turn up in it (ideafeed/extract, and whatever
+// comes next). They must still read as something — but INVENTING a description
+// for a call we can't see the source of would be worse than the raw id, so this
+// only reformats the id's own words: slashes become separators, underscores
+// become spaces, each part gets its capital. Same information, legible.
+const humanize = (fn) => String(fn || "").split("/")
+  .map(part => part.replace(/_/g, " ").replace(/^./, c => c.toUpperCase()))
+  .join(" · ");
+
 // Discord writes fn as `discord_<stage>`, so the stage is data, not a fixed key.
 const usageLabel = (fn) => USAGE_META[fn]?.label
-  || (/^discord_/.test(fn || "") ? `Discord · ${String(fn).slice(8).replace(/_/g, " ")}` : fn);
+  || (/^discord_/.test(fn || "") ? `Discord · ${String(fn).slice(8).replace(/_/g, " ")}` : humanize(fn));
+
+// The raw id rides under every row so a line here is greppable against the code
+// that wrote it — but only when it says something the label didn't. Printing
+// "ideafeed/extract" under "Ideafeed · Extract" is a row that appears to stutter.
+const squash = (s) => String(s).toLowerCase().replace(/[^a-z0-9]/g, "");
+const showRawId = (fn) => squash(usageLabel(fn)) !== squash(fn);
 
 // ── The Pentagon, by tool ────────────────────────────────────────────────────
 // ZTS, Clarify, Runway and Macro were consolidated into one app (see
@@ -119,6 +135,45 @@ const usageLabel = (fn) => USAGE_META[fn]?.label
 // has no read on it. Tools that Board Room doesn't pull for show a real zero
 // rather than being dropped, so "no line here" can't be mistaken for "no data".
 const PENTAGON_TOOLS = ["Zero To Secure", "Clarify Paid Search", "Macro Command Center", "Runway"];
+
+/* One row shape, shared by both halves of the table and by the Pentagon
+   roll-up, so a line reads the same wherever it appears.
+
+   Two lines, not one wide row: the NAME earns the full width on a phone, and
+   the numbers sit under it where nothing has to truncate. The one figure that
+   matters for this kind of row is right-aligned on the first line; the rest are
+   dot-separated underneath, and any falsy entry drops out rather than leaving a
+   stray separator — which is what lets a row carry two facts or four without
+   needing a different layout for each. */
+function UsageRows({ title, note, rows, value, meta, failed }) {
+  if (!rows.length) return null;
+  return (
+    <>
+      <div style={{ display: "flex", alignItems: "baseline", gap: 8, padding: "16px 2px 4px" }}>
+        <span className="t-label">{title}</span>
+        <span className="t-cap" style={{ color: "var(--faint)" }}>{note}</span>
+      </div>
+      <div style={{ display: "flex", flexDirection: "column" }}>
+        {rows.map(([fn, s], i) => {
+          const bits = (meta(fn, s) || []).filter(Boolean);
+          const nFailed = failed(s);
+          return (
+            <div key={fn} style={{ display: "flex", flexDirection: "column", gap: 2, padding: "8px 2px", borderTop: i > 0 ? "0.5px solid var(--line)" : "none" }}>
+              <div style={{ display: "flex", alignItems: "baseline", gap: 10 }}>
+                <span className="t-call" style={{ color: "var(--ink)", flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{usageLabel(fn)}</span>
+                <span className="t-num" style={{ fontSize: 12.5, fontWeight: 600, color: "var(--ink)", flex: "none" }}>{value(s)}</span>
+              </div>
+              <div className="t-num" style={{ fontSize: 11, color: "var(--faint)", lineHeight: 1.5 }}>
+                {bits.join(" · ")}
+                {nFailed > 0 && <span style={{ color: "var(--red)" }}>{bits.length ? " · " : ""}{nFailed} failed</span>}
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </>
+  );
+}
 
 function UsageCard({ isMobile }) {
   const [summary, setSummary] = useState(null); // null = loading; accurate totals via server-side aggregation, not capped by row count
@@ -158,32 +213,54 @@ function UsageCard({ isMobile }) {
   const totalCost = anthropicRows.reduce((s, r) => s + Number(r.cost_usd || 0), 0);
   const totalIn = anthropicRows.reduce((s, r) => s + Number(r.in_tokens || 0), 0);
   const totalOut = anthropicRows.reduce((s, r) => s + Number(r.out_tokens || 0), 0);
-  const byFn = {};
-  (summary || []).forEach(r => {
-    byFn[r.fn] = byFn[r.fn] || { calls: 0, cost: 0, failed: 0, inTok: 0, outTok: 0 };
-    byFn[r.fn].calls += Number(r.calls);
-    byFn[r.fn].cost += Number(r.cost_usd || 0);
-    byFn[r.fn].failed += Number(r.failed);
-    byFn[r.fn].inTok += Number(r.in_tokens || 0);
-    byFn[r.fn].outTok += Number(r.out_tokens || 0);
-  });
-  // Every fn, not a top-8 slice. A spend table that silently truncates is the
+  // ── Two tables, because there are two kinds of row ──
+  // A model call has a cost and a token count. A function hit has neither — it
+  // has a latency and a failure count. Mixing them into one table meant half
+  // the rows showed "—" in the money column and none of them showed the number
+  // that actually described them, which is a table that looks broken while
+  // working correctly. Split by `kind` and every row's headline number is real.
+  //
+  // Split on fn+kind rather than fn: `audit` and `auto-fix` log BOTH ways (the
+  // browser records the function hit, the function records its own model call),
+  // and folding those together produced one row whose call count and cost
+  // described two different events.
+  const bucket = (into, r) => {
+    const k = r.fn;
+    into[k] = into[k] || { calls: 0, cost: 0, failed: 0, inTok: 0, outTok: 0, msWeighted: 0 };
+    const calls = Number(r.calls);
+    into[k].calls += calls;
+    into[k].cost += Number(r.cost_usd || 0);
+    into[k].failed += Number(r.failed);
+    into[k].inTok += Number(r.in_tokens || 0);
+    into[k].outTok += Number(r.out_tokens || 0);
+    // Weighted by call count — a plain mean of per-model averages would let one
+    // 3-call row drag the number as hard as a 500-call one.
+    into[k].msWeighted += Number(r.ms_avg || 0) * calls;
+  };
+  const byModel = {}, byPull = {};
+  (summary || []).forEach(r => bucket(r.kind === "anthropic" ? byModel : byPull, r));
+  const avgMs = (s) => (s.calls ? Math.round(s.msWeighted / s.calls) : 0);
+
+  // Every fn, not a top slice. A spend table that silently truncates is the
   // same failure as one that reads $0.000 — the row you're hunting is exactly
   // the one that fell off the end. Long tails collapse behind a disclosure
   // instead, so the default view stays short without lying about what it holds.
-  const allFns = Object.entries(byFn).sort((a, b) => (b[1].cost - a[1].cost) || (b[1].calls - a[1].calls));
-  const topFns = fnsOpen ? allFns : allFns.slice(0, 8);
+  const modelFns = Object.entries(byModel).sort((a, b) => (b[1].cost - a[1].cost) || (b[1].calls - a[1].calls));
+  const pullFns = Object.entries(byPull).sort((a, b) => (b[1].calls - a[1].calls));
+  const TOP = 6;
+  const hidden = Math.max(0, modelFns.length - TOP) + Math.max(0, pullFns.length - TOP);
 
-  // Pentagon roll-up: fold every fn that serves a tool into that tool's row.
+  // Pentagon roll-up: fold every fn that serves a tool into that tool's row,
+  // across both kinds — a tool's cost to run is its model spend plus its pulls.
   const byTool = Object.fromEntries(PENTAGON_TOOLS.map(t => [t, { calls: 0, cost: 0, failed: 0, fns: [] }]));
-  Object.entries(byFn).forEach(([fn, s]) => {
+  [byModel, byPull].forEach(map => Object.entries(map).forEach(([fn, s]) => {
     const tool = USAGE_META[fn]?.tool;
     if (!tool || !byTool[tool]) return;
     byTool[tool].calls += s.calls;
     byTool[tool].cost += s.cost;
     byTool[tool].failed += s.failed;
-    byTool[tool].fns.push(fn);
-  });
+    if (!byTool[tool].fns.includes(fn)) byTool[tool].fns.push(fn);
+  }));
   const pentagonCalls = Object.values(byTool).reduce((n, t) => n + t.calls, 0);
   const fmtK = (n) => n > 999 ? (n / 1000).toFixed(1) + "K" : String(n);
   const ago = (ts) => { const s = Math.floor((Date.now() - new Date(ts).getTime()) / 1000); if (s < 60) return `${s}s`; if (s < 3600) return `${Math.floor(s / 60)}m`; if (s < 86400) return `${Math.floor(s / 3600)}h`; return `${Math.floor(s / 86400)}d`; };
@@ -219,64 +296,82 @@ function UsageCard({ isMobile }) {
             <StatTile value={summary === null ? "…" : String(failed)} label="Failed calls" valueTone={failed ? "var(--red)" : "var(--green)"} />
           </div>
 
-          <div className="t-label" style={{ padding: "16px 2px 6px" }}>What ran</div>
-          <div style={{ display: "flex", flexDirection: "column" }}>
-            {summary === null && <div className="t-foot" style={{ color: "var(--faint)", textAlign: "center", padding: "10px 0" }}>Loading…</div>}
-            {summary !== null && topFns.length === 0 && <div className="t-foot" style={{ color: "var(--faint)", textAlign: "center", padding: "10px 0" }}>No calls logged in this window yet.</div>}
-            {/* Two lines, not one wide row: the name of the pull earns the full
-                width on a phone, and the numbers sit under it where they can be
-                read without truncating anything. */}
-            {topFns.map(([fn, s], i) => (
-              <div key={fn} style={{ display: "flex", flexDirection: "column", gap: 2, padding: "8px 2px", borderTop: i > 0 ? "0.5px solid var(--line)" : "none" }}>
-                <div style={{ display: "flex", alignItems: "baseline", gap: 10 }}>
-                  <span className="t-call" style={{ color: "var(--ink)", flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{usageLabel(fn)}</span>
-                  <span className="t-num" style={{ fontSize: 12.5, fontWeight: 600, color: "var(--ink)", flex: "none" }}>{s.cost > 0 ? "$" + s.cost.toFixed(3) : "—"}</span>
-                </div>
-                <div style={{ display: "flex", alignItems: "baseline", gap: 8, flexWrap: "wrap" }}>
-                  {/* The raw id stays: a line in this table has to be greppable
-                      against the code that wrote it. */}
-                  <span className="t-num" style={{ fontSize: 11, color: "var(--faint)", flex: "none" }}>{fn}</span>
-                  <span className="t-num" style={{ fontSize: 11, color: "var(--faint)", flex: "none" }}>· {s.calls} call{s.calls === 1 ? "" : "s"}</span>
-                  {(s.inTok > 0 || s.outTok > 0) && (
-                    <span className="t-num" style={{ fontSize: 11, color: "var(--faint)", flex: "none" }}>· {fmtK(s.inTok)}/{fmtK(s.outTok)} tok</span>
-                  )}
-                  {s.failed > 0 && <span className="t-num" style={{ fontSize: 11, color: "var(--red)", flex: "none" }}>· {s.failed} failed</span>}
-                </div>
-              </div>
-            ))}
-            {allFns.length > 8 && (
-              <Button kind="plain" size="sm" onClick={() => setFnsOpen(o => !o)} style={{ alignSelf: "flex-start", paddingLeft: 0 }}>
-                {fnsOpen ? "Show top 8 only" : `Show all ${allFns.length}`}
-                <IcChevronDown size={12} style={{ transform: fnsOpen ? "rotate(180deg)" : "none", transition: "transform var(--dur-2) var(--ease-out)" }} />
-              </Button>
-            )}
-          </div>
+          {summary === null && <div className="t-foot" style={{ color: "var(--faint)", textAlign: "center", padding: "18px 0" }}>Loading…</div>}
+          {summary !== null && !modelFns.length && !pullFns.length && (
+            <div className="t-foot" style={{ color: "var(--faint)", textAlign: "center", padding: "18px 0" }}>No calls logged in this window yet.</div>
+          )}
+
+          {/* Model calls — the money. Headline number is the spend. */}
+          <UsageRows
+            title="Model calls" note="what the AI actually did"
+            rows={fnsOpen ? modelFns : modelFns.slice(0, TOP)}
+            value={(s) => "$" + s.cost.toFixed(3)}
+            meta={(fn, s) => [
+              showRawId(fn) && fn,
+              `${s.calls} call${s.calls === 1 ? "" : "s"}`,
+              (s.inTok > 0 || s.outTok > 0) && `${fmtK(s.inTok)}/${fmtK(s.outTok)} tok`,
+            ]}
+            failed={(s) => s.failed}
+          />
+
+          {/* Data pulls — the plumbing. Headline number is how often it ran;
+              cost is structurally zero here, so latency takes the slot where
+              a "—" used to sit. */}
+          <UsageRows
+            title="Data pulls" note="feeds and functions"
+            rows={fnsOpen ? pullFns : pullFns.slice(0, TOP)}
+            value={(s) => `${s.calls.toLocaleString()} call${s.calls === 1 ? "" : "s"}`}
+            meta={(fn, s) => [
+              showRawId(fn) && fn,
+              avgMs(s) > 0 && `${avgMs(s)}ms avg`,
+              s.cost > 0 && "$" + s.cost.toFixed(3),
+            ]}
+            failed={(s) => s.failed}
+          />
+
+          {hidden > 0 && (
+            <Button kind="plain" size="sm" onClick={() => setFnsOpen(o => !o)} style={{ alignSelf: "flex-start", paddingLeft: 0, marginTop: 2 }}>
+              {fnsOpen ? `Show top ${TOP} of each` : `Show ${hidden} more`}
+              <IcChevronDown size={12} style={{ transform: fnsOpen ? "rotate(180deg)" : "none", transition: "transform var(--dur-2) var(--ease-out)" }} />
+            </Button>
+          )}
 
           {/* ── The Pentagon, by tool ──
               The four ventures share one app and one URL now, so this is the
               only place left that answers "what is Board Room spending on each
               of them". */}
-          <div className="t-label" style={{ padding: "18px 2px 6px" }}>The Pentagon · by tool</div>
+          <div style={{ display: "flex", alignItems: "baseline", gap: 8, padding: "18px 2px 4px" }}>
+            <span className="t-label">The Pentagon</span>
+            <span className="t-cap" style={{ color: "var(--faint)" }}>by tool</span>
+          </div>
           <div style={{ display: "flex", flexDirection: "column" }}>
             {summary === null ? (
               <div className="t-foot" style={{ color: "var(--faint)", textAlign: "center", padding: "10px 0" }}>Loading…</div>
             ) : PENTAGON_TOOLS.map((tool, i) => {
               const s = byTool[tool];
               const dead = s.calls === 0;
+              // Calls, not cost, in the headline slot. Every one of these is a
+              // data pull, so the money column was structurally "—" on all four
+              // rows — a column that can only ever say nothing. Spend still
+              // appears underneath the moment a tool has any.
+              const bits = [
+                // Raw ids here, not labels: several labels contain a "·" of
+                // their own ("Search Console · zerotosecure.com"), and joining
+                // those with another one turns the line to mush.
+                s.fns.join(", "),
+                s.cost > 0 && "$" + s.cost.toFixed(3),
+              ].filter(Boolean);
               return (
                 <div key={tool} style={{ display: "flex", flexDirection: "column", gap: 2, padding: "8px 2px", borderTop: i > 0 ? "0.5px solid var(--line)" : "none", opacity: dead ? 0.55 : 1 }}>
                   <div style={{ display: "flex", alignItems: "baseline", gap: 10 }}>
                     <span className="t-call" style={{ color: "var(--ink)", flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{tool}</span>
-                    <span className="t-num" style={{ fontSize: 12.5, fontWeight: 600, color: dead ? "var(--faint)" : "var(--ink)", flex: "none" }}>{s.cost > 0 ? "$" + s.cost.toFixed(3) : "—"}</span>
-                  </div>
-                  <div style={{ display: "flex", alignItems: "baseline", gap: 8, flexWrap: "wrap" }}>
-                    <span className="t-num" style={{ fontSize: 11, color: "var(--faint)", flex: "none" }}>
-                      {/* Raw ids here, not labels: several labels contain a "·"
-                          of their own ("Search Console · zerotosecure.com"), and
-                          joining those with another one turns the line to mush. */}
-                      {dead ? "no pulls from Board Room" : `${s.calls} call${s.calls === 1 ? "" : "s"} · ${s.fns.join(", ")}`}
+                    <span className="t-num" style={{ fontSize: 12.5, fontWeight: 600, color: dead ? "var(--faint)" : "var(--ink)", flex: "none" }}>
+                      {dead ? "none" : `${s.calls.toLocaleString()} call${s.calls === 1 ? "" : "s"}`}
                     </span>
-                    {s.failed > 0 && <span className="t-num" style={{ fontSize: 11, color: "var(--red)", flex: "none" }}>· {s.failed} failed</span>}
+                  </div>
+                  <div className="t-num" style={{ fontSize: 11, color: "var(--faint)", lineHeight: 1.5 }}>
+                    {dead ? "no pulls from Board Room" : bits.join(" · ")}
+                    {s.failed > 0 && <span style={{ color: "var(--red)" }}> · {s.failed} failed</span>}
                   </div>
                 </div>
               );

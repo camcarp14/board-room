@@ -72,7 +72,8 @@ export function SidebarShell({ page, onNavigate, onOpenSettings, btc, session, t
         <div className="content-head">
           <div className="head-title">
             <h1 className="t-title1" style={{ margin: 0 }}>{head.title}</h1>
-            <div className="t-foot" style={{ marginTop: 2 }}>{head.sub(new Date(now))}</div>
+            {/* Optional — see HEADERS. Only the Brief still has one. */}
+            {head.sub && <div className="t-foot" style={{ marginTop: 2 }}>{head.sub(new Date(now))}</div>}
           </div>
           <div style={{ display: "flex", alignItems: "center", gap: 14, flex: "none", paddingBottom: 2 }}>
             {/* Honest label: this reads the `obs` localStorage ring, which is

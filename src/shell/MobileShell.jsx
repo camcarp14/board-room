@@ -43,7 +43,10 @@ export function MobileShell({ page, navDir, onNavigate, onOpenSettings, now, dat
   const letterboxed = IS_STANDALONE && vvh != null && window.screen?.height ? (window.screen.height - vvh >= 20 && envTop > 0) : false;
 
   const head = HEADERS[page];
-  const sub = head.sub(new Date(now));
+  // Optional now — only the Brief still carries one (today's date). LargeTitle
+  // renders nothing for a falsy sub, so the title closes up rather than
+  // holding an empty line open.
+  const sub = head.sub?.(new Date(now));
 
   // Theme moved into Settings, where it's three labelled choices instead of a
   // cycling icon whose current state you had to infer — and where sign-out and

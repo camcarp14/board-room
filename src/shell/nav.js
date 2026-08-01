@@ -28,19 +28,29 @@ export const NAV = [
 const DATE_LINE = (d) =>
   d.toLocaleDateString(undefined, { weekday: "long", month: "long", day: "numeric" });
 
-// Large-title copy per page. sub() takes the current Date so the Brief can
-// carry the day itself — the calmest possible subtitle.
+// Large-title copy per page.
+//
+// The taglines are gone — "Everything you own, and what runs it", "Log it. Beat
+// last time.", and the rest. They described the tab you had already chosen to
+// open, to someone who had already opened it: a line of copy under every title
+// that you read once and then spent months scrolling past. The title carries the
+// page now.
+//
+// The Brief keeps its sub, because it isn't a tagline — it's today's date, which
+// is information you actually want and can't get from the word "Brief". `sub` is
+// therefore OPTIONAL from here on, and both shells render nothing when it's
+// absent rather than an empty line holding space open.
 export const HEADERS = {
   brief: { title: "Brief", sub: (d) => DATE_LINE(d) },
-  personal: { title: "Personal", sub: () => "Notes, calendar, and life admin" },
-  train: { title: "Train", sub: () => "Log it. Beat last time." },
-  grocery: { title: "Grocery", sub: () => "What to buy, and what's already in the cart" },
-  assets: { title: "Assets", sub: () => "Everything you own, and what runs it" },
+  personal: { title: "Personal" },
+  train: { title: "Train" },
+  grocery: { title: "Grocery" },
+  assets: { title: "Assets" },
   // Both kept as defensive fallbacks: App.jsx redirects "systems" and the retired
   // "boardroom" to "assets", so the shell should never actually read either — but
   // a header lookup must never crash, and a stale saved link must not render a
   // page titled after a tab that no longer exists.
-  systems: { title: "Assets", sub: () => "Everything you own, and what runs it" },
-  boardroom: { title: "Assets", sub: () => "Everything you own, and what runs it" },
-  upstream: { title: "Upstream", sub: () => "Non-consensus questions · NOSTRADAMUS" },
+  systems: { title: "Assets" },
+  boardroom: { title: "Assets" },
+  upstream: { title: "Upstream" },
 };
