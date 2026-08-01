@@ -44,11 +44,10 @@ import {
   useClearCheckedGroceries, useSetGroceryQty, useGroceryFrequency, useEditGrocery,
   useRetagGroceryStore,
 } from "../../data/food.js";
-import { Card, Button, Field, EmptyState, Pill, PillRow, Segmented, Dot, useConfirm, IcCheck } from "../../ui/kit.jsx";
+import { Card, Button, Field, EmptyState, Pill, PillRow, Dot, useConfirm, IcCheck } from "../../ui/kit.jsx";
 import { IcClose, IcGrocery, IcChevronDown } from "../../ui/icons.jsx";
 import { NumTween } from "../../ui/primitives.jsx";
 import { SortableList } from "../../ui/SortableList.jsx";
-import { StoreRoute } from "./StoreRoute.jsx";
 import {
   groupList, parseItem, formatItem, frequentSuggestions, isTempId,
   storesOf, aisleOf, aisleMeta, titleCase, planRetag, storeCounts, isStore, ANY_STORE,
@@ -243,7 +242,6 @@ export function GroceryPanel({ isMobile, settings, updateSetting }) {
   const clearMut = useClearCheckedGroceries();
   const [newItem, setNewItem] = useState("");
   const [cartOpen, setCartOpen] = useState(false);
-  const [view, setView] = useState("list");   // "list" | "route" — see below
   const [store, setStore] = useState("");     // "" = every store
   // null | { mode: "new" } | { mode: "edit", original } — one form, because
   // naming a store and renaming one are the same field with a different verb.
@@ -257,7 +255,6 @@ export function GroceryPanel({ isMobile, settings, updateSetting }) {
 
   const savedStores = settings?.grocery_stores;
   const order = settings?.grocery_order;
-  const savedRoutes = settings?.store_routes;
   const stores = useMemo(() => storesOf(groceries || [], savedStores), [groceries, savedStores]);
   // The filter must not survive its store: delete the last Costco item and an
   // invisible filter would leave you staring at an empty list you can't explain.
@@ -383,19 +380,6 @@ export function GroceryPanel({ isMobile, settings, updateSetting }) {
     next.push(...(sectionKey === "anywhere" ? ids : anywhere.map((i) => i.id)));
     next.push(...cart.map((i) => i.id));
     updateSetting?.("grocery_order", next);
-  };
-
-  /* The walk order for one shop. Kept per route key rather than per store name so
-     renaming "Costco" to "Costco LP" doesn't lose the order you arranged — the
-     route is matched on the name, and the same warehouse gets the same key. A
-     null order removes the entry entirely instead of saving an empty array,
-     because "no saved order" and "an order that happens to be empty" have to stay
-     distinguishable for applyZoneOrder to fall back to the default. */
-  const saveRoute = (key, zones) => {
-    const next = { ...(savedRoutes || {}) };
-    if (zones && zones.length) next[key] = zones;
-    else delete next[key];
-    updateSetting?.("store_routes", next);
   };
 
   const clearChecked = async () => {
@@ -551,18 +535,6 @@ export function GroceryPanel({ isMobile, settings, updateSetting }) {
           </div>
         )}
 
-        {/* Two ways to read the same list: as a list, or as the walk through the
-            shop it implies. The toggle only appears once there's something to
-            walk — an empty route is a diagram of nothing — and it sits directly
-            above the thing it swaps rather than up in the header, so on a phone
-            your thumb is already there. */}
-        {groceries !== null && total > 0 && (
-          <Segmented
-            options={[{ key: "list", label: "List" }, { key: "route", label: "Route" }]}
-            value={view} onChange={setView}
-          />
-        )}
-
         {/* Unreachable list with nothing cached: say so and offer the retry,
             rather than a skeleton that shimmers forever. Once there IS a cached
             list, a failed refresh leaves it on screen and says nothing — the
@@ -579,14 +551,6 @@ export function GroceryPanel({ isMobile, settings, updateSetting }) {
               : "Add what you need above and it sorts itself into aisles. It syncs to every device, so you can build it at home and shop from your phone."}
             action={activeStore ? <Button kind="tinted" size="sm" onClick={() => setStore("")}>Show all stores</Button> : undefined}
             style={{ padding: "22px 12px" }} />
-        ) : view === "route" ? (
-          /* Given the WHOLE list, not the grouped one: the route applies the same
-             store rule itself (this shop's items plus the staples that follow you
-             everywhere) and needs the ungrouped items to zone them its own way.
-             renderRow is handed over so the rows here are literally the list's
-             rows — same tap, same stepper, same editor. */
-          <StoreRoute items={groceries} store={activeStore} savedRoutes={savedRoutes}
-            onSaveRoute={saveRoute} renderRow={renderRow} />
         ) : (
           <div style={{ margin: "0 -16px -10px" }}>
             {/* Aisles rise in on load; the inline --i keeps the stagger correct

@@ -55,18 +55,22 @@ export const aisleMeta = (key) => AISLE_BY_KEY[key] || AISLE_BY_KEY.other;
  * "2% milk".
  *
  * A word starts at the string's start or after a character that is neither a
- * letter nor a DIGIT. The digit half of that is what keeps units intact: match
- * on "the first letter after a non-letter" alone and "1lb ground beef" becomes
- * "1Lb Ground Beef" and "7up" becomes "7Up" — both wrong, and both things you
- * actually write on a shopping list. Punctuation still breaks a word, so
- * "half-and-half" comes out "Half-And-Half" and "(organic) milk" gets its
- * bracketed word too.
+ * letter, a DIGIT, nor an APOSTROPHE. The digit half of that is what keeps units
+ * intact: match on "the first letter after a non-letter" alone and "1lb ground
+ * beef" becomes "1Lb Ground Beef" and "7up" becomes "7Up" — both wrong, and both
+ * things you actually write on a shopping list. The apostrophe half is what
+ * keeps possessives intact: without it the store you shop at is listed as
+ * "Mariano'S" and a section reads "Ben'S Birthday". The cost is "O'brien"
+ * rather than "O'Brien", which is the right trade on a list where every
+ * apostrophe in practice is a possessive — "Trader Joe's", "Lay's", "Ben's".
+ * Other punctuation still breaks a word, so "half-and-half" comes out
+ * "Half-And-Half" and "(organic) milk" gets its bracketed word too.
  *
  * Applied at BOTH ends on purpose. On the way in so what's stored is what you'd
  * want to read; on the way out so the hundreds of rows already in the table look
  * right immediately, with no backfill and nothing to migrate.
  */
-const WORD_START = /(^|[^A-Za-zÀ-ÖØ-öø-ÿ0-9])([a-zà-öø-ÿ])/g;
+const WORD_START = /(^|[^A-Za-zÀ-ÖØ-öø-ÿ0-9'’])([a-zà-öø-ÿ])/g;
 export function titleCase(text) {
   return String(text ?? "").replace(WORD_START, (_m, before, letter) => before + letter.toUpperCase());
 }
@@ -166,6 +170,47 @@ const MATCHERS = Object.entries(LEXICON)
     aisle,
     re: new RegExp(`\\b${w.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}(?:s|es)?\\b`, "i"),
   }));
+
+/**
+ * A section you typed yourself, matched to an aisle — or "" if it isn't one.
+ *
+ * THE PROBLEM THIS SOLVES. A pinned section overrides the lexicon and gets a
+ * heading of its own, which is right for "#Ben's Birthday" and wrong for
+ * "#Freezer": that produced a "Freezer" heading sitting directly beside the
+ * "Frozen" one the lexicon had already made, so the same corner of the shop was
+ * two categories and the list read as though it had lost track of itself.
+ * "#Freezer" isn't a category you invented — it's the frozen aisle, spelled the
+ * way people spell it.
+ *
+ * So the aliases are the words a PERSON types, not our own vocabulary: nobody
+ * writes "#Frozen" or "#Centre aisles", they write "#Freezer" and "#Pantry".
+ * Anything that matches nothing is still yours and still gets its own pinned
+ * heading at the top, which is what pinning is actually for.
+ */
+const SECTION_ALIAS = {
+  produce: ["fruit", "fruits", "veg", "vegetables", "veggies", "greens"],
+  bakery: ["bread", "baked", "baked goods"],
+  deli: ["deli counter", "prepared", "prepared food"],
+  meat: ["butcher", "meat counter", "protein"],
+  seafood: ["fish", "fish counter"],
+  dairy: ["eggs", "fridge", "refrigerated", "cheese", "milk"],
+  frozen: ["freezer", "frozen food", "frozen foods"],
+  pantry: ["dry goods", "cupboard", "canned", "baking", "grocery", "aisles", "centre", "center", "centre aisles"],
+  snacks: ["snack"],
+  drinks: ["beverages", "beverage", "booze", "alcohol"],
+  household: ["home", "paper", "paper goods", "cleaning", "toiletries", "non-food", "toiletry"],
+};
+const SECTION_INDEX = (() => {
+  const m = new Map();
+  const put = (k, aisle) => { const s = String(k).toLowerCase().trim(); if (s && !m.has(s)) m.set(s, aisle); };
+  // "other" is a fallback, not a name to match — a section called "Other" is a
+  // heading you chose, and collapsing it into the bin aisle would lose it.
+  for (const a of AISLES) { if (a.key === "other") continue; put(a.key, a.key); put(a.label, a.key); }
+  for (const [aisle, words] of Object.entries(SECTION_ALIAS)) for (const w of words) put(w, aisle);
+  return m;
+})();
+export const aisleOfSection = (section) =>
+  SECTION_INDEX.get(String(section ?? "").toLowerCase().trim()) || "";
 
 /**
  * Which aisle is this item in? Falls back to "other" — never guesses wildly.
@@ -565,11 +610,15 @@ export function groupList(items, opts) {
   const byAisle = new Map();
   for (const it of todo) {
     const { section } = parseItem(it.item);
-    if (section) {
+    // A section that NAMES a real aisle files the item into that aisle — it
+    // still overrides the lexicon, it just doesn't open a second heading beside
+    // the one that already means the same place. See aisleOfSection.
+    const named = section ? aisleOfSection(section) : "";
+    if (section && !named) {
       if (!pinned.has(section)) pinned.set(section, []);
       pinned.get(section).push(it);
     } else {
-      const key = aisleOf(it.item);
+      const key = named || aisleOf(it.item);
       if (!byAisle.has(key)) byAisle.set(key, []);
       byAisle.get(key).push(it);
     }

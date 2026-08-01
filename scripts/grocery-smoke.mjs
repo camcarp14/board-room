@@ -15,7 +15,7 @@
 // Run by `npm run verify`.
 
 import {
-  AISLES, aisleOf, aisleMeta, parseItem, formatItem, canonicalName,
+  AISLES, aisleOf, aisleMeta, aisleOfSection, parseItem, formatItem, canonicalName,
   findDuplicate, groupList, bumpFrequency, frequentSuggestions, STAPLE_MIN_BUYS,
   titleCase, storesOf, inStore, isStore, applyOrder, planRetag, applyRetag, storeCounts, ANY_STORE,
   planAdd, applyAdd, requestFor, isTempId, TMP_PREFIX,
@@ -95,6 +95,14 @@ check("a unit glued to a number is not a word", titleCase("1lb ground beef") ===
 check("7up stays 7up", titleCase("7up") === "7up", titleCase("7up"));
 check("a percentage keeps its number", titleCase("2% milk") === "2% Milk", titleCase("2% milk"));
 check("punctuation still breaks a word", titleCase("half-and-half") === "Half-And-Half", titleCase("half-and-half"));
+// An apostrophe does NOT. Without this the shop you actually go to is listed as
+// "Mariano'S" in the store picker, and a pinned section reads "Ben'S Birthday" —
+// which is precisely the look Title Case was added to fix.
+check("a possessive keeps its lowercase s", titleCase("mariano's") === "Mariano's", titleCase("mariano's"));
+check("…including the curly apostrophe phones insert",
+  titleCase("mariano\u2019s") === "Mariano\u2019s", titleCase("mariano\u2019s"));
+check("a possessive mid-sentence too", titleCase("trader joe's peanut butter") === "Trader Joe's Peanut Butter",
+  titleCase("trader joe's peanut butter"));
 check("titleCase is idempotent", titleCase(titleCase("greek yogurt")) === titleCase("greek yogurt"));
 check("titleCase survives empty and null", titleCase("") === "" && titleCase(null) === "" && titleCase(undefined) === "");
 
@@ -221,13 +229,41 @@ check("isStore is strict where inStore is generous",
     c.anywhere.map((i) => i.id).join(",") === "1", c.anywhere.map((i) => i.id).join(","));
   check("the header still counts the staples as things to get",
     c.total === 3 && c.remaining === 3, `${c.total}/${c.remaining}`);
-  // A named section beats the guessed aisle and sorts above it — you said where
-  // it goes, so the lexicon doesn't get a vote.
-  check("a pinned section becomes its own heading at the top",
-    c.sections[0].label === "Freezer" && c.sections[0].pinned === true,
+  // A named section beats the guessed aisle — you said where it goes, so the
+  // lexicon doesn't get a vote. But "#Freezer" NAMES THE FROZEN AISLE, and it
+  // used to open a "Freezer" heading right beside the "Frozen" one the lexicon
+  // had already made: one corner of the shop showing as two categories, which
+  // read as the list losing track of itself. It files into the real aisle now.
+  check("a section naming a real aisle files into that aisle",
+    c.sections.some((s) => s.label === "Frozen" && s.items.some((i) => i.id === "4")),
     c.sections.map((s) => s.label).join(","));
-  check("the pinned item left its guessed aisle",
-    !c.sections.some((s) => !s.pinned && s.items.some((i) => i.id === "4")));
+  check("…and does NOT also open a heading of its own",
+    !c.sections.some((s) => s.label === "Freezer"), c.sections.map((s) => s.label).join(","));
+  check("one item is in exactly one category",
+    c.sections.filter((s) => s.items.some((i) => i.id === "4")).length === 1);
+}
+// The section words a person actually types. Nobody writes "#Frozen"; they
+// write "#Freezer". Matching only our own vocabulary is what caused the split
+// heading, so these are the whole point of the alias table.
+for (const [typed, aisle] of Object.entries({
+  Freezer: "frozen", freezer: "frozen", "Frozen Foods": "frozen", Fridge: "dairy", Eggs: "dairy",
+  Veg: "produce", Fruit: "produce", Bread: "bakery", Butcher: "meat", Fish: "seafood",
+  Pantry: "pantry", Aisles: "pantry", Beverages: "drinks", Paper: "household", "Dairy & Eggs": "dairy",
+})) {
+  check(`"#${typed}" is the ${aisle} aisle`, aisleOfSection(typed) === aisle, aisleOfSection(typed));
+}
+// …and the other half: a heading you invented is still yours, still pinned, and
+// still at the top. That's what pinning is for, and merging it would lose it.
+check("a heading you invented isn't forced into an aisle", aisleOfSection("Party Table") === "");
+check("an empty section matches nothing", aisleOfSection("") === "" && aisleOfSection(null) === "");
+// "Other" is the bin aisle, not a name to claim — a section called Other is a
+// choice, and collapsing it into the fallback would silently swallow it.
+check("a section called Other stays your own heading", aisleOfSection("Other") === "");
+{
+  const own = groupList([{ id: "x", item: "Cake #Party Table", checked: false }], {});
+  check("an invented section still gets its own pinned heading, at the top",
+    own.sections[0].label === "Party Table" && own.sections[0].pinned === true,
+    own.sections.map((s) => s.label).join(","));
 }
 {
   const a = groupList(shops, { store: "" });
