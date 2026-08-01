@@ -44,8 +44,14 @@ const sheet = readFileSync("src/shell/SettingsSheet.jsx", "utf8");
 
 const navKeys = [...(nav.match(/export const NAV = \[([\s\S]*?)\n\];/)?.[1] || "")
   .matchAll(/^\s*\{ key: "(\w+)"/gm)].map(m => m[1]);
-check("the nav is Brief, Personal, Train, Creed, Grocery",
-  navKeys.join(",") === "brief,personal,train,creed,grocery", navKeys.join(","));
+check("the nav is Brief, Personal, Train, Creed, Grocery, Finances",
+  navKeys.join(",") === "brief,personal,train,creed,grocery,finances", navKeys.join(","));
+// A tab with no route renders a blank titled page. The nav entry and the switch
+// case in App are two separate edits and only one of them is visible when you
+// forget the other — the icon/header pairs are already checked per key below,
+// but nothing was checking that the tab actually goes anywhere.
+check("every tab has a route", navKeys.every(k => new RegExp(`case "${k}":`).test(app)),
+  navKeys.filter(k => !new RegExp(`case "${k}":`).test(app)).join(","));
 // Six is the ceiling for a phone tab bar with readable labels. A seventh needs
 // a different chrome, not a smaller font.
 check("the tab bar stays at six or fewer", navKeys.length <= 6, String(navKeys.length));

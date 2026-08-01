@@ -23,6 +23,12 @@ export const NAV = [
   // shop, one-handed. Two taps deep inside Personal → Food was the wrong depth
   // for that, whatever its topical home.
   { key: "grocery", label: "Grocery" },
+  // Finances is last because it's the one you visit deliberately rather than
+  // pass through — the other five are daily surfaces. Six tabs is the ceiling
+  // for a phone bar; "Finances" is the longest label here and still clears its
+  // 65px column at 10px, which is the constraint that decides whether a seventh
+  // is ever possible (it isn't).
+  { key: "finances", label: "Finances" },
   // Assets is no longer a destination. Its last three sub-tabs — Usage, Status,
   // Miner — moved into the Settings sheet's Systems tab, because none of them is
   // somewhere you GO: they're things you check, on the same footing as which
@@ -56,5 +62,6 @@ export const HEADERS = {
   train: { title: "Train" },
   creed: { title: "Creed" },
   grocery: { title: "Grocery" },
+  finances: { title: "Finances" },
   upstream: { title: "Upstream" },
 };

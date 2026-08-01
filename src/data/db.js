@@ -262,6 +262,50 @@ export const db = {
     const { error } = await supabase.from("upkeep_items").delete().eq("id", id);
     if (error) throw error;
   },
+  // ─── Transactions ──────────────────────────────────────────────────────────
+  // The id is DERIVED from the transaction itself (see financeLogic.txKey),
+  // because a Chase CSV carries no transaction id. That is what makes an import
+  // idempotent: upserting on (user_id, id) means re-importing an overlapping
+  // export updates rows instead of doubling your month.
+  async loadTransactions(limit = 5000) {
+    const { data, error } = await supabase.from("transactions")
+      .select("id,account,date,amount_cents,description,merchant,category,category_override")
+      .order("date", { ascending: false }).limit(limit);
+    // Throws rather than returning [] — a dropped request must not read as "you
+    // have no transactions", which in a budgeting tool is a $0 month.
+    if (error) throw error;
+    return (data || []).map((r) => ({ ...r, amount: r.amount_cents }));
+  },
+  async saveTransactions(rows) {
+    const user_id = await db.uid();
+    if (!user_id) throw new Error("Not signed in");
+    const payload = (rows || []).map((r) => ({
+      id: r.id, user_id, account: r.account || "", date: r.date,
+      amount_cents: r.amount, description: r.description || "",
+      merchant: r.merchant || "", category: r.category || "other",
+      category_override: r.category_override ?? null,
+    }));
+    // Chunked: a 3,000-row export in one statement is a request big enough for
+    // PostgREST to reject, and the failure looks like "import did nothing".
+    const CHUNK = 500;
+    let saved = 0;
+    for (let i = 0; i < payload.length; i += CHUNK) {
+      const { error } = await supabase.from("transactions")
+        .upsert(payload.slice(i, i + CHUNK), { onConflict: "user_id,id" });
+      if (error) throw error;
+      saved += Math.min(CHUNK, payload.length - i);
+    }
+    return saved;
+  },
+  async setTransactionCategory(id, category) {
+    const { error } = await supabase.from("transactions")
+      .update({ category_override: category }).eq("id", id);
+    if (error) throw error;
+  },
+  async deleteTransactionsForAccount(account) {
+    const { error } = await supabase.from("transactions").delete().eq("account", account);
+    if (error) throw error;
+  },
   async loadAffirmations() {
     const { data, error } = await supabase.from("affirmations")
       .select("id,text,kind,created_at")

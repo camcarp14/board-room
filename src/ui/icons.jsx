@@ -210,11 +210,30 @@ export const IcUpstreamFill = (p = {}) => (
 );
 
 /* ── tab registry — one place decides what the tabs look like ──────────────── */
+export const IcFinances = (p = {}) => ( // a banknote — the money, plainly
+  // A NOTE, not a coin, a chart or a dollar sign. A coin reads as crypto, a
+  // chart reads as markets (which this app already has, in Brief), and a bare $
+  // is a glyph rather than an icon and goes muddy at 25px. A rectangle with a
+  // circle in it is unmistakably currency at any size and in any palette.
+  <svg {...base(p)}>
+    <rect x="2.6" y="5.6" width="18.8" height="12.8" rx="2.4" />
+    <circle cx="12" cy="12" r="2.8" />
+    <path d="M6 9.4v5.2M18 9.4v5.2" />
+  </svg>
+);
+export const IcFinancesFill = (p = {}) => (
+  // Filled by the note itself with the circle knocked back out, so the active
+  // tab reads as the same object solid rather than as a different shape.
+  <svg {...base(p)} fill="currentColor" stroke="none">
+    <path d="M5 5.6h14a2.4 2.4 0 0 1 2.4 2.4v8a2.4 2.4 0 0 1-2.4 2.4H5A2.4 2.4 0 0 1 2.6 16V8A2.4 2.4 0 0 1 5 5.6Zm7 3.6a2.8 2.8 0 1 0 0 5.6 2.8 2.8 0 0 0 0-5.6Z" />
+  </svg>
+);
 export const NAV_ICONS = {
   brief: { line: IcBrief, fill: IcBriefFill },
   personal: { line: IcPersonal, fill: IcPersonalFill },
   train: { line: IcTrain, fill: IcTrainFill },
   creed: { line: IcCreed, fill: IcCreedFill },
+  finances: { line: IcFinances, fill: IcFinancesFill },
   grocery: { line: IcGrocery, fill: IcGroceryFill },
   boardroom: { line: IcBoard, fill: IcBoardFill },
   assets: { line: IcAssets, fill: IcAssetsFill },

@@ -23,6 +23,9 @@ import { SeatNotesModal } from "./pages/board/SeatNotesModal.jsx";
 const PersonalPage = lazy(() => import("./pages/personal/PersonalPage.jsx").then(m => ({ default: m.PersonalPage })));
 const TrainPage = lazy(() => import("./pages/train/TrainPage.jsx").then(m => ({ default: m.TrainPage })));
 const GroceryPage = lazy(() => import("./pages/grocery/GroceryPage.jsx").then(m => ({ default: m.GroceryPage })));
+// Lazy like the rest: the CSV parser, the category lexicon and the whole
+// analyzer are dead weight on every launch that doesn't open the tab.
+const FinancesPage = lazy(() => import("./pages/finances/FinancesPage.jsx").then(m => ({ default: m.FinancesPage })));
 const CreedPage = lazy(() => import("./pages/creed/CreedPage.jsx").then(m => ({ default: m.CreedPage })));
 const UpstreamPage = lazy(() => import("./pages/upstream/UpstreamPage.jsx").then(m => ({ default: m.UpstreamPage })));
 
@@ -447,6 +450,7 @@ export default function App() {
       case "train": return <TrainPage isMobile={isMobile} settings={settings} updateSetting={updateSetting} jump={jump} />;
       case "creed": return <CreedPage isMobile={isMobile} settings={settings} updateSetting={updateSetting} jump={jump} />;
       case "grocery": return <GroceryPage isMobile={isMobile} settings={settings} updateSetting={updateSetting} />;
+      case "finances": return <FinancesPage isMobile={isMobile} settings={settings} updateSetting={updateSetting} />;
       case "upstream": return <UpstreamPage isMobile={isMobile} />;
       default: return null;
     }
