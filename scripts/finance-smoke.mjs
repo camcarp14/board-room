@@ -21,6 +21,7 @@ import {
   merchantOf, merchantKey, categorise, txKey, parseChaseCsv,
   monthsOf, summarise, compare, budgetStatus, recurring, largest,
   fromPlaid, fromPlaidSync, PLAID_PREFIX,
+  effectiveCategory, applyRule, ruleReach,
 } from "../src/features/finances/financeLogic.js";
 
 let failed = 0;
@@ -342,6 +343,46 @@ check("months come back newest first", monthsOf(ALL).join() === "2026-08");
     fromPlaidSync({}).rows.length === 0 && fromPlaidSync(null).rows.length === 0);
 }
 
+// ─── 11d. merchant rules — what stops the tool asking twice ──────────────────
+// With a live sync the same merchants return every month. Without rules you'd
+// recategorise the same coffee shop forever, so a rule has to beat the imported
+// category — and it must lose to a change you made to one specific row.
+{
+  const key = merchantKey("SQ *BLUE BOTTLE COFFEE 0123");
+  const tx = { description: "SQ *BLUE BOTTLE COFFEE 0123", category: "other", amount: -475, date: "2026-08-01" };
+  check("with no rule, the imported category stands", effectiveCategory(tx, null) === "other");
+  const rules = applyRule({}, key, "dining");
+  check("a rule beats what the bank said", effectiveCategory(tx, rules) === "dining");
+  // Most specific wins: you touched this row on purpose.
+  check("a per-row override still beats the rule",
+    effectiveCategory({ ...tx, category_override: "travel" }, rules) === "travel");
+  check("clearing a rule reverts, rather than storing a blank",
+    effectiveCategory(tx, applyRule(rules, key, "")) === "other" && !(key in applyRule(rules, key, "")));
+  check("a nonsense rule is ignored, not rendered as an empty category",
+    effectiveCategory(tx, { [key]: "not_a_category" }) === "other");
+  check("a nonsense override is ignored too",
+    effectiveCategory({ ...tx, category_override: "nope" }, null) === "other");
+  check("applyRule doesn't mutate what it was given",
+    (() => { const before = { a: "dining" }; applyRule(before, "b", "travel"); return Object.keys(before).length === 1; })());
+  check("a rule says how many rows it moves", ruleReach(card.rows, key) === 2, String(ruleReach(card.rows, key)));
+  check("effectiveCategory tolerates junk", CATEGORIES.some(c => c.key === effectiveCategory({}, null)));
+
+  // THE POINT OF ALL OF IT: a rule applies RETROACTIVELY, so the totals move.
+  // A rule that only affected future rows would be filing, not fixing.
+  const withRule = summarise(card.rows, "2026-08", applyRule({}, merchantKey("AMZN Mktp US*2Z4KL"), "groceries"));
+  const without = summarise(card.rows, "2026-08");
+  check("a new rule re-files history and the breakdown moves",
+    (withRule.categories.find(c => c.key === "groceries")?.cents || 0) ===
+    (without.categories.find(c => c.key === "groceries")?.cents || 0) + 6210,
+    JSON.stringify(withRule.categories.map(c => [c.key, c.cents])));
+  check("…without changing the total spent", withRule.spent === without.spent);
+  // A rule that moved something INTO transfers would silently shrink the month;
+  // that's legitimate (you might tag a savings transfer) but it must be exact.
+  const toTransfer = summarise(card.rows, "2026-08", applyRule({}, merchantKey("AMZN Mktp US*2Z4KL"), "transfer"));
+  check("ruling something a transfer removes exactly its own amount from spend",
+    toTransfer.spent === without.spent - 6210, `${toTransfer.spent} vs ${without.spent}`);
+}
+
 // ─── 11c. the server's copy of the mapping ───────────────────────────────────
 // netlify/functions/plaid.js duplicates mapTx rather than importing it: with
 // this repo's "type":"module" + esbuild bundling, a required helper's
@@ -385,6 +426,30 @@ check("months come back newest first", monthsOf(ALL).join() === "2026-08");
   // and says nothing that names the cause.
   check("the redirect_uri Chase requires is sent", /origin: window\.location\.origin/.test(cli));
   check("Plaid Link is loaded on demand, not bundled", /document\.createElement\("script"\)/.test(cli));
+}
+
+// ─── 11e. the sync behaviours that are only visible in the panel ─────────────
+// Not logic, but each of these is a way the live sync could be quietly wrong or
+// quietly expensive, and none of them shows up in a diff.
+{
+  const ui = readFileSync("src/features/finances/FinancesPanel.jsx", "utf8");
+  // Connecting a bank was meant to END manual work. A sync that only happens
+  // when you remember to press a button is a button, not a sync.
+  check("opening the tab syncs when the data is stale", /SYNC_AFTER/.test(ui) && /callPlaid\("sync"\)/.test(ui));
+  // Once per mount. React re-renders freely and this costs a Plaid call.
+  check("…at most once per mount", /autoSynced\.current = true/.test(ui) && /if \(autoSynced\.current\) return;/.test(ui));
+  // An unconfigured install must never call the function on a page view.
+  check("…and only when a bank is actually connected", /if \(!st\.items\?\.length\) return;/.test(ui));
+  // A background failure painting the screen red over a month you're reading is
+  // worse than a stale number; Sync now exists to surface it deliberately.
+  check("a background sync fails silently", /catch \{ \/\* silent/.test(ui));
+  // The category chip and the filter must both read the RESOLVED category, or a
+  // merchant rule shows in one place and not the other.
+  check("the row chip reads the resolved category, not the raw one",
+    /const cat = catMeta\(t\.category\);/.test(ui) && !/catMeta\(t\.category_override \|\| t\.category\)/.test(ui));
+  check("recategorising sets a merchant RULE by default",
+    /if \(onlyThis\) setCat\.mutate/.test(ui) && /updateSetting\?\.\("finance_rules"/.test(ui));
+  check("…and still offers the one-row escape hatch", /Just this one/.test(ui));
 }
 
 // ─── 12. the setup SQL has to be runnable, in the right schema ───────────────

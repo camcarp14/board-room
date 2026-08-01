@@ -390,6 +390,46 @@ export function fromPlaidSync(page, opts) {
   return { rows: added, removed, cursor: page?.next_cursor || "", more: !!page?.has_more };
 }
 
+// ─── What a transaction's category actually IS ───────────────────────────────
+
+/**
+ * Precedence, decided in one place so nothing downstream can disagree.
+ *
+ *   1. category_override — you changed THIS row. Most specific, wins outright.
+ *   2. A MERCHANT RULE — "Blue Bottle is always Dining". This is the one that
+ *      makes the tool stop asking: a live sync brings the same merchants back
+ *      every month, and without rules you'd recategorise the same coffee shop
+ *      forever. Rules beat the imported category deliberately — the whole point
+ *      is to override what the bank guessed.
+ *   3. The category stored at import.
+ *   4. The lexicon, for a row that somehow has none.
+ *
+ * Rules live in app_settings.finance_rules keyed by merchantKey, so they cost no
+ * database write and apply RETROACTIVELY: set one and every past charge from
+ * that merchant re-files itself, which is what makes fixing a category feel
+ * worth doing rather than like filing.
+ */
+export function effectiveCategory(tx, rules) {
+  if (tx?.category_override && catMeta(tx.category_override).key === tx.category_override) return tx.category_override;
+  const r = rules?.[merchantKey(tx?.description)];
+  if (r && catMeta(r).key === r) return r;
+  return tx?.category || categorise(tx || {}, rules);
+}
+
+/** Set or clear a merchant rule. Clearing removes the key rather than storing a
+ *  blank, so "no rule" and "a rule that happens to be empty" stay distinct. */
+export function applyRule(rules, key, category) {
+  const next = { ...(rules || {}) };
+  if (category && catMeta(category).key === category) next[key] = category;
+  else delete next[key];
+  return next;
+}
+
+/** How many rows a rule would move — so the sheet can say "applies to 14
+ *  charges" instead of asking you to take it on faith. */
+export const ruleReach = (txs, key) =>
+  (txs || []).filter((t) => merchantKey(t.description) === key).length;
+
 // ─── Aggregation ─────────────────────────────────────────────────────────────
 
 /** Every month present in the data, newest first — the month picker's options. */
@@ -408,7 +448,7 @@ export function monthsOf(txs) {
  */
 export function summarise(txs, month, overrides) {
   const rows = (txs || []).filter((t) => !month || monthOf(t.date) === month)
-    .map((t) => ({ ...t, category: t.category_override || t.category || categorise(t, overrides) }));
+    .map((t) => ({ ...t, category: effectiveCategory(t, overrides) }));
   let income = 0, spent = 0, transfers = 0;
   const byCat = new Map();
   for (const t of rows) {
@@ -471,7 +511,7 @@ export function budgetStatus(summary, budgets) {
  * The amount tolerance is proportional, so a $9.99 streaming service and a
  * $1,800 rent are judged on the same terms.
  */
-export function recurring(txs, { minMonths = 3, tolerance = 0.15 } = {}) {
+export function recurring(txs, { minMonths = 3, tolerance = 0.15, rules } = {}) {
   const by = new Map();
   for (const t of txs || []) {
     if (t.amount >= 0) continue;                       // money in isn't a subscription
@@ -492,7 +532,7 @@ export function recurring(txs, { minMonths = 3, tolerance = 0.15 } = {}) {
     const last = list.slice().sort((a, b) => a.date.localeCompare(b.date)).at(-1);
     out.push({
       key: k, merchant: merchantOf(last.description), typical, months: months.size,
-      lastDate: last.date, category: last.category_override || last.category,
+      lastDate: last.date, category: effectiveCategory(last, rules),
       yearly: typical * 12,
     });
   }
@@ -500,8 +540,10 @@ export function recurring(txs, { minMonths = 3, tolerance = 0.15 } = {}) {
 }
 
 /** The biggest single hits of the month — the other question you always ask. */
+// summary.rows already carry the resolved category (see summarise), so this
+// must NOT re-resolve — reading category_override here would ignore a rule.
 export const largest = (summary, n = 5) =>
-  summary.rows.filter((t) => t.amount < 0 && isSpendCategory(t.category_override || t.category))
+  summary.rows.filter((t) => t.amount < 0 && isSpendCategory(t.category))
     .sort((a, b) => a.amount - b.amount).slice(0, n);
 
 /**

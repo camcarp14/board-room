@@ -21,7 +21,7 @@
 // overlaps one you already loaded updates those rows rather than doubling your
 // month. You can export "last 90 days" every month and never think about it.
 
-import { useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { isMissingTable } from "../../data/db.js";
 import { useTransactions, useImportTransactions, useSetCategory, useForgetAccount } from "../../data/finances.js";
 import {
@@ -32,7 +32,7 @@ import { connectBank, callPlaid, PLAID_SQL } from "./plaid.js";
 import {
   CATEGORIES, SPEND_CATEGORIES, catMeta, isSpendCategory, SETUP_SQL,
   parseChaseCsv, money, monthsOf, monthLabel, summarise, compare, budgetStatus,
-  recurring, largest, merchantKey,
+  recurring, largest, merchantKey, effectiveCategory, applyRule, ruleReach,
 } from "./financeLogic.js";
 
 const pct = (n, d) => (d > 0 ? Math.min(100, Math.round((n / d) * 100)) : 0);
@@ -120,7 +120,7 @@ function Budgets({ status, onEdit }) {
    recategorising is the thing you do most while reading a month, so it's one tap
    from the row rather than behind an edit mode. */
 function TxRow({ t, onCat }) {
-  const cat = catMeta(t.category_override || t.category);
+  const cat = catMeta(t.category);
   const inflow = t.amount > 0;
   return (
     <div className="cell" style={{ minHeight: 54, gap: 8, alignItems: "center" }}>
@@ -258,6 +258,7 @@ export function FinancesPanel({ isMobile, settings, updateSetting }) {
   const [importing, setImporting] = useState(false);
   const [receipt, setReceipt] = useState(null);
   const [catFor, setCatFor] = useState(null);   // the row whose category sheet is open
+  const [onlyThis, setOnlyThis] = useState(false);
   const [budgetFor, setBudgetFor] = useState(null);
   const [budgetDraft, setBudgetDraft] = useState("");
   const [copied, setCopied] = useState(false);
@@ -271,21 +272,27 @@ export function FinancesPanel({ isMobile, settings, updateSetting }) {
 
   const all = rows || [];
   const budgets = settings?.finance_budgets || {};
+  // Merchant rules: "Blue Bottle is always Dining". Kept in settings rather than
+  // on the rows, so setting one costs no write and re-files every past charge
+  // from that merchant at once — see effectiveCategory.
+  const rules = settings?.finance_rules || {};
   const months = useMemo(() => monthsOf(all), [all]);
   // The month must not survive its data: import a different year and a stale
   // selection would show an empty month you can't explain.
   const activeMonth = months.includes(month) ? month : (months[0] || "");
   const prevMonth = months[months.indexOf(activeMonth) + 1] || "";
-  const cmp = useMemo(() => compare(all, activeMonth, prevMonth), [all, activeMonth, prevMonth]);
+  const cmp = useMemo(() => compare(all, activeMonth, prevMonth, rules), [all, activeMonth, prevMonth, rules]);
   const s = cmp.now;
   const budgetView = useMemo(() => budgetStatus(s, budgets), [s, budgets]);
-  const subs = useMemo(() => recurring(all), [all]);
+  const subs = useMemo(() => recurring(all, { rules }), [all, rules]);
   const accounts = useMemo(() => [...new Set(all.map((t) => t.account).filter(Boolean))].sort(), [all]);
 
   const ledger = useMemo(() => {
     const needle = q.trim().toLowerCase();
     return s.rows
-      .filter((t) => !catFilter || (t.category_override || t.category) === catFilter)
+      // s.rows already carry the resolved category — re-deriving here would
+      // ignore a rule and make the filter disagree with the bar you tapped.
+      .filter((t) => !catFilter || t.category === catFilter)
       .filter((t) => !needle || `${t.merchant} ${t.description}`.toLowerCase().includes(needle))
       .sort((a, b) => b.date.localeCompare(a.date) || a.amount - b.amount);
   }, [s.rows, catFilter, q]);
@@ -300,6 +307,42 @@ export function FinancesPanel({ isMobile, settings, updateSetting }) {
   };
 
   const refreshBanks = () => callPlaid("status").then(setBanks).catch(() => setBanks({ items: [], unavailable: true }));
+
+  /* Auto-sync. The point of connecting a bank was to stop doing this by hand, so
+     opening the tab syncs if the last pull is more than SYNC_AFTER old.
+
+     Three guards, each for a thing that would otherwise be worse than no
+     auto-sync at all:
+       · once per mount (autoSynced), so a re-render can't fire a second pull;
+       · only when something is actually connected, so an unconfigured install
+         never calls the function at all;
+       · silent on failure. A background sync that paints a red banner over a
+         month you were reading is a worse trade than a stale number — the
+         explicit Sync now button is there to surface a real error on demand. */
+  const autoSynced = useRef(false);
+  useEffect(() => {
+    if (autoSynced.current) return;
+    let alive = true;
+    (async () => {
+      try {
+        const st = await callPlaid("status");
+        if (!alive) return;
+        setBanks(st);
+        if (!st.items?.length) return;
+        const SYNC_AFTER = 6 * 60 * 60 * 1000;   // six hours; banks post once a day
+        const freshest = st.items.reduce((m, b) => Math.max(m, b.synced_at ? Date.parse(b.synced_at) : 0), 0);
+        if (Date.now() - freshest < SYNC_AFTER) return;
+        autoSynced.current = true;
+        setLinking("Syncing…");
+        const out = await callPlaid("sync");
+        if (!alive) return;
+        if (out.added || out.removed) { refetch(); setReceipt({ n: out.added || 0, skipped: 0, synced: true }); }
+        callPlaid("status").then((s2) => alive && setBanks(s2)).catch(() => {});
+      } catch { /* silent — see above */ }
+      finally { if (alive) setLinking(null); }
+    })();
+    return () => { alive = false; };
+  }, []);   // eslint-disable-line react-hooks/exhaustive-deps
 
   const connect = async () => {
     setLinkErr(null);
@@ -596,22 +639,47 @@ export function FinancesPanel({ isMobile, settings, updateSetting }) {
 
       {/* Recategorising. A sheet rather than an inline picker: twelve options
           don't fit beside a row, and this is a deliberate correction. */}
-      {catFor && (
-        <Sheet onClose={() => setCatFor(null)} title={catFor.merchant || catFor.description}>
-          <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
-            {CATEGORIES.map((c) => (
-              <Pill key={c.key} active={(catFor.category_override || catFor.category) === c.key}
-                onClick={() => { setCat.mutate({ id: catFor.id, category: c.key }); setCatFor(null); }}>
-                {c.label}
-              </Pill>
-            ))}
-          </div>
-          <p className="t-cap" style={{ color: "var(--faint)", marginTop: 12, lineHeight: 1.45 }}>
-            Saved against this transaction, not the merchant — and kept separately from what Chase said, so
-            re-importing can never undo it.
-          </p>
-        </Sheet>
-      )}
+      {catFor && (() => {
+        const mk = merchantKey(catFor.description);
+        const reach = ruleReach(all, mk);
+        return (
+          <Sheet onClose={() => setCatFor(null)} title={catFor.merchant || catFor.description}>
+            <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
+              {CATEGORIES.map((c) => (
+                <Pill key={c.key} active={catFor.category === c.key}
+                  onClick={() => {
+                    // A RULE by default, not a one-row edit. With a live sync the
+                    // same merchants come back every month, and a per-row fix
+                    // means recategorising the same coffee shop forever.
+                    if (onlyThis) setCat.mutate({ id: catFor.id, category: c.key });
+                    else updateSetting?.("finance_rules", applyRule(rules, mk, c.key));
+                    setCatFor(null); setOnlyThis(false);
+                  }}>
+                  {c.label}
+                </Pill>
+              ))}
+            </div>
+            <div style={{ marginTop: 12, display: "flex", alignItems: "center", gap: 10 }}>
+              <span className="t-cap" style={{ color: "var(--sub)", flex: 1, lineHeight: 1.45 }}>
+                {onlyThis
+                  ? "Just this one transaction."
+                  : reach > 1
+                    ? `Applies to all ${reach} charges from this merchant, past and future.`
+                    : "Applies to this merchant, including future charges."}
+              </span>
+              <Button kind="quiet" size="sm" onClick={() => setOnlyThis((v) => !v)} style={{ flex: "none" }}>
+                {onlyThis ? "Whole merchant" : "Just this one"}
+              </Button>
+            </div>
+            {rules[mk] && !onlyThis && (
+              <Button kind="plain" size="sm" style={{ marginTop: 6, paddingLeft: 0 }}
+                onClick={() => { updateSetting?.("finance_rules", applyRule(rules, mk, "")); setCatFor(null); }}>
+                Clear the rule for this merchant
+              </Button>
+            )}
+          </Sheet>
+        );
+      })()}
 
       {budgetFor && (
         <Sheet onClose={() => setBudgetFor(null)} title={`${catMeta(budgetFor).label} budget`}
