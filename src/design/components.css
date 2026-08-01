@@ -107,9 +107,19 @@ button:active:not(:disabled) { transform: scale(0.97); }
    the only feedback was the global 0.97 scale. Now the well fills too. */
 .icon-btn:active { background: var(--ink-a10); }
 
-/* Large-title block — the first thing on every page. Kept tight to the nav
-   bar so the useful content sits high on the screen. */
-.lt-block { padding: 2px 16px 6px; display: flex; align-items: flex-end; justify-content: space-between; gap: 12px; }
+/* Large-title block — the first thing on every page. Used only by MobileShell,
+   so these numbers are a phone's numbers.
+
+   The top padding is 12, not the 2 it was, and the reason is the status bar.
+   Under "black" (see index.html) iOS paints that strip itself and the app can
+   never match it, so the top of the window is a hard colour change we're stuck
+   with. At 2px the title's cap started SIX pixels below that edge — measured,
+   not guessed — which made an unavoidable seam read as a mistake, like the text
+   had been shoved against it. 12 puts the cap 16px down: enough that the title
+   is clearly sitting in the room rather than jammed under the lid, and little
+   enough that the first card is still above the fold. Everything else here
+   still wants content high on the screen; this is the one place that doesn't. */
+.lt-block { padding: 12px 16px 6px; display: flex; align-items: flex-end; justify-content: space-between; gap: 12px; }
 .lt-sub { margin-top: 2px; font-size: 12.5px; line-height: 1.35; color: var(--sub); }
 
 /* ── the status-bar strip ────────────────────────────────────────────────────
