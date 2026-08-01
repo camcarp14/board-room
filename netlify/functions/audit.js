@@ -17,14 +17,12 @@ const json = (code, body) => ({ statusCode: code, headers: { "Content-Type": "ap
 // handler — a 502 on every call. See the same note in tmdb.js and
 // workout-import.js; btc.js / mini-worker.js work precisely because they are
 // self-contained. Do NOT refactor these back into a shared module.
-// Degrades open when the service key is absent so `netlify dev` still runs.
-// Returns { denied } to refuse, or { userId } to proceed. It used to verify the
-// token and throw the identity away; usage_log needs it, so the id now rides
-// back out. userId is null when the service key is absent (the degrade-open
-// path) — spend simply goes unlogged there, same as it always did locally.
+// Returns { denied } to refuse, or { userId } to proceed. The owner id is
+// required so a second valid Supabase account cannot spend the shared API key.
 async function denyUnlessSignedIn(event) {
   const url = process.env.SUPABASE_URL, service = process.env.SUPABASE_SERVICE_ROLE_KEY;
-  if (!url || !service) return { userId: null };
+  const owner = String(process.env.BOARD_USER_ID || "").trim();
+  if (!url || !service || !owner) return { denied: json(503, { success: false, error: "server owner is not configured" }) };
   const h = event.headers || {};
   const token = String(h.authorization || h.Authorization || "").replace(/^Bearer\s+/i, "").trim();
   if (!token) return { denied: json(401, { success: false, error: "sign in first" }) };
@@ -32,7 +30,8 @@ async function denyUnlessSignedIn(event) {
     const who = await fetch(`${url}/auth/v1/user`, { headers: { apikey: service, Authorization: `Bearer ${token}` } });
     if (!who.ok) return { denied: json(401, { success: false, error: "session expired — refresh and try again" }) };
     const u = await who.json();
-    return { userId: u?.id || null };
+    if (u?.id !== owner) return { denied: json(403, { success: false, error: "this account is not allowed to use Board Room" }) };
+    return { userId: u.id };
   } catch {
     return { denied: json(503, { success: false, error: "couldn't verify your session — try again in a moment" }) };
   }
@@ -82,8 +81,52 @@ function badUrl(raw) {
   let u;
   try { u = new URL(raw); } catch { return "that's not a valid URL"; }
   if (u.protocol !== "http:" && u.protocol !== "https:") return "only http and https URLs can be audited";
-  if (PRIVATE_HOST.test(u.hostname)) return "that host isn't reachable from here";
+  if (u.username || u.password) return "URLs cannot include credentials";
+  const host = u.hostname.replace(/^\[|\]$/g, "").toLowerCase();
+  if (
+    PRIVATE_HOST.test(host) || host === "::" || host === "::1" ||
+    host.startsWith("::ffff:") || host.startsWith("fe80:") ||
+    host.startsWith("fc") || host.startsWith("fd") ||
+    host.endsWith(".local") || host.endsWith(".internal") || !host.includes(".")
+  ) return "that host isn't reachable from here";
   return null;
+}
+
+async function fetchPublicUrl(raw, init) {
+  let url = raw;
+  for (let hop = 0; hop <= 3; hop++) {
+    const problem = badUrl(url);
+    if (problem) throw new Error(problem);
+    const res = await fetch(url, { ...init, redirect: "manual" });
+    if (res.status < 300 || res.status >= 400) return res;
+    const location = res.headers.get("location");
+    if (!location) return res;
+    if (hop === 3) throw new Error("site redirected too many times");
+    url = new URL(location, url).toString();
+  }
+}
+
+async function readTextLimited(res, maxBytes = 250000) {
+  if (!res.body?.getReader) {
+    const text = await res.text();
+    if (Buffer.byteLength(text, "utf8") > maxBytes) throw new Error("site response is too large to audit");
+    return text;
+  }
+  const reader = res.body.getReader();
+  const chunks = [];
+  let bytes = 0;
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      bytes += value.length;
+      if (bytes > maxBytes) throw new Error("site response is too large to audit");
+      chunks.push(value);
+    }
+  } finally {
+    try { await reader.cancel(); } catch { /* already consumed */ }
+  }
+  return Buffer.concat(chunks.map((chunk) => Buffer.from(chunk))).toString("utf8");
 }
 
 exports.handler = async (event) => {
@@ -101,20 +144,20 @@ exports.handler = async (event) => {
   const userId = gate.userId;
 
   if (!body.url) return json(400, { error: "url is required" });
-  const problem = badUrl(String(body.url).trim());
+  const url = String(body.url).trim();
+  const problem = badUrl(url);
   if (problem) return json(400, { error: problem });
 
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), 10000);
   try {
     // 1. Fetch the live page (truncate — enough signal, controlled tokens)
-    const pageRes = await fetch(body.url, {
+    const pageRes = await fetchPublicUrl(url, {
       headers: { "User-Agent": "BoardRoom-Auditor/1.0" },
-      redirect: "follow",
       signal: controller.signal,
     });
     const status = pageRes.status;
-    const html = (await pageRes.text()).slice(0, 25000);
+    const html = (await readTextLimited(pageRes)).slice(0, 25000);
 
     // 2. Ask Haiku for findings as strict JSON
     const system = `You audit websites for a solo founder. Given raw HTML and HTTP status, return ONLY a JSON array (no markdown, no prose) of 0-4 findings. Each finding: {"severity":"high"|"medium"|"low","area":"seo"|"performance"|"conversion"|"content"|"technical","finding":"one specific sentence","suggestion":"one actionable sentence"}. Only report things actually visible in the HTML. If the site looks healthy, return [].`;
@@ -146,3 +189,6 @@ exports.handler = async (event) => {
     clearTimeout(timer);
   }
 };
+
+// Exported only for functions-smoke.mjs. Netlify reads `handler`.
+exports.badUrl = badUrl;
