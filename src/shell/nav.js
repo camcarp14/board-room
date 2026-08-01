@@ -16,11 +16,9 @@ export const NAV = [
   // row is the wrong depth for that. Filed between birthdays and movies it read
   // as one more list; on the bar it reads as a standing commitment.
   { key: "creed", label: "Creed" },
-  // Dreams sits next to Creed because they're the same argument from two
-  // directions: the Creed is what you hold, the boards are what you're holding
-  // it FOR. Several boards, not one — sub-boards on a specific thing keep the
-  // life-sized wall from turning into a mood board about everything.
-  { key: "dreams", label: "Dreams" },
+  // Dreams is a SUB-TAB of Creed, not a destination of its own — same argument
+  // from two directions, and six tabs to reach a wall you look at rather than
+  // work in was one too many. App.jsx remaps the retired "dreams" page key.
   // Grocery earns a top-level tab because of WHERE it gets used: standing in a
   // shop, one-handed. Two taps deep inside Personal → Food was the wrong depth
   // for that, whatever its topical home.
@@ -57,7 +55,6 @@ export const HEADERS = {
   personal: { title: "Personal" },
   train: { title: "Train" },
   creed: { title: "Creed" },
-  dreams: { title: "Dreams" },
   grocery: { title: "Grocery" },
   upstream: { title: "Upstream" },
 };

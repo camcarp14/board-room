@@ -44,11 +44,23 @@ const sheet = readFileSync("src/shell/SettingsSheet.jsx", "utf8");
 
 const navKeys = [...(nav.match(/export const NAV = \[([\s\S]*?)\n\];/)?.[1] || "")
   .matchAll(/^\s*\{ key: "(\w+)"/gm)].map(m => m[1]);
-check("the nav is Brief, Personal, Train, Creed, Dreams, Grocery",
-  navKeys.join(",") === "brief,personal,train,creed,dreams,grocery", navKeys.join(","));
+check("the nav is Brief, Personal, Train, Creed, Grocery",
+  navKeys.join(",") === "brief,personal,train,creed,grocery", navKeys.join(","));
 // Six is the ceiling for a phone tab bar with readable labels. A seventh needs
 // a different chrome, not a smaller font.
 check("the tab bar stays at six or fewer", navKeys.length <= 6, String(navKeys.length));
+// Dreams is a sub-tab of Creed now. Both halves matter: it must not be a nav
+// destination, and the page must actually mount it — a half-fold leaves a
+// panel nothing can reach.
+const creedPage = readFileSync("src/pages/creed/CreedPage.jsx", "utf8");
+check("Dreams is not a nav destination", !navKeys.includes("dreams"));
+check("Creed mounts both sub-tabs",
+  /key: "creed".*key: "dreams"/s.test(creedPage) && /<DreamBoardPanel/.test(creedPage) && /<CreedPanel/.test(creedPage));
+check("Creed lands on the Creed, not the boards", /useState\("creed"\)/.test(creedPage));
+check("a saved dreams link opens the boards sub-tab",
+  /if \(key === "dreams"\) key = "creed";/.test(app) && /t\.page === "dreams".*sub: "dreams"/s.test(app));
+check("the boards still get the settings they need for the board list",
+  /<CreedPage[^>]*updateSetting=\{updateSetting\}/.test(app) && /updateSetting=\{updateSetting\}/.test(creedPage));
 check("Assets is not a destination any more", !navKeys.includes("assets"));
 // Every nav key needs an icon pair and a header, or the tab bar renders a hole
 // and the large title comes up blank — both only visible by opening the app.

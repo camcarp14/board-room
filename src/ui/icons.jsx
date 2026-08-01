@@ -83,6 +83,8 @@ export const IcCreedFill = (p = {}) => (
     <path d="M12.9 7.2c1.7-1.4 3.9-2.1 6.7-2.1a1.2 1.2 0 0 1 1.2 1.2v10.9a1.2 1.2 0 0 1-1.2 1.2c-2.6 0-4.6.6-6 1.8a.6.6 0 0 1-.7-.5V7.2Z" />
   </svg>
 );
+// Kept, unused by NAV_ICONS: Dreams is a sub-tab of Creed now, so it has no tab
+// of its own to wear this. One line in NAV_ICONS away from coming back.
 export const IcDreams = (p = {}) => ( // a board of pinned cards — the collage
   // Three unequal panes inside a frame. Equal panes would read as a grid or a
   // calendar; the ragged sizes are what say "collage", which is the one thing
@@ -213,7 +215,6 @@ export const NAV_ICONS = {
   personal: { line: IcPersonal, fill: IcPersonalFill },
   train: { line: IcTrain, fill: IcTrainFill },
   creed: { line: IcCreed, fill: IcCreedFill },
-  dreams: { line: IcDreams, fill: IcDreamsFill },
   grocery: { line: IcGrocery, fill: IcGroceryFill },
   boardroom: { line: IcBoard, fill: IcBoardFill },
   assets: { line: IcAssets, fill: IcAssetsFill },

@@ -24,7 +24,6 @@ const PersonalPage = lazy(() => import("./pages/personal/PersonalPage.jsx").then
 const TrainPage = lazy(() => import("./pages/train/TrainPage.jsx").then(m => ({ default: m.TrainPage })));
 const GroceryPage = lazy(() => import("./pages/grocery/GroceryPage.jsx").then(m => ({ default: m.GroceryPage })));
 const CreedPage = lazy(() => import("./pages/creed/CreedPage.jsx").then(m => ({ default: m.CreedPage })));
-const DreamsPage = lazy(() => import("./pages/dreams/DreamsPage.jsx").then(m => ({ default: m.DreamsPage })));
 const UpstreamPage = lazy(() => import("./pages/upstream/UpstreamPage.jsx").then(m => ({ default: m.UpstreamPage })));
 
 // ════════════════════════════════════════════════════════════════════════════
@@ -208,6 +207,9 @@ export default function App() {
     // honour, and silently opening the Settings sheet from a URL would be a
     // stranger answer than the app's home.
     if (key === "assets" || key === "systems" || key === "boardroom") key = "brief";
+    // Dreams folded into Creed — a saved link opens the boards sub-tab (jumpTo
+    // carries the sub; this bare-key path just needs the right page).
+    if (key === "dreams") key = "creed";
     // Direction-aware: pages to the right slide in from the right, and vice
     // versa — the same physics whether the trigger was a tab tap or a swipe.
     const from = NAV.findIndex(n => n.key === page);
@@ -340,6 +342,7 @@ export default function App() {
     // forward would imply the section still exists inside Personal.
     let t = target.page === "personal" && target.sub === "workout" ? { ...target, page: "train", sub: undefined } : target;
     if (t.page === "personal" && t.sub === "creed") t = { ...t, page: "creed", sub: undefined };
+    if (t.page === "dreams") t = { ...t, page: "creed", sub: "dreams" };
     if (t.page === "assets" || t.page === "systems" || t.page === "boardroom") t = { ...t, page: "brief", sub: undefined };
     goToPage(t.page);
     setJump({ t: Date.now(), ...t });
@@ -442,8 +445,7 @@ export default function App() {
       case "brief": return <MorningBriefPage btc={btc} isMobile={isMobile} settings={settings} updateSetting={updateSetting} onOpenCalendar={goToCalendar} onAddEvent={(date) => jumpTo({ page: "personal", sub: "calendar", newEventDate: date })} onOpenNotes={(noteId) => jumpTo({ page: "personal", sub: "notes", noteId })} onOpenBirthdays={() => jumpTo({ page: "personal", sub: "birthdays" })} refreshSignal={briefRefreshSignal} />;
       case "personal": return <PersonalPage isMobile={isMobile} jumpSignal={personalJumpTo} jump={jump} settings={settings} updateSetting={updateSetting} />;
       case "train": return <TrainPage isMobile={isMobile} settings={settings} updateSetting={updateSetting} jump={jump} />;
-      case "creed": return <CreedPage isMobile={isMobile} />;
-      case "dreams": return <DreamsPage isMobile={isMobile} settings={settings} updateSetting={updateSetting} />;
+      case "creed": return <CreedPage isMobile={isMobile} settings={settings} updateSetting={updateSetting} jump={jump} />;
       case "grocery": return <GroceryPage isMobile={isMobile} settings={settings} updateSetting={updateSetting} />;
       case "upstream": return <UpstreamPage isMobile={isMobile} />;
       default: return null;
