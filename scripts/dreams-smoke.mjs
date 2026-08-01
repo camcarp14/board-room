@@ -9,6 +9,7 @@
 //
 // Run by `npm run verify`.
 
+import { readFileSync } from "node:fs";
 import {
   DEFAULT_BOARD, SETUP_SQL, DREAM_STARTERS, TILE_TONES,
   boardsOf, tilesOf, boardCounts, tileKind, toneFor, nextSort, moveTile, isImageUrl,
@@ -102,9 +103,37 @@ check("an empty board starts somewhere sane", nextSort([]) === 10 && nextSort(nu
 }
 
 // ─── 6. the setup SQL has to actually be runnable ────────────────────────────
-// The panel tells you to paste this into Supabase, so a typo here is a dead end
-// with no error anyone can act on.
-check("the SQL creates the table the loader reads", /create table if not exists public\.dream_items/.test(SETUP_SQL));
+// The panel tells you to paste this into Supabase, so a mistake here is a dead
+// end with no error anyone can act on — and this block already shipped one.
+//
+// THE BUG THIS SECTION EXISTS FOR: the SQL said `public.dream_items` while
+// supabase.js pins the client to the `boardroom` schema. Running it created a
+// real table the app could never see, so the loader kept 404ing and the panel
+// kept offering the setup card that had just been run — invisible from both
+// sides. So the schema isn't asserted against a literal here; it's read out of
+// supabase.js, which means the two cannot drift apart again.
+const clientSrc = readFileSync("src/lib/supabase.js", "utf8");
+const SCHEMA = clientSrc.match(/db:\s*\{\s*schema:\s*"(\w+)"/)?.[1];
+check("the client's schema is discoverable", !!SCHEMA, SCHEMA);
+check("the SQL creates the table in the schema the client reads",
+  new RegExp(`create table if not exists ${SCHEMA}\\.dream_items`).test(SETUP_SQL), SCHEMA);
+check("every statement targets that schema, none left in public",
+  !/\bpublic\.dream_items\b/.test(SETUP_SQL.replace(/^\s*--.*$/gm, "")),
+  "an uncommented public.dream_items survives");
+check("the schema itself is created first", new RegExp(`create schema if not exists ${SCHEMA}`).test(SETUP_SQL));
+// RLS filters; it does not grant. A table in a non-public schema is invisible
+// to the signed-in role until it is granted, no matter what the policy says.
+check("usage on the schema is granted", new RegExp(`grant usage on schema ${SCHEMA}`).test(SETUP_SQL));
+check("the table is granted to the signed-in role",
+  new RegExp(`grant [^;]*on ${SCHEMA}\\.dream_items to [^;]*authenticated`).test(SETUP_SQL));
+
+// The Creed's block carried the same mistake; it is the only other setup SQL in
+// the app, and it must not drift back.
+const creedSrc = readFileSync("src/features/creed/CreedPanel.jsx", "utf8");
+const creedSql = creedSrc.match(/const CREED_SETUP_SQL = `([\s\S]*?)`;/)?.[1] || "";
+check("the Creed's setup SQL targets the same schema",
+  new RegExp(`create table if not exists ${SCHEMA}\\.affirmations`).test(creedSql));
+check("…and grants it too", new RegExp(`grant [^;]*on ${SCHEMA}\\.affirmations`).test(creedSql));
 check("every column the client writes exists in the SQL",
   ["id", "user_id", "board", "title", "image_url", "note", "sort"].every(c => new RegExp(`\\n\\s+${c}\\b`).test(SETUP_SQL)),
   SETUP_SQL);

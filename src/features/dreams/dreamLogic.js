@@ -121,8 +121,29 @@ export const DREAM_STARTERS = [
   "A body that can still do this at sixty.",
 ];
 
+/**
+ * The one-time setup, in the schema the CLIENT ACTUALLY READS.
+ *
+ * `boardroom`, not `public` — src/lib/supabase.js creates the client with
+ * `db: { schema: "boardroom" }`, so every .from() in this app resolves there.
+ * The first version of this block said `public.dream_items`, copied from the
+ * Creed's setup card, which has the same stale text for a table that predates
+ * the schema move and already existed in boardroom. Running it created a real
+ * table that the app could never see: the loader kept 404ing and the panel kept
+ * offering the setup card that had just been run. Nothing about that is visible
+ * from either side, which is why the smoke test now checks the schema here
+ * against the one in supabase.js rather than trusting this string.
+ *
+ * The grants are not optional either. Supabase's default privileges cover
+ * `public`; a table in a custom schema is unreachable by anon/authenticated
+ * until it is granted explicitly, and RLS on its own does not grant anything —
+ * it only filters what a role already has.
+ */
 export const SETUP_SQL = `-- Board Room · Dream boards — one-time setup
-create table if not exists public.dream_items (
+-- Safe to run as many times as you like.
+create schema if not exists boardroom;
+
+create table if not exists boardroom.dream_items (
   id         uuid primary key,
   user_id    uuid not null references auth.users(id) on delete cascade,
   board      text not null default 'Dreams',
@@ -133,8 +154,19 @@ create table if not exists public.dream_items (
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
 );
-create index if not exists dream_items_board_idx on public.dream_items (user_id, board, sort);
-alter table public.dream_items enable row level security;
-drop policy if exists "dream_items own rows" on public.dream_items;
-create policy "dream_items own rows" on public.dream_items
-  for all using (auth.uid() = user_id) with check (auth.uid() = user_id);`;
+create index if not exists dream_items_board_idx
+  on boardroom.dream_items (user_id, board, sort);
+
+alter table boardroom.dream_items enable row level security;
+drop policy if exists "dream_items own rows" on boardroom.dream_items;
+create policy "dream_items own rows" on boardroom.dream_items
+  for all using (auth.uid() = user_id) with check (auth.uid() = user_id);
+
+-- RLS filters; it does not grant. Without these the table is invisible to the
+-- signed-in role no matter what the policy says.
+grant usage on schema boardroom to anon, authenticated;
+grant select, insert, update, delete on boardroom.dream_items to authenticated;
+
+-- If you ran the first version of this block, it made public.dream_items, which
+-- this app cannot see. Nothing was ever written to it — drop it:
+--   drop table if exists public.dream_items;`;

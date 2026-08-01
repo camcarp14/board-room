@@ -20,8 +20,18 @@ import { KINDS, kindMeta, splitQuote, dailyIndex, dayKey, countsByKind, filterBy
 // room you open for grounding that reshuffles on every glance isn't grounding;
 // it's a slot machine. Tapping still turns the page — the daily pick is where
 // you START, not a cage.
+// `boardroom`, not `public`: supabase.js pins the client to that schema, so a
+// table created in public is one this app can never see. This block said public
+// for as long as it has existed — harmless only because the live table predates
+// the schema move and already sits in boardroom, so nobody ever ran it. The
+// Dream board copied the mistake and it cost a round trip; both are corrected,
+// and scripts/dreams-smoke.mjs now checks every setup block against the schema
+// the client is actually configured with.
 const CREED_SETUP_SQL = `-- Board Room · Creed — one-time setup
-create table if not exists public.affirmations (
+-- Safe to run as many times as you like.
+create schema if not exists boardroom;
+
+create table if not exists boardroom.affirmations (
   id uuid primary key,
   user_id uuid not null references auth.users(id) on delete cascade,
   text text not null,
@@ -29,10 +39,14 @@ create table if not exists public.affirmations (
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
 );
-alter table public.affirmations enable row level security;
-drop policy if exists "affirmations own rows" on public.affirmations;
-create policy "affirmations own rows" on public.affirmations
-  for all using (auth.uid() = user_id) with check (auth.uid() = user_id);`;
+alter table boardroom.affirmations enable row level security;
+drop policy if exists "affirmations own rows" on boardroom.affirmations;
+create policy "affirmations own rows" on boardroom.affirmations
+  for all using (auth.uid() = user_id) with check (auth.uid() = user_id);
+
+-- RLS filters; it does not grant.
+grant usage on schema boardroom to anon, authenticated;
+grant select, insert, update, delete on boardroom.affirmations to authenticated;`;
 
 const roman = (n) => {
   const map = [[1000, "M"], [900, "CM"], [500, "D"], [400, "CD"], [100, "C"], [90, "XC"], [50, "L"], [40, "XL"], [10, "X"], [9, "IX"], [5, "V"], [4, "IV"], [1, "I"]];
