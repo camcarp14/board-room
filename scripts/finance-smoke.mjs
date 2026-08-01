@@ -20,6 +20,7 @@ import {
   parseCsv, toCents, money, toISO, monthOf, monthLabel, detectFormat,
   merchantOf, merchantKey, categorise, txKey, parseChaseCsv,
   monthsOf, summarise, compare, budgetStatus, recurring, largest,
+  fromPlaid, fromPlaidSync, PLAID_PREFIX,
 } from "../src/features/finances/financeLogic.js";
 
 let failed = 0;
@@ -286,6 +287,104 @@ check("months come back newest first", monthsOf(ALL).join() === "2026-08");
   check("…and excludes transfers, which are not spending",
     top.every((t) => isSpendCategory(t.category_override || t.category)));
   check("…and excludes income", top.every((t) => t.amount < 0));
+}
+
+// ─── 11b. Plaid, whose conventions are the OPPOSITE of the CSV's ─────────────
+// Both of these are silent if wrong, and one of them inverts the entire app.
+{
+  const p = fromPlaid({
+    transaction_id: "abc123", date: "2026-08-03", amount: 4.75,
+    merchant_name: "Blue Bottle Coffee", name: "SQ *BLUE BOTTLE COFFEE 0123",
+    personal_finance_category: { primary: "FOOD_AND_DRINK" },
+  }, { account: "Sapphire" });
+  // THE ONE THAT MATTERS MOST IN THIS FILE. Plaid documents `amount` as POSITIVE
+  // when money moves OUT — the exact opposite of every Chase export. Passed
+  // through unchanged, every purchase reads as income and every paycheque as
+  // spending: the month isn't wrong, it's backwards.
+  check("a Plaid purchase becomes NEGATIVE, like the rest of the ledger",
+    p.amount === -475, String(p.amount));
+  const paid = fromPlaid({ transaction_id: "x", date: "2026-08-01", amount: -5400, name: "PAYROLL" });
+  check("…and a Plaid deposit becomes positive", paid.amount === 540000, String(paid.amount));
+  check("the id is Plaid's own, prefixed", p.id === `${PLAID_PREFIX}abc123`, p.id);
+  // A synced row and an imported row must never share an id: a collision leaves
+  // one path unable to update its own row, forever, with nothing to show for it.
+  check("a synced id can never collide with an imported one",
+    !card.rows.some((r) => r.id.startsWith(PLAID_PREFIX)) && p.id.startsWith(PLAID_PREFIX));
+  check("it is the same row shape the CSV path produces",
+    ["id", "account", "date", "amount", "description", "merchant", "category"].every((k) => k in p));
+  check("merchant_name is preferred over the raw name", p.merchant === "Blue Bottle Coffee", p.merchant);
+  check("categories come from OUR set, not Plaid's taxonomy",
+    CATEGORIES.some((c) => c.key === p.category), p.category);
+  // A row missing any of the three things that make it a transaction is skipped
+  // rather than stored as a $0 on 1970-01-01.
+  check("a row with no id, date or amount is skipped",
+    fromPlaid({ date: "2026-08-01", amount: 1, name: "x" }) === null &&
+    fromPlaid({ transaction_id: "a", amount: 1, name: "x" }) === null &&
+    fromPlaid({ transaction_id: "a", date: "2026-08-01", name: "x" }) === null &&
+    fromPlaid({ transaction_id: "a", date: "2026-08-01", amount: 1 }) === null);
+  check("fromPlaid tolerates junk", fromPlaid(null) === null && fromPlaid({}) === null);
+}
+{
+  const page = fromPlaidSync({
+    added: [{ transaction_id: "a", date: "2026-08-01", amount: 10, name: "A" }],
+    modified: [{ transaction_id: "b", date: "2026-08-02", amount: 20, name: "B" }],
+    removed: [{ transaction_id: "c" }],
+    next_cursor: "CURSOR_2", has_more: true,
+  }, { account: "Checking" });
+  // Modified rows go through the SAME upsert as added ones — Plaid corrects
+  // pending amounts after they settle, and dropping those leaves the ledger
+  // holding the guess instead of the charge.
+  check("added and modified both become upsertable rows", page.rows.length === 2, String(page.rows.length));
+  check("removed comes back as prefixed ids to delete",
+    page.removed.join() === `${PLAID_PREFIX}c`, page.removed.join());
+  check("the cursor is carried forward", page.cursor === "CURSOR_2" && page.more === true);
+  check("an empty page is empty, not an error",
+    fromPlaidSync({}).rows.length === 0 && fromPlaidSync(null).rows.length === 0);
+}
+
+// ─── 11c. the server's copy of the mapping ───────────────────────────────────
+// netlify/functions/plaid.js duplicates mapTx rather than importing it: with
+// this repo's "type":"module" + esbuild bundling, a required helper's
+// module.exports clobbers the bundle's exports and the function deploys with NO
+// handler (see the note in workout-import.js). Duplication is the lesser evil,
+// but it means the two copies can drift — and the sign is the one place where
+// drift inverts the whole app rather than nudging it.
+{
+  const fn = readFileSync("netlify/functions/plaid.js", "utf8");
+  check("the function negates Plaid's amount, exactly like fromPlaid",
+    /amount_cents: -cents/.test(fn), "an un-negated server mapping makes every purchase read as income");
+  check("…and prefixes ids the same way, so the two paths can't collide",
+    /id: `plaid:\$\{id\}`/.test(fn));
+  check("it writes to the schema the client reads",
+    /"Content-Profile": "boardroom"/.test(fn) && /"Accept-Profile": "boardroom"/.test(fn));
+  // The cursor is what makes a sync incremental. Saved only at the end, a
+  // timeout mid-backfill replays from zero forever on a big account.
+  check("the sync cursor is saved after every page, not at the end",
+    /cursor, synced_at/.test(fn) && fn.indexOf("more = !!page.has_more") < fn.indexOf("cursor, synced_at"));
+  // The blast radius of this function is a bank feed. These two are the reason
+  // it is safe: the caller is identified by their own JWT, and no secret ever
+  // travels back to the browser.
+  check("the caller is identified from their own session, never from the body",
+    /auth\/v1\/user/.test(fn) && !/body\.user_id/.test(fn));
+  check("no access token is ever returned to the client",
+    !/json\(200, \{[^}]*access_token/.test(fn));
+  check("the handler is assigned — this repo has shipped functions with none",
+    /exports\.handler\s*=/.test(fn));
+  check("…and it is self-contained, which is why", !/require\(["'][^"']*_shared/.test(fn));
+}
+{
+  const cli = readFileSync("src/features/finances/plaid.js", "utf8");
+  // RLS with no policy, on purpose: this table holds long-lived bank tokens and
+  // only the service role should ever read it. A policy here would be a bug.
+  check("the token table grants nothing to the browser",
+    /revoke all on boardroom\.plaid_items from anon, authenticated/.test(cli) &&
+    !/create policy[^;]*plaid_items/.test(cli));
+  check("row-level security is still switched on for it",
+    /alter table boardroom\.plaid_items enable row level security/.test(cli));
+  // Chase is OAuth-only; without a redirect_uri Link refuses to open it at all,
+  // and says nothing that names the cause.
+  check("the redirect_uri Chase requires is sent", /origin: window\.location\.origin/.test(cli));
+  check("Plaid Link is loaded on demand, not bundled", /document\.createElement\("script"\)/.test(cli));
 }
 
 // ─── 12. the setup SQL has to be runnable, in the right schema ───────────────

@@ -81,6 +81,10 @@ const USAGE_META = {
   claude: { label: "Claude proxy" },
   trmnl: { label: "TRMNL e-ink render" },
   "workout-import": { label: "Workout import" },
+  // Doesn't bill anything — no model behind it — but every function gets a name
+  // so that if it ever DOES log, the Usage table reads as English on the first
+  // row rather than after someone notices a wire identifier.
+  plaid: { label: "Bank sync (Plaid)" },
   "fetch-page": { label: "Page fetched for Learn" },
   "discord-board": { label: "Discord command" },
   "board-work-background": { label: "Discord board work" },

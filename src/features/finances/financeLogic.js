@@ -336,6 +336,60 @@ export function parseChaseCsv(text, { account = "", overrides } = {}) {
   return { rows: out, format, skipped, error: null };
 }
 
+// ─── Plaid ───────────────────────────────────────────────────────────────────
+
+/**
+ * A Plaid transaction → the same row shape a CSV import produces.
+ *
+ * TWO THINGS THAT ARE OPPOSITE TO THE CSV PATH, and both are silent:
+ *
+ * 1. THE SIGN IS INVERTED. Plaid documents `amount` as POSITIVE when money
+ *    moves OUT of the account — the exact opposite of every Chase export, where
+ *    a purchase is negative. Pass it through unchanged and every purchase reads
+ *    as income, every paycheque as spending, and the month is not merely wrong
+ *    but backwards. It is negated here, once, at the boundary.
+ *
+ * 2. THE ID IS REAL. Plaid gives a stable `transaction_id`, so none of the
+ *    derived-key machinery the CSV path needs applies. It is prefixed so a
+ *    synced row can never collide with an imported one — the same coffee coming
+ *    down both paths is two rows, which is honest (you did import it twice) and
+ *    fixable by forgetting one account, whereas a silent collision would leave
+ *    one path unable to update its own row.
+ *
+ * Category comes from OUR lexicon, not Plaid's taxonomy: it is the same set the
+ * CSV path uses, so a month assembled from both doesn't have two vocabularies in
+ * one chart. Plaid's own label is passed to `categorise` as a hint in the same
+ * slot Chase's occupies.
+ */
+export const PLAID_PREFIX = "plaid:";
+export function fromPlaid(t, { account = "", overrides } = {}) {
+  const id = String(t?.transaction_id || "").trim();
+  const date = toISO(t?.date || t?.authorized_date);
+  const cents = toCents(t?.amount);
+  if (!id || !date || cents === null) return null;
+  const description = String(t?.merchant_name || t?.name || "").trim();
+  if (!description) return null;
+  const base = {
+    account,
+    date,
+    amount: -cents,                       // see (1) — Plaid's sign is inverted
+    description,
+    // personal_finance_category is the modern field; `category` is the legacy
+    // array. Either is only a hint: categorise() still prefers your override.
+    chaseCat: t?.personal_finance_category?.primary || (Array.isArray(t?.category) ? t.category[0] : "") || "",
+    merchant: merchantOf(description),
+  };
+  return { ...base, id: PLAID_PREFIX + id, category: categorise(base, overrides) };
+}
+
+/** A Plaid /transactions/sync page → rows to upsert and ids to remove. */
+export function fromPlaidSync(page, opts) {
+  const added = [...(page?.added || []), ...(page?.modified || [])]
+    .map((t) => fromPlaid(t, opts)).filter(Boolean);
+  const removed = (page?.removed || []).map((r) => PLAID_PREFIX + String(r?.transaction_id || "")).filter((s) => s !== PLAID_PREFIX);
+  return { rows: added, removed, cursor: page?.next_cursor || "", more: !!page?.has_more };
+}
+
 // ─── Aggregation ─────────────────────────────────────────────────────────────
 
 /** Every month present in the data, newest first — the month picker's options. */

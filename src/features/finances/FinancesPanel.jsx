@@ -28,6 +28,7 @@ import {
   Card, Button, Field, Pill, PillRow, Segmented, Dot, StatTile, Sheet, EmptyState, useConfirm,
 } from "../../ui/kit.jsx";
 import { IcFinances, IcChevronDown, IcClose } from "../../ui/icons.jsx";
+import { connectBank, callPlaid, PLAID_SQL } from "./plaid.js";
 import {
   CATEGORIES, SPEND_CATEGORIES, catMeta, isSpendCategory, SETUP_SQL,
   parseChaseCsv, money, monthsOf, monthLabel, summarise, compare, budgetStatus,
@@ -260,6 +261,12 @@ export function FinancesPanel({ isMobile, settings, updateSetting }) {
   const [budgetFor, setBudgetFor] = useState(null);
   const [budgetDraft, setBudgetDraft] = useState("");
   const [copied, setCopied] = useState(false);
+  // Plaid. `banks` is null until asked — the status call is only made when you
+  // open the accounts card, so a page view never touches the function.
+  const [banks, setBanks] = useState(null);
+  const [linking, setLinking] = useState(null);   // a human progress string
+  const [linkErr, setLinkErr] = useState(null);
+  const [plaidSql, setPlaidSql] = useState(false);
   const [confirmEl, confirm] = useConfirm();
 
   const all = rows || [];
@@ -290,6 +297,32 @@ export function FinancesPanel({ isMobile, settings, updateSetting }) {
     else delete next[budgetFor];     // clearing the field removes the budget
     updateSetting?.("finance_budgets", next);
     setBudgetFor(null); setBudgetDraft("");
+  };
+
+  const refreshBanks = () => callPlaid("status").then(setBanks).catch(() => setBanks({ items: [], unavailable: true }));
+
+  const connect = async () => {
+    setLinkErr(null);
+    try {
+      const out = await connectBank({ onEvent: setLinking });
+      setLinking(null);
+      if (out) { setReceipt({ n: out.added || 0, skipped: 0, bank: out.institution }); refetch(); refreshBanks(); }
+    } catch (e) {
+      setLinking(null);
+      // A closed Link sheet resolves to null rather than an error — changing
+      // your mind is not a failure and must not paint the screen red.
+      if (e) setLinkErr(e.message || "Couldn't connect that bank.");
+    }
+  };
+
+  const syncNow = async () => {
+    setLinkErr(null); setLinking("Syncing…");
+    try {
+      const out = await callPlaid("sync");
+      setReceipt({ n: out.added || 0, skipped: 0, synced: true });
+      refetch(); refreshBanks();
+    } catch (e) { setLinkErr(e.message || "Sync failed."); }
+    finally { setLinking(null); }
   };
 
   const dropAccount = async (name) => {
@@ -471,10 +504,72 @@ export function FinancesPanel({ isMobile, settings, updateSetting }) {
       {/* Accounts and importing, at the bottom — you set this up rarely and read
           the numbers daily, so the machinery goes where it doesn't compete. */}
       <Card pad="md" style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-        <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
           <span className="t-label" style={{ flex: 1 }}>Accounts</span>
-          <Button kind="tinted" size="sm" onClick={() => setImporting(true)}>Import CSV</Button>
+          <Button kind="quiet" size="sm" onClick={() => setImporting(true)}>Import CSV</Button>
+          <Button kind="tinted" size="sm" onClick={connect} disabled={!!linking}>
+            {linking || "Connect a bank"}
+          </Button>
         </div>
+
+        {/* Connected banks. Only rendered once you've asked — see refreshBanks. */}
+        {banks === null ? (
+          <Button kind="plain" size="sm" onClick={refreshBanks} style={{ alignSelf: "flex-start", paddingLeft: 0 }}>
+            Show connected banks
+          </Button>
+        ) : banks.unavailable ? (
+          <span className="t-cap" style={{ color: "var(--faint)", lineHeight: 1.45 }}>
+            Plaid isn't configured yet — CSV import still works.
+          </span>
+        ) : banks.items?.length ? (
+          <>
+            {banks.items.map((b) => (
+              <div key={b.item_id} style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                <Dot tone="var(--green)" size={6} />
+                <span className="t-call" style={{ flex: 1, minWidth: 0 }}>{b.institution}</span>
+                <span className="t-cap" style={{ color: "var(--faint)" }}>
+                  {b.synced_at ? `synced ${b.synced_at.slice(5, 10).replace("-", "/")}` : "never synced"}
+                </span>
+                <Button kind="plain" size="sm" style={{ paddingRight: 0 }}
+                  onClick={async () => {
+                    const ok = await confirm({
+                      title: `Disconnect ${b.institution}?`,
+                      message: "Stops the sync and tells Plaid to drop the connection. Transactions already imported stay — remove them separately if you want them gone.",
+                      confirmLabel: "Disconnect", destructive: true,
+                    });
+                    if (ok) { await callPlaid("disconnect", { item_id: b.item_id }).catch(() => {}); refreshBanks(); }
+                  }}>Disconnect</Button>
+              </div>
+            ))}
+            <Button kind="quiet" size="sm" onClick={syncNow} disabled={!!linking} style={{ alignSelf: "flex-start" }}>
+              {linking === "Syncing…" ? "Syncing…" : "Sync now"}
+            </Button>
+          </>
+        ) : (
+          <span className="t-cap" style={{ color: "var(--faint)", lineHeight: 1.45 }}>
+            No bank connected. Connecting one replaces the monthly CSV export with an automatic sync.
+          </span>
+        )}
+
+        {linkErr && (
+          <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+            <span className="t-cap" style={{ color: "var(--red)", flex: 1, lineHeight: 1.45 }}>{linkErr}</span>
+            {/* The one error with a specific fix: the table this needs doesn't
+                exist yet, and the SQL for it is right here rather than in a
+                message telling you to go and find it. */}
+            <Button kind="plain" size="sm" onClick={() => setPlaidSql((v) => !v)}>Setup SQL</Button>
+          </div>
+        )}
+        {plaidSql && (
+          <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+            <pre style={{
+              margin: 0, padding: 12, borderRadius: 12, background: "var(--surface-2)", overflowX: "auto",
+              font: "11px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace", color: "var(--sub)",
+            }}>{PLAID_SQL}</pre>
+            <Button kind="tinted" size="sm" style={{ alignSelf: "flex-start" }}
+              onClick={() => navigator.clipboard?.writeText(PLAID_SQL)}>Copy</Button>
+          </div>
+        )}
         {accounts.length === 0 ? (
           <span className="t-cap" style={{ color: "var(--faint)" }}>Nothing imported under a name yet.</span>
         ) : accounts.map((a) => (
@@ -487,7 +582,8 @@ export function FinancesPanel({ isMobile, settings, updateSetting }) {
         {receipt && (
           <div style={{ display: "flex", alignItems: "center", gap: 10, background: "var(--surface-2)", borderRadius: 12, padding: "9px 12px" }}>
             <span className="t-cap" style={{ color: "var(--sub)", flex: 1 }}>
-              Imported {receipt.n} transaction{receipt.n === 1 ? "" : "s"}
+              {receipt.synced ? "Synced" : "Imported"} {receipt.n} transaction{receipt.n === 1 ? "" : "s"}
+              {receipt.bank ? ` from ${receipt.bank}` : ""}
               {receipt.skipped ? ` · ${receipt.skipped} line${receipt.skipped === 1 ? "" : "s"} skipped` : ""}
             </span>
             <Button kind="plain" size="sm" onClick={() => setReceipt(null)}>Dismiss</Button>
