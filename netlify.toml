@@ -16,6 +16,14 @@
   to = "/index.html"
   status = 404
 
+# The privacy policy is a real static page, and it has to be readable at a plain
+# URL by someone with no account — Plaid's diligence links to it. This must sit
+# ABOVE the catch-all, or /privacy would serve the app shell instead.
+[[redirects]]
+  from = "/privacy"
+  to = "/privacy.html"
+  status = 200
+
 # SPA fallback — everything that isn't a function or asset serves index.html
 [[redirects]]
   from = "/*"

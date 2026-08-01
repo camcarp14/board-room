@@ -69,7 +69,11 @@ self.addEventListener("fetch", (e) => {
   // shell immediately (instant reopen, works offline), and refresh it in the
   // background so the next launch is up to date — the app already re-checks the
   // SW on every foreground, so being one launch behind is the accepted trade.
-  if (req.mode === "navigate") {
+  // …but ONLY for the app itself. Every in-app URL is "/" (tabs are state, not
+  // routes), so any other path is a real static page — /privacy.html — and
+  // answering it with the cached shell would serve the app under a URL someone
+  // was sent to read a document. Those fall through to network-first below.
+  if (req.mode === "navigate" && url.pathname === "/") {
     e.respondWith(
       caches.open(PAGE_CACHE).then(async (cache) => {
         const cached = (await cache.match("/")) || (await cache.match(req));

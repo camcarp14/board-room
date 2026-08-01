@@ -1,0 +1,151 @@
+<!doctype html>
+<!-- ─── Privacy policy ──────────────────────────────────────────────────────────
+     A STATIC FILE, deliberately, in three respects:
+
+       · it is outside the app, so a Plaid reviewer can read it without an
+         account — a policy behind a login is a policy nobody can check;
+       · it has no script and no network calls, so it cannot break when the app
+         does and cannot itself collect anything;
+       · Netlify serves real files ahead of the SPA fallback, so /privacy.html
+         is this page rather than index.html. /privacy is redirected to it in
+         netlify.toml, above the catch-all.
+
+     Everything below has to stay TRUE OF THE CODE. It is submitted to Plaid as
+     a description of what this app does, so if the app's handling of data
+     changes, this changes in the same commit. -->
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <meta name="color-scheme" content="light dark" />
+  <meta name="robots" content="noindex" />
+  <title>Privacy Policy · Board Room</title>
+  <style>
+    :root {
+      --bg: #f6f6f4; --surface: #fff; --ink: #16171a; --sub: #5b5f66; --line: #e4e4e0; --accent: #2f6f4e;
+    }
+    @media (prefers-color-scheme: dark) {
+      :root { --bg: #121316; --surface: #191b1f; --ink: #eceef1; --sub: #a2a7af; --line: #292c31; --accent: #7fc39c; }
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0; padding: 32px 20px 64px; background: var(--bg); color: var(--ink);
+      font: 16px/1.65 -apple-system, BlinkMacSystemFont, "Segoe UI", Inter, system-ui, sans-serif;
+      -webkit-text-size-adjust: 100%;
+    }
+    main { max-width: 720px; margin: 0 auto; }
+    header { margin-bottom: 28px; }
+    h1 { font-size: 26px; line-height: 1.25; margin: 0 0 6px; letter-spacing: -0.01em; }
+    h2 { font-size: 17px; margin: 30px 0 8px; letter-spacing: -0.005em; }
+    p, li { color: var(--sub); margin: 0 0 12px; }
+    strong { color: var(--ink); font-weight: 600; }
+    ul { padding-left: 20px; margin: 0 0 12px; }
+    li { margin-bottom: 6px; }
+    .meta { font-size: 13px; color: var(--sub); }
+    .card {
+      background: var(--surface); border: 1px solid var(--line); border-radius: 14px;
+      padding: 16px 18px; margin: 20px 0;
+    }
+    .card p:last-child, ul:last-child, p:last-child { margin-bottom: 0; }
+    a { color: var(--accent); }
+    hr { border: 0; border-top: 1px solid var(--line); margin: 32px 0 20px; }
+  </style>
+</head>
+<body>
+<main>
+  <header>
+    <h1>Board Room — Privacy Policy</h1>
+    <p class="meta">Effective 1 August 2026 · Reviewed annually</p>
+  </header>
+
+  <div class="card">
+    <p><strong>Board Room is a private application with a single user: its owner.</strong> It is not a
+    product, it has no customers, no employees and no contractors. It exists so one person can read their
+    own household data — a grocery list, a calendar, their own bank transactions — in one place. Nothing
+    here is sold, shared for advertising, or used to train anything.</p>
+  </div>
+
+  <h2>What is collected</h2>
+  <ul>
+    <li><strong>Financial data, via Plaid.</strong> When the owner connects a bank account through Plaid
+      Link, this application receives transactions (date, amount, description, merchant, the bank's own
+      category) and account details (account name, type, the last four digits, and balances).</li>
+    <li><strong>Account data.</strong> An email address and password hash, held by Supabase, used only to
+      sign in.</li>
+    <li><strong>Everything else the owner types into it</strong> — lists, notes, budgets, dates.</li>
+  </ul>
+  <p><strong>Bank credentials are never seen or handled by this application.</strong> They are entered
+  into Plaid Link, which communicates with the financial institution directly. This application receives
+  only a Plaid access token, and never a username, password or one-time code.</p>
+
+  <h2>How it is used</h2>
+  <p>Only to display it back to the owner: to total a month, categorise spending against budgets, and show
+  current balances. There is no other use. It is not shared with any third party, not sold, not used for
+  advertising or profiling, and no automated decision is made from it.</p>
+
+  <h2>Consent</h2>
+  <p>Data is collected only when the owner explicitly connects an account through Plaid Link, which
+  presents Plaid's own consent screen and end-user privacy policy before anything is shared. Connecting is
+  an affirmative action taken by the person whose data it is. It can be withdrawn at any time — see
+  Deletion, below.</p>
+
+  <h2>Storage and security</h2>
+  <ul>
+    <li><strong>In transit:</strong> HTTPS with TLS 1.2 or better, everywhere, enforced by the hosting
+      providers. There is no unencrypted endpoint.</li>
+    <li><strong>At rest:</strong> data is stored in a managed PostgreSQL database (Supabase), encrypted at
+      rest with AES-256.</li>
+    <li><strong>Row-level security</strong> is enabled on every table, scoped so that a signed-in session
+      can read only rows belonging to that user.</li>
+    <li><strong>Plaid access tokens</strong> are held in a table with row-level security enabled and
+      <em>no policy at all</em>, with all privileges revoked from the browser-facing database roles. They
+      are readable only by the server-side function that uses them, and are never sent to the browser.</li>
+    <li><strong>API secrets</strong> (including the Plaid secret) exist only as environment variables on
+      the server-side functions. They are not in the source repository, not in the client bundle, and
+      builds fail automatically if a secret would be published.</li>
+    <li><strong>Balances are never stored.</strong> They are fetched when the page is opened and discarded
+      when it is closed.</li>
+    <li><strong>Access to the systems</strong> that hold this data (Supabase, Netlify, GitHub, the Plaid
+      dashboard) is limited to the single owner, protected by multi-factor authentication.</li>
+  </ul>
+
+  <h2>Service providers</h2>
+  <p>Three, each acting as a processor for this application:</p>
+  <ul>
+    <li><strong>Plaid Inc.</strong> — the connection to financial institutions.
+      <a href="https://plaid.com/legal/#end-user-privacy-policy">Plaid's end user privacy policy</a>.</li>
+    <li><strong>Supabase</strong> — the database and authentication (SOC 2 Type II).</li>
+    <li><strong>Netlify</strong> — hosting and server-side functions (SOC 2 Type II).</li>
+  </ul>
+  <p>There are no others. No analytics service, no advertising network, no data broker, and no tracking
+  cookies of any kind — the only browser storage used is the session that keeps the owner signed in.</p>
+
+  <h2>Retention and deletion</h2>
+  <p>Financial data is retained only while it is useful to the person it belongs to, and is deleted on
+  request without delay. In practice:</p>
+  <ul>
+    <li><strong>Disconnecting a bank</strong> in the app calls Plaid's <code>/item/remove</code>, which
+      ends Plaid's access to the institution, and deletes the stored access token immediately.</li>
+    <li><strong>Removing an account's transactions</strong> deletes those rows from the database.</li>
+    <li><strong>Deleting the user account</strong> removes every row associated with it; database
+      foreign keys are declared <code>on delete cascade</code>, so nothing is left behind.</li>
+    <li><strong>Balances</strong> are never written to storage at all, so there is nothing to delete.</li>
+    <li>Data is not retained after deletion for any secondary purpose. Provider backups age out on the
+      hosting providers' own schedules.</li>
+  </ul>
+  <p>This policy is reviewed at least once a year, and whenever the application's handling of data
+  changes.</p>
+
+  <h2>Rights</h2>
+  <p>The only person whose data this application holds is its owner, who can export, correct or delete
+  any of it at any time from within the application.</p>
+
+  <h2>Contact</h2>
+  <p>Questions about this policy, or about the data held: <a href="mailto:cam.carp14@gmail.com">cam.carp14@gmail.com</a>.</p>
+
+  <hr />
+  <p class="meta">Board Room is a personal project, not a company and not a service offered to anyone
+  else.</p>
+</main>
+</body>
+</html>

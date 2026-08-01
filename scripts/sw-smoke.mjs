@@ -104,5 +104,41 @@ check("the worker doesn't try to message the page about builds",
   !/postMessage/.test(sw.replace(/^\s*\/\/.*$/gm, "")),
   "clients.matchAll runs before the new document exists");
 
+// ─── 5. the privacy policy has to be reachable BY A STRANGER ─────────────────
+// Plaid's diligence links to it, so the failure that matters is not "the page is
+// wrong" — it's "the URL serves the app". Three separate things would each do
+// that silently: the file not being published, the SPA catch-all swallowing
+// /privacy, and the service worker answering the navigation with the cached
+// shell for anyone who has the app installed.
+{
+  check("the policy is published as a real page", existsSync("dist/privacy.html"));
+  const policy = existsSync("dist/privacy.html") ? readFileSync("dist/privacy.html", "utf8") : "";
+  // No script and no third-party anything: a privacy policy that loads a tracker
+  // is a joke, and one that needs the app to boot can't be read when it can't.
+  check("…that runs no script of its own", !/<script/i.test(policy));
+  // Links OUT are fine — Plaid's own policy is linked deliberately. What must
+  // not exist is anything the page LOADS: a font, a stylesheet, an image or an
+  // import, each of which would report the reader's IP to a third party from
+  // inside the document telling them nobody is watching.
+  check("…and loads nothing off-origin",
+    !/\ssrc\s*=/i.test(policy) && !/<link\b/i.test(policy) && !/@import/i.test(policy) && !/url\(\s*['"]?https?:/i.test(policy),
+    (policy.match(/\ssrc\s*=[^>]*|<link\b[^>]*|@import[^;]*/i) || ["clean"])[0]);
+  // The claims Plaid is being pointed at. If the app stops doing one of these,
+  // the policy becomes a misrepresentation, which is the one thing worse than
+  // not having one.
+  for (const claim of ["TLS 1.2", "AES-256", "no policy at all", "/item/remove", "Reviewed annually", "never stored"]) {
+    check(`the policy still states: ${claim}`, policy.includes(claim));
+  }
+
+  const toml = readFileSync("netlify.toml", "utf8");
+  check("/privacy resolves to the policy, not the app shell", /from = "\/privacy"/.test(toml));
+  check("…and is declared above the SPA catch-all — order is what decides it",
+    toml.indexOf('from = "/privacy"') < toml.indexOf('from = "/*"'));
+  // The worker used to answer EVERY navigation with the cached "/" shell, which
+  // would hand the app to someone who followed a link to read a document.
+  check("the worker only shells the app's own URL",
+    /req\.mode === "navigate" && url\.pathname === "\/"/.test(sw));
+}
+
 console.log(failed ? `\n${failed} update-check failure(s)` : "\nSW SMOKE PASS");
 process.exit(failed ? 1 : 0);
