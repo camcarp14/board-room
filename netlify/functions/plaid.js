@@ -101,6 +101,40 @@ const toCents = (v) => {
   const n = Number(v);
   return Number.isFinite(n) ? Math.round(n * 100) : null;
 };
+
+// ─── Accounts ────────────────────────────────────────────────────────────────
+// /accounts/get is included with Transactions — it is NOT the Balance product,
+// which is the paid one that forces a live refresh at the bank. These figures
+// are whatever the last transaction refresh saw, which for a personal budget is
+// the right trade: free, and a few hours old at worst.
+const accountLabel = (a) => {
+  const name = String(a?.name || a?.official_name || "Account").trim() || "Account";
+  const mask = String(a?.mask || "").trim();
+  return mask ? `${name} ••${mask}` : name;
+};
+function mapAccount(a, institution) {
+  const b = a?.balances || {};
+  return {
+    account_id: String(a?.account_id || ""),
+    name: accountLabel(a),
+    institution,
+    type: String(a?.type || ""),
+    subtype: String(a?.subtype || ""),
+    // null, not 0, when the bank didn't say. netWorth() counts these as unknown
+    // and says so, rather than folding a missing number into the total.
+    current_cents: toCents(b.current),
+    available_cents: toCents(b.available),
+    limit_cents: toCents(b.limit),
+    currency: b.iso_currency_code || b.unofficial_currency_code || "USD",
+  };
+}
+/** Every account behind one item, with its balances. Never throws the caller's
+ *  sync away: a bank that won't answer this still has transactions worth having. */
+async function accountsFor(item, c) {
+  const out = await plaid("/accounts/get", { access_token: item.access_token }, c);
+  return (out?.accounts || []).map((a) => mapAccount(a, item.institution || "Bank"));
+}
+
 function mapTx(t, account) {
   const id = String(t?.transaction_id || "").trim();
   const date = String(t?.date || t?.authorized_date || "").slice(0, 10);
@@ -185,8 +219,22 @@ exports.handler = async (event) => {
 
       let added = 0, removed = 0;
       const accounts = [];
+      const balances = [];
       for (const item of items) {
-        const account = item.institution || "Bank";
+        const bank = item.institution || "Bank";
+        // NAME THE ACCOUNT, NOT THE BANK. Every row used to be filed under
+        // "Chase", so a card and a checking account at the same bank collapsed
+        // into one column and per-account totals meant nothing. Plaid gives each
+        // transaction an account_id; this resolves it to "Sapphire ••1234".
+        // A bank that won't answer /accounts/get still syncs — it just falls
+        // back to the institution name, which is what it did before.
+        let byId = {};
+        try {
+          const mine = await accountsFor(item, c);
+          balances.push(...mine);
+          byId = Object.fromEntries(mine.map((a) => [a.account_id, a.name]));
+        } catch { /* transactions are worth having without balances */ }
+        const nameFor = (t) => byId[String(t?.account_id || "")] || bank;
         let cursor = item.cursor || undefined;
         let more = true, guard = 0;
         // /transactions/sync pages. The guard is a backstop, not a limit: a
@@ -197,7 +245,7 @@ exports.handler = async (event) => {
             access_token: item.access_token, cursor, count: 500,
           }, c);
           const rows = [...(page.added || []), ...(page.modified || [])]
-            .map((t) => mapTx(t, account)).filter(Boolean)
+            .map((t) => mapTx(t, nameFor(t))).filter(Boolean)
             .map((r) => ({ ...r, user_id: uid }));
           if (rows.length) {
             for (let i = 0; i < rows.length; i += 400) {
@@ -223,9 +271,30 @@ exports.handler = async (event) => {
             method: "PATCH", body: JSON.stringify({ cursor, synced_at: new Date().toISOString() }),
           }, c);
         }
-        accounts.push(account);
+        accounts.push(bank);
       }
-      return json(200, { ok: true, connected: items.length, added, removed, accounts });
+      return json(200, { ok: true, connected: items.length, added, removed, accounts, balances });
+    }
+
+    // ── 3a. balances, without a sync ───────────────────────────────────────
+    // Separate from sync because they are asked for at different rates: the
+    // balance is the thing you check on the way out of the door, and pulling a
+    // full transaction page every time you glance at it would be slow and, on a
+    // metered plan, billed. This is one /accounts/get per bank and writes
+    // nothing — the numbers live in the page and die with it.
+    if (action === "balances") {
+      const items = await sb(`plaid_items?user_id=eq.${uid}&select=item_id,access_token,institution`, {}, c) || [];
+      if (!items.length) return json(200, { ok: true, accounts: [], connected: 0 });
+      const out = [];
+      const failed = [];
+      for (const item of items) {
+        try { out.push(...(await accountsFor(item, c))); }
+        // One bank being unreachable must not blank the other's balances, so
+        // it's named instead of thrown — a partial total that says which part
+        // is missing beats an error page.
+        catch { failed.push(item.institution || "Bank"); }
+      }
+      return json(200, { ok: true, connected: items.length, accounts: out, failed });
     }
 
     // ── 3b. what is actually configured ────────────────────────────────────

@@ -33,6 +33,7 @@ import {
   CATEGORIES, SPEND_CATEGORIES, catMeta, isSpendCategory, SETUP_SQL,
   parseChaseCsv, money, monthsOf, monthLabel, summarise, compare, budgetStatus,
   recurring, largest, merchantKey, effectiveCategory, applyRule, ruleReach,
+  netWorth, groupAccounts, accountKind, accountCents,
 } from "./financeLogic.js";
 
 const pct = (n, d) => (d > 0 ? Math.min(100, Math.round((n / d) * 100)) : 0);
@@ -49,6 +50,82 @@ function Totals({ s, delta }) {
       <StatTile value={money(s.net, { centsShown: false })} label="Net"
         valueTone={s.net >= 0 ? "var(--green)" : "var(--red)"} />
     </div>
+  );
+}
+
+/* Balances — where you stand, as opposed to where the month went.
+
+   This sits above the month because it answers the question you open the tab
+   for most often, and because it's the number a budget is actually kept against:
+   "spent $2,100" means something different with $400 in checking than with
+   $9,000. Three figures for the same reason the month has three — cash on hand,
+   what's owed, and the difference, which is the one with a verdict attached.
+
+   Never persisted. A balance written to a table is a number that goes stale
+   silently and then gets read as current; these are fetched when the tab opens
+   and gone when it closes, so what's on screen is either fresh or absent. */
+function Balances({ data, onRefresh, busy }) {
+  const accounts = data?.accounts || [];
+  if (!accounts.length) return null;
+  const nw = netWorth(accounts);
+  const groups = groupAccounts(accounts);
+  return (
+    <Card pad="md" style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+        <span className="t-label" style={{ flex: 1 }}>Balances</span>
+        <Button kind="plain" size="sm" onClick={onRefresh} disabled={busy} style={{ paddingRight: 0 }}>
+          {busy ? "Checking…" : "Refresh"}
+        </Button>
+      </div>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 8 }}>
+        <StatTile value={money(nw.cash, { centsShown: false })} label="Cash" />
+        <StatTile value={money(nw.debts, { centsShown: false })} label="Owed"
+          valueTone={nw.debts > 0 ? "var(--red)" : undefined} />
+        <StatTile value={money(nw.net, { centsShown: false })} label="Net"
+          valueTone={nw.net >= 0 ? "var(--green)" : "var(--red)"} />
+      </div>
+
+      {groups.map((g) => (
+        <div key={g.institution} style={{ display: "flex", flexDirection: "column", gap: 2 }}>
+          <span className="t-cap" style={{ color: "var(--faint)" }}>{g.institution}</span>
+          {g.accounts.map((a) => {
+            const owed = accountKind(a) === "debt";
+            const signed = accountCents(a);
+            return (
+              <div key={a.account_id || a.name} style={{ display: "flex", alignItems: "baseline", gap: 10, padding: "5px 0" }}>
+                <span className="t-call" style={{ flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                  {a.name}
+                </span>
+                {/* Available, not just current, on anything where the two differ:
+                    a card's current balance is what you owe, and the number you
+                    actually need before buying something is what's left to spend. */}
+                {owed && Number.isFinite(a.available_cents) && (
+                  <span className="t-cap t-num" style={{ color: "var(--faint)", flex: "none" }}>
+                    {money(a.available_cents, { centsShown: false })} open
+                  </span>
+                )}
+                <span className="t-call t-num" style={{ flex: "none", fontWeight: 600, color: signed < 0 ? "var(--red)" : "inherit" }}>
+                  {Number.isFinite(a.current_cents) ? money(signed) : "—"}
+                </span>
+              </div>
+            );
+          })}
+        </div>
+      ))}
+
+      {/* Both of these are the difference between a wrong total and a partial
+          one. Silence here would present an understated net worth as the truth. */}
+      {nw.unknown > 0 && (
+        <span className="t-cap" style={{ color: "var(--faint)", lineHeight: 1.45 }}>
+          {nw.unknown} account{nw.unknown === 1 ? "" : "s"} didn't report a balance and {nw.unknown === 1 ? "isn't" : "aren't"} in the total.
+        </span>
+      )}
+      {data?.failed?.length > 0 && (
+        <span className="t-cap" style={{ color: "var(--faint)", lineHeight: 1.45 }}>
+          Couldn't reach {data.failed.join(", ")} — the total is missing whatever is there.
+        </span>
+      )}
+    </Card>
   );
 }
 
@@ -269,6 +346,10 @@ export function FinancesPanel({ isMobile, settings, updateSetting }) {
   const [linkErr, setLinkErr] = useState(null);
   const [plaidSql, setPlaidSql] = useState(false);
   const [diag, setDiag] = useState(null);
+  // Balances live only here — see the Balances card for why they are never
+  // written to a table.
+  const [balances, setBalances] = useState(null);
+  const [balancing, setBalancing] = useState(false);
   const [confirmEl, confirm] = useConfirm();
 
   const all = rows || [];
@@ -308,6 +389,17 @@ export function FinancesPanel({ isMobile, settings, updateSetting }) {
   };
 
   const refreshBanks = () => callPlaid("status").then(setBanks).catch(() => setBanks({ items: [], unavailable: true }));
+
+  /* Balances, on demand. Silent on failure for the same reason the auto-sync is:
+     the card simply doesn't appear, and the month — which is the thing you came
+     for and which needs no network at all — is not covered in red because a
+     bank was slow. */
+  const refreshBalances = async () => {
+    setBalancing(true);
+    try { setBalances(await callPlaid("balances")); }
+    catch { /* leave whatever was last shown; the month stands on its own */ }
+    finally { setBalancing(false); }
+  };
 
   /* The connect-failure surface, in ONE place because it is rendered twice — on
      the empty first screen and in the Accounts card — and a message improved in
@@ -394,6 +486,11 @@ export function FinancesPanel({ isMobile, settings, updateSetting }) {
         if (!alive) return;
         setBanks(st);
         if (!st.items?.length) return;
+        // Balances first, and regardless of whether a sync is due: it's one call
+        // per bank, it writes nothing, and it's the number at the top of the
+        // page — waiting for a six-hourly transaction pull to refresh it would
+        // mean opening the tab and reading yesterday's figure.
+        callPlaid("balances").then((b) => alive && setBalances(b)).catch(() => {});
         const SYNC_AFTER = 6 * 60 * 60 * 1000;   // six hours; banks post once a day
         const freshest = st.items.reduce((m, b) => Math.max(m, b.synced_at ? Date.parse(b.synced_at) : 0), 0);
         if (Date.now() - freshest < SYNC_AFTER) return;
@@ -401,6 +498,9 @@ export function FinancesPanel({ isMobile, settings, updateSetting }) {
         setLinking("Syncing…");
         const out = await callPlaid("sync");
         if (!alive) return;
+        // A sync already asked each bank for its accounts, so the fresher
+        // numbers come back with it — free, and one round trip sooner.
+        if (out.balances?.length) setBalances({ accounts: out.balances });
         if (out.added || out.removed) { refetch(); setReceipt({ n: out.added || 0, skipped: 0, synced: true }); }
         callPlaid("status").then((s2) => alive && setBanks(s2)).catch(() => {});
       } catch { /* silent — see above */ }
@@ -414,7 +514,11 @@ export function FinancesPanel({ isMobile, settings, updateSetting }) {
     try {
       const out = await connectBank({ onEvent: setLinking });
       setLinking(null);
-      if (out) { setReceipt({ n: out.added || 0, skipped: 0, bank: out.institution }); refetch(); refreshBanks(); }
+      if (out) {
+        setReceipt({ n: out.added || 0, skipped: 0, bank: out.institution });
+        if (out.balances?.length) setBalances({ accounts: out.balances });
+        refetch(); refreshBanks();
+      }
     } catch (e) {
       setLinking(null);
       // A closed Link sheet resolves to null rather than an error — changing
@@ -428,6 +532,7 @@ export function FinancesPanel({ isMobile, settings, updateSetting }) {
     try {
       const out = await callPlaid("sync");
       setReceipt({ n: out.added || 0, skipped: 0, synced: true });
+      if (out.balances?.length) setBalances({ accounts: out.balances });
       refetch(); refreshBanks();
     } catch (e) { setLinkErr(e.message || "Sync failed."); }
     finally { setLinking(null); }
@@ -508,6 +613,10 @@ export function FinancesPanel({ isMobile, settings, updateSetting }) {
           <Button kind="tinted" size="sm" onClick={() => refetch()}>Retry</Button>
         </Card>
       )}
+
+      {/* Only when a bank is connected — it renders nothing on a CSV-only
+          install, because a CSV has no balance in it to show. */}
+      <Balances data={balances} onRefresh={refreshBalances} busy={balancing} />
 
       <Card pad="md" style={{ display: "flex", flexDirection: "column", gap: 12 }}>
         {/* Which month. Newest first, because that's the one you came to look at. */}

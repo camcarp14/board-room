@@ -390,6 +390,84 @@ export function fromPlaidSync(page, opts) {
   return { rows: added, removed, cursor: page?.next_cursor || "", more: !!page?.has_more };
 }
 
+// ─── Balances ────────────────────────────────────────────────────────────────
+// A month's spending answers "where did it go". These answer "where do I stand",
+// which is the other half and the one you check most often. The numbers come
+// from Plaid's /accounts/get — included with Transactions, no extra product —
+// and are never stored: a stale balance is worse than no balance, so it is
+// fetched when the tab opens and thrown away when it closes.
+
+/**
+ * What an account does to your net worth.
+ *
+ * THE SIGN IS THE WHOLE THING HERE, exactly as it is for transactions. Plaid
+ * reports a credit card's `current` as a POSITIVE number meaning "you owe this",
+ * and a checking account's as a positive number meaning "you have this". Adding
+ * them up without knowing which is which produces a total that grows when you
+ * borrow money.
+ *
+ * "other" is real, not a fallback for tidiness: Plaid types things this app has
+ * no opinion about, and quietly filing an unknown type as an asset would inflate
+ * the one number the card exists to state.
+ */
+const ACCOUNT_KIND = {
+  depository: "asset", investment: "asset", brokerage: "asset",
+  credit: "debt", loan: "debt",
+};
+export const accountKind = (a) => ACCOUNT_KIND[String(a?.type || "").toLowerCase()] || "other";
+
+/** The balance as a number that can be added up: negative when it's owed. */
+export function accountCents(a) {
+  const c = a?.current_cents;
+  if (!Number.isFinite(c)) return 0;
+  return accountKind(a) === "debt" ? -c : c;
+}
+
+/**
+ * Assets, debts, cash and the net.
+ *
+ * NOT Math.abs on the debts. An overpaid card has a NEGATIVE current balance —
+ * the bank owes you — and taking the magnitude would turn a $50 credit into $50
+ * of debt. Keeping the sign makes that case come out right for free.
+ *
+ * `unknown` counts accounts Plaid returned with no balance at all. They are left
+ * out of the sum rather than counted as zero, and the count is reported so the
+ * card can say the total is partial instead of quietly understating it.
+ */
+export function netWorth(accounts = []) {
+  let assets = 0, debts = 0, cash = 0, unknown = 0;
+  for (const a of accounts || []) {
+    const kind = accountKind(a);
+    if (kind === "other") continue;
+    if (!Number.isFinite(a?.current_cents)) { unknown++; continue; }
+    if (kind === "debt") debts += a.current_cents;
+    else {
+      assets += a.current_cents;
+      if (String(a.type).toLowerCase() === "depository") cash += a.current_cents;
+    }
+  }
+  return { assets, debts, cash, unknown, net: assets - debts };
+}
+
+/** Accounts grouped under the bank they came from, assets before debts — the
+ *  order you'd read them in, and the order that puts the money above the bills. */
+export function groupAccounts(accounts = []) {
+  const rank = (a) => (accountKind(a) === "asset" ? 0 : accountKind(a) === "debt" ? 1 : 2);
+  const by = new Map();
+  for (const a of accounts || []) {
+    const k = String(a?.institution || "Bank");
+    if (!by.has(k)) by.set(k, []);
+    by.get(k).push(a);
+  }
+  return [...by.entries()]
+    .map(([institution, list]) => ({
+      institution,
+      accounts: [...list].sort((x, y) => rank(x) - rank(y) || String(x?.name || "").localeCompare(String(y?.name || ""))),
+      net: netWorth(list).net,
+    }))
+    .sort((a, b) => b.net - a.net || a.institution.localeCompare(b.institution));
+}
+
 // ─── What a transaction's category actually IS ───────────────────────────────
 
 /**

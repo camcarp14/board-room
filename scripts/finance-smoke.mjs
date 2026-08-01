@@ -22,6 +22,7 @@ import {
   monthsOf, summarise, compare, budgetStatus, recurring, largest,
   fromPlaid, fromPlaidSync, PLAID_PREFIX,
   effectiveCategory, applyRule, ruleReach,
+  accountKind, accountCents, netWorth, groupAccounts,
 } from "../src/features/finances/financeLogic.js";
 
 let failed = 0;
@@ -520,6 +521,106 @@ check("months come back newest first", monthsOf(ALL).join() === "2026-08");
   // If NEITHER accepts them it is not an environment problem at all, and saying
   // "check the environment" would send you round the same loop again.
   check("…and says so when neither environment accepts them", /Neither environment accepted/.test(ui));
+}
+
+// ─── 11b. balances: the other place a sign error hides ───────────────────────
+// A card's balance is POSITIVE when you owe it and a checking balance is
+// POSITIVE when you have it. Adding the two produces a net worth that goes UP
+// when you borrow — a number that looks entirely plausible and is exactly wrong.
+{
+  const CHECKING = { name: "Checking ••1234", institution: "Chase", type: "depository", subtype: "checking", current_cents: 420000, available_cents: 415000 };
+  const SAVINGS = { name: "Savings ••9911", institution: "Chase", type: "depository", subtype: "savings", current_cents: 1000000 };
+  const CARD = { name: "Sapphire ••4321", institution: "Chase", type: "credit", subtype: "credit card", current_cents: 130000, available_cents: 870000, limit_cents: 1000000 };
+  const LOAN = { name: "Auto ••7777", institution: "Ally", type: "loan", subtype: "auto", current_cents: 950000 };
+
+  check("a checking account is an asset", accountKind(CHECKING) === "asset");
+  check("a card is a debt", accountKind(CARD) === "debt");
+  check("a loan is a debt", accountKind(LOAN) === "debt");
+  check("an unrecognised type is neither, not silently an asset",
+    accountKind({ type: "other" }) === "other" && accountKind({}) === "other");
+
+  const nw = netWorth([CHECKING, SAVINGS, CARD, LOAN]);
+  check("cash is the depository accounts only", nw.cash === 1420000, String(nw.cash));
+  check("assets do not include what's owed", nw.assets === 1420000, String(nw.assets));
+  check("debts are the card and the loan", nw.debts === 1080000, String(nw.debts));
+  // THE ONE THAT MATTERS: 14,200 of assets minus 10,800 of debt is 3,400 — not
+  // 25,000, which is what summing Plaid's raw `current` fields would give.
+  check("net worth SUBTRACTS the debts", nw.net === 340000, String(nw.net));
+  check("…which is not the naive sum", nw.net !== 1420000 + 1080000);
+  check("a debt reads as negative when it's displayed", accountCents(CARD) === -130000);
+  check("…and an asset reads as itself", accountCents(CHECKING) === 420000);
+
+  // An overpaid card is a credit, not a debt. Math.abs here would post a $50
+  // refund as $50 owed and quietly understate the net by a hundred dollars.
+  const over = netWorth([{ type: "credit", current_cents: -5000 }]);
+  check("an overpaid card raises the net rather than lowering it",
+    over.net === 5000 && over.debts === -5000, JSON.stringify(over));
+
+  // A missing balance is not zero. Counting it as zero would state a total that
+  // is confidently wrong; leaving it out and saying so is a total that is right
+  // about the part it covers.
+  // The string case is the one with teeth: null happens to add as zero, so a
+  // dropped guard would go unnoticed, but "9999" concatenates and turns the
+  // total into "4200009999". Both shapes come back from a bank that half-answers.
+  const partial = netWorth([
+    CHECKING,
+    { name: "Mystery", type: "depository", current_cents: null },
+    { name: "Stringy", type: "depository", current_cents: "9999" },
+  ]);
+  check("an account with no usable balance is excluded, not zeroed",
+    partial.unknown === 2 && partial.assets === 420000, JSON.stringify(partial));
+  check("…and the total is still a number", Number.isFinite(partial.net) && partial.net === 420000, String(partial.net));
+  check("nothing connected is a clean zero", netWorth([]).net === 0 && netWorth().net === 0);
+
+  const groups = groupAccounts([CARD, LOAN, SAVINGS, CHECKING]);
+  check("accounts are grouped under their bank", groups.length === 2, JSON.stringify(groups.map((g) => g.institution)));
+  const chase = groups.find((g) => g.institution === "Chase");
+  check("assets come before debts inside a bank",
+    chase.accounts.map((a) => a.type).join(",") === "depository,depository,credit", chase.accounts.map((a) => a.name).join(","));
+  check("each bank carries its own net", chase.net === 1290000 && groups.find((g) => g.institution === "Ally").net === -950000,
+    JSON.stringify(groups.map((g) => [g.institution, g.net])));
+  check("the bank you have the most at is listed first", groups[0].institution === "Chase");
+}
+
+// ─── 11c. balances end to end: the function and the card ─────────────────────
+{
+  const fn = readFileSync("netlify/functions/plaid.js", "utf8");
+  const ui = readFileSync("src/features/finances/FinancesPanel.jsx", "utf8");
+  check("there is a balances action", /action === "balances"/.test(fn));
+  // /accounts/get comes free with Transactions. /accounts/balance/get is the
+  // paid product that forces a live pull at the bank, and using it to render a
+  // number you glance at would be billed every glance.
+  check("…using the free endpoint, not the metered one",
+    /accounts\/get/.test(fn) && !/accounts\/balance\/get/.test(fn));
+  check("balances are scoped to the caller's own items",
+    /plaid_items\?user_id=eq\.\$\{uid\}&select=item_id,access_token,institution/.test(fn));
+  check("one unreachable bank doesn't blank the others", /failed\.push/.test(fn));
+  // Nothing about a balance is written down. A stored balance goes stale in
+  // silence and is then read as current.
+  check("no balance is ever persisted",
+    !/POST[\s\S]{0,400}?balances/.test(fn) && !/sb\("balances"/.test(fn) && !/"account_balances"/.test(fn));
+  check("the sign is negated exactly once, for transactions only",
+    (fn.match(/amount_cents: -cents/g) || []).length === 1 && !/current_cents: -/.test(fn));
+
+  // Per-account naming. Every row used to be filed under the institution, so a
+  // card and a checking account at the same bank became one column.
+  check("transactions are filed under the account, not just the bank",
+    /nameFor\(t\)/.test(fn) && /byId\[String\(t\?\.account_id \|\| ""\)\]/.test(fn));
+  check("…falling back to the bank name when Plaid won't say",
+    /byId\[String\(t\?\.account_id \|\| ""\)\] \|\| bank/.test(fn));
+  check("a bank that won't return accounts still syncs transactions",
+    /try \{[\s\S]{0,320}?accountsFor\(item, c\)[\s\S]{0,320}?\} catch/.test(fn));
+
+  check("the panel renders the balances card", /<Balances data=\{balances\}/.test(ui));
+  check("…above the month, which is the order you read them in",
+    ui.indexOf("<Balances data={balances}") < ui.indexOf("<Totals s={s}"));
+  check("…and asks for them as soon as a bank is known to be connected",
+    /callPlaid\("balances"\)/.test(ui));
+  check("a sync's balances are used rather than re-fetched",
+    (ui.match(/out\.balances\?\.length/g) || []).length >= 2);
+  check("a partial total says it is partial", /didn't report a balance/.test(ui) && /Couldn't reach/.test(ui));
+  check("the card is absent rather than empty with no bank connected",
+    /if \(!accounts\.length\) return null;/.test(ui));
 }
 
 // ─── 12. the setup SQL has to be runnable, in the right schema ───────────────
