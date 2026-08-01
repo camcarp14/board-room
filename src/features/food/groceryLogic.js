@@ -397,13 +397,44 @@ export function storesOf(items, saved) {
  *
  * An item with NO store belongs to all of them. Bread is bread — you'll buy it
  * wherever you end up, and a staple that hid itself the moment you picked a
- * shop is a bug you'd only discover at the till.
+ * shop is a bug you'd only discover at the till. groupList keeps those in their
+ * own labelled group rather than mixing them in, so "Costco" still reads as
+ * Costco's list instead of Costco's list plus a scatter of things that aren't.
  */
 export const inStore = (item, store) => {
   if (!store) return true;
   const s = parseItem(item).store;
   return !s || s.toLowerCase() === String(store).toLowerCase();
 };
+
+/** Exactly this store, staples excluded — the strict half of inStore. */
+export const isStore = (item, store) =>
+  parseItem(item).store.toLowerCase() === String(store ?? "").trim().toLowerCase();
+
+/**
+ * What's still to get, counted per store — the numbers on the pills.
+ *
+ * This exists because of the worst thing a filtered list can do: you tag
+ * something to Costco while looking at Jewel, it disappears, and nothing on
+ * screen says where it went or even that it still exists. A count on every pill
+ * turns "my list is empty" into "my list is over there", without a tap.
+ *
+ * `""` is the grand total, ANY_STORE the ones tagged to nothing. Checked items
+ * are excluded — this counts what's left to buy, which is the question you're
+ * asking when you look at it.
+ */
+export const ANY_STORE = " any";  // sentinel: no typed store name can hold a NUL
+export function storeCounts(items) {
+  const out = { "": 0, [ANY_STORE]: 0 };
+  for (const it of items || []) {
+    if (it.checked) continue;
+    out[""] += 1;
+    const s = parseItem(it.item).store;
+    if (!s) { out[ANY_STORE] += 1; continue; }
+    out[s] = (out[s] || 0) + 1;
+  }
+  return out;
+}
 
 /**
  * Renaming or removing a store, planned as one operation.
@@ -502,11 +533,12 @@ export function applyOrder(list, orderIds) {
  * THREE ORGANISING RULES, in priority order, because they answer different
  * questions and only one of them can win at a time:
  *
- *   1. STORE filters. You are standing in one shop; the others are noise. An
- *      item with no store belongs to every shop (bread is bread), so it shows
- *      under every filter rather than only under "All" — a staple that hid
- *      itself the moment you picked a store would be a bug you'd discover at
- *      the till.
+ *   1. STORE decides what's on screen — and, under a store, WHICH GROUP.
+ *      Items tagged to that shop fill the aisle sections. Untagged staples come
+ *      back separately in `anywhere`, because they are true in every shop and
+ *      mixing them into Costco's aisles makes "Costco" mean "Costco plus a
+ *      scatter of things that aren't". Dropping them instead would be worse —
+ *      you'd walk past the bread — so they get a group and a label of their own.
  *   2. A PINNED SECTION ("#Freezer") beats the guessed aisle, and pinned
  *      sections sort to the top. You named it, so you meant it; the lexicon is
  *      only there for everything you didn't.
@@ -517,13 +549,17 @@ export function applyOrder(list, orderIds) {
  * thumb every time you added something.
  *
  * `opts` is optional so every existing two-argument-free caller keeps working.
+ * With no store, `anywhere` is empty and everything is in `sections` — there is
+ * nothing to separate staples FROM.
  */
 export function groupList(items, opts) {
   const store = opts?.store || "";
   const order = opts?.order;
   const all = (items || []).filter((it) => inStore(it.item, store));
   const cart = applyOrder(all.filter((it) => it.checked), order);
-  const todo = all.filter((it) => !it.checked);
+  const remaining = all.filter((it) => !it.checked);
+  const todo = store ? remaining.filter((it) => isStore(it.item, store)) : remaining;
+  const anywhere = store ? applyOrder(remaining.filter((it) => !parseItem(it.item).store), order) : [];
 
   const pinned = new Map();   // label → items, for "#Freezer" style overrides
   const byAisle = new Map();
@@ -545,7 +581,10 @@ export function groupList(items, opts) {
     ...AISLES.filter((a) => byAisle.has(a.key)).map((a) => ({ ...a, items: byAisle.get(a.key) })),
   ].map((s) => ({ ...s, items: applyOrder(s.items, order) }));
 
-  return { sections, cart, remaining: todo.length, total: all.length };
+  // `remaining` counts everything still to get in this view, staples included —
+  // it drives the "N to get" header, and a header that ignored the anywhere
+  // group would undercount the trolley you're actually filling.
+  return { sections, anywhere, cart, remaining: remaining.length, total: all.length };
 }
 
 /**

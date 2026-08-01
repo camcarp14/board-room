@@ -17,7 +17,7 @@
 import {
   AISLES, aisleOf, aisleMeta, parseItem, formatItem, canonicalName,
   findDuplicate, groupList, bumpFrequency, frequentSuggestions, STAPLE_MIN_BUYS,
-  titleCase, storesOf, inStore, applyOrder, planRetag, applyRetag,
+  titleCase, storesOf, inStore, isStore, applyOrder, planRetag, applyRetag, storeCounts, ANY_STORE,
   planAdd, applyAdd, requestFor, isTempId, TMP_PREFIX,
 } from "../src/features/food/groceryLogic.js";
 
@@ -206,12 +206,21 @@ check("an untagged item shows under every store",
 check("a tagged item shows only under its own store",
   inStore("Milk @Costco", "Costco") && !inStore("Milk @Costco", "HEB"));
 check("the store match is case-insensitive", inStore("Milk @Costco", "costco"));
+check("isStore is strict where inStore is generous",
+  isStore("Milk @Costco", "Costco") && !isStore("Bananas", "Costco") && inStore("Bananas", "Costco"));
 {
   const c = groupList(shops, { store: "Costco" });
   const ids = c.sections.flatMap((s) => s.items.map((i) => i.id)).sort().join(",");
-  check("filtering to a store keeps its items plus the untagged ones", ids === "1,2,4", ids);
+  // THE FIX: a store's aisles hold that store's items and nothing else. Staples
+  // used to be mixed in, which made "Costco" read as Costco plus a scatter of
+  // things that weren't, and left no way to tell which was which.
+  check("a store's aisles hold only that store's items", ids === "2,4", ids);
   check("the other store's items are gone", !ids.includes("3"));
-  check("counts follow the filter", c.total === 3 && c.remaining === 3, `${c.total}/${c.remaining}`);
+  // Dropped instead of annexed would be worse — you'd walk past the bread.
+  check("untagged staples come back separately, not discarded",
+    c.anywhere.map((i) => i.id).join(",") === "1", c.anywhere.map((i) => i.id).join(","));
+  check("the header still counts the staples as things to get",
+    c.total === 3 && c.remaining === 3, `${c.total}/${c.remaining}`);
   // A named section beats the guessed aisle and sorts above it — you said where
   // it goes, so the lexicon doesn't get a vote.
   check("a pinned section becomes its own heading at the top",
@@ -220,7 +229,29 @@ check("the store match is case-insensitive", inStore("Milk @Costco", "costco"));
   check("the pinned item left its guessed aisle",
     !c.sections.some((s) => !s.pinned && s.items.some((i) => i.id === "4")));
 }
-check("no filter shows everything", groupList(shops, { store: "" }).total === 4);
+{
+  const a = groupList(shops, { store: "" });
+  check("no filter shows everything", a.total === 4);
+  // With no store there is nothing to separate staples FROM.
+  check("the anywhere group is empty when no store is picked", a.anywhere.length === 0);
+  check("and every item is in the aisles", a.sections.flatMap((s) => s.items).length === 4);
+}
+
+// ─── 4d. the pill counts — the answer to "where did my list go" ──────────────
+// Tag something to Costco while looking at Jewel and it vanishes. Without a
+// count on every pill the view can only say "nothing here"; it can't say "and
+// there are two at Costco", which is the thing you actually need to know.
+{
+  const n = storeCounts(shops);
+  check("the total counts everything still to get", n[""] === 4, String(n[""]));
+  check("each store counts only its own", n.Costco === 2 && n.HEB === 1, `${n.Costco}/${n.HEB}`);
+  check("untagged items get their own tally", n[ANY_STORE] === 1, String(n[ANY_STORE]));
+  // A count of what's left to buy, not of what's on the list — a shop showing
+  // "3" when all three are already in the trolley sends you back for nothing.
+  const withCart = storeCounts([...shops, { id: "9", item: "Eggs @Costco", checked: true }]);
+  check("checked items are not counted as still to get", withCart.Costco === 2, String(withCart.Costco));
+  check("storeCounts tolerates an empty list", storeCounts([])[""] === 0 && storeCounts(null)[""] === 0);
+}
 
 // ─── 4c. renaming and removing a store ───────────────────────────────────────
 // The store is part of each item's TEXT, so a rename is a bulk rewrite, and a

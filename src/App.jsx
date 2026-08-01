@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef, lazy, Suspense } from "react";
 import { supabase } from "./lib/supabase.js";
-import { sm, obs } from "./lib/storage.js";
+import { sm } from "./lib/storage.js";
 import { db } from "./data/db.js";
 import { queryClient } from "./lib/queryClient.js";
 import { callClaude, convene, DEFAULT_MODELS } from "./lib/claude.js";
@@ -423,7 +423,6 @@ export default function App() {
   if (gate) return <>{ambient}{gate}</>;
 
   const calUrl = settings?.calendar_url || "";
-  const totalSpend = obs.all().reduce((s, l) => s + (l.cost || 0), 0);
 
   const renderPageInner = (key) => {
     switch (key) {
@@ -496,8 +495,6 @@ export default function App() {
         {...shellProps}
         btc={btc}
         session={session}
-        totalSpend={totalSpend}
-        callCount={obs.all().length}
       >
         {renderPage(page)}
       </SidebarShell>

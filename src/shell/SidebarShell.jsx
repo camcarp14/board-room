@@ -12,7 +12,7 @@ import { NAV_ICONS, IcSettings } from "../ui/icons.jsx";
 import { NumTween, Sparkline } from "../ui/primitives.jsx";
 import { Delta } from "../ui/kit.jsx";
 
-export function SidebarShell({ page, onNavigate, onOpenSettings, btc, session, totalSpend, callCount, now, dataStamp, refreshing, onRefresh, children }) {
+export function SidebarShell({ page, onNavigate, onOpenSettings, btc, session, now, dataStamp, refreshing, onRefresh, children }) {
   const head = HEADERS[page];
 
   return (
@@ -76,13 +76,13 @@ export function SidebarShell({ page, onNavigate, onOpenSettings, btc, session, t
             {head.sub && <div className="t-foot" style={{ marginTop: 2 }}>{head.sub(new Date(now))}</div>}
           </div>
           <div style={{ display: "flex", alignItems: "center", gap: 14, flex: "none", paddingBottom: 2 }}>
-            {/* Honest label: this reads the `obs` localStorage ring, which is
-                capped at 300 entries and persists across launches — so it's
-                neither "this session" nor complete. The durable cross-device
-                numbers are on Systems → Usage. */}
-            <span className="t-cap head-spend" style={{ color: "var(--faint)" }} title="Anthropic spend across the last 300 calls logged on this device. Systems → Usage has the durable, cross-device totals.">
-              ${totalSpend.toFixed(3)} · last {callCount} calls
-            </span>
+            {/* The "$0.002 · last 300 calls" spend line lived here. It read the
+                `obs` localStorage ring — this device only, capped at 300 entries,
+                neither a session total nor a real one — so it sat at the top of
+                every page quoting a number that disagreed with the durable
+                cross-device figures on Assets → Usage. Two spend numbers that
+                disagree by design is worse than one, and the one that belongs on
+                the chrome is neither. */}
             <TopStatus now={now} dataStamp={dataStamp} refreshing={refreshing} onRefresh={onRefresh} />
           </div>
         </div>
