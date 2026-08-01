@@ -162,57 +162,63 @@ if (gm) {
 }
 
 // ─── The status-bar strip, and the top of the screen ─────────────────────────
-// The bar at the top used to be a different colour from the app: with
-// "black" iOS sizes the window BELOW the status bar and paints that strip flat
-// black itself, which matches a near-black palette and clashes with every other
-// one. Nothing in CSS could reach it — env(safe-area-inset-top) is 0 in that
-// mode and the strip is outside the web view entirely.
+// All three values of apple-mobile-web-app-status-bar-style have now been tried
+// on a real phone. These checks pin the survivor, because the two that lost both
+// look right in code and fail only on the device:
 //
-// Under "black-translucent" the window runs under the status bar, so the app's
-// own ground paints it and there is no seam by construction. Every piece of that
-// has to stay true together, and each one fails silently on its own:
+//   · "black-translucent" lets the app paint the strip — the only way to remove
+//     the seam — and STILL letterboxes on current iOS: the window is sized as if
+//     the status bar were opaque but anchored at y=0, so the app pays for it
+//     twice and a dead ~59pt chin sits under the tab bar. Not fixable from
+//     inside; you cannot render outside your own window.
+//   · "default" is a white cap with dark glyphs — fine over a light palette,
+//     indefensible over a dark one.
+//   · "black" costs a seam over any ground that isn't near-black, and that seam
+//     is unreachable from CSS. It is the only one with no dead space.
+//
+// A fourth attempt should start by reading index.html, not by changing this.
 const chrome = readFileSync("src/design/components.css", "utf8");
 const shell = readFileSync("src/shell/MobileShell.jsx", "utf8");
 
-check("the window extends under the status bar",
-  /apple-mobile-web-app-status-bar-style"\s+content="black-translucent"/.test(html),
+check("the status bar style is the one that doesn't letterbox",
+  /apple-mobile-web-app-status-bar-style"\s+content="black"/.test(html),
   html.match(/apple-mobile-web-app-status-bar-style"[^>]*/)?.[0]);
-// Without viewport-fit=cover every env(safe-area-inset-*) reads 0 and the app
-// draws UNDER the notch with no reservation — the title lands beneath the clock.
+// Without viewport-fit=cover every env(safe-area-inset-*) reads 0, including the
+// bottom one — the tab bar would sit on top of the home indicator.
 check("the viewport opts into the safe areas", /viewport-fit=cover/.test(html));
+
+// The strip reservation stays: inert under "black" (the inset is 0), correct the
+// moment the inset is real. What it must NOT have is a background.
 check("the shell reserves the strip", /className="statuscap"/.test(shell));
-// The point of the whole change. An opaque fill here just swaps iOS's grey cap
-// for one of ours: same hard edge, one shade closer. It must stay transparent so
-// the ambient wash — which is a gradient — carries through it.
-check("…and paints nothing there, so the room shows through",
-  !/statuscap[^}]*background/.test(chrome.replace(/\[data-theme="day"\][^}]*\}/g, "")),
-  "an opaque statuscap re-creates the bar it replaced");
 check("the strip is exactly the inset tall",
   /\.statuscap \{[^}]*height: env\(safe-area-inset-top\)/.test(chrome));
 
-// iOS draws status-bar glyphs WHITE under black-translucent, with no way to ask
-// for dark ones. On a light palette that is invisible unless something darkens
-// the strip — and the first attempt faded out ABOVE the clock, measuring 2.2:1
-// at the glyph line while looking perfectly fine in a screenshot.
+// THE ONE THIS FILE EXISTS FOR NOW. A scrim here was shipped to keep white
+// status-bar glyphs legible over a light palette, and it was wrong twice over:
+// the glyphs are not white (this iOS follows the page's `color-scheme` and drew
+// them dark), and the gradient smeared the top of every light screen. It looked
+// completely fine in a headless screenshot and only failed on a phone.
+//
+// Slice the rule by brace, not by regex. Two regexes have now silently asserted
+// nothing in this file: one whose lazy match walked through a closing brace into
+// a rule thirty lines later, and one whose {0,400} cap found no match at all and
+// so passed an empty string to a `!test`. A negative check against a pattern
+// that failed to match is the most comfortable kind of green there is.
 {
-  const day = chrome.match(/\[data-theme="day"\] \.statuscap \{([\s\S]*?)\}/)?.[1] || "";
-  check("light palettes scrim the strip so the clock stays readable", /linear-gradient/.test(day));
-  const stops = [...day.matchAll(/rgba\(0, 0, 0, ([\d.]+)\)(?:\s+(\d+)%)?/g)]
-    .map((m) => ({ a: parseFloat(m[1]), at: m[2] === undefined ? null : parseInt(m[2], 10) }));
-  check("…at full strength where the glyphs actually are, not just at the top",
-    stops.some((s) => s.a >= 0.5 && s.at !== null && s.at >= 50),
-    "the scrim fades out before ~22px down a 59px inset — measured 6:1 at the glyph line when correct");
-  check("…and fading to nothing by the bottom, so it has no edge",
-    stops.some((s) => s.a === 0), day.trim());
+  const at = chrome.indexOf(".statuscap {");
+  check("the .statuscap rule is findable", at >= 0);
+  const rule = at < 0 ? "MISSING" : chrome.slice(at, chrome.indexOf("}", at) + 1);
+  check("nothing paints the strip — no scrim, no fill",
+    at >= 0 && !/background|linear-gradient/.test(rule), rule.trim());
+  check("…and no palette adds one back",
+    !/\[data-theme="(day|night)"\] \.statuscap/.test(chrome),
+    "a per-theme statuscap rule is the smear returning");
 }
-// Dark palettes must get NO scrim: white on a dark room is already right, and a
-// scrim there would be the grey bar this replaced.
-check("dark palettes are left alone", !/\[data-theme="night"\] \.statuscap/.test(chrome));
 
-// The recorded risk of black-translucent: an older iOS anchored the window at
-// the top while sizing it short, leaving dead space at the BOTTOM. This is the
-// detection and the collapse that make the failure mode survivable.
-check("the letterbox fallback is still wired", /letterboxed/.test(shell) && /\.lbx \.dock-tab/.test(chrome));
+// Kept even though "black" never triggers it: it is the detection that made the
+// black-translucent failure legible rather than mysterious, and the next attempt
+// will need it.
+check("the letterbox detection is still wired", /letterboxed/.test(shell) && /\.lbx \.dock-tab/.test(chrome));
 
 // The tab bar's safe-area padding stays INSIDE the button, which is what makes
 // the band above the home indicator live tap area instead of dead chrome.
