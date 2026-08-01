@@ -403,14 +403,46 @@ export function FinancesPanel({ isMobile, settings, updateSetting }) {
   }
 
   // ── nothing imported yet ───────────────────────────────────────────────────
+  // THE FIRST SCREEN HAS TO OFFER THE CONNECTION. This early-returned with only
+  // "Import from Chase" on it, while Connect a bank sat in the Accounts card at
+  // the bottom of the FULL page — which you cannot reach until you already have
+  // transactions. So the one path that ends manual work was unreachable until
+  // you had done the manual work. Connecting is the primary action here now, and
+  // the CSV is the alternative rather than the only door.
   if (rows !== null && all.length === 0) {
     return (
       <>
-        <Card pad="md">
-          <EmptyState icon={<IcFinances size={26} />} title="No transactions yet"
-            sub="Export CSV from Chase — account activity, then Download — and drop it in. Card and checking both work, and re-importing an overlapping export never doubles anything."
-            action={<Button kind="primary" size="md" onClick={() => setImporting(true)}>Import from Chase</Button>}
+        <Card pad="md" style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+          <EmptyState icon={<IcFinances size={26} />} title="Connect your bank"
+            sub="Chase connects through Plaid and syncs on its own — nothing to export, nothing to remember. You can import a CSV instead if you'd rather, or to backfill years of history a live feed won't give you."
+            action={
+              <div style={{ display: "flex", flexDirection: "column", gap: 8, alignItems: "center" }}>
+                <Button kind="primary" size="md" onClick={connect} disabled={!!linking}>
+                  {linking || "Connect a bank"}
+                </Button>
+                <Button kind="plain" size="sm" onClick={() => setImporting(true)}>Import a CSV instead</Button>
+              </div>
+            }
             style={{ padding: "26px 12px" }} />
+
+          {/* The same error surface as the Accounts card — without it, a failure
+              on the very first screen would have nowhere to appear. */}
+          {linkErr && (
+            <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+              <span className="t-cap" style={{ color: "var(--red)", flex: 1, lineHeight: 1.45 }}>{linkErr}</span>
+              <Button kind="plain" size="sm" onClick={() => setPlaidSql((v) => !v)}>Setup SQL</Button>
+            </div>
+          )}
+          {plaidSql && (
+            <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+              <pre style={{
+                margin: 0, padding: 12, borderRadius: 12, background: "var(--surface-2)", overflowX: "auto",
+                font: "11px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace", color: "var(--sub)",
+              }}>{PLAID_SQL}</pre>
+              <Button kind="tinted" size="sm" style={{ alignSelf: "flex-start" }}
+                onClick={() => navigator.clipboard?.writeText(PLAID_SQL)}>Copy</Button>
+            </div>
+          )}
         </Card>
         {importing && <ImportSheet onClose={() => setImporting(false)}
           onDone={(n, r) => { setImporting(false); setReceipt({ n, skipped: r.skipped.length }); }} />}

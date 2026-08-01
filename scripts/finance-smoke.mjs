@@ -450,6 +450,20 @@ check("months come back newest first", monthsOf(ALL).join() === "2026-08");
   check("recategorising sets a merchant RULE by default",
     /if \(onlyThis\) setCat\.mutate/.test(ui) && /updateSetting\?\.\("finance_rules"/.test(ui));
   check("…and still offers the one-row escape hatch", /Just this one/.test(ui));
+
+  // THE BUG THIS EXISTS FOR. The empty state early-returns before the Accounts
+  // card, so for a while the ONLY thing on a fresh install was "Import from
+  // Chase" — Connect a bank was further down a page you could not reach until
+  // you already had transactions. The one path that ends manual work was gated
+  // behind doing the manual work.
+  const empty = ui.match(/if \(rows !== null && all\.length === 0\) \{[\s\S]*?\n  \}/)?.[0] || "";
+  check("the empty state is findable", !!empty);
+  check("a fresh install can connect a bank without importing first",
+    /onClick=\{connect\}/.test(empty), "Connect a bank is unreachable until you have transactions");
+  check("…and CSV is still offered as the alternative", /setImporting\(true\)/.test(empty));
+  // A connect failure on the very first screen needs somewhere to appear, or it
+  // is a button that does nothing.
+  check("…and a connect error has somewhere to show", /linkErr/.test(empty));
 }
 
 // ─── 12. the setup SQL has to be runnable, in the right schema ───────────────
