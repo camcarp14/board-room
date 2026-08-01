@@ -11,10 +11,11 @@ exports.handler = async (event) => {
 
   const url = process.env.SUPABASE_URL;
   const key = process.env.SUPABASE_SERVICE_ROLE_KEY;
-  const configured = !!(url && key);
+  const owner = String(process.env.BOARD_USER_ID || "").trim();
+  const configured = !!(url && key && owner);
 
-  if (body.ping) return json(200, { success: true, service: "db-admin", configured, missing: configured ? undefined : "SUPABASE_URL / SUPABASE_SERVICE_ROLE_KEY" });
-  if (!configured) return json(500, { error: "Supabase service env vars not set" });
+  if (body.ping) return json(200, { success: true, service: "db-admin", configured, missing: configured ? undefined : "SUPABASE_URL / SUPABASE_SERVICE_ROLE_KEY / BOARD_USER_ID" });
+  if (!configured) return json(503, { error: "server owner is not configured" });
 
   // Require a valid session before running service-role commands (which include
   // DELETEs against the shared brain). Unauthenticated, this exposed row counts
@@ -24,6 +25,8 @@ exports.handler = async (event) => {
     if (!token) return json(401, { error: "sign in first" });
     const who = await fetch(`${url}/auth/v1/user`, { headers: { apikey: key, Authorization: `Bearer ${token}` } });
     if (!who.ok) return json(401, { error: "session expired — refresh and try again" });
+    const user = await who.json().catch(() => null);
+    if (user?.id !== owner) return json(403, { error: "this account is not allowed to use Board Room" });
   }
 
   const rest = (path, opts = {}) => fetch(`${url}/rest/v1/${path}`, {
