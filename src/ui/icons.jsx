@@ -63,29 +63,24 @@ export const IcGrocery = (p = {}) => ( // shopping bag — the list you shop fro
     <path d="M9 7.8V6.4a3 3 0 0 1 6 0v1.4" />
   </svg>
 );
-export const IcCreed = (p = {}) => ( // shooting star — the thing you're aiming at
-  // A star with a trail, not a target or a trophy: the Creed is what you're
-  // steering by rather than a box to tick, and a wish on a falling star is the
-  // one piece of iconography everybody already reads as "what I want".
+export const IcCreed = (p = {}) => ( // open journal — the book you keep
+  // An OPEN book, not a closed one: closed reads as "library" or "docs", open
+  // reads as something being written in, which is what this room is. Two page
+  // halves with a visible gutter — a single outline with a centre line would
+  // read as a folded card at 24px.
   <svg {...base(p)}>
-    <path d="M15.2 4.1l1.85 3.75 4.15.6-3 2.93.71 4.12-3.71-1.95-3.71 1.95.71-4.12-3-2.93 4.15-.6L15.2 4.1Z" />
-    {/* Three tapering strokes: the trail reads as motion at 24px, where a single
-        line just reads as a stray mark next to the star. */}
-    <line x1="8.4" y1="14.6" x2="3.6" y2="19.4" />
-    <line x1="10.9" y1="18.1" x2="8.5" y2="20.5" />
-    <line x1="4.9" y1="12.6" x2="2.6" y2="14.9" />
+    <path d="M12 6.9C10.4 5.5 8.2 4.8 5.3 4.8a1.1 1.1 0 0 0-1.1 1.1v10.6a1.1 1.1 0 0 0 1.1 1.1c2.9 0 5.1.7 6.7 2.1" />
+    <path d="M12 6.9c1.6-1.4 3.8-2.1 6.7-2.1a1.1 1.1 0 0 1 1.1 1.1v10.6a1.1 1.1 0 0 1-1.1 1.1c-2.9 0-5.1.7-6.7 2.1" />
+    <line x1="12" y1="6.9" x2="12" y2="19.7" />
   </svg>
 );
 export const IcCreedFill = (p = {}) => (
+  // The gutter survives as a real gap between two filled shapes rather than a
+  // drawn line — a stroke over a solid fill in the same colour is invisible,
+  // and the gap is what keeps the filled form reading as a book.
   <svg {...solid(p)}>
-    <path d="M15.2 3.6l1.98 4.01 4.43.64a.6.6 0 0 1 .33 1.03l-3.2 3.12.75 4.4a.6.6 0 0 1-.87.63l-3.96-2.08-3.96 2.08a.6.6 0 0 1-.87-.63l.75-4.4-3.2-3.12a.6.6 0 0 1 .33-1.03l4.43-.64L14.66 3.6a.6.6 0 0 1 .54-.34c.23 0 .44.13.54.34Z" />
-    {/* The trail stays a stroke so the filled form still reads as motion rather
-        than a solid wedge — same trick the Grocery bag's handle plays. */}
-    <g fill="none" stroke="currentColor" strokeWidth={p.weight || 1.9} strokeLinecap="round">
-      <line x1="8.4" y1="14.6" x2="3.6" y2="19.4" />
-      <line x1="10.9" y1="18.1" x2="8.5" y2="20.5" />
-      <line x1="4.9" y1="12.6" x2="2.6" y2="14.9" />
-    </g>
+    <path d="M11.1 7.2C9.4 5.8 7.2 5.1 4.4 5.1a1.2 1.2 0 0 0-1.2 1.2v10.9a1.2 1.2 0 0 0 1.2 1.2c2.6 0 4.6.6 6 1.8a.6.6 0 0 0 .7-.5V7.2Z" />
+    <path d="M12.9 7.2c1.7-1.4 3.9-2.1 6.7-2.1a1.2 1.2 0 0 1 1.2 1.2v10.9a1.2 1.2 0 0 1-1.2 1.2c-2.6 0-4.6.6-6 1.8a.6.6 0 0 1-.7-.5V7.2Z" />
   </svg>
 );
 export const IcGroceryFill = (p = {}) => (
