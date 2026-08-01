@@ -15,10 +15,12 @@ export const NAV = [
   // shop, one-handed. Two taps deep inside Personal → Food was the wrong depth
   // for that, whatever its topical home.
   { key: "grocery", label: "Grocery" },
-  // Systems folded into Assets, supplying its Usage/Status/Deploy/Supabase/Miner
-  // sub-tabs; the page lands on Usage. Mind was removed from the app entirely.
-  // App.jsx redirects any stray "systems"/"boardroom" deep link here.
-  { key: "assets", label: "Assets" },
+  // Assets is no longer a destination. Its last three sub-tabs — Usage, Status,
+  // Miner — moved into the Settings sheet's Systems tab, because none of them is
+  // somewhere you GO: they're things you check, on the same footing as which
+  // theme you're in. Four tabs that are all daily surfaces beats five where the
+  // last one is a machine room. App.jsx sends any stray "assets"/"systems"/
+  // "boardroom" deep link to the Brief.
   // Upstream is built and deployed but hidden from nav while the pipeline settles.
   // To bring it back, uncomment this line — the page, route, HEADERS entry and the
   // Supabase tables are all still wired.
@@ -45,12 +47,5 @@ export const HEADERS = {
   personal: { title: "Personal" },
   train: { title: "Train" },
   grocery: { title: "Grocery" },
-  assets: { title: "Assets" },
-  // Both kept as defensive fallbacks: App.jsx redirects "systems" and the retired
-  // "boardroom" to "assets", so the shell should never actually read either — but
-  // a header lookup must never crash, and a stale saved link must not render a
-  // page titled after a tab that no longer exists.
-  systems: { title: "Assets" },
-  boardroom: { title: "Assets" },
   upstream: { title: "Upstream" },
 };

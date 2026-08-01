@@ -12,6 +12,7 @@ import { SidebarShell } from "./shell/SidebarShell.jsx";
 import { BootScreen, LoginScreen, SetupNotice } from "./shell/Boot.jsx";
 import { Ambient } from "./shell/Ambient.jsx";
 import { SettingsSheet } from "./shell/SettingsSheet.jsx";
+import { useConnections } from "./pages/systems/connections.js";
 import { ErrorBoundary } from "./shell/ErrorBoundary.jsx";
 import { Sheet, Button, useConfirm } from "./ui/kit.jsx";
 // The Brief is the landing tab — keep it in the main chunk so first paint is
@@ -22,7 +23,6 @@ import { SeatNotesModal } from "./pages/board/SeatNotesModal.jsx";
 const PersonalPage = lazy(() => import("./pages/personal/PersonalPage.jsx").then(m => ({ default: m.PersonalPage })));
 const TrainPage = lazy(() => import("./pages/train/TrainPage.jsx").then(m => ({ default: m.TrainPage })));
 const GroceryPage = lazy(() => import("./pages/grocery/GroceryPage.jsx").then(m => ({ default: m.GroceryPage })));
-const PropertiesPage = lazy(() => import("./pages/assets/AssetsPage.jsx").then(m => ({ default: m.PropertiesPage })));
 const UpstreamPage = lazy(() => import("./pages/upstream/UpstreamPage.jsx").then(m => ({ default: m.UpstreamPage })));
 
 // ════════════════════════════════════════════════════════════════════════════
@@ -200,10 +200,12 @@ export default function App() {
   // actually somewhere to scroll from, skipped entirely if already at top
   // so it's not a pointless animation on every tap.
   const goToPage = (key) => {
-    // Systems and Mind both fold into Assets — honor any stray "systems"/
-    // "boardroom" deep link (old Summon muscle memory, saved links) by landing
-    // on Assets (jumpTo carries the right sub-tab).
-    if (key === "systems" || key === "boardroom") key = "assets";
+    // Assets, Systems and Mind are all gone from the nav — the first two moved
+    // into Settings → Systems, Mind was retired outright. A saved link to any of
+    // them lands on the Brief rather than a blank page; there is no tab left to
+    // honour, and silently opening the Settings sheet from a URL would be a
+    // stranger answer than the app's home.
+    if (key === "assets" || key === "systems" || key === "boardroom") key = "brief";
     // Direction-aware: pages to the right slide in from the right, and vice
     // versa — the same physics whether the trigger was a tab tap or a swipe.
     const from = NAV.findIndex(n => n.key === page);
@@ -305,6 +307,12 @@ export default function App() {
   // shells; before this, sign-out was desktop-only and calendar_url had no UI.
   const [settingsOpen, setSettingsOpen] = useState(false);
   useEffect(() => { if (!session) setSettingsOpen(false); }, [session]);
+  // Hosted here, not inside the sheet, so a Status run survives closing and
+  // reopening Settings — the checks take a few seconds and ~25 requests, and
+  // losing them because you looked at Theme would mean paying for them twice.
+  // Nothing fires until the Systems → Status panel is actually shown; the sheet
+  // owns that trigger.
+  const conn = useConnections({ session, btc });
 
   // Summon — the ⌘K overlay that searched every page and took a quick note —
   // has been removed, along with its search buttons in both shells and the ⌘K
@@ -326,8 +334,7 @@ export default function App() {
     // unknown key would be ignored anyway, but carrying "mind" forward would
     // imply the tab still exists.
     let t = target.page === "personal" && target.sub === "workout" ? { ...target, page: "train", sub: undefined } : target;
-    if (t.page === "systems") t = { ...t, page: "assets", sub: t.sub || "status" };
-    if (t.page === "boardroom") t = { ...t, page: "assets", sub: undefined };
+    if (t.page === "assets" || t.page === "systems" || t.page === "boardroom") t = { ...t, page: "brief", sub: undefined };
     goToPage(t.page);
     setJump({ t: Date.now(), ...t });
   };
@@ -430,7 +437,6 @@ export default function App() {
       case "personal": return <PersonalPage isMobile={isMobile} jumpSignal={personalJumpTo} jump={jump} settings={settings} updateSetting={updateSetting} />;
       case "train": return <TrainPage isMobile={isMobile} settings={settings} updateSetting={updateSetting} jump={jump} />;
       case "grocery": return <GroceryPage isMobile={isMobile} settings={settings} updateSetting={updateSetting} />;
-      case "assets": return <PropertiesPage isMobile={isMobile} settings={settings} updateSetting={updateSetting} session={session} btc={btc} jump={jump} />;
       case "upstream": return <UpstreamPage isMobile={isMobile} />;
       default: return null;
     }
@@ -472,6 +478,7 @@ export default function App() {
           calUrl={calUrl}
           onSaveCalUrl={(v) => updateSetting("calendar_url", v)}
           isMobile={isMobile}
+          conn={conn}
         />
       )}
       {editSeat && <SeatNotesModal seatKey={editSeat} initial={seatNotes[editSeat]} onSave={saveSeatNote} onClose={() => setEditSeat(null)} isMobile={isMobile} />}

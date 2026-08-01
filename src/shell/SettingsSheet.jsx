@@ -10,11 +10,40 @@
 //     Meetings card told you to "link a calendar in the sidebar", pointing at a
 //     control that did not exist anywhere in the app. This is that control.
 // Opened from both shells so there's one place to look on either platform.
-import { useState } from "react";
+//
+// ── It is now the machine room too ───────────────────────────────────────────
+// Usage, Status and Miner used to be the Assets page; Assets has left the nav
+// and they live here, behind the Systems tab. The reasoning is that none of the
+// three is somewhere you GO — they're things you check, on the same footing as
+// which theme you're in and which calendar feeds the Brief. Four nav tabs that
+// are all daily surfaces beats five where the last one is a machine room.
+//
+// Two levels of picker, and both are shallow on purpose: the sheet chooses
+// Theme or Systems, and Systems chooses which panel. Flattening them into one
+// six-item row would put "Colour scheme" and "Miner" on the same shelf.
+import { useState, useEffect, useRef, lazy, Suspense } from "react";
 import { supabase } from "../lib/supabase.js";
-import { Sheet, Cell, CellGroup, Button, Field, SectionHeader, SwitchRow, useConfirm } from "../ui/kit.jsx";
+import { Sheet, Cell, CellGroup, Button, Field, SectionHeader, SwitchRow, Segmented, Spinner, useConfirm } from "../ui/kit.jsx";
 import { IcSun, IcMoon, IcAutoTheme, IcCheck } from "../ui/icons.jsx";
 import { PALETTES } from "../design/palettes.js";
+
+// Lazy, and deliberately so: this sheet is imported eagerly by App (it has to be
+// openable from anywhere), and SystemsPage carries the whole usage table with
+// it. Static imports here would move all of that into the first-load bundle for
+// a panel most sessions never open.
+const UsageTab = lazy(() => import("../pages/systems/SystemsPage.jsx").then(m => ({ default: m.UsageTab })));
+const StatusTab = lazy(() => import("../pages/systems/SystemsPage.jsx").then(m => ({ default: m.StatusTab })));
+const MinerPanel = lazy(() => import("../pages/systems/MinerPanel.jsx").then(m => ({ default: m.MinerPanel })));
+
+const SHEET_TABS = [{ key: "theme", label: "Theme" }, { key: "systems", label: "Systems" }];
+// Account sits with the systems panels rather than in Theme: your calendar feed
+// and your session are configuration, and Theme is strictly how it looks.
+const SYS_TABS = [
+  { key: "status", label: "Status" },
+  { key: "usage", label: "Usage" },
+  { key: "miner", label: "Miner" },
+  { key: "account", label: "Account" },
+];
 
 // Two axes, both here: MODE (below) and PALETTE (the swatch grid). They live
 // together because this sheet is what opens from the light/dark button — looking
@@ -53,7 +82,9 @@ function Swatch({ p, mode, selected }) {
   );
 }
 
-export function SettingsSheet({ onClose, session, theme, calUrl, onSaveCalUrl, isMobile }) {
+export function SettingsSheet({ onClose, session, theme, calUrl, onSaveCalUrl, isMobile, conn }) {
+  const [tab, setTab] = useState("theme");   // the sheet opens from the sun/moon
+  const [sys, setSys] = useState("status");  // …so Theme is what it lands on
   const [draft, setDraft] = useState(calUrl || "");
   const [saved, setSaved] = useState(false);
   const [confirmEl, confirm] = useConfirm();
@@ -77,10 +108,76 @@ export function SettingsSheet({ onClose, session, theme, calUrl, onSaveCalUrl, i
     if (ok) await supabase.auth.signOut();
   };
 
+  // Status fires ~25 network calls including a paid Anthropic ping, so it must
+  // not run because the SHEET opened — only when you actually land on it. The
+  // hook itself lives in App, so results survive closing and reopening.
+  const started = useRef(false);
+  useEffect(() => {
+    if (tab !== "systems" || sys !== "status" || started.current || !conn) return;
+    started.current = true;
+    conn.runAll();
+  }, [tab, sys]); // eslint-disable-line react-hooks/exhaustive-deps
+
   return (
     <>
       <Sheet title="Settings" onClose={onClose} z={420}>
-        <div style={{ display: "flex", flexDirection: "column", gap: 4, paddingBottom: 4 }}>
+        <Segmented options={SHEET_TABS} value={tab} onChange={setTab} style={{ marginBottom: 12 }} />
+
+        {tab === "systems" && (
+          <div key="systems" className="pagefade" style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+            <Segmented options={SYS_TABS} value={sys} onChange={setSys} style={{ marginBottom: 10 }} />
+            <Suspense fallback={<div style={{ display: "flex", justifyContent: "center", padding: "40px 0" }}><Spinner /></div>}>
+              {sys === "usage" && <UsageTab isMobile={isMobile} />}
+              {sys === "status" && <StatusTab checks={conn?.checks || {}} lastRun={conn?.lastRun} running={conn?.running} runAll={conn?.runAll} isMobile={isMobile} />}
+              {/* `active` gates the 5s poll — it stops the moment you leave. */}
+              {sys === "miner" && <MinerPanel active isMobile={isMobile} />}
+            </Suspense>
+
+            {sys === "account" && (
+              <>
+                <SectionHeader title="Business Meetings" />
+                <div className="t-foot" style={{ color: "var(--sub)", lineHeight: 1.55, padding: "0 4px 10px" }}>
+                  The Brief pulls upcoming meetings from a read-only calendar feed. In Google Calendar:
+                  Settings → your calendar → <strong style={{ color: "var(--ink)", fontWeight: 600 }}>Secret address in iCal format</strong>.
+                  It has to be the <code className="t-num" style={{ fontSize: 12 }}>.ics</code> link, not a shared web page.
+                </div>
+                <Field
+                  value={draft}
+                  onChange={(e) => { setDraft(e.target.value); setSaved(false); }}
+                  onKeyDown={(e) => { if (e.key === "Enter" && dirty) { e.preventDefault(); save(); } }}
+                  placeholder="https://calendar.google.com/calendar/ical/…/basic.ics"
+                  inputMode="url" autoCapitalize="off" autoCorrect="off" spellCheck="false"
+                  aria-label="Calendar iCal URL"
+                />
+                {warn && (
+                  <div className="t-foot" style={{ color: "var(--amber)", lineHeight: 1.5, padding: "8px 4px 0" }}>
+                    That doesn't look like an iCal feed — it should end in <code className="t-num" style={{ fontSize: 12 }}>.ics</code>.
+                    Saving it anyway is fine; the card will tell you if it can't be parsed.
+                  </div>
+                )}
+                <div style={{ display: "flex", alignItems: "center", gap: 10, paddingTop: 10 }}>
+                  <Button kind="tinted" size="md" disabled={!dirty} onClick={save} style={{ flex: "none" }}>
+                    {draft.trim() ? "Save calendar" : "Clear calendar"}
+                  </Button>
+                  {saved && <span className="t-foot" style={{ color: "var(--green)" }}>Saved — the Brief picks it up on the next refresh.</span>}
+                </div>
+
+                <SectionHeader title="Account" style={{ marginTop: 20 }} />
+                <CellGroup>
+                  <Cell
+                    title={session?.user?.email || "Signed in"}
+                    sub="Synced across every device on this account"
+                    titleStyle={{ fontSize: 14.5 }}
+                  />
+                  <Cell title="Sign out" destructive onClick={signOut} />
+                </CellGroup>
+              </>
+            )}
+          </div>
+        )}
+
+        {tab === "theme" && (
+        <div key="theme" className="pagefade" style={{ display: "flex", flexDirection: "column", gap: 4, paddingBottom: 4 }}>
 
           <SectionHeader title="Appearance" />
           <CellGroup>
@@ -163,47 +260,8 @@ export function SettingsSheet({ onClose, session, theme, calUrl, onSaveCalUrl, i
             for reduced motion, the light stays and the drifting stops.
           </div>
 
-          <SectionHeader title="Business Meetings" style={{ marginTop: 14 }} />
-          <div className="t-foot" style={{ color: "var(--sub)", lineHeight: 1.55, padding: "0 4px 10px" }}>
-            The Brief pulls upcoming meetings from a read-only calendar feed. In Google Calendar:
-            Settings → your calendar → <strong style={{ color: "var(--ink)", fontWeight: 600 }}>Secret address in iCal format</strong>.
-            It has to be the <code className="t-num" style={{ fontSize: 12 }}>.ics</code> link, not a shared web page.
-          </div>
-          <Field
-            value={draft}
-            onChange={(e) => { setDraft(e.target.value); setSaved(false); }}
-            onKeyDown={(e) => { if (e.key === "Enter" && dirty) { e.preventDefault(); save(); } }}
-            placeholder="https://calendar.google.com/calendar/ical/…/basic.ics"
-            inputMode="url"
-            autoCapitalize="off"
-            autoCorrect="off"
-            spellCheck="false"
-            aria-label="Calendar iCal URL"
-          />
-          {warn && (
-            <div className="t-foot" style={{ color: "var(--amber)", lineHeight: 1.5, padding: "8px 4px 0" }}>
-              That doesn't look like an iCal feed — it should end in <code className="t-num" style={{ fontSize: 12 }}>.ics</code>.
-              Saving it anyway is fine; the card will tell you if it can't be parsed.
-            </div>
-          )}
-          <div style={{ display: "flex", alignItems: "center", gap: 10, paddingTop: 10 }}>
-            <Button kind="tinted" size="md" disabled={!dirty} onClick={save} style={{ flex: "none" }}>
-              {draft.trim() ? "Save calendar" : "Clear calendar"}
-            </Button>
-            {saved && <span className="t-foot" style={{ color: "var(--green)" }}>Saved — the Brief picks it up on the next refresh.</span>}
-          </div>
-
-          <SectionHeader title="Account" style={{ marginTop: 20 }} />
-          <CellGroup>
-            <Cell
-              title={session?.user?.email || "Signed in"}
-              sub="Synced across every device on this account"
-              titleStyle={{ fontSize: 14.5 }}
-            />
-            <Cell title="Sign out" destructive onClick={signOut} />
-          </CellGroup>
-
         </div>
+        )}
       </Sheet>
       {confirmEl}
     </>
