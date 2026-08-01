@@ -493,19 +493,33 @@ check("months come back newest first", monthsOf(ALL).join() === "2026-08");
   {
     const diagBlock = fn.match(/if \(action === "diag"\) \{[\s\S]*?\n    \}/)?.[0] || "";
     check("the diag block is findable", !!diagBlock);
-    // Match what a LEAK actually looks like — a bare value assignment, `x: c.id,`
-    // — rather than any mention of c.id at all. The block legitimately reads the
-    // key twice: once for .length and once inside a format test. Two earlier
-    // versions of this check failed on correct code, which is its own kind of
-    // useless: a test that cries wolf gets edited until it stops, and then it
-    // isn't checking anything.
+    // Police what is RETURNED, not what the block mentions. Three earlier
+    // versions of this check failed on correct code — a file-wide search flags
+    // the outbound call to Plaid, the block reads c.id twice for legitimate
+    // reasons, and the probe now sends the keys to Plaid on purpose. The only
+    // thing that matters is the response body, so that is what gets read.
+    const body = diagBlock.match(/return json\(200, \{[\s\S]*?\n      \}\);/)?.[0] || "";
+    check("the diag response body is findable", !!body, diagBlock.slice(-200));
     check("the diagnostic reports shape, never values",
-      /clientIdLength/.test(diagBlock) && /secretLength/.test(diagBlock) &&
-      !/:\s*c\.(id|secret)\s*[,}]/.test(diagBlock),
-      (diagBlock.match(/:\s*c\.(id|secret)\s*[,}]/) || ["clean"])[0]);
+      /clientIdLength/.test(body) && /secretLength/.test(body) &&
+      !/:\s*c\.(id|secret)\s*[,}]/.test(body),
+      (body.match(/:\s*c\.(id|secret)\s*[,}]/) || ["clean"])[0]);
   }
   check("…and is behind the session like everything else",
     fn.indexOf("const who = await whoami") < fn.indexOf('action === "diag"'));
+  // SHAPE ALONE COULDN'T FINISH THE JOB. It reported "24 chars, 30 chars, both
+  // look right" and still left "probably the wrong environment" as a guess. Plaid
+  // knows the answer, so the diagnostic asks BOTH hosts and reports which one
+  // accepts the keys — a fact instead of a hypothesis.
+  check("the diagnostic asks Plaid which environment the keys belong to",
+    /probe\("https:\/\/production\.plaid\.com"\)/.test(fn) && /probe\("https:\/\/sandbox\.plaid\.com"\)/.test(fn));
+  check("…using a call that creates nothing and bills nothing",
+    /institutions\/get/.test(fn), "an Item-creating probe would cost money to diagnose a typo");
+  check("…and states the mismatch outright", /mismatch: !!worksIn && worksIn !== PLAID_ENV\(\)/.test(fn));
+  check("the panel reports which environment actually works", /diag\.worksIn/.test(ui) && /diag\.probe/.test(ui));
+  // If NEITHER accepts them it is not an environment problem at all, and saying
+  // "check the environment" would send you round the same loop again.
+  check("…and says so when neither environment accepts them", /Neither environment accepted/.test(ui));
 }
 
 // ─── 12. the setup SQL has to be runnable, in the right schema ───────────────

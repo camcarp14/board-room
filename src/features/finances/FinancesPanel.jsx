@@ -335,11 +335,25 @@ export function FinancesPanel({ isMobile, settings, updateSetting }) {
               <div>Environment: <b>{diag.env}</b> → {diag.host}</div>
               <div>Client ID: {diag.clientIdLength} chars {diag.looksLikeClientId ? "· looks right" : "· NOT the usual 24-character format"}</div>
               <div>Secret: {diag.secretLength} chars {diag.looksLikeSecret ? "· looks right" : "· NOT the usual 30-character format"}</div>
-              {diag.looksLikeClientId && diag.looksLikeSecret && (
+              {diag.probe && (
                 <div style={{ marginTop: 4 }}>
-                  Both keys are well-formed, so this is almost certainly the wrong <b>environment</b>: Plaid gives you
-                  a different secret for Sandbox and for Production. Copy the <b>{diag.env}</b> secret from Plaid →
-                  Developers → Keys, or change PLAID_ENV to match the one you have.
+                  Plaid was asked directly: production <b>{diag.probe.production}</b> · sandbox <b>{diag.probe.sandbox}</b>
+                </div>
+              )}
+              {/* A fact rather than a hypothesis. Shape alone could only ever say
+                  "well-formed", which is where the previous version stopped. */}
+              {diag.mismatch && (
+                <div style={{ marginTop: 6, color: "var(--ink)" }}>
+                  Your keys are <b>{diag.worksIn}</b> keys, but PLAID_ENV is set to <b>{diag.env}</b>. Either set
+                  PLAID_ENV to <b>{diag.worksIn}</b> and redeploy, or paste the <b>{diag.env}</b> secret from
+                  Plaid → Developers → Keys.
+                  {diag.worksIn === "sandbox" && " Sandbox is Plaid's test bank — real-looking data, not your money."}
+                </div>
+              )}
+              {!diag.worksIn && diag.probe && (
+                <div style={{ marginTop: 6, color: "var(--ink)" }}>
+                  Neither environment accepted these keys, so it isn't the environment — the client_id and secret
+                  don't belong together. Re-copy both from Plaid → Developers → Keys.
                 </div>
               )}
             </>

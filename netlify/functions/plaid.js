@@ -234,6 +234,30 @@ exports.handler = async (event) => {
     // a client_id and secret swapped round, and it leaks nothing — the whole
     // point of the keys living in here is that they never come back out.
     if (action === "diag") {
+      // ASK BOTH ENVIRONMENTS. Shape alone can only say "well-formed", which is
+      // where this got stuck: 24 and 30 characters, both correct, and still
+      // rejected — leaving "probably the wrong environment" as a guess the user
+      // has to act on. Plaid will answer the question directly, so ask it.
+      //
+      // /institutions/get is the cheapest call that authenticates: it needs the
+      // client_id and secret, touches no Item, creates nothing and bills
+      // nothing. A 200 from a host means the keys ARE that host's keys.
+      const probe = async (host) => {
+        try {
+          const r = await fetch(`${host}/institutions/get`, {
+            method: "POST", headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ client_id: c.id, secret: c.secret, count: 1, offset: 0, country_codes: ["US"] }),
+          });
+          if (r.ok) return "accepted";
+          const d = await r.json().catch(() => ({}));
+          return d?.error_code || `HTTP ${r.status}`;
+        } catch { return "unreachable"; }
+      };
+      const [production, sandbox] = await Promise.all([
+        probe("https://production.plaid.com"),
+        probe("https://sandbox.plaid.com"),
+      ]);
+      const worksIn = production === "accepted" ? "production" : sandbox === "accepted" ? "sandbox" : null;
       return json(200, {
         ok: true,
         env: PLAID_ENV(),
@@ -244,6 +268,10 @@ exports.handler = async (event) => {
         // are almost always a swap or a partial copy.
         looksLikeClientId: /^[a-f0-9]{24}$/i.test(c.id),
         looksLikeSecret: /^[a-f0-9]{30}$/i.test(c.secret),
+        probe: { production, sandbox },
+        worksIn,
+        // The whole point: a fact, not a hypothesis.
+        mismatch: !!worksIn && worksIn !== PLAID_ENV(),
       });
     }
 
