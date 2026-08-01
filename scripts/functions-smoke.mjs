@@ -21,7 +21,7 @@
 // function. Self-contained is the house pattern here, deliberately.
 
 import esbuild from "esbuild";
-import { mkdirSync, rmSync, readdirSync } from "node:fs";
+import { mkdirSync, rmSync, readdirSync, readFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { join, resolve, basename } from "node:path";
 
@@ -32,6 +32,16 @@ const require_ = createRequire(import.meta.url);
 // tweetnacl is a real dependency of discord-board; keep it external so this
 // check doesn't depend on bundling third-party trees.
 const EXTERNALS = ["tweetnacl"];
+
+// Board Room is a personal, owner-only console. These endpoints can read
+// connected business data, spend API budget, or write through privileged
+// credentials; a valid session for a second account must never be sufficient.
+const OWNER_ONLY = [
+  "audit", "auto-fix", "calendar-events", "claude", "clarify-pipeline",
+  "db-admin", "deploy", "econ-resolve-background", "fetch-page", "gsc",
+  "mini-worker", "plaid", "shopify", "site-status", "upstream-run-background",
+  "workout-import", "zts-pipeline",
+];
 
 // ─── extra assertions on pure helpers a function exports for testing ─────────
 // Netlify only reads `handler`, so a function may export a pure helper purely so
@@ -111,6 +121,48 @@ const EXTRA = {
         m([], []).length === 0 && m(null, null).length === 0 && m([{ status: "queued" }], []).length === 0],
     ];
   },
+  "calendar-events": (mod) => {
+    const badUrl = mod.badUrl;
+    if (typeof badUrl !== "function") return [["calendar-events exports badUrl", false, "not exported"]];
+    return [
+      ["calendar events allow a public HTTPS host", !badUrl("https://calendar.google.com/calendar/ical/example/basic.ics")],
+      ["calendar events reject loopback hosts", !!badUrl("http://127.0.0.1:8080/private.ics")],
+      ["calendar events reject IPv6 loopback", !!badUrl("http://[::1]/private.ics")],
+      ["calendar events reject metadata hosts", !!badUrl("http://169.254.169.254/latest/meta-data/")],
+      ["calendar events reject embedded credentials", !!badUrl("https://user:pass@example.com/feed.ics")],
+    ];
+  },
+  "site-status": (mod) => {
+    const badUrl = mod.badUrl;
+    if (typeof badUrl !== "function") return [["site-status exports badUrl", false, "not exported"]];
+    return [
+      ["site status allows a public HTTPS host", !badUrl("https://zerotosecure.com")],
+      ["site status rejects loopback hosts", !!badUrl("http://localhost:3000")],
+      ["site status rejects private networks", !!badUrl("http://10.0.0.8/admin")],
+      ["site status rejects IPv6 local networks", !!badUrl("http://[fe80::1]/")],
+      ["site status rejects non-web schemes", !!badUrl("file:///etc/passwd")],
+    ];
+  },
+  "fetch-page": (mod) => {
+    const badUrl = mod.badUrl;
+    if (typeof badUrl !== "function") return [["fetch-page exports badUrl", false, "not exported"]];
+    return [
+      ["page fetch allows a public HTTPS host", !badUrl("https://developers.openai.com" )],
+      ["page fetch rejects local IPv6", !!badUrl("http://[::1]/" )],
+      ["page fetch rejects private IPv4", !!badUrl("http://192.168.1.1/" )],
+      ["page fetch rejects embedded credentials", !!badUrl("https://user:pass@example.com/" )],
+    ];
+  },
+  audit: (mod) => {
+    const badUrl = mod.badUrl;
+    if (typeof badUrl !== "function") return [["audit exports badUrl", false, "not exported"]];
+    return [
+      ["site auditor allows a public HTTPS host", !badUrl("https://zerotosecure.com" )],
+      ["site auditor rejects metadata hosts", !!badUrl("http://169.254.169.254/latest/meta-data/" )],
+      ["site auditor rejects IPv6 local networks", !!badUrl("http://[fd00::1]/" )],
+      ["site auditor rejects local hostnames", !!badUrl("http://app.internal/" )],
+    ];
+  },
 };
 
 rmSync(OUT_DIR, { recursive: true, force: true });
@@ -119,6 +171,13 @@ mkdirSync(OUT_DIR, { recursive: true });
 const fns = readdirSync(FN_DIR).filter(f => f.endsWith(".js")).sort();
 let pass = 0;
 const failures = [];
+
+for (const name of OWNER_ONLY) {
+  const source = readFileSync(join(FN_DIR, `${name}.js`), "utf8");
+  if (!source.includes("BOARD_USER_ID")) {
+    failures.push([`${name} · owner gate`, "missing BOARD_USER_ID authorization"]);
+  }
+}
 
 for (const file of fns) {
   const name = basename(file, ".js");
