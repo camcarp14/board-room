@@ -19,7 +19,15 @@
 // all, and the message is delivered to a document that is being torn down. It
 // passed every static check I wrote and failed the first time it met a browser.
 // The page asks instead (src/main.jsx), which needs no cooperation from here.
-const VERSION = "br-v5";
+//
+// v6, same reason as v5 and worth restating because it will come up again: the
+// brand-mark deploys changed only src/, so this file was byte-identical across
+// them, no new worker installed, and a launch kept painting the v5 shell — the
+// change landed on the SECOND launch, which reads as "the code never shipped".
+// Any deploy whose whole point is that you SEE something different has to touch
+// this file too. Bumping VERSION purges the stale PAGE_CACHE on activate, so the
+// next navigate finds nothing cached and awaits the live shell.
+const VERSION = "br-v6";
 const ASSET_CACHE = `${VERSION}-assets`;
 const PAGE_CACHE = `${VERSION}-pages`;
 
