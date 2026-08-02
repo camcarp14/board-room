@@ -209,6 +209,35 @@ export const IcUpstreamFill = (p = {}) => (
   </svg>
 );
 
+/* ── brand ────────────────────────────────────────────────────────────────────
+   The house mark: the same geometry as the home-screen app icon — a thin ring
+   with a solid diamond seated in it. The sidebar used to fly a bare rotated
+   square, which shared nothing with the icon you tap to get here.
+   Colour is a gradient over --accent-hi → --accent → --accent-deep rather than
+   flat --accent, which is what gives the app icon its metal. Those three tokens
+   are re-authored by every one of the 20 palettes in both light and dark, so the
+   mark re-tints with the room and never needs a second copy. Stops carry the
+   var() in `style`, not in a stop-color attribute: presentation attributes are
+   the shakier of the two paths for custom properties. */
+export const IcBoardRoom = (p = {}) => (
+  <svg
+    width={p.size || 24} height={p.size || 24} viewBox="0 0 24 24"
+    fill="none" style={p.style} aria-hidden={true}
+  >
+    <defs>
+      <linearGradient id="br-mark" x1="4.5" y1="3" x2="19.5" y2="21" gradientUnits="userSpaceOnUse">
+        <stop offset="0" style={{ stopColor: "var(--accent-hi)" }} />
+        <stop offset="0.55" style={{ stopColor: "var(--accent)" }} />
+        <stop offset="1" style={{ stopColor: "var(--accent-deep)" }} />
+      </linearGradient>
+    </defs>
+    <circle cx="12" cy="12" r="9" stroke="url(#br-mark)" strokeWidth={p.weight || 1.6} />
+    {/* A shade heavier than the app icon's diamond — at 18px the faithful ratio
+        goes to a speck, and the ring reads as an empty O. */}
+    <rect x="9.1" y="9.1" width="5.8" height="5.8" rx="0.7" transform="rotate(45 12 12)" fill="url(#br-mark)" />
+  </svg>
+);
+
 /* ── tab registry — one place decides what the tabs look like ──────────────── */
 export const IcFinances = (p = {}) => ( // a banknote — the money, plainly
   // A NOTE, not a coin, a chart or a dollar sign. A coin reads as crypto, a

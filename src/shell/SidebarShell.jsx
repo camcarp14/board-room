@@ -8,7 +8,7 @@
 // gets the difference back.
 import { NAV, HEADERS } from "./nav.js";
 import { TopStatus } from "./TopStatus.jsx";
-import { NAV_ICONS, IcSettings } from "../ui/icons.jsx";
+import { NAV_ICONS, IcSettings, IcBoardRoom } from "../ui/icons.jsx";
 import { NumTween, Sparkline } from "../ui/primitives.jsx";
 import { Delta } from "../ui/kit.jsx";
 
@@ -19,7 +19,7 @@ export function SidebarShell({ page, onNavigate, onOpenSettings, btc, session, n
     <div style={{ minHeight: "100vh", display: "grid", gridTemplateColumns: "236px minmax(0,1fr)", color: "var(--ink)" }}>
       <aside className="sidebar">
         <div className="side-brand">
-          <span style={{ width: 13, height: 13, transform: "rotate(45deg)", borderRadius: 3, background: "var(--accent)", flex: "none" }} />
+          <span style={{ display: "inline-flex", flex: "none" }}><IcBoardRoom size={19} /></span>
           <span className="side-brand-name">Board Room</span>
         </div>
 
