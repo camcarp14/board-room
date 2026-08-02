@@ -337,20 +337,22 @@ export function useConfirm() {
 }
 
 /* ── large-title page block ────────────────────────────────────────────────── */
-// `leading` hangs a mark to the LEFT of the title, in its own column — the sub
-// is indented to the title's left edge rather than sitting under the mark, so
-// title and sub keep one shared edge and the mark reads as a margin ornament.
+// `leading` hangs a mark to the LEFT of the title. Only the TITLE shares that
+// row — the sub stays on the block's own left edge, flush under the mark rather
+// than indented to the title's first letter. The mark is the header's left
+// margin; a sub that started inboard of it would give the block two competing
+// left edges.
 // The 5px nudge is optical: flex would centre the mark on the full 36.8px line
 // box, which sits it visibly low against a cap-height-dominated title.
 export function LargeTitle({ title, sub, trailing, leading, onTitleTap }) {
   return (
     <div className="lt-block" style={{ alignItems: "flex-start" }}>
-      <div style={{ minWidth: 0, flex: 1, display: "flex", gap: 10 }}>
-        {leading && <span style={{ flex: "none", display: "inline-flex", marginTop: 5 }}>{leading}</span>}
-        <div style={{ minWidth: 0 }}>
-          <h1 className="t-ltitle" style={{ margin: 0, cursor: onTitleTap ? "default" : undefined, WebkitUserSelect: "none", userSelect: "none" }} data-lt-sentinel onClick={onTitleTap}>{title}</h1>
-          {sub && <div className="lt-sub">{sub}</div>}
+      <div style={{ minWidth: 0, flex: 1 }}>
+        <div style={{ display: "flex", gap: 10, minWidth: 0 }}>
+          {leading && <span style={{ flex: "none", display: "inline-flex", marginTop: 5 }}>{leading}</span>}
+          <h1 className="t-ltitle" style={{ margin: 0, minWidth: 0, cursor: onTitleTap ? "default" : undefined, WebkitUserSelect: "none", userSelect: "none" }} data-lt-sentinel onClick={onTitleTap}>{title}</h1>
         </div>
+        {sub && <div className="lt-sub">{sub}</div>}
       </div>
       {trailing && <div style={{ flex: "none", display: "flex", alignItems: "center", marginTop: -2 }}>{trailing}</div>}
     </div>
