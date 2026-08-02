@@ -401,6 +401,8 @@ button:active:not(:disabled) { transform: scale(0.97); }
   padding: 4px 4px; min-width: 0;
 }
 .seg-opt.active { color: var(--ink); font-weight: 600; }
+/* five-up (Train): one notch down, still well above the 10.5px floor */
+.seg-tight .seg-opt { font-size: 12px; padding: 4px 2px; gap: 4px; }
 @media (hover: hover) { .seg-opt:not(.active):hover { color: var(--ink); } }
 .seg-thumb {
   position: absolute; top: 2px; bottom: 2px; border-radius: 8px; background: var(--seg-thumb);

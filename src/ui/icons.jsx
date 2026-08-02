@@ -183,6 +183,14 @@ export const IcMoon = (p = {}) => <svg {...base(p)}><path d="M20 13.2A8.2 8.2 0 
 export const IcAutoTheme = (p = {}) => <svg {...base(p)}><circle cx="12" cy="12" r="8" /><path d="M12 4a8 8 0 0 1 0 16z" fill="currentColor" stroke="none" /></svg>;
 export const IcCommand = (p = {}) => <svg {...base(p)}><path d="M9 9V6.5A2.5 2.5 0 1 0 6.5 9H9zm0 0v6m0-6h6M9 15H6.5A2.5 2.5 0 1 0 9 17.5V15zm6-6V6.5A2.5 2.5 0 1 1 17.5 9H15zm0 0v6m0 0h2.5a2.5 2.5 0 1 1-2.5 2.5V15z" /></svg>;
 export const IcDumbbell = (p = {}) => <svg {...base(p)}><rect x="2.5" y="9.2" width="3.2" height="5.6" rx="1.1" /><rect x="6.6" y="7" width="3.2" height="10" rx="1.1" /><rect x="18.3" y="9.2" width="3.2" height="5.6" rx="1.1" /><rect x="14.2" y="7" width="3.2" height="10" rx="1.1" /><line x1="9.8" y1="12" x2="14.2" y2="12" /></svg>;
+export const IcBike = (p = {}) => ( // two wheels and a crank — the Rides tab
+  <svg {...base(p)}>
+    <circle cx="5.5" cy="17" r="3.5" /><circle cx="18.5" cy="17" r="3.5" />
+    <path d="M5.5 17 9.5 9h4.2" /><path d="M9.5 9h5.2l3.8 8" />
+    <circle cx="12" cy="17" r="0.9" fill="currentColor" stroke="none" />
+    <path d="M14.7 5.4h2.4" />
+  </svg>
+);
 export const IcBook = (p = {}) => <svg {...base(p)}><path d="M4 5.5C4 4.7 4.7 4 5.5 4H10c1.1 0 2 .9 2 2v14c0-1.1-.9-2-2-2H5.5c-.8 0-1.5-.7-1.5-1.5z" /><path d="M20 5.5c0-.8-.7-1.5-1.5-1.5H14c-1.1 0-2 .9-2 2v14c0-1.1.9-2 2-2h4.5c.8 0 1.5-.7 1.5-1.5z" /></svg>;
 export const IcHeart = (p = {}) => <svg {...base(p)}><path d="M12 20s-7.5-4.7-7.5-10A4.4 4.4 0 0 1 9 5.6c1.3 0 2.4.6 3 1.6.6-1 1.7-1.6 3-1.6a4.4 4.4 0 0 1 4.5 4.4c0 5.3-7.5 10-7.5 10z" /></svg>;
 export const IcGift = (p = {}) => <svg {...base(p)}><rect x="4" y="10.5" width="16" height="9.5" rx="1.6" /><line x1="12" y1="7" x2="12" y2="20" /><path d="M4.8 7h14.4v3.5H4.8z" /><path d="M12 7s-.7-3.5-3-3.5A1.75 1.75 0 0 0 9 7zm0 0s.7-3.5 3-3.5A1.75 1.75 0 0 1 15 7z" /></svg>;

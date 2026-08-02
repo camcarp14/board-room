@@ -13,6 +13,9 @@ import {
 } from "./lib/workout-engine.js";
 import { FindWorkout } from "./pages/train/PerfectWorkout.jsx";
 import { FatMelter } from "./pages/train/FatMelter.jsx";
+import { listRides } from "./lib/ride-engine.js";
+import RidesPanel from "./pages/train/RidesPanel.jsx";
+import WatchSheet from "./pages/train/WatchSheet.jsx";
 
 // ════════════════════════════════════════════════════════════════════════════
 // WORKOUT — the Train tab (graduated from Personal to its own dock slot).
@@ -39,6 +42,8 @@ import { FatMelter } from "./pages/train/FatMelter.jsx";
 //   · Apple Watch: a Shortcuts automation POSTs finished workouts to
 //     /.netlify/functions/workout-import (token-gated, idempotent) — runs
 //     and rides land in History with kcal + avg HR
+//   · Rides: the cycling recap built on those imports — distance, climbing,
+//     power, effort zones, all-time bests (src/pages/train/RidesPanel.jsx)
 //   · a workout in progress survives the app closing — resumes where you left it
 //   · finishing can write today's numbers back into the routine (one toggle)
 //   · your data, your Supabase — CSV export lives in History
@@ -118,7 +123,10 @@ function makeWdb(sb) {
       return data;
     },
     async deleteTemplate(id) { try { await sb.from("workout_templates").delete().eq("id", id); } catch {} },
-    async loadSessions(limit = 120) {
+    // 300, not 120: Rides reads all-time bests and a 12-week shape out of the
+    // same list, and a rider who also lifts four times a week would have their
+    // cycling history quietly cut off at the old ceiling.
+    async loadSessions(limit = 300) {
       const { data, error } = await sb.from("workout_sessions")
         .select("id,template_id,template_name,unit,started_at,ended_at,duration_sec,notes,exercises,total_volume,total_sets,pr_count")
         .order("started_at", { ascending: false }).limit(limit);
@@ -462,9 +470,9 @@ export default function WorkoutPanel({ isMobile, supabase, settings, updateSetti
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 12, minWidth: 0 }}>
       <Segmented
-        options={[{ key: "train", label: "Train" }, { key: "routines", label: "Routines" }, { key: "progress", label: "Progress" }, { key: "history", label: "History" }]}
+        options={[{ key: "train", label: "Train" }, { key: "routines", label: "Routines" }, { key: "rides", label: "Rides" }, { key: "progress", label: "Progress" }, { key: "history", label: "History" }]}
         value={view} onChange={setView}
-        style={isMobile ? undefined : { maxWidth: 480 }}
+        style={isMobile ? undefined : { maxWidth: 560 }}
       />
       {loadErr && <Card pad="md"><span className="t-call" style={{ color: "var(--red)" }}>{loadErr}</span></Card>}
       {view === "train" && (
@@ -474,8 +482,12 @@ export default function WorkoutPanel({ isMobile, supabase, settings, updateSetti
           onResume={() => setView("session")} onStart={startWorkout}
           onQuickStart={() => startWorkout(null)} onSaveRoutine={saveAsRoutine}
           onManage={() => setView("routines")} onHistory={() => setView("history")}
+          onRides={() => setView("rides")}
           ws={{ ...ws, unit, bar, defaultRest }} setWs={setWs}
         />
+      )}
+      {view === "rides" && (
+        <RidesPanel sessions={sessions} wdb={wdb} ws={{ ...ws, unit }} setWs={setWs} onRefresh={refreshAll} />
       )}
       {view === "progress" && (
         <ProgressView isMobile={isMobile} sessions={sessions} unit={unit} goal={Number(ws.goal) > 0 ? Number(ws.goal) : 3} wdb={wdb} />
@@ -577,7 +589,7 @@ function SetupCard({ onRetry }) {
 }
 
 // ─── Train home — resume, this week, start, recent, recovery, preferences ────
-function TrainHome({ isMobile, templates, sessions, active, unit, onResume, onStart, onQuickStart, onSaveRoutine, onManage, onHistory, ws, setWs }) {
+function TrainHome({ isMobile, templates, sessions, active, unit, onResume, onStart, onQuickStart, onSaveRoutine, onManage, onHistory, onRides, ws, setWs }) {
   const doneSets = active ? active.exercises.reduce((n, e) => n + e.sets.filter((s) => s.done && !isWU(s)).length, 0) : 0;
   const mins = active ? Math.max(1, Math.round((Date.now() - active.startedAt) / 60000)) : 0;
   const recent = (sessions || []).slice(0, 3);
@@ -591,6 +603,7 @@ function TrainHome({ isMobile, templates, sessions, active, unit, onResume, onSt
   }, [sessions]);
   const [watchOpen, setWatchOpen] = useState(false);
   const watchCount = useMemo(() => (sessions || []).filter((s) => isCardio(s) && cardioMeta(s)?.source === "watch").length, [sessions]);
+  const rideCount = useMemo(() => listRides(sessions || []).length, [sessions]);
   // the coach line: which routine does today want? (ranked by days-since +
   // muscle-group freshness — transparent score, facts in the reason)
   const pick = useMemo(() => {
@@ -779,6 +792,10 @@ function TrainHome({ isMobile, templates, sessions, active, unit, onResume, onSt
             <Cell title="Auto-import workouts" chevron onClick={() => setWatchOpen(true)}
               sub={watchCount > 0 ? `${watchCount} imported so far — runs, rides, rows land in History` : "Not receiving yet — one-time Shortcuts setup"}
               trailing={watchCount > 0 ? <Dot tone="var(--green)" size={7} /> : undefined} />
+            <Cell title="Rides" chevron onClick={onRides}
+              sub={rideCount > 0
+                ? `${rideCount} ride${rideCount === 1 ? "" : "s"} — distance, climbing, effort, all-time bests`
+                : "The cycling recap — empty until a ride arrives from Apple Health"} />
           </CellGroup>
         </section>
       </Grid>
@@ -1518,65 +1535,6 @@ function RoutineEditor({ isMobile, unit, defaultRest, initial, nextPosition, onS
       )}
       {confirmEl}
     </Card>
-  );
-}
-
-// ─── Watch sheet — the honest Apple Watch hookup ──────────────────────────────
-// A web app cannot touch HealthKit; the working path is an iOS Shortcuts
-// automation ("When I finish a workout" → POST here). The only status shown
-// is how many workouts actually arrived — no fake "connected" state.
-function WatchSheet({ ws, setWs, watchCount, onClose }) {
-  const [copied, setCopied] = useState(null);
-  const endpoint = `${window.location.origin}/.netlify/functions/workout-import`;
-  const token = ws.importToken || "";
-  const copy = (label, text) => { navigator.clipboard?.writeText(text).then(() => { setCopied(label); setTimeout(() => setCopied(null), 1800); }); };
-  const genToken = () => setWs({ importToken: uuid() });
-  return (
-    <Sheet onClose={onClose} title="Apple Watch · auto-import" z={320}>
-      <div className="t-call" style={{ color: "var(--sub)", lineHeight: 1.6 }}>
-        Finish a workout on the watch → an iPhone Shortcuts automation posts it here → it lands in
-        History with calories and average heart rate. Re-sends are skipped, never duplicated.
-        {watchCount > 0 ? ` ${watchCount} imported so far.` : " Nothing has arrived yet."}
-      </div>
-
-      <div className="t-label" style={{ margin: "16px 0 8px" }}>Your import token</div>
-      {token ? (
-        <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-          <code className="t-num" style={{ flex: 1, minWidth: 0, background: "var(--surface-2)", borderRadius: 10, padding: "10px 12px", fontSize: 12, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{token}</code>
-          <Button kind="quiet" size="md" onClick={() => copy("token", token)}>{copied === "token" ? "Copied" : "Copy"}</Button>
-        </div>
-      ) : (
-        <Button kind="primary" size="md" onClick={genToken}>Generate token</Button>
-      )}
-      {token && (
-        <div className="t-foot" style={{ color: "var(--faint)", marginTop: 6 }}>
-          The token is the only key to this door — treat it like a password.{" "}
-          <button className="sec-link" style={{ font: "inherit" }} onClick={genToken}>Regenerate</button> to revoke the old one.
-        </div>
-      )}
-
-      <div className="t-label" style={{ margin: "16px 0 8px" }}>One-time setup (iPhone)</div>
-      <ol className="t-call" style={{ color: "var(--sub)", lineHeight: 1.7, margin: 0, paddingLeft: 20 }}>
-        <li>Shortcuts → Automation → <b>+</b> → <b>When I finish a workout</b> → Run Immediately.</li>
-        <li>Add action <b>Get Contents of URL</b>:&nbsp;
-          <code className="t-num" style={{ fontSize: 11.5, background: "var(--surface-2)", borderRadius: 6, padding: "2px 6px", wordBreak: "break-all" }}>{endpoint}</code>
-          <Button kind="quiet" size="md" onClick={() => copy("url", endpoint)} style={{ marginLeft: 6, padding: "0 10px", height: 30, minHeight: 30 }}>{copied === "url" ? "Copied" : "Copy"}</Button>
-        </li>
-        <li>Method <b>POST</b> · Request Body <b>JSON</b> with fields from the automation's workout:
-          <pre className="t-num" style={{ background: "var(--surface-2)", borderRadius: 10, padding: "10px 12px", fontSize: 11, lineHeight: 1.55, overflowX: "auto", margin: "8px 0 0" }}>
-{`{ "token": "<your token>",
-  "workouts": [{
-    "type":        <Workout Type>,
-    "start":       <Start Date (ISO 8601)>,
-    "durationMin": <Duration (minutes)>,
-    "calories":    <Active Energy>,
-    "avgHeartRate":<Average Heart Rate>,
-    "distanceKm":  <Distance (km)>
-  }] }`}</pre>
-          Only type, start, and duration are required. The <b>Health Auto Export</b> app's REST automation pointed at the same URL works too.
-        </li>
-      </ol>
-    </Sheet>
   );
 }
 

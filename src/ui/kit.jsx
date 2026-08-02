@@ -167,11 +167,13 @@ export function PillRow({ options, value, onChange, fmt = (o) => o.label ?? Stri
 }
 
 export function Segmented({ options, value, onChange, style }) {
-  // options: [{ key, label, sub? }] — ≤4, equal width; thumb glides, no measuring
+  // options: [{ key, label, sub? }] — equal width; thumb glides, no measuring.
+  // Four is the comfortable ceiling; a fifth (Train's Rides tab) tightens the
+  // type a notch rather than truncating "Routines" on a 390px phone.
   const idx = Math.max(0, options.findIndex((o) => (o.key ?? o) === value));
   const w = 100 / options.length;
   return (
-    <div className="seg" style={style}>
+    <div className={`seg${options.length > 4 ? " seg-tight" : ""}`} style={style}>
       <span className="seg-thumb" style={{ left: `calc(${idx * w}% + 2px)`, width: `calc(${w}% - 4px)` }} />
       {options.map((o) => {
         const k = o.key ?? o;
