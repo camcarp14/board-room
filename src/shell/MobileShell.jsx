@@ -8,7 +8,7 @@ import { useState, useRef } from "react";
 import { NAV, HEADERS } from "./nav.js";
 import { TopStatus } from "./TopStatus.jsx";
 import { ViewportDiag } from "./ViewportDiag.jsx";
-import { NAV_ICONS, IcSettings } from "../ui/icons.jsx";
+import { NAV_ICONS, IcSettings, IcBoardRoom } from "../ui/icons.jsx";
 import { LargeTitle } from "../ui/kit.jsx";
 import { IS_STANDALONE, useVisualViewport } from "../hooks/index.js";
 
@@ -76,7 +76,11 @@ export function MobileShell({ page, navDir, onNavigate, onOpenSettings, now, dat
 
       <div id="page-scroll" style={{ flex: 1, minHeight: 0, overflowY: "auto", display: "flex", flexDirection: "column", touchAction: "pan-y" }}>
         <div key={page} className={navDir === "l" ? "pageslide-l" : navDir === "r" ? "pageslide-r" : "pagefade"} style={{ display: "flex", flexDirection: "column", flex: 1, paddingBottom: 20 }}>
-          <LargeTitle title={head.title} sub={sub} trailing={controls} onTitleTap={onBarTap} />
+          {/* The house mark rides beside every page title. The rail carries it on
+              desktop; phone has no rail, so this header is the only place the
+              app says whose room you're in. It tints itself off --accent* — see
+              IcBoardRoom — so it follows the palette without anything here. */}
+          <LargeTitle title={head.title} sub={sub} trailing={controls} leading={<IcBoardRoom size={26} />} onTitleTap={onBarTap} />
           {children}
         </div>
       </div>
