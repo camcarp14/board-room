@@ -99,8 +99,10 @@ check("a saved assets/systems/boardroom link lands on the Brief",
 
 // ── 2. the Settings sheet, and the split that keeps it cheap ─────────────────
 const sheetTabs = [...(sheet.match(/const SHEET_TABS = \[([^\]]*)\]/)?.[1] || "").matchAll(/key: "(\w+)"/g)].map(m => m[1]);
-check("Systems is the first tab, Theme second",
-  sheetTabs.join(",") === "systems,theme", sheetTabs.join(","));
+// Tabs is third: which rooms are on the bar is configuration you set once,
+// like the theme — it earns a sheet tab, never a nav slot.
+check("Systems first, Theme second, Tabs third",
+  sheetTabs.join(",") === "systems,theme,tabs", sheetTabs.join(","));
 const sysTabs = [...(sheet.match(/const SYS_TABS = \[([\s\S]*?)\n\];/)?.[1] || "").matchAll(/key: "(\w+)"/g)].map(m => m[1]);
 check("Systems holds Status, Usage, Miner and Account",
   sysTabs.slice().sort().join(",") === "account,miner,status,usage", sysTabs.join(","));

@@ -176,6 +176,13 @@ export default function App() {
     setSettings(prev => ({ ...(prev || {}), [key]: value }));
     db.saveSetting(key, value);
   };
+
+  // Tabs the owner switched off (Settings → Tabs). Brief cannot be hidden —
+  // it's the landing page and the bar's one guaranteed way home. Hiding a tab
+  // removes its BAR SLOT, not the destination: deep links and in-app jumps
+  // still reach the page; the bar just shows no active tab while you're there.
+  const hiddenTabs = new Set(Array.isArray(settings?.hidden_tabs) ? settings.hidden_tabs : []);
+  const visibleNav = NAV.filter(n => n.key === "brief" || !hiddenTabs.has(n.key));
   const saveSeatNote = async (key, notes) => {
     setSeatNotes(prev => ({ ...prev, [key]: notes }));
     await db.saveSeatNote(key, notes);
@@ -216,8 +223,11 @@ export default function App() {
     if (key === "dreams") key = "creed";
     // Direction-aware: pages to the right slide in from the right, and vice
     // versa — the same physics whether the trigger was a tab tap or a swipe.
-    const from = NAV.findIndex(n => n.key === page);
-    const to = NAV.findIndex(n => n.key === key);
+    // Measured on the VISIBLE bar: with tabs hidden, "next door" means the
+    // next slot you can see, and a hidden destination (deep link) gets no
+    // slide rather than a direction derived from a bar it isn't on.
+    const from = visibleNav.findIndex(n => n.key === page);
+    const to = visibleNav.findIndex(n => n.key === key);
     setNavDir(to > from ? "l" : to < from ? "r" : null);
     setPage(key);
     requestAnimationFrame(() => {
@@ -236,6 +246,18 @@ export default function App() {
   pageRef.current = page;
   const goToPageRef = useRef(null);
   goToPageRef.current = goToPage;
+  // The swipe handler is a native listener mounted once — it reads the
+  // visible bar through a ref so a toggle in Settings takes effect without
+  // re-binding the gesture.
+  const visibleNavRef = useRef(visibleNav);
+  visibleNavRef.current = visibleNav;
+
+  // Hiding the tab you're standing on bounces you to the Brief — the sheet
+  // stays open, the bar under it just updates. Keyed on the setting, not the
+  // page, so a deep link INTO a hidden page later doesn't get bounced.
+  useEffect(() => {
+    if (page !== "brief" && hiddenTabs.has(page)) setPage("brief");
+  }, [settings?.hidden_tabs]); // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => {
     if (!isMobile) return;
     // Document-level delegation: the shell (and #page-scroll) may not exist
@@ -265,9 +287,11 @@ export default function App() {
       if (!s || e.pointerType !== "touch") return;
       const dx = e.clientX - s.x, dy = e.clientY - s.y;
       if (Date.now() - s.t > 600 || Math.abs(dx) < 64 || Math.abs(dx) < 2.2 * Math.abs(dy)) return;
-      const idx = NAV.findIndex(n => n.key === pageRef.current);
+      const bar = visibleNavRef.current;
+      const idx = bar.findIndex(n => n.key === pageRef.current);
+      if (idx === -1) return; // on a hidden page (deep link) — no neighbors to swipe to
       const next = dx < 0 ? idx + 1 : idx - 1;
-      if (next >= 0 && next < NAV.length) goToPageRef.current?.(NAV[next].key);
+      if (next >= 0 && next < bar.length) goToPageRef.current?.(bar[next].key);
     };
     const onCancel = () => { start = null; };
     document.addEventListener("pointerdown", onDown);
@@ -482,7 +506,7 @@ export default function App() {
   // ═══ SHELLS ═══
   // One nav state, two chromes: MobileShell (glass nav bar + tab bar, all the
   // iOS-standalone geometry) and SidebarShell (iPadOS sidebar + content well).
-  const shellProps = { page, theme, onNavigate: goToPage, onOpenSettings: () => setSettingsOpen(true), now, dataStamp, refreshing, onRefresh: refreshData };
+  const shellProps = { page, theme, nav: visibleNav, onNavigate: goToPage, onOpenSettings: () => setSettingsOpen(true), now, dataStamp, refreshing, onRefresh: refreshData };
   const overlays = (
     <>
       {confirmEl}
@@ -495,6 +519,8 @@ export default function App() {
           onSaveCalUrl={(v) => updateSetting("calendar_url", v)}
           isMobile={isMobile}
           conn={conn}
+          settings={settings}
+          updateSetting={updateSetting}
         />
       )}
       {editSeat && <SeatNotesModal seatKey={editSeat} initial={seatNotes[editSeat]} onSave={saveSeatNote} onClose={() => setEditSeat(null)} isMobile={isMobile} />}

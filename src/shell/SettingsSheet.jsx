@@ -23,6 +23,7 @@
 // six-item row would put "Colour scheme" and "Miner" on the same shelf.
 import { useState, useEffect, useRef, lazy, Suspense } from "react";
 import { supabase } from "../lib/supabase.js";
+import { NAV } from "./nav.js";
 import { Sheet, Cell, CellGroup, Button, Field, SectionHeader, SwitchRow, Segmented, Spinner, useConfirm } from "../ui/kit.jsx";
 import { IcSun, IcMoon, IcAutoTheme, IcCheck } from "../ui/icons.jsx";
 import { PALETTES } from "../design/palettes.js";
@@ -35,7 +36,7 @@ const UsageTab = lazy(() => import("../pages/systems/SystemsPage.jsx").then(m =>
 const StatusTab = lazy(() => import("../pages/systems/SystemsPage.jsx").then(m => ({ default: m.StatusTab })));
 const MinerPanel = lazy(() => import("../pages/systems/MinerPanel.jsx").then(m => ({ default: m.MinerPanel })));
 
-const SHEET_TABS = [{ key: "systems", label: "Systems" }, { key: "theme", label: "Theme" }];
+const SHEET_TABS = [{ key: "systems", label: "Systems" }, { key: "theme", label: "Theme" }, { key: "tabs", label: "Tabs" }];
 // Account sits with the systems panels rather than in Theme: your calendar feed
 // and your session are configuration, and Theme is strictly how it looks.
 const SYS_TABS = [
@@ -82,7 +83,7 @@ function Swatch({ p, mode, selected }) {
   );
 }
 
-export function SettingsSheet({ onClose, session, theme, calUrl, onSaveCalUrl, isMobile, conn }) {
+export function SettingsSheet({ onClose, session, theme, calUrl, onSaveCalUrl, isMobile, conn, settings, updateSetting }) {
   // Systems first, and Usage first within it. The sheet is opened from the
   // sun/moon button, so Theme was the obvious landing — but the theme is set
   // once and then never again, while "what has this been spending" is the thing
@@ -268,6 +269,40 @@ export function SettingsSheet({ onClose, session, theme, calUrl, onSaveCalUrl, i
 
         </div>
         )}
+
+        {tab === "tabs" && (() => {
+          // Hidden tabs live in app_settings (account-scoped, unlike the
+          // device-local theme prefs): which rooms exist is a fact about the
+          // house, not about the phone in your hand. The bar updates live
+          // behind the sheet — updateSetting is optimistic.
+          const hidden = new Set(Array.isArray(settings?.hidden_tabs) ? settings.hidden_tabs : []);
+          const toggle = (key) => {
+            const next = new Set(hidden);
+            if (next.has(key)) next.delete(key); else next.add(key);
+            updateSetting?.("hidden_tabs", [...next]);
+          };
+          return (
+            <div key="tabs" className="pagefade" style={{ display: "flex", flexDirection: "column", gap: 4, paddingBottom: 4 }}>
+              <SectionHeader title="The bar" />
+              <CellGroup>
+                {NAV.filter((n) => n.key !== "brief").map((n) => (
+                  <SwitchRow
+                    key={n.key}
+                    title={n.label}
+                    on={!hidden.has(n.key)}
+                    onToggle={() => toggle(n.key)}
+                  />
+                ))}
+              </CellGroup>
+              <div className="t-cap" style={{ color: "var(--faint)", lineHeight: 1.5, padding: "8px 4px 0" }}>
+                Off takes the tab out of the phone bar and the tablet rail — the page
+                itself stays reachable from links inside the app. Brief isn't listed
+                because it can't go: it's the front door, and the one tab that always
+                leads home.
+              </div>
+            </div>
+          );
+        })()}
       </Sheet>
       {confirmEl}
     </>

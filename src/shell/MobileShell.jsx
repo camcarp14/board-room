@@ -12,7 +12,7 @@ import { NAV_ICONS, IcSettings, IcBoardRoom } from "../ui/icons.jsx";
 import { LargeTitle } from "../ui/kit.jsx";
 import { IS_STANDALONE, useVisualViewport } from "../hooks/index.js";
 
-export function MobileShell({ page, navDir, onNavigate, onOpenSettings, now, dataStamp, refreshing, onRefresh, children }) {
+export function MobileShell({ page, navDir, nav = NAV, onNavigate, onOpenSettings, now, dataStamp, refreshing, onRefresh, children }) {
   const { vvh, envTop } = useVisualViewport();
   const diagTaps = useRef({ n: 0, t: 0 });
   const [diagOpen, setDiagOpen] = useState(false);
@@ -91,7 +91,7 @@ export function MobileShell({ page, navDir, onNavigate, onOpenSettings, now, dat
           flex column cannot be. Hidden entirely while the keyboard is up. */}
       <div className="dock-wrap" style={{ flex: "none", display: keyboardOpen ? "none" : undefined }}>
         <nav className="dock" aria-label="Primary">
-          {NAV.map(n => {
+          {nav.map(n => {
             const active = page === n.key;
             const Icon = active ? NAV_ICONS[n.key].fill : NAV_ICONS[n.key].line;
             return (

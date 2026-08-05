@@ -12,7 +12,7 @@ import { NAV_ICONS, IcSettings, IcBoardRoom } from "../ui/icons.jsx";
 import { NumTween, Sparkline } from "../ui/primitives.jsx";
 import { Delta } from "../ui/kit.jsx";
 
-export function SidebarShell({ page, onNavigate, onOpenSettings, btc, session, now, dataStamp, refreshing, onRefresh, children }) {
+export function SidebarShell({ page, nav = NAV, onNavigate, onOpenSettings, btc, session, now, dataStamp, refreshing, onRefresh, children }) {
   const head = HEADERS[page];
 
   return (
@@ -25,7 +25,7 @@ export function SidebarShell({ page, onNavigate, onOpenSettings, btc, session, n
 
         {/* One flat list, ordered — Brief · Personal · Train · Assets. */}
         <nav className="side-nav" aria-label="Primary">
-          {NAV.map(n => {
+          {nav.map(n => {
             const active = page === n.key;
             const Icon = active ? NAV_ICONS[n.key].fill : NAV_ICONS[n.key].line;
             return (
