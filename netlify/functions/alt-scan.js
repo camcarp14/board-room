@@ -182,13 +182,26 @@ exports.handler = async (event) => {
     // Board: stored screener rows with live price/chg overlaid. Scores and
     // targets stay as the cron computed them — a fresher price does not make
     // the hourly read fresher, it just stops the tape looking frozen.
-    // chg4h/chg12h are OURS, not CoinGecko's: current price against the cron's
-    // stored snapshot baselines, per row, so the Crypto board can show every
-    // window on every coin. Null until the snapshot series is old enough.
-    const chgVsBaseline = (w, id, price) => {
+    // chg4h/chg12h are OURS, not CoinGecko's — it publishes neither window.
+    // Two sources, in this order of preference:
+    //   1. `baselines` — the cron's own alt_snapshots row from ~4h/~12h ago.
+    //      Exact, measured by us, but only exists once the series has been
+    //      accumulating that long.
+    //   2. `sparkRef` — the same instant read off CoinGecko's 168-point hourly
+    //      sparkline, which is available on the cron's very first pass.
+    // Snapshots win when present; the sparkline is what stops both columns
+    // reading "—" for the first half-day after a deploy or a cron gap.
+    const refFor = (w, id) => {
       const base = payload.baselines && payload.baselines[w];
-      const b = base ? num(base[id]) : null;
-      return b != null && b > 0 && price != null ? r2(((price - b) / b) * 100) : null;
+      const fromSnapshot = base ? num(base[id]) : null;
+      if (fromSnapshot != null && fromSnapshot > 0) return fromSnapshot;
+      const spark = payload.sparkRef && payload.sparkRef[w];
+      const fromSpark = spark ? num(spark[id]) : null;
+      return fromSpark != null && fromSpark > 0 ? fromSpark : null;
+    };
+    const chgVsBaseline = (w, id, price) => {
+      const ref = refFor(w, id);
+      return ref != null && price != null ? r2(((price - ref) / ref) * 100) : null;
     };
     const board = storedBoard.map((row) => {
       const live = liveById.get(row.id);
@@ -240,16 +253,17 @@ exports.handler = async (event) => {
         return m;
       });
     };
-    // 4h/12h have no CoinGecko field — they come from our own hourly
-    // snapshots. No baseline yet (fresh deploy, snapshot gap) → null, and the
-    // UI shows readyIn instead of a fake zero.
+    // 4h/12h have no CoinGecko field — see refFor above for the two sources.
+    // Only when NEITHER exists for any coin does the window go null and the UI
+    // fall back to readyIn, rather than ranking a list of fake zeroes.
     const baselineWindow = (w) => {
-      const base = payload.baselines && payload.baselines[w];
-      if (!base) return null;
-      return topBy((r) => {
-        const b = num(base[r.id]);
-        return b != null && b > 0 ? ((r.price - b) / b) * 100 : NaN;
+      const hasAny = (payload.baselines && payload.baselines[w]) || (payload.sparkRef && payload.sparkRef[w]);
+      if (!hasAny) return null;
+      const list = topBy((r) => {
+        const ref = refFor(w, r.id);
+        return ref != null ? ((r.price - ref) / ref) * 100 : NaN;
       });
+      return list.length ? list : null;
     };
 
     const movers = {

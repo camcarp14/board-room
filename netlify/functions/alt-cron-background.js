@@ -1094,6 +1094,41 @@ function mergeDomSample(history, t, dom) {
   return kept.slice(-DOM_CAP);
 }
 
+/**
+ * The price `hoursAgo` hours back, read off CoinGecko's 7-day hourly
+ * sparkline.
+ *
+ * WHY THIS EXISTS AT ALL, given alt_snapshots. The snapshot series is our own
+ * and exact, but it can only price a 4h window after four hours of passes and
+ * a 12h window after twelve — so a fresh deploy (or any gap in the cron) shows
+ * "—" in those two columns for half a day, and a column that reads "—" the
+ * first time you look at it is a column you stop looking at. The sparkline is
+ * ~168 hourly closes and arrives on the FIRST pass, so it can seed both
+ * windows immediately. Snapshots still win when present (see refFor in
+ * alt-scan.js) — this is the floor, not the ceiling.
+ *
+ * The index is derived from the array's own length rather than assuming 168
+ * points: CoinGecko truncates the series for young listings, and stepping a
+ * fixed 4 slots back on a 40-point tape would reach ~17 hours, not 4.
+ *
+ * KNOWN IMPRECISION, and the second reason snapshots outrank this: the series
+ * carries no timestamps, so "4 hours back" is 4 hours back from its LAST
+ * CLOSE, not from now. The reading is therefore a 4-to-5 hour window depending
+ * on how long ago that close printed. Fine for a mover column, which is why
+ * this seeds the window rather than owning it.
+ */
+function priceAgo(spark, hoursAgo) {
+  const s = Array.isArray(spark) ? spark.filter(Number.isFinite) : [];
+  if (s.length < 8) return null;
+  const perHour = (s.length - 1) / (7 * 24);
+  const idx = Math.round(s.length - 1 - hoursAgo * perHour);
+  // idx must leave a real gap — landing on the last point would compare the
+  // price against itself and print a confident 0.0%.
+  if (idx < 0 || idx >= s.length - 1) return null;
+  const v = s[idx];
+  return v > 0 ? v : null;
+}
+
 // ~28 evenly-sampled points, first and last always included — the board ships
 // a spark, not the 168-point sparkline, because 60 rows × 168 floats is dead
 // weight on every client poll.
@@ -1129,7 +1164,7 @@ async function runPass() {
   const now = Date.now();
   const nowIso = new Date(now).toISOString();
   const counts = {
-    universe: 0, eligible: 0, board: 0,
+    universe: 0, eligible: 0, board: 0, sparkRef4h: 0,
     flagsInserted: 0, flagsUpdated: 0, flagsClosed: 0,
     snapshotWritten: false, stateWritten: false,
   };
@@ -1345,6 +1380,20 @@ async function runPass() {
   if (db && season && eligible && !prevReadFailed) {
     const board = eligible.slice(0, BOARD_SIZE).map(boardRow);
     counts.board = board.length;
+    // Sparkline-derived reference prices for the 4h/12h windows, for EVERY
+    // eligible coin rather than just the 60 on the board — the movers lists
+    // rank over the whole eligible set, and a reference map that stopped at
+    // the board would silently cap those two windows at the board's coins.
+    // Same {id: price} shape as `baselines` so alt-scan can fall back to it
+    // with one lookup. See priceAgo() for why this exists next to snapshots.
+    const sparkRef = { "4h": {}, "12h": {} };
+    for (const r of eligible) {
+      const p4 = priceAgo(r.sparkline7d, 4);
+      const p12 = priceAgo(r.sparkline7d, 12);
+      if (p4 != null) sparkRef["4h"][r.id] = p4;
+      if (p12 != null) sparkRef["12h"][r.id] = p12;
+    }
+    counts.sparkRef4h = Object.keys(sparkRef["4h"]).length;
     const payload = {
       asOf: nowIso,
       season,
@@ -1355,6 +1404,7 @@ async function runPass() {
       eligibleIds: eligible.map((r) => r.id),
       baselines,
       baselineMeta,
+      sparkRef,
       readyIn,
       domHistory,
     };
@@ -1365,6 +1415,7 @@ async function runPass() {
 
   console.log(
     `[alt-cron-background] universe=${counts.universe} eligible=${counts.eligible} board=${counts.board} ` +
+    `sparkRef4h=${counts.sparkRef4h} ` +
     `flags +${counts.flagsInserted} ~${counts.flagsUpdated} closed=${counts.flagsClosed} ` +
     `snapshot=${counts.snapshotWritten} state=${counts.stateWritten} ` +
     `season=${season && season.score != null ? `${season.score}/${season.phase}` : "none"}` +
@@ -1404,6 +1455,7 @@ exports.handler = async (event) => {
 // Pure helpers, exported for scripts/altseason-smoke.mjs (the calendar.js
 // precedent — Netlify only reads `handler`).
 exports.parseMarketsRow = parseMarketsRow;
+exports.priceAgo = priceAgo;
 exports.isStablecoin = isStablecoin;
 exports.isWrapper = isWrapper;
 exports.structure7d = structure7d;

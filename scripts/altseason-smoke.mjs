@@ -69,7 +69,7 @@ try {
   const cron = mods["alt-cron-background"];
   if (!cron) throw new Error("alt-cron-background did not load — the fixture suite cannot run");
   const {
-    parseMarketsRow, isStablecoin, isWrapper, structure7d,
+    parseMarketsRow, priceAgo, isStablecoin, isWrapper, structure7d,
     screenCoin, screenUniverse, seasonRead, targetsFor, flagTier, transitionFlags,
   } = cron;
 
@@ -387,6 +387,32 @@ try {
       const out = screenUniverse([cleanRaw, { ...BTC, sparkline7d: null }, { id: "tether", symbol: "USDT", name: "Tether", price: 1, mcap: 1e11, vol24h: 8e10 }], { btcRow: BTC });
       return out.every((r) => r.symbol !== "USDT") && out[0].symbol === "ALT";
     })());
+
+  // ── priceAgo: the 4h/12h reference read off the hourly sparkline ───────────
+  // These two windows have no CoinGecko field, and the sparkline is the only
+  // source that can price them on a cold start. The index arithmetic is the
+  // whole risk: off by a few slots and the column shows a confident wrong
+  // number, which is worse than the "—" it replaced.
+  //
+  // A full-length tape: 169 points = the last close plus exactly 168 hours.
+  // Value equals index, so the assertion reads as "how many hours back".
+  const FULL = Array.from({ length: 169 }, (_, i) => i);
+  check("priceAgo(4) steps back 4 hourly closes on a full tape",
+    priceAgo(FULL, 4) === 164, String(priceAgo(FULL, 4)));
+  check("priceAgo(12) steps back 12", priceAgo(FULL, 12) === 156, String(priceAgo(FULL, 12)));
+  check("priceAgo never returns the last point (that would compare price to itself)",
+    priceAgo(FULL, 0) === null);
+  check("a truncated tape scales by its own length, it does not step 4 raw slots",
+    // 41 points spanning the same 7 days ⇒ ~4.1h per point, so 4h back is one
+    // slot, not four. Stepping four would silently report a ~17-hour move.
+    priceAgo(Array.from({ length: 41 }, (_, i) => i), 4) === 39,
+    String(priceAgo(Array.from({ length: 41 }, (_, i) => i), 4)));
+  check("too short to read returns null, not a guess", priceAgo([1, 2, 3], 4) === null);
+  check("a missing sparkline returns null", priceAgo(null, 4) === null && priceAgo(undefined, 4) === null);
+  check("non-finite points are filtered before indexing",
+    priceAgo([...FULL.slice(0, 100), NaN, null, ...FULL.slice(100)].filter((x) => x !== undefined), 4) != null);
+  check("a zero or negative price is refused (it would divide the board by zero)",
+    priceAgo(Array.from({ length: 169 }, () => 0), 4) === null);
 } catch (e) {
   failed++;
   console.error(`FAIL: smoke crashed — ${(e && e.stack) || e}`);
