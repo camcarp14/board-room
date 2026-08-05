@@ -11,6 +11,9 @@ import { StancePill, StatusTag, CARD_STATES } from "../../ui/shared.jsx";
 import { NumTween, Sparkline } from "../../ui/primitives.jsx";
 import { SortableList } from "../../ui/SortableList.jsx";
 import { applyBriefOrder, orderOf, packColumns } from "../../lib/brief-order.js";
+import { activeLayout, layoutColumnCount, defaultColumnCount, dealExplicit } from "../../lib/brief-layouts.js";
+import { PonderCard } from "./PonderCard.jsx";
+import { BriefLayoutSheet } from "./BriefLayoutSheet.jsx";
 import GscLineChart from "../../GscLineChart.jsx";
 // Lazy — pulls lightweight-charts (~a quarter of the old bundle) into its own
 // chunk that loads only when you actually open a price chart.
@@ -123,6 +126,7 @@ export function MorningBriefPage({ btc, isMobile, settings, updateSetting, onOpe
   const resolveEcon = useResolveEconEvents();
   const [btcChartOpen, setBtcChartOpen] = useState(false);
   const [tickerChart, setTickerChart] = useState(null); // {key,label} of the watchlist ticker whose chart is open
+  const [layoutOpen, setLayoutOpen] = useState(false);  // the Brief layout sheet (desktop-only affordance)
   const [meetingsAll, setMeetingsAll] = useState(false);
   // Per-card collapse state, persisted per-device so a collapsed card stays
   // collapsed across reloads. Keyed by a stable card id (see coll() below).
@@ -770,20 +774,40 @@ export function MorningBriefPage({ btc, isMobile, settings, updateSetting, onOpe
   // `id` is the persistence key for the manual order (app_settings.brief_order),
   // so these strings are permanent: renaming one silently resets that card to its
   // default slot for everyone who had moved it.
+  // `label` feeds the layout sheet's arrangement grid — the card's own title,
+  // not a second name for it.
   const DEFAULT_CARDS = [
-    { id: "notes", c: card_notes, w: 3 }, { id: "minicalendar", c: card_minicalendar, w: 2.5 }, { id: "birthdays", c: card_birthdays, w: 1.5 },
-    { id: "markets", c: card_markets, w: 2.5 }, { id: "watch", c: card_watch, w: 3 },
+    { id: "notes", c: card_notes, w: 3, label: "Notes" }, { id: "minicalendar", c: card_minicalendar, w: 2.5, label: "Calendar" }, { id: "birthdays", c: card_birthdays, w: 1.5, label: "Birthdays" },
+    { id: "markets", c: card_markets, w: 2.5, label: "Markets" }, { id: "watch", c: card_watch, w: 3, label: "Watch This Week" },
     // 4.5, not 3: the feed is 480px tall now (50% up from 320), and the weight is
     // what stops the packer from stacking it under another tall card.
-    { id: "wire", c: card_wire, w: 4.5 },
-    { id: "gsc", c: card_gsc, w: 2.5 }, { id: "meetings", c: card_meetings, w: 2 }, { id: "clarify", c: card_clarify, w: 1.5 },
-    { id: "zts", c: card_zts, w: 1.5 }, { id: "shopify", c: card_shopify, w: 1.5 },
+    { id: "wire", c: card_wire, w: 4.5, label: "The Wire" },
+    { id: "gsc", c: card_gsc, w: 2.5, label: "Search Console" }, { id: "meetings", c: card_meetings, w: 2, label: "Meetings" }, { id: "clarify", c: card_clarify, w: 1.5, label: "Clarify" },
+    { id: "zts", c: card_zts, w: 1.5, label: "ZTS" }, { id: "shopify", c: card_shopify, w: 1.5, label: "Shopify" },
+    // Ponder joins at the tail: applyBriefOrder keeps a card the saved order has
+    // never seen at its default slot, so nobody's arrangement jumps.
+    { id: "ponder", c: <PonderCard settings={settings} updateSetting={updateSetting} coll={coll} pad={pad} />, w: 2, label: "Ponder" },
   ];
   // Your arrangement, if you have one. See lib/brief-order.js for why a card the
   // saved order has never seen keeps its default slot instead of jumping to top.
   const cards = applyBriefOrder(DEFAULT_CARDS, settings?.brief_order);
+  // Layout profiles are a DESKTOP concern (they're named after screens — "Mac",
+  // "iPad"); the phone always renders the one-column glance order. The default
+  // arrangement honors the stored column-count override; a named profile deals
+  // cards into its authored columns and turns the drag off — its arrangement is
+  // edited in the sheet, and a drag that silently rewrote an authored column
+  // would be data loss wearing a gesture.
+  const layoutProfile = !isMobile ? activeLayout(settings) : null;
+  const briefCols = isMobile ? 1 : layoutProfile ? layoutColumnCount(layoutProfile) : defaultColumnCount(settings, nCols);
   return (
     <div style={{ flex: 1, padding: isMobile ? "2px 12px 20px" : "6px 0 0", minWidth: 0 }}>
+      {!isMobile && (
+        <div style={{ maxWidth: maxW, margin: "0 auto 6px", display: "flex", justifyContent: "flex-end" }}>
+          <Button kind="plain" size="sm" style={{ height: 44 }} onClick={() => setLayoutOpen(true)}>
+            Layout{layoutProfile ? ` · ${layoutProfile.name}` : ""}
+          </Button>
+        </div>
+      )}
       {/* Hold a card for a moment, then drag it anywhere — including into another
           column. Deliberately no edit toggle, no drag handles, no reorder mode:
           the affordance IS the hold, so at rest the Brief looks exactly as it
@@ -792,6 +816,18 @@ export function MorningBriefPage({ btc, isMobile, settings, updateSetting, onOpe
           ignoreWithin keeps the inner feeds scrollable — a hold inside The Wire
           or Watch This Week is a scroll, not a grab — and the nested Notes list
           claims its own holds through the [data-sortable] ownership rule. */}
+      {layoutProfile ? (
+        // A named profile renders its authored columns statically — no drag.
+        // The arrangement is edited in the layout sheet (arrow moves); a drag
+        // that re-dealt an authored column would rewrite the profile silently.
+        <div className="stagger" style={{ maxWidth: maxW, width: "100%", margin: "0 auto", minWidth: 0, display: "flex", flexDirection: "row", gap: 8, alignItems: "flex-start" }}>
+          {dealExplicit(cards, layoutProfile, briefCols).map((col, i) => (
+            <div key={i} style={{ flex: 1, minWidth: 0 }}>
+              {col.map((card) => <div key={card.id} style={{ marginBottom: 8 }}>{card.c}</div>)}
+            </div>
+          ))}
+        </div>
+      ) : (
       <SortableList
         className="stagger"
         items={cards}
@@ -803,7 +839,7 @@ export function MorningBriefPage({ btc, isMobile, settings, updateSetting, onOpe
           // ordered cards and we deal the matching rendered node into the same
           // slot, so the sequence the drag produced is the sequence dealt out.
           const withNodes = ordered.map((card, i) => ({ ...card, node: itemNodes[i] }));
-          return packColumns(withNodes, nCols).map((col, i) => (
+          return packColumns(withNodes, briefCols).map((col, i) => (
             <div key={i} style={{ flex: 1, minWidth: 0 }}>
               {col.map((card) => <div key={card.id} style={{ marginBottom: 8 }}>{card.node}</div>)}
             </div>
@@ -812,6 +848,17 @@ export function MorningBriefPage({ btc, isMobile, settings, updateSetting, onOpe
       >
         {(card) => card.c}
       </SortableList>
+      )}
+      {layoutOpen && (
+        <BriefLayoutSheet
+          settings={settings}
+          updateSetting={updateSetting}
+          cards={cards}
+          screenColumns={layoutProfile ? dealExplicit(cards, layoutProfile, briefCols) : packColumns(cards, briefCols)}
+          autoCols={nCols}
+          onClose={() => setLayoutOpen(false)}
+        />
+      )}
       {(btcChartOpen || tickerChart) && (
         <Suspense fallback={null}>
           {btcChartOpen && <BtcChartModal isMobile={isMobile} onClose={() => setBtcChartOpen(false)} callFnFull={callFnFull} />}

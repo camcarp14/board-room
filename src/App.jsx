@@ -177,12 +177,28 @@ export default function App() {
     db.saveSetting(key, value);
   };
 
-  // Tabs the owner switched off (Settings → Tabs). Brief cannot be hidden —
-  // it's the landing page and the bar's one guaranteed way home. Hiding a tab
-  // removes its BAR SLOT, not the destination: deep links and in-app jumps
-  // still reach the page; the bar just shows no active tab while you're there.
-  const hiddenTabs = new Set(Array.isArray(settings?.hidden_tabs) ? settings.hidden_tabs : []);
-  const visibleNav = NAV.filter(n => n.key === "brief" || !hiddenTabs.has(n.key));
+  // The bar the owner built (Settings → Tabs), stored as
+  // app_settings.navigation = { order: [key…], hidden: [key…] } — THE SCHEMA
+  // PREDATES THIS CODE (the restored production build wrote it), so both
+  // halves are read as stored: unknown keys are ignored, keys the saved order
+  // has never met append in default order, and `hidden_tabs` (a short-lived
+  // interim key) is honored as a fallback. Brief cannot be hidden — it's the
+  // landing page and the bar's one guaranteed way home. Hiding a tab removes
+  // its BAR SLOT, not the destination: deep links still reach the page; the
+  // bar just shows no active tab while you're there.
+  const navSetting = settings?.navigation || {};
+  const hiddenTabs = new Set(
+    Array.isArray(navSetting.hidden) ? navSetting.hidden
+      : Array.isArray(settings?.hidden_tabs) ? settings.hidden_tabs : []);
+  const orderedNav = (() => {
+    const order = Array.isArray(navSetting.order) ? navSetting.order : [];
+    if (!order.length) return NAV;
+    const byKey = new Map(NAV.map(n => [n.key, n]));
+    const out = order.map(k => byKey.get(k)).filter(Boolean);
+    for (const n of NAV) if (!out.includes(n)) out.push(n);
+    return out;
+  })();
+  const visibleNav = orderedNav.filter(n => n.key === "brief" || !hiddenTabs.has(n.key));
   const saveSeatNote = async (key, notes) => {
     setSeatNotes(prev => ({ ...prev, [key]: notes }));
     await db.saveSeatNote(key, notes);
@@ -257,7 +273,7 @@ export default function App() {
   // page, so a deep link INTO a hidden page later doesn't get bounced.
   useEffect(() => {
     if (page !== "brief" && hiddenTabs.has(page)) setPage("brief");
-  }, [settings?.hidden_tabs]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [settings?.navigation, settings?.hidden_tabs]); // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => {
     if (!isMobile) return;
     // Document-level delegation: the shell (and #page-scroll) may not exist

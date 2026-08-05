@@ -30,7 +30,11 @@
 //
 // v7: the Markets tab. A seventh destination in the bottom bar is exactly the
 // kind of deploy the v6 note warns about — its whole point is that you see it.
-const VERSION = "br-v7";
+// v8: the restoration deploy — navigation order/hidden, Brief layout profiles
+// and Ponder, all reading the account's existing settings. The owner is
+// actively comparing this build against what he lost; a stale shell here
+// would read as the restoration not having happened.
+const VERSION = "br-v8";
 const ASSET_CACHE = `${VERSION}-assets`;
 const PAGE_CACHE = `${VERSION}-pages`;
 

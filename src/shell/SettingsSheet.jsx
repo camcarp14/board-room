@@ -24,7 +24,7 @@
 import { useState, useEffect, useRef, lazy, Suspense } from "react";
 import { supabase } from "../lib/supabase.js";
 import { NAV } from "./nav.js";
-import { Sheet, Cell, CellGroup, Button, Field, SectionHeader, SwitchRow, Segmented, Spinner, useConfirm } from "../ui/kit.jsx";
+import { Sheet, Cell, CellGroup, Button, Field, SectionHeader, Switch, SwitchRow, Segmented, Spinner, useConfirm } from "../ui/kit.jsx";
 import { IcSun, IcMoon, IcAutoTheme, IcCheck } from "../ui/icons.jsx";
 import { PALETTES } from "../design/palettes.js";
 
@@ -271,34 +271,60 @@ export function SettingsSheet({ onClose, session, theme, calUrl, onSaveCalUrl, i
         )}
 
         {tab === "tabs" && (() => {
-          // Hidden tabs live in app_settings (account-scoped, unlike the
-          // device-local theme prefs): which rooms exist is a fact about the
-          // house, not about the phone in your hand. The bar updates live
-          // behind the sheet — updateSetting is optimistic.
-          const hidden = new Set(Array.isArray(settings?.hidden_tabs) ? settings.hidden_tabs : []);
+          // The bar's shape lives in app_settings.navigation = {order, hidden}
+          // (account-scoped, unlike the device-local theme prefs): which rooms
+          // exist, and in what sequence, is a fact about the house, not about
+          // the phone in your hand. The schema predates this panel — the
+          // restored production build wrote it — so it is read and written
+          // as stored. The bar updates live behind the sheet.
+          const navSet = settings?.navigation || {};
+          const hidden = new Set(
+            Array.isArray(navSet.hidden) ? navSet.hidden
+              : Array.isArray(settings?.hidden_tabs) ? settings.hidden_tabs : []);
+          const byKey = new Map(NAV.map((n) => [n.key, n]));
+          const saved = (Array.isArray(navSet.order) ? navSet.order : []).map((k) => byKey.get(k)).filter(Boolean);
+          const ordered = saved.length ? [...saved, ...NAV.filter((n) => !saved.includes(n))] : [...NAV];
+          const rows = ordered.filter((n) => n.key !== "brief");
+          const write = (rowsNext, hiddenNext) =>
+            updateSetting?.("navigation", { order: ["brief", ...rowsNext.map((n) => n.key)], hidden: [...hiddenNext] });
           const toggle = (key) => {
-            const next = new Set(hidden);
-            if (next.has(key)) next.delete(key); else next.add(key);
-            updateSetting?.("hidden_tabs", [...next]);
+            const h = new Set(hidden);
+            if (h.has(key)) h.delete(key); else h.add(key);
+            write(rows, h);
+          };
+          const move = (i, d) => {
+            const j = i + d;
+            if (j < 0 || j >= rows.length) return;
+            const next = rows.slice();
+            [next[i], next[j]] = [next[j], next[i]];
+            write(next, hidden);
+          };
+          const arrowStyle = {
+            width: 34, height: 34, borderRadius: 9, border: "none", cursor: "pointer",
+            background: "var(--surface-2)", color: "var(--sub)", fontSize: 14, lineHeight: 1, flex: "none",
           };
           return (
             <div key="tabs" className="pagefade" style={{ display: "flex", flexDirection: "column", gap: 4, paddingBottom: 4 }}>
               <SectionHeader title="The bar" />
-              <CellGroup>
-                {NAV.filter((n) => n.key !== "brief").map((n) => (
-                  <SwitchRow
-                    key={n.key}
-                    title={n.label}
-                    on={!hidden.has(n.key)}
-                    onToggle={() => toggle(n.key)}
-                  />
+              <div style={{ background: "var(--surface-2)", borderRadius: 12, padding: "2px 12px" }}>
+                {rows.map((n, i) => (
+                  <div key={n.key} style={{
+                    display: "flex", alignItems: "center", gap: 8, minHeight: 52,
+                    borderTop: i === 0 ? "none" : "1px solid var(--line)",
+                    opacity: hidden.has(n.key) ? 0.55 : 1,
+                  }}>
+                    <span style={{ flex: 1, minWidth: 0 }}>{n.label}</span>
+                    <button aria-label={`Move ${n.label} earlier`} style={arrowStyle} onClick={() => move(i, -1)}>↑</button>
+                    <button aria-label={`Move ${n.label} later`} style={arrowStyle} onClick={() => move(i, 1)}>↓</button>
+                    <Switch on={!hidden.has(n.key)} onToggle={() => toggle(n.key)} aria-label={n.label} />
+                  </div>
                 ))}
-              </CellGroup>
+              </div>
               <div className="t-cap" style={{ color: "var(--faint)", lineHeight: 1.5, padding: "8px 4px 0" }}>
-                Off takes the tab out of the phone bar and the tablet rail — the page
-                itself stays reachable from links inside the app. Brief isn't listed
-                because it can't go: it's the front door, and the one tab that always
-                leads home.
+                Arrows set the bar's order; the switch takes a tab out of the phone
+                bar and the tablet rail — its page stays reachable from links inside
+                the app. Brief isn't listed because it can't move or go: it's the
+                front door, first on the bar, and the one tab that always leads home.
               </div>
             </div>
           );
