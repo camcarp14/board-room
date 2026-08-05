@@ -45,17 +45,19 @@ const kit = readFileSync("src/ui/kit.jsx", "utf8");
 
 const navKeys = [...(nav.match(/export const NAV = \[([\s\S]*?)\n\];/)?.[1] || "")
   .matchAll(/^\s*\{ key: "(\w+)"/gm)].map(m => m[1]);
-check("the nav is Brief, Personal, Train, Creed, Grocery, Finances",
-  navKeys.join(",") === "brief,personal,train,creed,grocery,finances", navKeys.join(","));
+check("the nav is Brief, Personal, Train, Creed, Grocery, Markets, Finances",
+  navKeys.join(",") === "brief,personal,train,creed,grocery,markets,finances", navKeys.join(","));
 // A tab with no route renders a blank titled page. The nav entry and the switch
 // case in App are two separate edits and only one of them is visible when you
 // forget the other — the icon/header pairs are already checked per key below,
 // but nothing was checking that the tab actually goes anywhere.
 check("every tab has a route", navKeys.every(k => new RegExp(`case "${k}":`).test(app)),
   navKeys.filter(k => !new RegExp(`case "${k}":`).test(app)).join(","));
-// Six is the ceiling for a phone tab bar with readable labels. A seventh needs
-// a different chrome, not a smaller font.
-check("the tab bar stays at six or fewer", navKeys.length <= 6, String(navKeys.length));
+// Seven is the ceiling for a phone tab bar with readable labels — Markets took
+// the seventh slot after measuring the real fit (~53px columns at 375pt, the
+// longest label ~46px at 10px/600; see the note in nav.js). An eighth needs a
+// different chrome, not a smaller font.
+check("the tab bar stays at seven or fewer", navKeys.length <= 7, String(navKeys.length));
 // Dreams is a sub-tab of Creed now. Both halves matter: it must not be a nav
 // destination, and the page must actually mount it — a half-fold leaves a
 // panel nothing can reach.

@@ -1,0 +1,398 @@
+// ─── Alt Season smoke — the hourly brain's math, with known answers ──────────
+// alt-cron.js is the only place the Alt Season tab's judgment lives: the
+// 100-point screen, the season regime, the price targets, and the flag log's
+// entire grading ladder. None of it is exercised by `vite build`, none of it
+// throws when a threshold drifts, and the flag log is APPEND-ONLY history — a
+// transition bug doesn't show up as an error, it shows up three weeks later as
+// a record that quietly graded every episode wrong and cannot be rebuilt.
+//
+// So: bundle the function the way Netlify does (the functions-smoke technique —
+// read that file's header for the triple outage behind it), require the output,
+// and assert the exported pure helpers against fixtures with answers a reader
+// can verify by eye. The specific regressions pinned here:
+//
+//   1. parts[] always sums to score — the penalty is clamped to points earned,
+//      so a parabolic coin floors at a true 0 and the table never lies.
+//   2. priorLow excludes the last day. Pentagon's sentinel once compared price
+//      to a minimum taken over a window CONTAINING that price, and "invalidation
+//      hit" fired on every row making its own 7-day low — the series testing
+//      itself, 1,276 times in 20,000 tapes.
+//   3. The flag ladder ratchets up only, against targets FROZEN at flag time,
+//      and a re-scan never resets first_flagged_at. The log's one job is
+//      remembering the FIRST day; a reset erases the record's reason to exist.
+//
+// Zero network. Run with `node scripts/altseason-smoke.mjs`.
+
+import esbuild from "esbuild";
+import { mkdirSync, rmSync } from "node:fs";
+import { createRequire } from "node:module";
+import { join, resolve } from "node:path";
+
+const FN_DIR = "netlify/functions";
+const OUT_DIR = ".altseason-smoke";
+const require_ = createRequire(import.meta.url);
+
+let failed = 0;
+const check = (name, cond, detail = "") => {
+  if (cond) console.log(`ok: ${name}`);
+  else { failed++; console.error(`FAIL: ${name} ${detail}`); }
+};
+// Float-safe equality — the target math multiplies decimals and 1.5/1.2 is not
+// exactly 1.25 in binary.
+const near = (a, b, eps = 1e-6) =>
+  Number.isFinite(a) && Math.abs(a - b) <= eps * Math.max(1, Math.abs(b));
+
+rmSync(OUT_DIR, { recursive: true, force: true });
+mkdirSync(OUT_DIR, { recursive: true });
+
+try {
+  // ─── 0. the functions-smoke assertion, early: a bundle with no handler is a
+  // 502 that deploys clean. All three alt functions, before any math. ─────────
+  const mods = {};
+  for (const name of ["alt-cron", "alt-scan", "alt-candles"]) {
+    try {
+      const out = resolve(OUT_DIR, `${name}.cjs`);
+      esbuild.buildSync({
+        entryPoints: [join(FN_DIR, `${name}.js`)],
+        bundle: true, platform: "node", format: "cjs",
+        outfile: out, logLevel: "silent",
+      });
+      mods[name] = require_(out);
+      check(`${name} bundles with a callable handler`, typeof mods[name].handler === "function",
+        `exports are ${JSON.stringify(Object.keys(mods[name] || {}))}`);
+    } catch (e) {
+      failed++;
+      console.error(`FAIL: ${name} did not bundle/load — ${(e.message || String(e)).split("\n")[0]}`);
+    }
+  }
+
+  const cron = mods["alt-cron"];
+  if (!cron) throw new Error("alt-cron did not load — the fixture suite cannot run");
+  const {
+    parseMarketsRow, isStablecoin, isWrapper, structure7d,
+    screenCoin, screenUniverse, seasonRead, targetsFor, flagTier, transitionFlags,
+  } = cron;
+
+  const HOUR = 3600 * 1000;
+  const DAY = 24 * HOUR;
+  const NOW = Date.parse("2026-08-05T12:00:00Z");
+  const iso = (ms) => new Date(ms).toISOString();
+
+  // The shared BTC bar: +2% on the week, +5% on the month.
+  const BTC = { id: "bitcoin", symbol: "BTC", name: "Bitcoin", rank: 1, price: 60000, mcap: 2e12, vol24h: 3e10, chg1h: 0.1, chg24h: 0.5, chg7d: 2, chg30d: 5, sparkline7d: null, ath: 73000, athChangePct: -17, athDate: "2024-03-14T00:00:00.000Z" };
+
+  // 28 points, so a "day" is 4. Prior 24 top out at 0.95; the last day clears
+  // it and closes at the high of its own week — a clean ignition tape.
+  const IGNITION_SPARK = [
+    0.80, 0.82, 0.81, 0.83, 0.84, 0.83, 0.85, 0.86,
+    0.85, 0.87, 0.88, 0.87, 0.89, 0.90, 0.89, 0.91,
+    0.90, 0.92, 0.91, 0.93, 0.92, 0.94, 0.93, 0.95,
+    0.96, 0.97, 0.99, 1.00,
+  ];
+
+  // ─── 1. screenCoin — parts[] sums to score, and the clamp is real ──────────
+  // Every threshold this row crosses is written next to the field it earns:
+  // rs7 12 (+12pts) · rs30 5 (+5) · accel24 7 (+14) · accel7v30 1.67 (+12) ·
+  // turnover 0.12 (+11) · pos 1.0 (+10) · fresh break (+10) · 75% off ATH (+8).
+  const cleanRaw = {
+    id: "altcoin", symbol: "ALT", name: "Alt Coin", rank: 40,
+    price: 1.0, mcap: 5e8, vol24h: 6e7,
+    chg1h: 1, chg24h: 9, chg7d: 14, chg30d: 10,
+    sparkline7d: IGNITION_SPARK, ath: 4, athChangePct: -75, athDate: "2025-01-01T00:00:00.000Z",
+  };
+  const clean = screenCoin(cleanRaw, { btcRow: BTC });
+  const sumParts = (r) => r.parts.reduce((s, p) => s + p.points, 0);
+  check("clean ignition scores 82 — every point accounted for", clean.score === 82, `got ${clean.score}`);
+  check("clean ignition parts[] sums to score", sumParts(clean) === clean.score);
+  check("clean ignition bands 'starting'", clean.band === "starting", clean.band);
+
+  // A blow-off that EARNED only 6 points: the −25 must land as −6, not drive
+  // the score below zero and not break the by-eye arithmetic.
+  const blowoff = screenCoin({ id: "moon", symbol: "MOON", name: "Moon Token", price: 2, chg24h: 45, chg7d: 308 }, {});
+  check("parabolic row floors at a true 0, never negative", blowoff.score === 0, `got ${blowoff.score}`);
+  check("parabolic parts[] still sums to score", sumParts(blowoff) === blowoff.score);
+  check("parabolic penalty clamps to the points earned",
+    blowoff.parts.find((p) => p.key === "parabolic")?.points === -6,
+    JSON.stringify(blowoff.parts.map((p) => [p.key, p.points])));
+  check("parabolic flag is set", blowoff.flags.parabolic === true);
+
+  // ─── 2. the exclusion sets — a dollar is not a mover ───────────────────────
+  check("USDT is a stablecoin", isStablecoin({ symbol: "USDT" }));
+  check("PAXG (gold peg) is a stablecoin", isStablecoin({ symbol: "PAXG" }));
+  check("a flat $1B+ unknown trips the flatness heuristic",
+    isStablecoin({ id: "flatco", symbol: "FLT", name: "FlatCo", price: 0.999, mcap: 1.5e9, chg24h: 0.1, chg7d: 0.4, chg30d: 1.1 }));
+  check("BTC in a quiet month is NEVER deleted by the heuristic",
+    !isStablecoin({ id: "bitcoin", symbol: "BTC", name: "Bitcoin", price: 60000, mcap: 2e12, chg24h: 0.1, chg7d: 0.4, chg30d: 1.0 }));
+  check("WSTETH is a wrapper", isWrapper({ symbol: "WSTETH" }));
+  check("a coin NAMED 'Wrapped Foo' is a wrapper", isWrapper({ symbol: "FOO", name: "Wrapped Foo" }));
+  check("WIF is not eaten by the wrapper heuristics", !isWrapper({ id: "dogwifhat", symbol: "WIF", name: "dogwifhat" }));
+
+  // ─── 3. structure7d — levels come from bars that are DONE ──────────────────
+  // 14 points → a "day" is 2. Prior twelve range 1.0–1.2.
+  const PRIOR = [1.0, 1.05, 1.1, 1.12, 1.15, 1.18, 1.2, 1.14, 1.1, 1.16, 1.19, 1.18];
+  const sBreak = structure7d([...PRIOR, 1.21, 1.25]);
+  const sInside = structure7d([...PRIOR, 1.15, 1.18]);
+  const sTouch = structure7d([...PRIOR, 1.1, 1.2]);
+  const sNewLow = structure7d([...PRIOR, 0.9, 0.8]);
+  check("fresh break: last day clears the prior high", sBreak.freshBreak === true && near(sBreak.priorHigh, 1.2));
+  check("no break while the last day stays inside", sInside.freshBreak === false);
+  check("touching the prior high is not a break (strict >)", sTouch.freshBreak === false);
+  check("pos stays in [0,1] across the tapes",
+    [sBreak, sInside, sTouch, sNewLow].every((s) => s.pos >= 0 && s.pos <= 1),
+    JSON.stringify([sBreak.pos, sInside.pos, sTouch.pos, sNewLow.pos]));
+  // THE SENTINEL BUG. A row making its own 7-day low: `low` follows price down,
+  // priorLow must not — a level that moves with price is not a level.
+  check("priorLow excludes the last day", near(sNewLow.priorLow, 1.0), `got ${sNewLow.priorLow}`);
+  check("...while the range low includes it", near(sNewLow.low, 0.8) && sNewLow.priorLow > sNewLow.low);
+  check("a short series answers null, not garbage",
+    structure7d([1, 2, 3]).pos === null && structure7d([1, 2, 3]).priorHigh === null);
+  check("a dead-flat series has no pos (zero range)", structure7d(Array(14).fill(1)).pos === null);
+
+  // ─── 4. band ordering — 'late' is a verdict, not a score bucket ────────────
+  // Same ignition tape, but up 45% today: parabolic must beat 'starting'.
+  const late = screenCoin({ ...cleanRaw, chg24h: 45, chg7d: 30, chg30d: 20 }, { btcRow: BTC });
+  check("parabolic → late beats starting", late.band === "late", late.band);
+  // Up 60% on the week and breaking out: running, not lighting.
+  const running = screenCoin({ ...cleanRaw, chg24h: 15, chg7d: 60, chg30d: 70 }, { btcRow: BTC });
+  check("a +60% week breaking out is NOT 'starting'", running.band !== "starting", running.band);
+  check("...it is 'underway'", running.band === "underway", running.band);
+
+  // ─── 5. targetsFor — measured moves off a 1.0–1.5 base (h = 0.5) ───────────
+  const tRow = (price, priorHigh, priorLow, freshBreak, ath = null) =>
+    ({ price, ath, range7d: { priorHigh, priorLow, freshBreak } });
+
+  const building = targetsFor(tRow(1.2, 1.5, 1.0, false));
+  check("building T1 IS the prior high", near(building.t1, 1.5), `got ${building?.t1}`);
+  check("building T2/T3 step +0.5h/+1.0h", near(building.t2, 1.75) && near(building.t3, 2.0));
+  check("building invalidation is the prior low", near(building.invalidation, 1.0));
+  check("t1Pct is % vs current price, 1dp", near(building.t1Pct, 25.0, 1e-3), `got ${building?.t1Pct}`);
+
+  const breakout = targetsFor(tRow(1.6, 1.5, 1.0, true));
+  check("breakout targets are the measured moves (0.382/0.618/1.0)",
+    near(breakout.t1, 1.691) && near(breakout.t2, 1.809) && near(breakout.t3, 2.0),
+    JSON.stringify(breakout));
+  check("breakout invalidation is the 0.382 retrace", near(breakout.invalidation, 1.309));
+
+  const clamped = targetsFor(tRow(1.65, 1.5, 1.0, true));
+  check("a T1 under +4% is bumped to +5%", near(clamped.t1, 1.65 * 1.05), `got ${clamped?.t1}`);
+
+  // Price already through the prior high — breakout path without a fresh-break
+  // flag — and far enough that the clamp cascades through T2.
+  const cascade = targetsFor(tRow(1.79, 1.5, 1.0, false));
+  check("price above the prior high takes the breakout path", near(cascade.invalidation, 1.309), JSON.stringify(cascade));
+  check("cascade keeps T1<T2<T3 strictly", cascade.t1 < cascade.t2 && cascade.t2 < cascade.t3, JSON.stringify(cascade));
+
+  const snapped = targetsFor(tRow(1.2, 1.5, 1.0, false, 1.9));
+  check("an ATH just under T3 snaps T3 onto it", near(snapped.t3, 1.9), `got ${snapped?.t3}`);
+  check("...without touching the targets below it", near(snapped.t1, 1.5) && near(snapped.t2, 1.75));
+  check("an ATH far above T3 snaps nothing", near(targetsFor(tRow(1.2, 1.5, 1.0, false, 5)).t3, 2.0));
+
+  check("T1 ≥ price×1.04 on every result",
+    [[1.2, building], [1.6, breakout], [1.65, clamped], [1.79, cascade], [1.2, snapped]]
+      .every(([p, t]) => t && t.t1 >= p * 1.04 - 1e-9));
+  check("a flat sparkline yields no targets",
+    targetsFor({ price: 1, range7d: structure7d(Array(14).fill(1)) }) === null);
+  check("an invalidation at price is no structure at all — null",
+    targetsFor(tRow(1.21, 1.5, 1.2, false)) === null);
+
+  // ─── 6. flagTier — the thresholds, and the rows that must never flag ───────
+  const T_OK = { t1: 1.08, t2: 1.15, t3: 1.25, invalidation: 0.9, t1Pct: 8, t2Pct: 15, t3Pct: 25, invPct: -10 };
+  const fRow = (o = {}) => ({
+    id: "altcoin", symbol: "ALT", name: "Alt Coin", rank: 40,
+    price: 1, mcap: 5e8, vol24h: 5e7,
+    chg1h: 1, chg24h: 9, chg7d: 14, chg30d: 10,
+    score: 60, band: "starting",
+    flags: { stablecoin: false, wrapper: false, parabolic: false, thinLiquidity: false, freshBreak: true, newListing: false },
+    accel: { d24VsWeek: 7, weekVsMonth: 1.7, daily7d: 2, daily30d: 0.33 },
+    range7d: { low: 0.8, high: 1, last: 1, pos: 1, freshBreak: true, priorHigh: 0.95, priorLow: 0.8, points: 28 },
+    rsVsBtc7d: 12, targets: T_OK,
+    ...o,
+  });
+  check("starting + score 55 ignites", flagTier(fRow({ score: 55 })) === "igniting");
+  check("starting + score 54 does not", flagTier(fRow({ score: 54 })) === null);
+  check("underway ignites on real acceleration", flagTier(fRow({ band: "underway", score: 60, chg24h: 20, accel: { d24VsWeek: 4 } })) === "igniting");
+  check("underway up 21% on the day is a chase, not a flag", flagTier(fRow({ band: "underway", score: 60, chg24h: 21, accel: { d24VsWeek: 4 } })) === null);
+  check("underway without the acceleration is not igniting", flagTier(fRow({ band: "underway", score: 60, chg24h: 20, accel: { d24VsWeek: 3.9 } })) === null);
+  check("warming + score 50 builds", flagTier(fRow({ band: "warming", score: 50 })) === "building");
+  check("warming + score 49 does not", flagTier(fRow({ band: "warming", score: 49 })) === null);
+  check("quiet builds only high in range with RS", flagTier(fRow({ band: "quiet", score: 45, range7d: { pos: 0.55 }, rsVsBtc7d: 0.1 })) === "building");
+  check("quiet without RS over BTC does not", flagTier(fRow({ band: "quiet", score: 45, range7d: { pos: 0.55 }, rsVsBtc7d: 0 })) === null);
+  check("quiet low in its range does not", flagTier(fRow({ band: "quiet", score: 45, range7d: { pos: 0.54 }, rsVsBtc7d: 0.1 })) === null);
+  check("BTC is never flagged", flagTier(fRow({ symbol: "BTC", score: 90 })) === null);
+  check("thin liquidity is never flagged", flagTier(fRow({ flags: { thinLiquidity: true } })) === null);
+  check("under $1M of volume is never flagged", flagTier(fRow({ vol24h: 9e5 })) === null);
+  check("a T1 under 5% away is never flagged", flagTier(fRow({ targets: { ...T_OK, t1Pct: 4.9 } })) === null);
+  check("no targets, no flag", flagTier(fRow({ targets: null })) === null);
+
+  // ─── 7. transitionFlags — the episode ladder, end to end ───────────────────
+  // The screened row as the cron hands it over: screenCoin output + targets.
+  const screened = { ...clean, targets: targetsFor(clean) };
+  check("the clean ignition is flag-eligible end to end", flagTier(screened) === "igniting");
+
+  const run1 = transitionFlags([], { altcoin: screened }, NOW);
+  const ep = run1.inserts[0];
+  check("first sight inserts one episode", run1.inserts.length === 1 && run1.updates.length === 0);
+  check("the id embeds the UTC day of the FIRST flag", ep?.id === "altcoin:20260805", ep?.id);
+  check("the episode opens active with frozen targets",
+    ep?.status === "active" && ep?.tier === "igniting" && near(ep?.t1, screened.targets.t1) && ep?.resolved_at === null);
+
+  // THE REGRESSION THAT MATTERS MOST: the same scan an hour later.
+  const run2 = transitionFlags([ep], { altcoin: screened }, NOW + HOUR);
+  const u2 = run2.updates.find((u) => u.id === ep.id);
+  check("a re-scan of an open flag inserts NOTHING", run2.inserts.length === 0, JSON.stringify(run2.inserts.map((i) => i.id)));
+  check("...and never touches first_flagged_at", !u2 || !("first_flagged_at" in u2), JSON.stringify(u2));
+
+  // Update-path fixtures: frozen targets t1 1.1 / t2 1.2 / t3 1.4 / inv 0.9.
+  // The live screened row deliberately carries DIFFERENT targets — the ladder
+  // must grade against the frozen ones.
+  const mkFlag = (o = {}) => ({
+    id: "altcoin:20260801", coin_id: "altcoin", symbol: "ALT", name: "Alt Coin",
+    tier: "building", status: "active",
+    first_flagged_at: iso(NOW - 4 * DAY), flag_price: 1.0, score: 55,
+    t1: 1.1, t2: 1.2, t3: 1.4, invalidation: 0.9,
+    peak_price: 1.0, peak_at: iso(NOW - 4 * DAY),
+    last_price: 1.0, last_seen_at: iso(NOW - HOUR),
+    resolved_at: null, notes: {},
+    ...o,
+  });
+  const scr = (price, o = {}) => fRow({
+    price, score: 55, band: "warming",
+    flags: { stablecoin: false, wrapper: false, parabolic: false, thinLiquidity: false, freshBreak: false, newListing: false },
+    accel: { d24VsWeek: 1, weekVsMonth: 0.5, daily7d: 2, daily30d: 0.33 },
+    range7d: { low: 0.8, high: 1.2, last: price, pos: 0.8, freshBreak: false, priorHigh: 1.1, priorLow: 0.8, points: 28 },
+    targets: { t1: 9, t2: 9.5, t3: 10, invalidation: 0.1, t1Pct: 800, t2Pct: 850, t3Pct: 900, invPct: -90 },
+    ...o,
+  });
+  const step = (flag, row) => transitionFlags([flag], { altcoin: row }, NOW).updates.find((u) => u.id === flag.id);
+
+  const dip = step(mkFlag({ status: "hit_t2", peak_price: 1.3 }), scr(1.05));
+  check("the peak never falls", dip && dip.last_price === 1.05 && !("peak_price" in dip), JSON.stringify(dip));
+  const push = step(mkFlag({ status: "hit_t2", peak_price: 1.3 }), scr(1.45));
+  check("the peak ratchets up and carries peak_at", push?.peak_price === 1.45 && !!push?.peak_at);
+  check("peak 1.45 grades hit_t3 on the FROZEN t3", push?.status === "hit_t3", push?.status);
+
+  const rung1 = step(mkFlag(), scr(1.15));
+  check("active → hit_t1 against the frozen T1, not the live one", rung1?.status === "hit_t1" && !("resolved_at" in rung1), JSON.stringify(rung1));
+  const noDown = step(mkFlag({ status: "hit_t2", peak_price: 1.25 }), scr(0.95));
+  check("the ladder never ratchets down", !noDown || !("status" in noDown), JSON.stringify(noDown));
+
+  const inval = step(mkFlag(), scr(0.85));
+  check("price through invalidation closes the episode", !!inval?.resolved_at && inval?.status === "invalidated");
+  check("...and records why", inval?.notes?.closedBy === "invalidation");
+  const invalKept = step(mkFlag({ status: "hit_t1", peak_price: 1.15 }), scr(0.85));
+  check("a hit that round-tripped keeps its hit, closed by invalidation",
+    !!invalKept?.resolved_at && invalKept?.status !== "invalidated" && invalKept?.notes?.closedBy === "invalidation",
+    JSON.stringify(invalKept));
+
+  const faded = step(mkFlag({ first_flagged_at: iso(NOW - 100 * HOUR), peak_at: iso(NOW - 100 * HOUR) }), scr(1.02, { score: 30, band: "cold" }));
+  check("a dead setup past 72h fades", faded?.status === "faded" && !!faded?.resolved_at, JSON.stringify(faded));
+  const young = step(mkFlag({ first_flagged_at: iso(NOW - 24 * HOUR), peak_at: iso(NOW - 24 * HOUR) }), scr(1.02, { score: 30, band: "cold" }));
+  check("faded needs >72h — one bad day is not a fade", !young || !("resolved_at" in young), JSON.stringify(young));
+  const alive = step(mkFlag({ first_flagged_at: iso(NOW - 100 * HOUR), peak_at: iso(NOW - 100 * HOUR) }), scr(1.02, { score: 50 }));
+  check("faded needs score<35 — a live setup stays open", !alive || !("resolved_at" in alive), JSON.stringify(alive));
+
+  const stale = transitionFlags([mkFlag({ status: "hit_t1", peak_price: 1.15, peak_at: iso(NOW - 15 * DAY) })], {}, NOW)
+    .updates.find((u) => u.id === "altcoin:20260801");
+  check("14 days without a new peak closes, status kept",
+    !!stale?.resolved_at && !("status" in stale), JSON.stringify(stale));
+
+  const upgrade = step(mkFlag(), scr(1.0, { score: 60, band: "starting" }));
+  check("building upgrades to igniting when the move ignites",
+    upgrade?.tier === "igniting" && !!upgrade?.notes?.tierUpgradedAt);
+  check("...and the upgrade never resets first_flagged_at", !upgrade || !("first_flagged_at" in upgrade));
+
+  const reflag = transitionFlags(
+    [mkFlag({ id: "altcoin:20260728", resolved_at: iso(NOW - 2 * DAY) })],
+    { altcoin: screened }, NOW,
+  );
+  check("a closed episode re-flagging starts a NEW episode with a NEW id",
+    reflag.inserts.length === 1 && reflag.inserts[0].id === "altcoin:20260805" && reflag.updates.length === 0,
+    JSON.stringify({ inserts: reflag.inserts.map((i) => i.id), updates: reflag.updates.length }));
+
+  // ─── 8. seasonRead — renormalisation, and the phase ladder's edges ─────────
+  // 100 eligible alts (BTC is the bar, passed separately), exact beat counts so
+  // every breadth percentage is checkable on a phone calculator.
+  const seasonUniverse = (beat7, beat30) =>
+    Array.from({ length: 100 }, (_, i) => ({
+      id: `alt-${i}`, symbol: `A${i}`, name: `Alt ${i}`, rank: i + 1,
+      price: 2, mcap: 5e8, vol24h: 2e7,
+      chg24h: 2, chg7d: i < beat7 ? 10 : -10, chg30d: i < beat30 ? 20 : -20,
+    }));
+  const BTC0 = { ...BTC, chg7d: 0, chg30d: 0 };
+  const dom = (delta) => Array.from({ length: 8 }, (_, k) => ({ t: NOW - (7 - k) * DAY, dom: 60 + (delta * k) / 7 }));
+  const season = (beat7, beat30, o = {}) => seasonRead({
+    universe: seasonUniverse(beat7, beat30), btcRow: BTC0,
+    ethRow: { symbol: "ETH", chg7d: -2, chg30d: -2 },
+    fearGreed: { value: 0 }, domHistory: dom(0), now: NOW,
+    ...o,
+  });
+  const earnedOf = (r) => r.parts.reduce(
+    (a, p) => (p.points == null ? a : { earned: a.earned + p.points, of: a.of + p.max }),
+    { earned: 0, of: 0 });
+
+  // Fully measured (of=100): score IS the part sum, so the boundaries are exact.
+  const r70 = season(100, 100);                                            // 35+25+10 = 70
+  const r69 = season(97, 100);                                             // 34+25+10 = 69
+  const r55 = season(100, 40);                                             // 35+10+10 = 55
+  const r54 = season(100, 36);                                             // 35+9+10  = 54
+  const r40 = season(0, 20, { domHistory: dom(-3), ethRow: { chg7d: 2, chg30d: -2 }, fearGreed: { value: 100 } }); // 5+20+5+10 = 40
+  const r39 = season(0, 20, { domHistory: dom(-3), ethRow: { chg7d: 2, chg30d: -2 }, fearGreed: { value: 90 } });  // 5+20+5+9  = 39
+  const r25 = season(0, 0, { domHistory: dom(-3), ethRow: { chg7d: 2, chg30d: -2 } });                             // 20+5      = 25
+  const r24 = season(20, 28, { domHistory: dom(3), fearGreed: { value: 100 } });                                   // 7+7+10    = 24
+  check("70 is alt_season", r70.score === 70 && r70.phase === "alt_season", `${r70.score}/${r70.phase}`);
+  check("69 is majors_rotating", r69.score === 69 && r69.phase === "majors_rotating", `${r69.score}/${r69.phase}`);
+  check("55 is majors_rotating", r55.score === 55 && r55.phase === "majors_rotating", `${r55.score}/${r55.phase}`);
+  check("54 is mixed", r54.score === 54 && r54.phase === "mixed", `${r54.score}/${r54.phase}`);
+  check("40 is mixed", r40.score === 40 && r40.phase === "mixed", `${r40.score}/${r40.phase}`);
+  check("39 is btc_only", r39.score === 39 && r39.phase === "btc_only", `${r39.score}/${r39.phase}`);
+  check("25 is btc_only", r25.score === 25 && r25.phase === "btc_only", `${r25.score}/${r25.phase}`);
+  check("24 is risk_off", r24.score === 24 && r24.phase === "risk_off", `${r24.score}/${r24.phase}`);
+  check("fully measured parts sum to the score",
+    [r70, r69, r55, r54, r40, r39, r25, r24].every((r) => {
+      const { earned, of } = earnedOf(r);
+      return of === 100 && earned === r.score;
+    }));
+
+  // Dominance unmeasured (day one): the part is dropped from BOTH sides and the
+  // 76 earned of 80 offered renormalises to 95 — still reported out of 100.
+  const thin = season(100, 100, { domHistory: [], ethRow: { chg7d: 2, chg30d: 2 }, fearGreed: { value: 60 } });
+  const thinEO = earnedOf(thin);
+  check("dominance unmeasured drops from both sides (76 of 80)",
+    thinEO.earned === 76 && thinEO.of === 80, JSON.stringify(thinEO));
+  check("...and the score renormalises to /100", thin.score === 95, `got ${thin.score}`);
+  check("...still landing on the ladder", thin.phase === "alt_season", thin.phase);
+  check("the unmeasured part is still listed at its full max",
+    thin.parts.length === 6 && thin.parts.find((p) => p.key === "dominance")?.max === 20 &&
+    thin.parts.find((p) => p.key === "dominance")?.points == null);
+  check("domTrend is honestly null on day one", thin.domTrend === null, String(thin.domTrend));
+
+  // ─── 9. odds and ends the pipeline leans on ────────────────────────────────
+  check("parseMarketsRow uppercases the symbol and maps the CG fields",
+    (() => {
+      const r = parseMarketsRow({
+        id: "altcoin", symbol: "alt", name: "Alt Coin", market_cap_rank: 40,
+        current_price: 1.5, market_cap: 5e8, total_volume: 6e7,
+        price_change_percentage_1h_in_currency: 1.2,
+        price_change_percentage_24h_in_currency: 9,
+        price_change_percentage_7d_in_currency: null,
+        price_change_percentage_30d_in_currency: 10,
+        sparkline_in_7d: { price: [1, 1.1, 1.2] },
+        ath: 4, ath_change_percentage: -62.5, ath_date: "2025-01-01T00:00:00.000Z",
+      });
+      return r.symbol === "ALT" && r.price === 1.5 && r.chg24h === 9 && r.chg7d === null &&
+        r.athChangePct === -62.5 && Array.isArray(r.sparkline7d);
+    })());
+  check("screenUniverse drops excluded rows and orders deterministically",
+    (() => {
+      const out = screenUniverse([cleanRaw, { ...BTC, sparkline7d: null }, { id: "tether", symbol: "USDT", name: "Tether", price: 1, mcap: 1e11, vol24h: 8e10 }], { btcRow: BTC });
+      return out.every((r) => r.symbol !== "USDT") && out[0].symbol === "ALT";
+    })());
+} catch (e) {
+  failed++;
+  console.error(`FAIL: smoke crashed — ${(e && e.stack) || e}`);
+} finally {
+  rmSync(OUT_DIR, { recursive: true, force: true });
+}
+
+console.log(failed ? `\nALT SEASON SMOKE FAILED (${failed})` : "\nALT SEASON SMOKE PASS");
+process.exit(failed ? 1 : 0);

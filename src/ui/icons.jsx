@@ -265,11 +265,39 @@ export const IcFinancesFill = (p = {}) => (
     <path d="M5 5.6h14a2.4 2.4 0 0 1 2.4 2.4v8a2.4 2.4 0 0 1-2.4 2.4H5A2.4 2.4 0 0 1 2.6 16V8A2.4 2.4 0 0 1 5 5.6Zm7 3.6a2.8 2.8 0 1 0 0 5.6 2.8 2.8 0 0 0 0-5.6Z" />
   </svg>
 );
+export const IcMarkets = (p = {}) => ( // candlesticks — the tape itself
+  // Three candles, not a line chart: the banknote comment above already claims
+  // "a chart reads as markets", and candles are the one chart form that can't
+  // be mistaken for the analytics icon in Systems. Wicks stop at the bodies so
+  // the outline stays legible at 25px.
+  <svg {...base(p)}>
+    <rect x="3.4" y="9.6" width="3.6" height="6.4" rx="1.2" />
+    <path d="M5.2 6.8v2.8M5.2 16v2.6" />
+    <rect x="10.2" y="5.2" width="3.6" height="7" rx="1.2" />
+    <path d="M12 2.8v2.4M12 12.2v2.6" />
+    <rect x="17" y="10.6" width="3.6" height="6" rx="1.2" />
+    <path d="M18.8 7.8v2.8M18.8 16.6v2.6" />
+  </svg>
+);
+export const IcMarketsFill = (p = {}) => (
+  <svg {...solid(p)}>
+    <rect x="3.2" y="9.4" width="4" height="6.8" rx="1.4" />
+    <rect x="4.3" y="6.6" width="1.8" height="3.2" rx="0.9" />
+    <rect x="4.3" y="15.8" width="1.8" height="3.2" rx="0.9" />
+    <rect x="10" y="5" width="4" height="7.4" rx="1.4" />
+    <rect x="11.1" y="2.6" width="1.8" height="2.8" rx="0.9" />
+    <rect x="11.1" y="12" width="1.8" height="3.2" rx="0.9" />
+    <rect x="16.8" y="10.4" width="4" height="6.4" rx="1.4" />
+    <rect x="17.9" y="7.6" width="1.8" height="3.2" rx="0.9" />
+    <rect x="17.9" y="16.4" width="1.8" height="3.2" rx="0.9" />
+  </svg>
+);
 export const NAV_ICONS = {
   brief: { line: IcBrief, fill: IcBriefFill },
   personal: { line: IcPersonal, fill: IcPersonalFill },
   train: { line: IcTrain, fill: IcTrainFill },
   creed: { line: IcCreed, fill: IcCreedFill },
+  markets: { line: IcMarkets, fill: IcMarketsFill },
   finances: { line: IcFinances, fill: IcFinancesFill },
   grocery: { line: IcGrocery, fill: IcGroceryFill },
   boardroom: { line: IcBoard, fill: IcBoardFill },

@@ -23,11 +23,18 @@ export const NAV = [
   // shop, one-handed. Two taps deep inside Personal → Food was the wrong depth
   // for that, whatever its topical home.
   { key: "grocery", label: "Grocery" },
+  // Markets sits between Grocery and Finances so the two money tabs read as a
+  // cluster at the end of the bar. It's a daily check-in surface (the alt
+  // radar refreshes hourly), which is why it earns a bar slot at all.
+  { key: "markets", label: "Markets" },
   // Finances is last because it's the one you visit deliberately rather than
-  // pass through — the other five are daily surfaces. Six tabs is the ceiling
-  // for a phone bar; "Finances" is the longest label here and still clears its
-  // 65px column at 10px, which is the constraint that decides whether a seventh
-  // is ever possible (it isn't).
+  // pass through — everything before it is a daily surface. The old comment
+  // here called six tabs the ceiling and a seventh impossible; that was
+  // derived from a 65px column budget, which was generous. Measured for real:
+  // at seven tabs a 375pt phone gives each column ~53px, and the longest
+  // labels ("Finances", "Personal") set at 10px/600 run ~46px — tight but
+  // clear. SEVEN IS THE CEILING NOW; an eighth genuinely doesn't fit, and the
+  // proof burden for anyone tempted is a screenshot at 375pt, not arithmetic.
   { key: "finances", label: "Finances" },
   // Assets is no longer a destination. Its last three sub-tabs — Usage, Status,
   // Miner — moved into the Settings sheet's Systems tab, because none of them is
@@ -62,6 +69,7 @@ export const HEADERS = {
   train: { title: "Train" },
   creed: { title: "Creed" },
   grocery: { title: "Grocery" },
+  markets: { title: "Markets" },
   finances: { title: "Finances" },
   upstream: { title: "Upstream" },
 };

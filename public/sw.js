@@ -27,7 +27,10 @@
 // Any deploy whose whole point is that you SEE something different has to touch
 // this file too. Bumping VERSION purges the stale PAGE_CACHE on activate, so the
 // next navigate finds nothing cached and awaits the live shell.
-const VERSION = "br-v6";
+//
+// v7: the Markets tab. A seventh destination in the bottom bar is exactly the
+// kind of deploy the v6 note warns about — its whole point is that you see it.
+const VERSION = "br-v7";
 const ASSET_CACHE = `${VERSION}-assets`;
 const PAGE_CACHE = `${VERSION}-pages`;
 

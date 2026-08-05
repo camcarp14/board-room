@@ -27,6 +27,7 @@ const GroceryPage = lazy(() => import("./pages/grocery/GroceryPage.jsx").then(m 
 // analyzer are dead weight on every launch that doesn't open the tab.
 const FinancesPage = lazy(() => import("./pages/finances/FinancesPage.jsx").then(m => ({ default: m.FinancesPage })));
 const CreedPage = lazy(() => import("./pages/creed/CreedPage.jsx").then(m => ({ default: m.CreedPage })));
+const MarketsPage = lazy(() => import("./pages/markets/MarketsPage.jsx").then(m => ({ default: m.MarketsPage })));
 const UpstreamPage = lazy(() => import("./pages/upstream/UpstreamPage.jsx").then(m => ({ default: m.UpstreamPage })));
 
 // ════════════════════════════════════════════════════════════════════════════
@@ -450,6 +451,7 @@ export default function App() {
       case "train": return <TrainPage isMobile={isMobile} settings={settings} updateSetting={updateSetting} jump={jump} />;
       case "creed": return <CreedPage isMobile={isMobile} settings={settings} updateSetting={updateSetting} jump={jump} />;
       case "grocery": return <GroceryPage isMobile={isMobile} settings={settings} updateSetting={updateSetting} />;
+      case "markets": return <MarketsPage isMobile={isMobile} btc={btc} jump={jump} settings={settings} updateSetting={updateSetting} />;
       case "finances": return <FinancesPage isMobile={isMobile} settings={settings} updateSetting={updateSetting} />;
       case "upstream": return <UpstreamPage isMobile={isMobile} />;
       default: return null;

@@ -22,7 +22,11 @@ const chartHeight = (width) =>
 // by breakpoint (bottom sheet on phone, centered modal ≥761px).
 // Generalized: BTC by default, but any ticker with a candles endpoint can reuse
 // it — pass title, fn, fnArgs (e.g. {symbol:"gold"}), and a default interval.
-export default function BtcChartModal({ isMobile, onClose, callFnFull, title = "BTC/USDT", fn = "btc-candles", fnArgs = null, defaultInterval = "1m" }) {
+// `intervals` lets a caller swap the pill row: the default list is minute-
+// scale because Kraken serves intraday candles, but alt-candles (CoinGecko
+// OHLC) only has day-span lookbacks — its callers pass day-scale pills so no
+// pill can select a range the endpoint cannot serve.
+export default function BtcChartModal({ isMobile, onClose, callFnFull, title = "BTC/USDT", fn = "btc-candles", fnArgs = null, defaultInterval = "1m", intervals = INTERVALS }) {
   const [interval, setInterval_] = useState(defaultInterval);
   const [candles, setCandles] = useState(null);
   const [candleErr, setCandleErr] = useState(null);
@@ -127,7 +131,7 @@ export default function BtcChartModal({ isMobile, onClose, callFnFull, title = "
       bodyStyle={{ paddingBottom: "calc(16px + env(safe-area-inset-bottom))" }}
     >
       <PillRow
-        options={INTERVALS}
+        options={intervals}
         value={interval}
         onChange={setInterval_}
         style={{ margin: "0 -16px 4px" }}
