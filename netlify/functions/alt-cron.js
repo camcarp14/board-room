@@ -1166,15 +1166,35 @@ async function runPass() {
     : null;
   if (!db) errors.push("supabase env not set — nothing persisted this pass");
 
-  // ── prior state: domHistory lives inside the payload and survives passes ──
+  // ── prior state: domHistory rides inside the payload between passes, but
+  // the DURABLE copy is alt_snapshots.btc_dominance — a transient read failure
+  // here must never be able to shorten the series. Two defenses: a failed read
+  // is remembered and blocks this pass's alt_state upsert outright (the next
+  // pass repairs; one stale hour is cheap, a truncated series is forever), and
+  // a missing/thin in-payload history is rebuilt from the snapshots before the
+  // day's sample is merged, so even a genuinely lost payload recovers. ──
   let prevPayload = null;
+  let prevReadFailed = false;
   if (db) {
     const { data, error } = await db.from("alt_state").select("payload").eq("id", "latest").maybeSingle();
-    if (error) errors.push(`alt_state read: ${error.message}`);
+    if (error) { prevReadFailed = true; errors.push(`alt_state read: ${error.message}`); }
     else prevPayload = (data && data.payload) || null;
   }
 
   let domHistory = Array.isArray(prevPayload && prevPayload.domHistory) ? prevPayload.domHistory : [];
+  if (db && domHistory.length < 2) {
+    const { data, error } = await db.from("alt_snapshots")
+      .select("taken_at, btc_dominance")
+      .not("btc_dominance", "is", null)
+      .order("taken_at", { ascending: true })
+      .limit(2400);
+    if (error) errors.push(`domHistory rebuild: ${error.message}`);
+    else for (const r of data || []) {
+      const t = parseTs(r.taken_at);
+      const dom = Number(r.btc_dominance);
+      if (t != null && Number.isFinite(dom)) domHistory = mergeDomSample(domHistory, t, dom);
+    }
+  }
   if (global) domHistory = mergeDomSample(domHistory, now, global.btcDominance);
 
   // ── the math (needs the universe; everything else degrades around it) ──
@@ -1189,15 +1209,19 @@ async function runPass() {
     counts.eligible = eligible.length;
   }
 
-  // ── snapshot: written whenever dominance resolved, even with a dead markets
-  // feed (prices then empty — a baseline chooser skips empty rows). This row
-  // is the one thing a missed hour never gets back. ──
-  if (db && global) {
+  // ── snapshot: written whenever EITHER feed resolved. The two columns serve
+  // different consumers — prices feed the 4h/12h baselines, dominance feeds
+  // the season trend — and neither may hold the other hostage: a /global 429
+  // with 250 priced rows writes prices with null dominance, a dead markets
+  // feed with a live /global writes dominance with empty prices (the baseline
+  // chooser skips empty rows). This row is the one thing a missed hour never
+  // gets back. ──
+  if (db && (global || (eligible && eligible.length))) {
     const prices = {};
     if (eligible) for (const r of eligible) if (Number.isFinite(r.price)) prices[r.id] = r.price;
     const ins = await db.from("alt_snapshots").insert({
       taken_at: nowIso,
-      btc_dominance: global.btcDominance,
+      btc_dominance: global ? global.btcDominance : null,
       fear_greed: fng ? fng.value : null,
       prices,
     });
@@ -1220,13 +1244,22 @@ async function runPass() {
       if (inserts.length) {
         // ignoreDuplicates: a coin closed and re-flagged inside one UTC day
         // collides with the closed episode's id — dropped, never resurrected.
-        const up = await db.from("alt_flags").upsert(inserts, { onConflict: "id", ignoreDuplicates: true });
+        // Cross-day double-opens (two overlapping passes that both read before
+        // either wrote) are refused by the DB instead: alt_flags_one_open_uidx
+        // is a partial unique index on (coin_id) where resolved_at is null, so
+        // the stale pass's insert errors and is logged, not applied.
+        // .select("id") so flagsInserted counts rows the DB actually kept,
+        // not rows the dedupe silently dropped.
+        const up = await db.from("alt_flags").upsert(inserts, { onConflict: "id", ignoreDuplicates: true }).select("id");
         if (up.error) errors.push(`flag insert: ${up.error.message}`);
-        else counts.flagsInserted = inserts.length;
+        else counts.flagsInserted = (up.data || []).length;
       }
       for (const u of updates) {
         const { id, ...patch } = u;
-        const res = await db.from("alt_flags").update(patch).eq("id", id);
+        // .is("resolved_at", null): every update targets an OPEN episode. A
+        // concurrent pass that already closed the row wins outright — a stale
+        // patch must not reopen the ladder or lower a ratchet over it.
+        const res = await db.from("alt_flags").update(patch).eq("id", id).is("resolved_at", null);
         if (res.error) errors.push(`flag update ${id}: ${res.error.message}`);
         else {
           counts.flagsUpdated++;
@@ -1276,8 +1309,10 @@ async function runPass() {
 
   // ── alt_state: only a pass that produced a board overwrites the board. A
   // dead markets feed must not refresh updated_at and hide its own staleness
-  // behind a re-upserted copy of the old payload. ──
-  if (db && season && eligible) {
+  // behind a re-upserted copy of the old payload — and a pass whose READ of
+  // the prior payload failed must not write at all, because it cannot know
+  // what its overwrite would destroy (see the domHistory block above). ──
+  if (db && season && eligible && !prevReadFailed) {
     const board = eligible.slice(0, BOARD_SIZE).map(boardRow);
     counts.board = board.length;
     const payload = {
@@ -1309,9 +1344,13 @@ async function runPass() {
   return { counts, errors };
 }
 
-// Scheduled hourly via netlify.toml. Counts only on every path — the payload
-// itself never leaves through this endpoint, so an unscheduled POST costs the
-// caller nothing but our upstream quota, and a ping costs nothing at all.
+// Scheduled hourly via netlify.toml — which means Netlify production does NOT
+// route public HTTP to it; the ping and POST paths below are reachable only
+// under `netlify dev`. Do not add alt-cron to the Status tab's ping list: the
+// row would read "down" forever while the cron runs fine. Counts only on
+// every path — the payload never leaves through this endpoint, and error
+// DETAIL stays in the function log (an unauthenticated dev-mode caller gets a
+// count, not our table names).
 exports.handler = async (event) => {
   const configured = !!(process.env.SUPABASE_URL && process.env.SUPABASE_SERVICE_ROLE_KEY);
   let body = {};
@@ -1320,7 +1359,7 @@ exports.handler = async (event) => {
 
   try {
     const { counts, errors } = await runPass();
-    return json(200, { success: true, service: "alt-cron", counts, errors });
+    return json(200, { success: true, service: "alt-cron", counts, errorCount: errors.length });
   } catch (e) {
     // The outer net — anything here is a bug, not a market condition, and it
     // still must not surface as a failed scheduled invocation.

@@ -6,10 +6,10 @@
 // of math on this page — the panel only formats and never re-derives, so the
 // number here and the number the flag log was graded by are the same number.
 //
-// The 60s poll (useAltScan) overlays live prices server-side; `stale` means
-// the SCREENER pass is old, not the quotes — the season card wears that tag
-// while the movers can still be seconds fresh, which is exactly the honest
-// combination.
+// The 60s poll (useAltScan) overlays live prices server-side; `stale` fires
+// when EITHER half aged out — the screener pass is >2h old, or the live quote
+// fetch failed and the prices shown are the stored pass's (alt-scan sets it
+// for both). The footer's two stamps say which half is old.
 import { lazy, Suspense, useEffect, useState } from "react";
 import { T } from "../../theme.js";
 import { Card, CollapsibleCard, CellGroup, Cell, Button, PillRow, EmptyState, Dot, Delta } from "../../ui/kit.jsx";
@@ -37,8 +37,9 @@ function px(x) {
 const signedPct = (n, d = 1) => (n == null || !isFinite(n) ? "—" : `${n >= 0 ? "+" : ""}${n.toFixed(d)}%`);
 const fmtDay = (iso) => { const d = new Date(iso); return isNaN(d) ? "—" : d.toLocaleDateString("en-US", { month: "short", day: "numeric" }); };
 const fmtTime = (iso) => { const d = new Date(iso); return isNaN(d) ? "—" : d.toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" }); };
-// Accepts both stamp shapes the payload carries: flag dates are ISO strings,
-// the scan's asOf/liveAsOf are ms epochs — Date.parse(number) is NaN.
+// Accepts both stamp shapes: alt-scan ships ISO strings throughout, but a
+// number is legal input too (fixtures and future callers) — and the number
+// path matters because Date.parse(number) is NaN, not an epoch.
 const rel = (stamp, now) => {
   const t = typeof stamp === "number" ? stamp : Date.parse(stamp);
   if (!Number.isFinite(t)) return "—";
@@ -388,7 +389,7 @@ export default function AltSeasonPanel({ isMobile }) {
       {chart && (
         <Suspense fallback={null}>
           <BtcChartModal isMobile={isMobile} onClose={() => setChart(null)} callFnFull={callFnFull}
-            title={chart.symbol} fn="alt-candles" fnArgs={{ id: chart.id }} defaultInterval="1m"
+            title={chart.symbol} fn="alt-candles" fnArgs={{ id: chart.id }} defaultInterval="1m" z={480}
             // Day-scale pills only: alt-candles is CoinGecko OHLC, which has no
             // intraday lookbacks — the modal's default minute pills would all
             // land on "Chart unavailable" here. "1m" is a MONTH in this row.

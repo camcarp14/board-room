@@ -26,7 +26,11 @@ const chartHeight = (width) =>
 // scale because Kraken serves intraday candles, but alt-candles (CoinGecko
 // OHLC) only has day-span lookbacks — its callers pass day-scale pills so no
 // pill can select a range the endpoint cannot serve.
-export default function BtcChartModal({ isMobile, onClose, callFnFull, title = "BTC/USDT", fn = "btc-candles", fnArgs = null, defaultInterval = "1m", intervals = INTERVALS }) {
+// `z` forwards to the Sheet for callers that open this OVER another sheet —
+// two sheets at the default z tie on z-index and stack by DOM order, which
+// leaves the underlying dialog brighter than its own scrim (useConfirm's
+// z=480 is the house precedent).
+export default function BtcChartModal({ isMobile, onClose, callFnFull, title = "BTC/USDT", fn = "btc-candles", fnArgs = null, defaultInterval = "1m", intervals = INTERVALS, z = 300 }) {
   const [interval, setInterval_] = useState(defaultInterval);
   const [candles, setCandles] = useState(null);
   const [candleErr, setCandleErr] = useState(null);
@@ -127,6 +131,7 @@ export default function BtcChartModal({ isMobile, onClose, callFnFull, title = "
     <Sheet
       onClose={onClose}
       title={title}
+      z={z}
       // keep the chart clear of the home indicator on iOS standalone
       bodyStyle={{ paddingBottom: "calc(16px + env(safe-area-inset-bottom))" }}
     >
