@@ -119,12 +119,9 @@ check("packColumns tolerates a nonsense column count", packColumns(CARDS, 0).len
 import { readFileSync } from "node:fs";
 const brief = readFileSync("src/pages/brief/BriefPage.jsx", "utf8");
 const declared = [...(brief.match(/const DEFAULT_CARDS = \[([\s\S]*?)\n  \];/)?.[1] || "").matchAll(/id: "([\w-]+)"/g)].map((m) => m[1]);
-// Ponder ships at the page's tail but stays out of the fixture above: the
-// sequence assertions hard-code eleven-card expectations, and applyBriefOrder's
-// unknown-card rule (tested with "brand-new") is exactly what covers a twelfth.
 check("BriefPage declares the expected card ids",
-  declared.join(",") === `${DEFAULT_IDS},ponder`,
-  `\n  page  ${declared.join(",")}\n  test  ${DEFAULT_IDS},ponder`);
+  declared.join(",") === DEFAULT_IDS,
+  `\n  page  ${declared.join(",")}\n  test  ${DEFAULT_IDS}`);
 check("every card id is unique", new Set(declared).size === declared.length);
 check("the order is saved under app_settings.brief_order",
   /updateSetting\?\.\("brief_order", ids\)/.test(brief));

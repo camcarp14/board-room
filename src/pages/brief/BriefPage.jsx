@@ -12,7 +12,6 @@ import { NumTween, Sparkline } from "../../ui/primitives.jsx";
 import { SortableList } from "../../ui/SortableList.jsx";
 import { applyBriefOrder, orderOf, packColumns } from "../../lib/brief-order.js";
 import { activeLayout, layoutColumnCount, defaultColumnCount, dealExplicit } from "../../lib/brief-layouts.js";
-import { PonderCard } from "./PonderCard.jsx";
 import { BriefLayoutSheet } from "./BriefLayoutSheet.jsx";
 import GscLineChart from "../../GscLineChart.jsx";
 // Lazy — pulls lightweight-charts (~a quarter of the old bundle) into its own
@@ -784,9 +783,6 @@ export function MorningBriefPage({ btc, isMobile, settings, updateSetting, onOpe
     { id: "wire", c: card_wire, w: 4.5, label: "The Wire" },
     { id: "gsc", c: card_gsc, w: 2.5, label: "Search Console" }, { id: "meetings", c: card_meetings, w: 2, label: "Meetings" }, { id: "clarify", c: card_clarify, w: 1.5, label: "Clarify" },
     { id: "zts", c: card_zts, w: 1.5, label: "ZTS" }, { id: "shopify", c: card_shopify, w: 1.5, label: "Shopify" },
-    // Ponder joins at the tail: applyBriefOrder keeps a card the saved order has
-    // never seen at its default slot, so nobody's arrangement jumps.
-    { id: "ponder", c: <PonderCard settings={settings} updateSetting={updateSetting} coll={coll} pad={pad} />, w: 2, label: "Ponder" },
   ];
   // Your arrangement, if you have one. See lib/brief-order.js for why a card the
   // saved order has never seen keeps its default slot instead of jumping to top.

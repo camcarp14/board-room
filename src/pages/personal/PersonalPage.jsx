@@ -12,6 +12,7 @@ import { PillRow } from "../../ui/kit.jsx";
 // Upkeep alongside it.
 import { NotesPanel } from "./NotesPanel.jsx";
 import { CalendarPanel } from "./CalendarPanel.jsx";
+const PonderPanel = lazy(() => import("./PonderPanel.jsx").then(m => ({ default: m.PonderPanel })));
 const UpkeepPanel = lazy(() => import("../../features/upkeep/UpkeepPanel.jsx").then(m => ({ default: m.UpkeepPanel })));
 const BirthdaysPanel = lazy(() => import("../../features/birthdays/BirthdaysPanel.jsx").then(m => ({ default: m.BirthdaysPanel })));
 const MoviesPanel = lazy(() => import("../../features/movies/MoviesPanel.jsx").then(m => ({ default: m.MoviesPanel })));
@@ -30,7 +31,7 @@ const PanelFallback = () => (
 // App.jsx so old deep links still land somewhere sensible.
 // Creed graduated to its own tab, like Workout did before it — App.jsx remaps
 // jump.sub "creed" so old deep links still land on it.
-const PERSONAL_SUBTABS = [{ key: "notescal", label: "Notes & Calendar" }, { key: "upkeep", label: "Upkeep" }, { key: "birthdays", label: "Birthdays" }, { key: "movies", label: "Movies" }, { key: "food", label: "Food" }];
+const PERSONAL_SUBTABS = [{ key: "notescal", label: "Notes & Calendar" }, { key: "ponder", label: "Ponder" }, { key: "upkeep", label: "Upkeep" }, { key: "birthdays", label: "Birthdays" }, { key: "movies", label: "Movies" }, { key: "food", label: "Food" }];
 
 export function PersonalPage({ isMobile, jumpSignal, jump, settings, updateSetting }) {
   const [sub, setSub] = useState("notescal");
@@ -71,6 +72,7 @@ export function PersonalPage({ isMobile, jumpSignal, jump, settings, updateSetti
           )}
           {sub !== "notescal" && (
             <Suspense fallback={<PanelFallback />}>
+              {sub === "ponder" && <PonderPanel isMobile={isMobile} settings={settings} updateSetting={updateSetting} />}
               {sub === "upkeep" && <UpkeepPanel isMobile={isMobile} />}
               {sub === "birthdays" && <BirthdaysPanel isMobile={isMobile} />}
               {sub === "movies" && <MoviesPanel isMobile={isMobile} />}
