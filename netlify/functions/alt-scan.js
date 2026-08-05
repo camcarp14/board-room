@@ -1,12 +1,12 @@
-// Client-facing read for the Alt Season tab. The hourly alt-cron does all the
-// heavy math (screening, season score, flag transitions) and persists its
-// verdict to boardroom.alt_state; this function just composes that stored
-// verdict with the open/recent episodes in boardroom.alt_flags and one live
-// CoinGecko quote pass, so prices on screen are seconds old even though the
-// screener only runs hourly. The live fetch failing is NOT an error — the
-// stored board prices are served with stale:true and the UI says so. Scores,
-// bands, targets, and season parts are never recomputed here: one brain
-// (alt-cron), one mouth (this).
+// Client-facing read for the Alt Season tab. The hourly alt-cron-background
+// does all the heavy math (screening, season score, flag transitions) and
+// persists its verdict to boardroom.alt_state; this function just composes
+// that stored verdict with the open/recent episodes in boardroom.alt_flags
+// and one live CoinGecko quote pass, so prices on screen are seconds old even
+// though the screener only runs hourly. The live fetch failing is NOT an
+// error — the stored board prices are served with stale:true and the UI says
+// so. Scores, bands, targets, and season parts are never recomputed here: one
+// brain (alt-cron-background), one mouth (this).
 //
 // Self-contained by house rule — see the scripts/functions-smoke.mjs header
 // for the outage that rule paid for.
@@ -162,8 +162,17 @@ exports.handler = async (event) => {
     if (openQ.error) throw new Error(`alt_flags: ${openQ.error.message}`);
     if (closedQ.error) throw new Error(`alt_flags: ${closedQ.error.message}`);
     if (allQ.error) throw new Error(`alt_flags: ${allQ.error.message}`);
-    const payload = stateQ.data && stateQ.data.payload;
-    if (!payload) throw new Error("No screener state yet — alt-cron hasn't completed a pass.");
+    // Two distinct failures, two distinct messages — collapsing them into one
+    // generic "hasn't run yet" is exactly what hid the real bug (a growing
+    // per-row update loop timing the pass out every hour after the first)
+    // behind a message that looked like ordinary first-deploy timing.
+    if (!stateQ.data) {
+      throw new Error("The screener has never completed a pass — check back once alt-cron-background finishes its first hourly run.");
+    }
+    if (!stateQ.data.payload) {
+      throw new Error(`The screener's last write (${stateQ.data.updated_at || "unknown time"}) has no usable data — that's a bug, not a timing issue.`);
+    }
+    const payload = stateQ.data.payload;
 
     const liveRows = Array.isArray(liveQ) ? liveQ : null;
     const liveById = new Map((liveRows || []).map((r) => [r.id, r]));

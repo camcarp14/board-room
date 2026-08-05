@@ -1,5 +1,5 @@
 // ─── Alt Season smoke — the hourly brain's math, with known answers ──────────
-// alt-cron.js is the only place the Alt Season tab's judgment lives: the
+// alt-cron-background.js is the only place the Alt Season tab's judgment lives: the
 // 100-point screen, the season regime, the price targets, and the flag log's
 // entire grading ladder. None of it is exercised by `vite build`, none of it
 // throws when a threshold drifts, and the flag log is APPEND-ONLY history — a
@@ -49,7 +49,7 @@ try {
   // ─── 0. the functions-smoke assertion, early: a bundle with no handler is a
   // 502 that deploys clean. All three alt functions, before any math. ─────────
   const mods = {};
-  for (const name of ["alt-cron", "alt-scan", "alt-candles"]) {
+  for (const name of ["alt-cron-background", "alt-scan", "alt-candles"]) {
     try {
       const out = resolve(OUT_DIR, `${name}.cjs`);
       esbuild.buildSync({
@@ -66,8 +66,8 @@ try {
     }
   }
 
-  const cron = mods["alt-cron"];
-  if (!cron) throw new Error("alt-cron did not load — the fixture suite cannot run");
+  const cron = mods["alt-cron-background"];
+  if (!cron) throw new Error("alt-cron-background did not load — the fixture suite cannot run");
   const {
     parseMarketsRow, isStablecoin, isWrapper, structure7d,
     screenCoin, screenUniverse, seasonRead, targetsFor, flagTier, transitionFlags,

@@ -12,8 +12,10 @@
 # date is only honest if the scan runs while nobody is looking — and hourly is
 # also what makes the 4h/12h mover windows computable at all (they're diffs
 # against our own stored passes; CoinGecko's free tier doesn't carry them).
-# Budget: ~3 keyless HTTP calls per pass, no LLM anywhere.
-[functions."alt-cron"]
+# Budget: ~3 keyless HTTP calls per pass, no LLM anywhere. -background: the
+# flag ledger only grows, and this needs room past a synchronous function's
+# few seconds once there's real data to write back (see the function header).
+[functions."alt-cron-background"]
   schedule = "0 * * * *"
 
 # Purged hashed chunks must 404, never fall back to index.html — a stale shell

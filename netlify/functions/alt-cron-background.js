@@ -1,9 +1,21 @@
-// ─── alt-cron — the hourly alt-season brain ──────────────────────────────────
+// ─── alt-cron-background — the hourly alt-season brain ───────────────────────
 // Scheduled hourly (netlify.toml). Does ALL the heavy math for the Markets →
 // Alt Season tab so the client-facing alt-scan.js stays light: three keyless
 // HTTP calls, screen the top 250, read the rotation regime, compute targets,
 // tier flags, transition the flag log, and persist everything to Supabase
 // (schema "boardroom"). Zero LLM calls, by design.
+//
+// "-BACKGROUND" IS LOAD-BEARING, NOT COSMETIC. It shipped as plain "alt-cron"
+// first and ran clean exactly once (empty flag table, nothing to update) —
+// then never wrote another snapshot for eleven hours straight. The second
+// pass had to individually UPDATE every open flag, one Supabase round trip
+// each, sequentially, in a for-loop — and a synchronous Netlify function has
+// seconds, not minutes: econ-resolve-background.js's own header cites this
+// account's actual measured deaths at 8.8s, 15.7s and 30.8s before it moved
+// off the request path for the same reason. A flag count that only grows
+// turns that loop into a time bomb with a fuse that gets shorter every pass.
+// "-background" gets fifteen minutes, which makes the deadline stop being the
+// design constraint — the same fix this repo already made once elsewhere.
 //
 // THIS FUNCTION MUST NEVER THROW. A scheduled function that 500s writes
 // nothing, and two of the things it writes cannot be backfilled:
@@ -1254,16 +1266,28 @@ async function runPass() {
         if (up.error) errors.push(`flag insert: ${up.error.message}`);
         else counts.flagsInserted = (up.data || []).length;
       }
-      for (const u of updates) {
-        const { id, ...patch } = u;
-        // .is("resolved_at", null): every update targets an OPEN episode. A
-        // concurrent pass that already closed the row wins outright — a stale
-        // patch must not reopen the ladder or lower a ratchet over it.
-        const res = await db.from("alt_flags").update(patch).eq("id", id).is("resolved_at", null);
-        if (res.error) errors.push(`flag update ${id}: ${res.error.message}`);
+      if (updates.length) {
+        // ONE round trip for every changed flag, not one PER flag — this was
+        // the loop that killed the pass (see the header). Each row is spread
+        // over its ORIGINAL columns (openById), never the bare patch: a
+        // multi-row upsert unions the column set across the whole batch, and
+        // a row missing a column another row in the batch supplies would get
+        // that column nulled rather than left alone. Full rows in, full rows
+        // out, every time.
+        //
+        // Trade made in exchange for the batch: the old per-row
+        // `.is("resolved_at", null)` compare-and-swap is gone, so a second
+        // pass overlapping this one could in principle resurrect a row this
+        // pass just closed. Netlify does not double-fire one cron slot and
+        // this is a single-owner console, not a multi-writer system — that
+        // risk is accepted, not overlooked.
+        const openById = new Map((openRows || []).map((r) => [r.id, r]));
+        const rows = updates.map((u) => ({ ...openById.get(u.id), ...u }));
+        const up = await db.from("alt_flags").upsert(rows, { onConflict: "id" }).select("id");
+        if (up.error) errors.push(`flag update: ${up.error.message}`);
         else {
-          counts.flagsUpdated++;
-          if (patch.resolved_at) counts.flagsClosed++;
+          counts.flagsUpdated = (up.data || []).length;
+          counts.flagsClosed = updates.filter((u) => u.resolved_at).length;
         }
       }
     }
@@ -1277,12 +1301,18 @@ async function runPass() {
   const readyIn = { "4h": null, "12h": null };
   if (db) {
     const windows = [["4h", 4], ["12h", 12]];
-    for (const [key, hours] of windows) {
+    // Two independent lookups — parallel, not sequential (the flags loop above
+    // is the one that actually scales with data; this pair is fixed at two
+    // round trips regardless, but there's no reason to pay for them in series).
+    const results = await Promise.all(windows.map(([key, hours]) => {
       const target = now - hours * HOUR;
-      const { data, error } = await db.from("alt_snapshots")
+      return db.from("alt_snapshots")
         .select("taken_at, prices")
         .gte("taken_at", new Date(target - BASELINE_TOLERANCE_MS).toISOString())
-        .lte("taken_at", new Date(target + BASELINE_TOLERANCE_MS).toISOString());
+        .lte("taken_at", new Date(target + BASELINE_TOLERANCE_MS).toISOString())
+        .then((res) => ({ key, target, ...res }));
+    }));
+    for (const { key, target, data, error } of results) {
       if (error) { errors.push(`baseline ${key}: ${error.message}`); continue; }
       const best = (data || [])
         .filter((r) => r.prices && typeof r.prices === "object" && Object.keys(r.prices).length > 0)
@@ -1334,7 +1364,7 @@ async function runPass() {
   }
 
   console.log(
-    `[alt-cron] universe=${counts.universe} eligible=${counts.eligible} board=${counts.board} ` +
+    `[alt-cron-background] universe=${counts.universe} eligible=${counts.eligible} board=${counts.board} ` +
     `flags +${counts.flagsInserted} ~${counts.flagsUpdated} closed=${counts.flagsClosed} ` +
     `snapshot=${counts.snapshotWritten} state=${counts.stateWritten} ` +
     `season=${season && season.score != null ? `${season.score}/${season.phase}` : "none"}` +
@@ -1344,27 +1374,30 @@ async function runPass() {
   return { counts, errors };
 }
 
-// Scheduled hourly via netlify.toml — which means Netlify production does NOT
-// route public HTTP to it; the ping and POST paths below are reachable only
-// under `netlify dev`. Do not add alt-cron to the Status tab's ping list: the
-// row would read "down" forever while the cron runs fine. Counts only on
-// every path — the payload never leaves through this endpoint, and error
-// DETAIL stays in the function log (an unauthenticated dev-mode caller gets a
-// count, not our table names).
+// Scheduled hourly via netlify.toml, as a background invocation — the caller
+// (Netlify's scheduler) gets an immediate ack the moment this starts, and
+// runPass() keeps running for up to fifteen minutes regardless of what gets
+// returned below. Netlify production does NOT route public HTTP to a
+// scheduled function either way; the ping and POST paths here are reachable
+// only under `netlify dev`. Do not add alt-cron-background to the Status
+// tab's ping list: the row would read "down" forever while the cron runs
+// fine. Counts only on every path — the payload never leaves through this
+// endpoint, and error DETAIL stays in the function log (an unauthenticated
+// dev-mode caller gets a count, not our table names).
 exports.handler = async (event) => {
   const configured = !!(process.env.SUPABASE_URL && process.env.SUPABASE_SERVICE_ROLE_KEY);
   let body = {};
   try { body = JSON.parse((event && event.body) || "{}"); } catch {}
-  if (body.ping) return json(200, { success: true, service: "alt-cron", configured, scheduled: true });
+  if (body.ping) return json(200, { success: true, service: "alt-cron-background", configured, scheduled: true });
 
   try {
     const { counts, errors } = await runPass();
-    return json(200, { success: true, service: "alt-cron", counts, errorCount: errors.length });
+    return json(200, { success: true, service: "alt-cron-background", counts, errorCount: errors.length });
   } catch (e) {
     // The outer net — anything here is a bug, not a market condition, and it
     // still must not surface as a failed scheduled invocation.
-    console.error("alt-cron failed:", e);
-    return json(200, { success: false, service: "alt-cron", error: String((e && e.message) || e) });
+    console.error("alt-cron-background failed:", e);
+    return json(200, { success: false, service: "alt-cron-background", error: String((e && e.message) || e) });
   }
 };
 

@@ -65,7 +65,7 @@ const USAGE_META = {
   markets: { label: "Gold, NVDA, MSTR, STRC quotes" },
   "ticker-candles": { label: "Watchlist ticker charts" },
   "alt-scan": { label: "Alt Season board + movers" },
-  "alt-cron": { label: "Alt Season hourly screener" },
+  "alt-cron-background": { label: "Alt Season hourly screener" },
   "alt-candles": { label: "Alt coin candles · CoinGecko" },
   wire: { label: "Crypto headlines · CoinDesk + Cointelegraph" },
   calendar: { label: "US econ calendar" },

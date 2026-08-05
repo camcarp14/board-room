@@ -4,18 +4,25 @@
 // card, so it doesn't belong on the Brief. THE SCHEMA IS INHERITED, NOT
 // DESIGNED: rows in app_settings.ponder_items predate this file, so every
 // field — kind, status, createdAt/updatedAt/lastSeenAt, dismissedAt,
-// snoozeUntil — is read and written as already stored. Items never delete;
-// Done marks dismissedAt and keeps the row, because an idea you dismissed in
-// July is still yours to grep for in October.
+// snoozeUntil — is read and written as already stored.
 //
-// Editing follows the house pattern (see UpkeepPanel): tap a row, an inline
+// Two sub-views, a PillRow under the header: Open (the active inbox) and
+// Archive (status "dismissed" — items you're done tending but kept). Archive
+// is a real destination, not a trash can: restore brings a row back to Open,
+// nothing in it is one tap from gone. Delete is the only irreversible action
+// here, gated behind a confirm like every other destructive control in this
+// app (never window.confirm).
+//
+// Editing follows the house pattern (see UpkeepPanel): tap Edit, an inline
 // Card opens above the list with an editable TextArea, Save/Cancel below it.
-// Quick-add stays a one-line Field + Enter, for capture with zero friction —
-// editing is the deliberate, slower path for fixing or expanding a thought
-// after the fact.
+// Quick-add stays a one-line Field + Enter for zero-friction capture. Row
+// actions are icon buttons (.icon-btn — 38px visual box, 44pt touch target,
+// same class NotesPanel uses for Pin/Delete) rather than labelled buttons:
+// four actions in text would have wrapped or crowded on a narrow phone: icons
+// read as a toolbar instead of a wall of pills.
 import { useState } from "react";
-import { T } from "../../theme.js";
-import { Card, SectionHeader, CellGroup, Button, Field, TextArea, Pill, EmptyState } from "../../ui/kit.jsx";
+import { Card, SectionHeader, CellGroup, PillRow, Button, Field, TextArea, EmptyState, useConfirm } from "../../ui/kit.jsx";
+import { IcPencil, IcClock, IcArchive, IcUnarchive, IcTrash } from "../../ui/icons.jsx";
 
 const now = () => Date.now();
 const isUrl = (s) => /^https?:\/\/\S+$/i.test(String(s).trim());
@@ -25,14 +32,32 @@ const ageOf = (t) => {
   return d <= 0 ? "today" : d === 1 ? "yesterday" : `${d}d ago`;
 };
 
+const VIEWS = [{ key: "open", label: "Open" }, { key: "archive", label: "Archive" }];
+
+function IconAction({ icon, label, tone, onClick }) {
+  return (
+    <button className="icon-btn" onClick={onClick} title={label} aria-label={label}
+      style={{ width: 32, height: 32, borderRadius: 9, color: tone || "var(--faint)" }}>
+      {icon}
+    </button>
+  );
+}
+
 export function PonderPanel({ isMobile, settings, updateSetting }) {
+  const [view, setView] = useState("open");
   const [quick, setQuick] = useState("");
   const [form, setForm] = useState(null); // { id, content } while an item is open for editing
+  const [confirmEl, confirm] = useConfirm();
+
   const items = Array.isArray(settings?.ponder_items) ? settings.ponder_items : [];
   const open = items.filter((it) => it && it.status === "open" && !(Number.isFinite(it.snoozeUntil) && it.snoozeUntil > now()));
+  const archived = items.filter((it) => it && it.status === "dismissed")
+    .sort((a, b) => (b.dismissedAt ?? 0) - (a.dismissedAt ?? 0));
+  const rows = view === "open" ? open : archived;
 
   const write = (next) => updateSetting?.("ponder_items", next);
   const patch = (id, fields) => write(items.map((it) => (it && it.id === id ? { ...it, ...fields, updatedAt: now() } : it)));
+  const remove = (id) => write(items.filter((it) => it && it.id !== id));
 
   const add = () => {
     const content = quick.trim();
@@ -56,22 +81,31 @@ export function PonderPanel({ isMobile, settings, updateSetting }) {
     patch(form.id, { content, kind: isUrl(content) ? "Link" : "Thought" });
     setForm(null);
   };
+  const del = async (it) => {
+    const label = it.content.length > 60 ? `${it.content.slice(0, 60)}…` : it.content;
+    if (!(await confirm({ title: "Delete this?", message: label, confirmLabel: "Delete", destructive: true }))) return;
+    remove(it.id);
+  };
 
   return (
     <section style={{ display: "flex", flexDirection: "column", gap: 12, minWidth: 0 }}>
       <div>
         <SectionHeader title="Ponder" />
         <div className="t-foot" style={{ padding: "0 4px" }}>
-          Park a thought or a link you're not ready to act on. It resurfaces here
-          until you snooze it or mark it done — nothing you write gets deleted.
+          Park a thought or a link you're not ready to act on. Archive when
+          you're done with it, snooze it a few days, or delete it outright.
         </div>
       </div>
 
-      <Card pad="md" style={{ display: "flex", gap: 8 }}>
-        <Field value={quick} onChange={(e) => setQuick(e.target.value)} placeholder="Park a thought or a link…"
-          onKeyDown={(e) => { if (e.key === "Enter") add(); }} style={{ flex: 1, minWidth: 0 }} />
-        <Button kind="tinted" size="md" onClick={add} disabled={!quick.trim()} style={{ flex: "none" }}>Add</Button>
-      </Card>
+      <PillRow options={VIEWS} value={view} onChange={setView} style={isMobile ? { margin: "0 -16px" } : undefined} />
+
+      {view === "open" && (
+        <Card pad="md" style={{ display: "flex", gap: 8 }}>
+          <Field value={quick} onChange={(e) => setQuick(e.target.value)} placeholder="Park a thought or a link…"
+            onKeyDown={(e) => { if (e.key === "Enter") add(); }} style={{ flex: 1, minWidth: 0 }} />
+          <Button kind="tinted" size="md" onClick={add} disabled={!quick.trim()} style={{ flex: "none" }}>Add</Button>
+        </Card>
+      )}
 
       {form && (
         <Card pad="md" style={{ display: "flex", flexDirection: "column", gap: 12 }}>
@@ -85,42 +119,51 @@ export function PonderPanel({ isMobile, settings, updateSetting }) {
         </Card>
       )}
 
-      {open.length === 0 ? (
+      {rows.length === 0 ? (
         <Card pad="md">
-          <EmptyState title="Nothing parked" sub="Ideas and links land here and resurface until you're done with them." />
+          <EmptyState
+            title={view === "open" ? "Nothing parked" : "Nothing archived"}
+            sub={view === "open"
+              ? "Ideas and links land here and resurface until you archive or delete them."
+              : "Items you archive from Open show up here — restore or delete anytime."}
+          />
         </Card>
       ) : (
         <CellGroup>
           {/* A plain div, not a button: when the content is a link it's a real
-              <a> so tapping it opens the URL, same as before. Editing is its
-              own explicit button rather than "tap the row" — the two actions
-              (visit a link, edit its text) can't share one tap target without
-              one of them becoming a trap for the other. */}
-          {open.map((it) => (
-            <div key={it.id} className="cell" style={{ flexDirection: "column", alignItems: "stretch", gap: 8, paddingTop: 10, paddingBottom: 10 }}>
-              <div>
-                <span style={{ display: "flex", alignItems: "baseline", gap: 8, marginBottom: 4 }}>
-                  <Pill active={false} style={{ pointerEvents: "none" }}>{it.kind === "Link" ? "Link" : "Thought"}</Pill>
-                  <span className="t-cap" style={{ color: "var(--faint)" }}>{ageOf(it.createdAt)}</span>
+              <a> so tapping it opens the URL. The icon row is the row's only
+              other interactive surface, so a link tap and an action tap can
+              never fight over the same target. */}
+          {rows.map((it) => (
+            <div key={it.id} className="cell" style={{ flexDirection: "column", alignItems: "stretch", gap: 6, paddingTop: 9, paddingBottom: 9 }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                <span className="t-cap" style={{ color: "var(--faint)", flex: 1, minWidth: 0 }}>
+                  {it.kind === "Link" ? "Link" : "Thought"} · {view === "open" ? ageOf(it.createdAt) : `archived ${ageOf(it.dismissedAt)}`}
                 </span>
-                {it.kind === "Link" && isUrl(it.content) ? (
-                  <a href={it.content} target="_blank" rel="noreferrer" className="t-foot"
-                    style={{ color: "var(--accent)", wordBreak: "break-all", display: "block" }}>{it.content}</a>
-                ) : (
-                  <span className="t-foot" style={{ lineHeight: 1.5, whiteSpace: "normal", display: "block" }}>{it.content}</span>
-                )}
+                <span style={{ display: "flex", gap: 2, flex: "none" }}>
+                  {view === "open" ? (
+                    <>
+                      <IconAction icon={<IcPencil size={15} />} label="Edit" onClick={() => openEdit(it)} />
+                      <IconAction icon={<IcClock size={15} />} label="Snooze 3 days" onClick={() => patch(it.id, { snoozeUntil: now() + 3 * 864e5 })} />
+                      <IconAction icon={<IcArchive size={15} />} label="Archive" tone="var(--green)" onClick={() => patch(it.id, { status: "dismissed", dismissedAt: now() })} />
+                    </>
+                  ) : (
+                    <IconAction icon={<IcUnarchive size={15} />} label="Restore" tone="var(--accent)" onClick={() => patch(it.id, { status: "open", dismissedAt: null })} />
+                  )}
+                  <IconAction icon={<IcTrash size={15} />} label="Delete" tone="var(--red)" onClick={() => del(it)} />
+                </span>
               </div>
-              <span style={{ display: "flex", gap: 8 }}>
-                <Button kind="quiet" size="sm" style={{ height: 44 }} onClick={() => openEdit(it)}>Edit</Button>
-                <Button kind="quiet" size="sm" style={{ height: 44 }}
-                  onClick={() => patch(it.id, { snoozeUntil: now() + 3 * 864e5 })}>Snooze 3d</Button>
-                <Button kind="quiet" size="sm" style={{ height: 44, color: T.green }}
-                  onClick={() => patch(it.id, { status: "dismissed", dismissedAt: now() })}>Done</Button>
-              </span>
+              {it.kind === "Link" && isUrl(it.content) ? (
+                <a href={it.content} target="_blank" rel="noreferrer" className="t-foot"
+                  style={{ color: "var(--accent)", wordBreak: "break-all", display: "block" }}>{it.content}</a>
+              ) : (
+                <span className="t-foot" style={{ lineHeight: 1.5, whiteSpace: "normal", display: "block" }}>{it.content}</span>
+              )}
             </div>
           ))}
         </CellGroup>
       )}
+      {confirmEl}
     </section>
   );
 }
