@@ -173,6 +173,14 @@ exports.handler = async (event) => {
     // Board: stored screener rows with live price/chg overlaid. Scores and
     // targets stay as the cron computed them — a fresher price does not make
     // the hourly read fresher, it just stops the tape looking frozen.
+    // chg4h/chg12h are OURS, not CoinGecko's: current price against the cron's
+    // stored snapshot baselines, per row, so the Crypto board can show every
+    // window on every coin. Null until the snapshot series is old enough.
+    const chgVsBaseline = (w, id, price) => {
+      const base = payload.baselines && payload.baselines[w];
+      const b = base ? num(base[id]) : null;
+      return b != null && b > 0 && price != null ? r2(((price - b) / b) * 100) : null;
+    };
     const board = storedBoard.map((row) => {
       const live = liveById.get(row.id);
       const price = live && live.price != null ? live.price : row.price;
@@ -185,11 +193,15 @@ exports.handler = async (event) => {
           flagPrice: v.flagPrice, sinceFlagPct: v.sinceFlagPct, peakPct: v.peakPct,
         };
       }
-      if (!live) return { ...row, flag };
+      const chg4h = chgVsBaseline("4h", row.id, price);
+      const chg12h = chgVsBaseline("12h", row.id, price);
+      if (!live) return { ...row, flag, chg4h, chg12h };
       return {
         ...row,
         price,
         chg1h: live.chg1h ?? row.chg1h,
+        chg4h,
+        chg12h,
         chg24h: live.chg24h ?? row.chg24h,
         chg7d: live.chg7d ?? row.chg7d,
         chg30d: live.chg30d ?? row.chg30d,
