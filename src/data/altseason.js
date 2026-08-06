@@ -87,7 +87,10 @@ export function useRunStockScreener() {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: async () => {
-      const { ok, status } = await callFnFull("stock-settle-background", { source: "manual" });
+      // force: a manual run means RE-RUN. Without it the engine answers
+      // "already settled" and idles, so the button would do nothing every time
+      // it matters most — right after a change to how the screen scores.
+      const { ok, status } = await callFnFull("stock-settle-background", { source: "manual", force: true });
       // 202 Accepted is the success case for a background function, and it is
       // NOT ok:true — treating it as a failure would show an error on the one
       // path that worked.

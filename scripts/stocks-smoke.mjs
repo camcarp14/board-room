@@ -359,6 +359,7 @@ try {
   check("the effective floor overrides the phase floor when it is higher",
     flagTier(cand({ score: 70 }), { max: 8, floor: 60 }, 75) === null);
 
+
   // GRADING OFF REAL HIGHS AND LOWS. An equity can gap through T2 at the open
   // and be back under T1 within a minute — the close would miss it entirely.
   const openFlag = {
@@ -411,6 +412,27 @@ try {
   check("a coin off the board is never promoted to an entry", entryRead(null, live(100), 100).state === "watch");
   check("liveTargets never moves a target price and never treats null as zero",
     liveTargets(TGT, 120).t1 === 105 && liveTargets(TGT, null) === TGT);
+  // THE INVARIANT THAT WOULD HAVE CAUGHT ZERO FLAGS ON A NORMAL DAY.
+  // entryRead and flagTier are two halves of one judgment and they disagreed:
+  // the read called an `underway` row an entry ("trend intact and T1 still
+  // ahead") while the ladder refused to flag it, because the crypto ladder
+  // excludes underway — where it means a coin already up 15%+ on the week. On
+  // the first live equity board every single strong name banded underway, so
+  // a 49-name board produced nothing at all.
+  check("'underway' with the first target ahead is flaggable",
+    flagTier(cand({ band: "underway", accel: { dSessionVsWeek: 0.5 } }), { max: 8, floor: 60 }) === "building");
+  check("every band entryRead calls an ENTRY is a band the ladder will flag",
+    ["starting", "underway"].every((band) => {
+      const row = cand({ band, accel: { dSessionVsWeek: 0.5 } });
+      const e = entryRead(row, row.targets, row.price);
+      return e.state !== "entry" || flagTier(row, { max: 8, floor: 60 }) !== null;
+    }));
+  // The floors have to sit UNDER a realistic board, or the percentile leg
+  // never gets to do its job and the fixed number silently becomes the whole
+  // gate. Measured p95 on the first live equity board was 61.
+  check("no phase floor sits above a realistic board's 95th percentile",
+    Object.values(PHASE_GATE).every((g) => g.floor <= 66),
+    JSON.stringify(Object.entries(PHASE_GATE).map(([k, g]) => `${k}:${g.floor}`)));
 
   check("well under the level is 'In its base'",
     moveRead(ctxOf({ range20: { ...RANGE, priorHigh: 112 } }), live(100), 100).stage === "base");

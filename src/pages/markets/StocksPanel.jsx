@@ -43,6 +43,9 @@ const MOVER_WINDOWS = [
   { key: "21s", label: "1 month" },
 ];
 const SECTION_PREVIEW = 10;
+// A full sweep is ~50 paced requests plus headlines — about two minutes. Five
+// gives it real headroom and still admits failure while you are looking at it.
+const RUN_TIMEOUT_MS = 5 * 60 * 1000;
 
 const PHASE_TONE = { risk_on: T.green, broadening: T.green, mixed: T.amber, narrow: T.red, risk_off: T.red };
 const PHASE_READ = {
@@ -207,21 +210,50 @@ export function StocksPanel({ isMobile }) {
   const run = useRunStockScreener();
   const data = q.data;
 
-  // A manual pass takes a couple of minutes (it is paced deliberately slowly to
-  // stay well under the quote feed's patience), so the button keeps saying
-  // "Running" and the query keeps re-asking until a board lands. `isPending`
-  // alone would stop the moment the 202 came back, which is the moment the work
-  // STARTS — the least useful place to stop.
-  const running = run.isPending || (run.isSuccess && !data?.settledSession);
+  // A MANUAL PASS IS BOUNDED, AND IT KNOWS WHEN IT IS DONE.
+  //
+  // The first version inferred "running" from `isSuccess && !data?.settledSession`,
+  // which has two ways to hang forever and hit both: isSuccess never goes back
+  // to false, and `data` is null the whole time the read is erroring — so a
+  // pass that failed, or one whose board simply had not propagated, left the
+  // card polling every fifteen seconds with no way out and a fake "running"
+  // message sitting where the real error should have been.
+  //
+  // Done is now a FACT rather than an absence: we remember the payload stamp we
+  // started from and stop when a different one comes back. And it is bounded,
+  // because a screen that spins forever is worse than one that admits it
+  // failed.
+  const [runState, setRunState] = useState(null); // null | {startedAt, priorAsOf} | "timeout"
+  const running = !!runState && runState !== "timeout";
+  const timedOut = runState === "timeout";
+
   useEffect(() => {
     if (!running) return undefined;
-    const iv = setInterval(() => q.refetch(), 15_000);
-    return () => clearInterval(iv);
+    let alive = true;
+    const poll = async () => {
+      if (!alive) return;
+      if (Date.now() - runState.startedAt > RUN_TIMEOUT_MS) { setRunState("timeout"); return; }
+      const r = await q.refetch();
+      // A NEW stamp, not merely a present one — re-running an already-settled
+      // session would otherwise look finished the instant it started.
+      if (alive && r.data?.asOf && r.data.asOf !== runState.priorAsOf) setRunState(null);
+    };
+    // Immediately, then on a cadence. Waiting the full interval before the
+    // first look is how a pass that finished in forty seconds still reads as
+    // running two minutes later.
+    poll();
+    const iv = setInterval(poll, 12_000);
+    return () => { alive = false; clearInterval(iv); };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [running]);
+  }, [runState]);
+
+  const startRun = () => {
+    setRunState({ startedAt: Date.now(), priorAsOf: data?.asOf || null });
+    run.mutate();
+  };
 
   const runNow = (
-    <Button kind="quiet" size="sm" disabled={running} onClick={() => run.mutate()} style={{ height: 44, flex: "none" }}>
+    <Button kind="quiet" size="sm" disabled={running} onClick={startRun} style={{ height: 44, flex: "none" }}>
       {running ? "Running…" : "Run now"}
     </Button>
   );
@@ -290,7 +322,15 @@ export function StocksPanel({ isMobile }) {
               <span className="t-head">Screener</span>
               <span style={{ marginLeft: "auto" }}>{runNow}</span>
             </div>
-            <FallbackRow detail={running ? "Running the screener — this takes a couple of minutes." : q.error?.message} onRetry={() => q.refetch()} />
+            {/* The real error is never hidden behind a fake progress message —
+                that is how a broken pass reads as a slow one forever. */}
+            <FallbackRow
+              detail={
+                running ? "Running the screener — a full pass takes a couple of minutes."
+                  : timedOut ? `The pass didn't finish inside ${Math.round(RUN_TIMEOUT_MS / 60000)} minutes. ${run.error?.message || q.error?.message || "Check the function log."}`
+                  : (run.error?.message || q.error?.message)
+              }
+              onRetry={() => { setRunState(null); q.refetch(); }} />
           </Card>
         ) : <PanelSkeleton />}
       </div>
@@ -490,7 +530,7 @@ export function StocksPanel({ isMobile }) {
       <Card pad="md">
         <span className="t-head" style={{ display: "block", marginBottom: 3 }}>Movers</span>
         <div className="t-cap" style={{ color: "var(--faint)", marginBottom: 6, lineHeight: 1.5 }}>
-          Biggest movers last session — where the tape was hot, not a list of entries.
+          Biggest movers last session — where the tape was hot, not entries.
         </div>
         <PillRow options={MOVER_WINDOWS} value={win} onChange={setWin} style={{ margin: "0 -16px 2px" }} />
         {win === "overnight" && session?.overnightSpan && (
@@ -533,8 +573,8 @@ export function StocksPanel({ isMobile }) {
       {/* ── BOARD ────────────────────────────────────────────────────────── */}
       <CollapsibleCard {...coll("board")} title="Board" tight>
         <div className="t-foot" style={{ color: "var(--sub)", marginBottom: 4, lineHeight: 1.5 }}>
-          Every screened name, ranked by how likely a move is starting — not by how much it already moved.
-          A high score is a good <em>setup</em>, which is not the same as a good <em>entry</em>: the tag says which.
+          Ranked by how likely a move is starting, not by how much it already moved —
+          a good <em>setup</em> is not a good <em>entry</em>, and the tag says which.
         </div>
         {board.length ? (
           <CellGroup style={inCardGroup}>

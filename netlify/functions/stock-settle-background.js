@@ -1078,14 +1078,26 @@ function igniteCond(row) {
  * list that long is not a signal, it is the absence of one wearing a signal's
  * clothes.
  */
+//
+// THE FLOORS ARE CALIBRATED TO THE EQUITY SCORE DISTRIBUTION, NOT COPIED FROM
+// CRYPTO. The first live pass is the evidence: 49 names, max score 70, p95 61,
+// p90 56, p50 27. The crypto-shaped floors (60-76) sat ABOVE the 95th
+// percentile of the board, so a perfectly ordinary session produced exactly
+// zero flags — not because the tape was hostile but because the same number
+// means something different under a different point ladder.
+//
+// So the FIXED floor is the backstop and the PERCENTILE is the working bar
+// (see effectiveFloor): floors sit just under a typical p90 so the top decile
+// normally binds and self-calibrates with the tape, while the fixed number
+// still refuses to flag junk on a day when the whole board is garbage.
 const PHASE_GATE = {
-  risk_on: { max: 10, floor: 60 },
-  broadening: { max: 8, floor: 64 },
-  mixed: { max: 6, floor: 68 },
-  narrow: { max: 4, floor: 72 },
-  risk_off: { max: 2, floor: 76 },
+  risk_on: { max: 10, floor: 50 },
+  broadening: { max: 8, floor: 54 },
+  mixed: { max: 6, floor: 58 },
+  narrow: { max: 4, floor: 62 },
+  risk_off: { max: 2, floor: 66 },
 };
-const DEFAULT_GATE = { max: 6, floor: 68 };
+const DEFAULT_GATE = { max: 6, floor: 58 };
 function gateFor(regime) {
   const phase = regime && regime.phase;
   return (phase && PHASE_GATE[phase]) || DEFAULT_GATE;
@@ -1115,7 +1127,14 @@ function flagTier(row, gate = DEFAULT_GATE, floorValue = null) {
   if (row.score < (floorValue ?? gate.floor ?? DEFAULT_GATE.floor)) return null;
 
   if (igniteCond(row)) return "igniting";
-  if (row.band === "warming" || row.band === "starting") return "building";
+  // 'underway' IS a flaggable state for an equity, and leaving it out was a
+  // straight contradiction with entryRead — which calls the same row an entry
+  // ("trend intact and T1 still ahead") while this refused to flag it. The
+  // crypto ladder excludes underway because there it means a coin already up
+  // 15%+ on the week; here bandOf's underway is chg5 >= 5 with the price
+  // better than halfway up its 20-session range, which is a normal healthy
+  // trend and precisely what you want to buy into at an open.
+  if (row.band === "warming" || row.band === "starting" || row.band === "underway") return "building";
   return null;
 }
 
@@ -1269,7 +1288,7 @@ function boardRow(r) {
 
 /* ═══ the passes ═════════════════════════════════════════════════════════════ */
 
-async function runPass(now = Date.now()) {
+async function runPass(now = Date.now(), opts = {}) {
   const counts = { pass: null, requests: 0, screened: 0, board: 0, flagsInserted: 0, flagsUpdated: 0, flagsClosed: 0, stateWritten: false };
   const errors = [];
 
@@ -1319,8 +1338,18 @@ async function runPass(now = Date.now()) {
   }
 
   const spyDates = spy.bars.map((b) => b.date);
-  const decision = decidePass(now, spyDates, settled);
+  // FORCE means re-settle the newest finished session even though it already
+  // has a board. "Run now" has to mean run now — after a calibration change
+  // the stored board is the OLD verdict, and a button that answers "already
+  // done" is the same dead end as having no button at all. Re-settling is
+  // safe: flag ids are `${ticker}:${session}` with ignoreDuplicates, the
+  // ladder ratchets up only, and the partial unique index refuses a second
+  // open episode per ticker.
+  const decision = opts.force && spyDates.length
+    ? { pass: "settle", et, newest: spyDates[spyDates.length - 1] }
+    : decidePass(now, spyDates, settled);
   counts.pass = decision.pass;
+  if (opts.force) counts.forced = true;
 
   if (decision.pass === "idle") return { counts, errors };
   if (decision.pass === "tick") {
@@ -1658,7 +1687,7 @@ exports.handler = async (event) => {
   if (body.ping) return json(200, { success: true, service: "stock-settle-background", configured });
 
   try {
-    const { counts, errors } = await runPass(Date.now());
+    const { counts, errors } = await runPass(Date.now(), { force: !!body.force });
     console.log(
       `[stock-settle-background] pass=${counts.pass} requests=${counts.requests} screened=${counts.screened} ` +
       `board=${counts.board} flags +${counts.flagsInserted} ~${counts.flagsUpdated} closed=${counts.flagsClosed} ` +

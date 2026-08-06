@@ -91,12 +91,12 @@ const ENTRY_META = {
     rule: "First target still ahead, stop close, and the move pays 1.5×+ what being wrong costs.",
   },
   watch: {
-    label: "Watch", tone: T.amber, head: "Setting up — not yet", open: false,
-    rule: "A real structure with nothing lifting it yet, or too thin a payoff from here.",
+    label: "Watch", tone: T.amber, head: "Getting ready", open: false,
+    rule: "Real structure, nothing lifting it yet — or too thin a payoff from here.",
   },
   late: {
     label: "Late", tone: T.faint, head: "Already ran", open: false,
-    rule: "Past its first target, parabolic, or too thin to exit — you'd be buying the exit.",
+    rule: "Past its first target, parabolic, or too thin to exit.",
   },
 };
 const ENTRY_ORDER = ["entry", "watch", "late"];
@@ -348,17 +348,21 @@ export default function AltSeasonPanel({ isMobile }) {
             {season?.label || "No read"}
           </span>
           {season?.score != null && (
-            <span className="t-num" style={{ fontSize: 13, color: "var(--faint)", flex: "none" }}>
+            <span className="t-num" style={{ fontSize: 12.5, color: "var(--faint)", flex: "none", letterSpacing: "0.01em" }}>
               <NumTween v={season.score} f={(n) => String(Math.round(n))} />
+              <span style={{ opacity: 0.55 }}>/100</span>
             </span>
           )}
           <span style={{ marginLeft: "auto", display: "inline-flex", alignItems: "center", gap: 8, flex: "none" }}>
             {staleTag && <StatusTag status={staleTag} />}
             {/* No score, no Why — there is nothing behind it to show, and a
-                button that opens an empty table is worse than no button. */}
+                button that opens an empty table is worse than no button.
+                Quiet, not accent: accent is for active/primary by house rule,
+                and as the only coloured thing above the fold this was the
+                loudest element on a screen whose content is the rows. */}
             {season?.score != null && (
               <Button kind="plain" size="sm" onClick={() => setWhyOpen((v) => !v)}
-                style={{ height: 44, margin: "-11px -10px", padding: "0 10px" }}>
+                style={{ height: 44, margin: "-11px -10px", padding: "0 10px", color: "var(--sub)", fontWeight: 500 }}>
                 {whyOpen ? "Hide" : "Why"}
               </Button>
             )}
@@ -423,19 +427,22 @@ export default function AltSeasonPanel({ isMobile }) {
                   <button type="button" onClick={() => toggleSec(state)} aria-expanded={open}
                     style={{
                       display: "flex", alignItems: "center", gap: 8, width: "100%", minHeight: 44,
-                      background: "none", border: "none", padding: "6px 0", font: "inherit", color: "inherit",
+                      background: "none", border: "none", padding: "4px 0", font: "inherit", color: "inherit",
                       textAlign: "left", cursor: "pointer",
                     }}>
                     <Dot tone={meta.tone} size={7} />
                     <span className="t-label" style={{ color: "var(--ink)", minWidth: 0 }}>{meta.head}</span>
-                    <span className="t-cap t-num" style={{ color: "var(--faint)" }}>{rows.length}</span>
+                    <span className="t-cap t-num" style={{
+                      color: "var(--sub)", background: "var(--surface-2)", borderRadius: 999,
+                      padding: "1px 7px", flex: "none", lineHeight: 1.6,
+                    }}>{rows.length}</span>
                     <IcChevronDown size={12} style={{ marginLeft: "auto", flex: "none", color: "var(--faint)", transform: open ? "none" : "rotate(-90deg)", transition: "transform var(--dur-2) var(--ease-out)" }} />
                   </button>
                   {open && (
                     <>
                       {/* the rule, in the section — a category nobody can
                           state the test for is just a colour to memorise */}
-                      <div className="t-cap" style={{ color: "var(--faint)", lineHeight: 1.5, paddingBottom: 6 }}>{meta.rule}</div>
+                      <div className="t-cap" style={{ color: "var(--faint)", lineHeight: 1.45, padding: "0 0 7px" }}>{meta.rule}</div>
                       <CellGroup style={inCardGroup}>
                         {/* THE ROW SAYS WHERE THE MOVE IS, THE SECTION SAYS
                             WHETHER TO ACT. Six slots, two numbers, one
@@ -502,7 +509,7 @@ export default function AltSeasonPanel({ isMobile }) {
         {/* Says what this list is FOR, because it is the one card here that is
             not a recommendation and reads exactly like one. */}
         <div className="t-cap" style={{ color: "var(--faint)", marginBottom: 6, lineHeight: 1.5 }}>
-          Biggest gainers in the window — where the tape is hot, not a list of entries.
+          Biggest gainers in the window — where the tape is hot, not entries.
         </div>
         <PillRow options={MOVER_WINDOWS} value={win} onChange={setWin} style={{ margin: "0 -16px 2px" }} />
         {list == null ? (
@@ -548,8 +555,8 @@ export default function AltSeasonPanel({ isMobile }) {
       {/* ── BOARD — the full ranking, folded ───────────────────────────────── */}
       <CollapsibleCard {...coll("board")} title="Board" tight>
         <div className="t-foot" style={{ color: "var(--sub)", marginBottom: 4, lineHeight: 1.5 }}>
-          Every screened coin, ranked by how likely a move is starting — not by how much it already moved.
-          A high score is a good <em>setup</em>, which is not the same as a good <em>entry</em>: the tag says which.
+          Ranked by how likely a move is starting, not by how much it already moved —
+          a good <em>setup</em> is not a good <em>entry</em>, and the tag says which.
         </div>
         {board.length ? (
           <CellGroup style={inCardGroup}>
