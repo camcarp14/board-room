@@ -1,0 +1,319 @@
+// ─── Stock sheet — one name, the levels you'd act on ─────────────────────────
+// The AltCoinSheet's anatomy, because the vocabulary has to be identical across
+// the two tabs: verdict first, then the stage spelled out, then the chart, the
+// session windows, the level rail, the target table, the score and the
+// screener's evidence verbatim.
+//
+// Three things are equity-specific and each earns its line:
+//   · the windows are SESSION counts. There is no 4h return on a market that
+//     shuts at 4pm, and labelling one is the failure this tab exists to avoid.
+//   · ATR — "a normal day for this one is ±1.7%". It is the only unit that
+//     means the same thing on a 1.2%-a-day utility and a 6%-a-day biotech, and
+//     it is what makes a target distance legible without a dollar figure.
+//   · `probing` — the session's HIGH cleared the level and the close did not.
+//     A close-only series cannot produce it; Yahoo's true OHLC can.
+import { Sheet, Button, Delta } from "../../ui/kit.jsx";
+import { NumTween, Sparkline } from "../../ui/primitives.jsx";
+import { T } from "../../theme.js";
+
+/* ── tone vocabulary — lives in this leaf so StocksPanel can import it without
+      making the module graph circular ────────────────────────────────────── */
+export const BAND_TONE = {
+  starting: T.green, underway: T.blue, warming: T.amber,
+  quiet: T.faint, cold: T.faint, late: T.red,
+};
+export const TIER_META = {
+  igniting: { label: "Igniting", tone: T.green },
+  building: { label: "Building", tone: T.amber },
+};
+export const ENTRY_TONE = { entry: T.green, watch: T.amber, late: T.faint };
+export const ENTRY_LABEL = { entry: "Entry", watch: "Watch", late: "Late" };
+// The SAME six words the Alt Season tab uses. A move that is "Breaking out" on
+// one tab must not be called something else on the other — that is the whole
+// reason this vocabulary is a shared export rather than a string literal.
+export const STAGE_LABEL = {
+  base: "In its base",
+  atLevel: "At its level",
+  breaking: "Breaking out",
+  extending: "Extending",
+  spent: "Move spent",
+  broken: "Structure lost",
+  none: "No level drawn",
+  offboard: "Off the board",
+};
+export const MOTION_LABEL = { up: "pace picking up", flat: "pace holding", down: "pace easing off" };
+export const HIT_LABEL = { hit_t1: "T1 ✓", hit_t2: "T2 ✓", hit_t3: "T3 ✓" };
+
+export function TonePill({ tone, children, style }) {
+  return (
+    <span className="t-cap" style={{
+      background: `color-mix(in srgb, ${tone} 14%, transparent)`, color: tone,
+      borderRadius: 999, padding: "3px 9px", fontWeight: 600, whiteSpace: "nowrap", flex: "none", ...style,
+    }}>{children}</span>
+  );
+}
+
+function px(x) {
+  if (!Number.isFinite(x)) return "—";
+  const a = Math.abs(x);
+  if (a >= 1000) return `$${Math.round(x).toLocaleString("en-US")}`;
+  if (a >= 1) return `$${(Math.round(x * 100) / 100).toFixed(2)}`;
+  if (a === 0) return "$0";
+  return `$${x.toPrecision(4).replace(/(\.\d*?)0+$/, "$1").replace(/\.$/, "")}`;
+}
+const signedPct = (n, d = 1) => (n == null || !isFinite(n) ? "—" : `${n >= 0 ? "+" : ""}${n.toFixed(d)}%`);
+function usd(x) {
+  if (!Number.isFinite(x)) return "—";
+  const a = Math.abs(x);
+  if (a >= 1e9) return `$${(x / 1e9).toFixed(1)}B`;
+  if (a >= 1e6) return `$${(x / 1e6).toFixed(0)}M`;
+  if (a >= 1e3) return `$${Math.round(x / 1e3)}k`;
+  return `$${Math.round(x)}`;
+}
+
+const STATUS_RANK = { active: 0, hit_t1: 1, hit_t2: 2, hit_t3: 3 };
+// SESSION counts, never hours. "Overnight" is the equity-only window and it is
+// where the gap lives — the thing a close-to-close series is blindest to.
+const WINDOWS = [
+  { key: "overnight", label: "O/N" },
+  { key: "chgSession", label: "1 SESS" },
+  { key: "chg5", label: "1 WK" },
+  { key: "chg21", label: "1 MO" },
+  { key: "chg63", label: "3 MO" },
+];
+
+export default function StockSheet({ sel, row, episode, session, onClose, onChart }) {
+  const price = row?.price ?? episode?.lastPrice ?? null;
+  // Frozen episode targets beat the board's recompute — a fresher settle does
+  // not move the levels a flag is being judged by.
+  const targets = episode?.targets || row?.targets || null;
+  const score = row?.score ?? episode?.score ?? null;
+  const band = row?.band || null;
+  const facts = Array.isArray(row?.facts) ? row.facts : [];
+  const spark = Array.isArray(row?.spark) && row.spark.length > 1 ? row.spark : null;
+  const reached = STATUS_RANK[episode?.status] || 0;
+
+  const entry = episode?.entry || row?.entry || null;
+  const move = episode?.move || row?.move || null;
+
+  const days = episode?.firstFlaggedAt ? Math.max(0, Math.floor((Date.now() - Date.parse(episode.firstFlaggedAt)) / 86400000)) : null;
+  const flaggedWord = days == null ? null : days === 0 ? "today" : days === 1 ? "yesterday" : `${days} days ago`;
+  const tier = episode ? (TIER_META[episode.tier] || TIER_META.building) : null;
+
+  // TWO DIFFERENT TRUTHS PER LEVEL.
+  //   `hit`     — the LOG graded it: the session's real HIGH reached this
+  //               target, against the frozen levels. Historical, never revoked.
+  //   `cleared` — price is at or above it right now. Live, and it can go away.
+  const targetRows = targets ? [
+    { key: "t1", label: "T1", p: targets.t1, pct: targets.t1Pct, hit: reached >= 1 },
+    { key: "t2", label: "T2", p: targets.t2, pct: targets.t2Pct, hit: reached >= 2 },
+    { key: "t3", label: "T3", p: targets.t3, pct: targets.t3Pct, hit: reached >= 3 },
+  ].map((t) => ({ ...t, cleared: Number.isFinite(t.pct) ? t.pct <= 0 : Number.isFinite(price) && Number.isFinite(t.p) && price >= t.p })) : null;
+
+  const lo = targets?.invalidation, hi = targets?.t3;
+  const spanOk = Number.isFinite(lo) && Number.isFinite(hi) && hi > lo && Number.isFinite(price);
+  const pos = (p) => (spanOk && Number.isFinite(p) ? Math.max(0, Math.min(100, ((p - lo) / (hi - lo)) * 100)) : null);
+  const pricePos = pos(price);
+  const up = (row?.chgSession ?? 0) >= 0;
+
+  return (
+    <Sheet
+      onClose={onClose}
+      title={`${sel.symbol} · ${sel.name}`}
+      footer={<Button kind="tinted" size="lg" full onClick={onChart}>Open chart</Button>}
+    >
+      <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: spark ? 8 : 12 }}>
+        <span style={{ display: "inline-flex", alignItems: "baseline", gap: 8, minWidth: 0 }}>
+          <span className="t-title1 t-num">{price != null ? <NumTween v={price} f={px} /> : "—"}</span>
+          {row && <Delta pct={row.chgSession} digits={1} />}
+        </span>
+        {/* WHEN this price is from. On a shut market it is a settled close, not
+            a live quote, and saying so is the difference between a number you
+            can act on and one you think you can. */}
+        <span className="t-cap" style={{ marginLeft: "auto", color: "var(--faint)", flex: "none" }}>
+          {session?.state === "open" ? "during the session" : session?.lastSessionLabel ? `${session.lastSessionLabel} close` : "last close"}
+        </span>
+      </div>
+
+      {/* THE VERDICT, ABOVE EVERYTHING IT IS DERIVED FROM. */}
+      {entry && (
+        <div style={{
+          background: `color-mix(in srgb, ${ENTRY_TONE[entry.state] || T.faint} 10%, transparent)`,
+          borderRadius: 12, padding: "9px 12px", marginBottom: 12,
+        }}>
+          <div style={{ display: "flex", alignItems: "baseline", gap: 8, minWidth: 0 }}>
+            <span className="t-label" style={{ color: entry.state === "late" ? "var(--sub)" : (ENTRY_TONE[entry.state] || T.faint), letterSpacing: "0.04em" }}>
+              {ENTRY_LABEL[entry.state] || "—"}
+            </span>
+            <span className="t-foot" style={{ color: "var(--sub)", minWidth: 0, lineHeight: 1.45 }}>{entry.why}</span>
+          </div>
+          {(Number.isFinite(entry.roomPct) || Number.isFinite(entry.riskPct)) && (
+            <div className="t-cap t-num" style={{ color: "var(--faint)", marginTop: 4 }}>
+              {Number.isFinite(entry.roomPct) && <>room to T3 <span style={{ color: entry.roomPct >= 0 ? T.green : "var(--faint)" }}>{signedPct(entry.roomPct)}</span></>}
+              {Number.isFinite(entry.riskPct) && <> · risk <span style={{ color: T.red }}>{signedPct(entry.riskPct)}</span></>}
+              {entry.rr != null && <> · pays {entry.rr}×</>}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* THE STAGE, SPELLED OUT — same vocabulary as the list. */}
+      {move && STAGE_LABEL[move.stage] && (
+        <div style={{ marginBottom: 12 }}>
+          <div className="t-foot" style={{ color: "var(--ink)", lineHeight: 1.5 }}>
+            {STAGE_LABEL[move.stage]}
+            {move.probing && <span style={{ color: "var(--sub)" }}> · poked through intraday, closed back under</span>}
+            {move.thin && <span style={{ color: T.red }}> · too thin to exit</span>}
+          </div>
+          <div className="t-cap t-num" style={{ color: "var(--faint)", marginTop: 2, lineHeight: 1.5 }}>
+            {[
+              Number.isFinite(move.toLevelPct)
+                ? `${Math.abs(move.toLevelPct).toFixed(1)}% ${move.toLevelPct < 0 ? "under" : "over"} its level${row?.range20?.priorHigh ? ` ${px(row.range20.priorHigh)}` : ""}`
+                : null,
+              move.motion ? MOTION_LABEL[move.motion] : null,
+              Number.isFinite(move.offPeakPct) ? `${Math.abs(move.offPeakPct).toFixed(1)}% off its own high` : null,
+            ].filter(Boolean).join(" · ") || "no level drawn yet"}
+          </div>
+        </div>
+      )}
+
+      {spark && (
+        <div style={{ marginBottom: 10 }}>
+          <Sparkline points={spark} color={up ? T.green : T.red} height={44} />
+          {row?.range20?.low != null && row?.range20?.high != null && (
+            <div className="t-cap" style={{ color: "var(--faint)", marginTop: 4 }}>
+              20-session range {px(row.range20.low)}–{px(row.range20.high)}
+              {row.range20.pos != null && ` · ${Math.round(row.range20.pos * 100)}% up it`}
+            </div>
+          )}
+        </div>
+      )}
+
+      {row && (
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(5, minmax(0, 1fr))", gap: 4, marginBottom: 14 }}>
+          {WINDOWS.map((w) => {
+            const v = row[w.key];
+            const has = Number.isFinite(v);
+            return (
+              <div key={w.key} style={{ minWidth: 0 }}>
+                <div className="t-cap" style={{ color: "var(--faint)", fontSize: 10 }}>{w.label}</div>
+                <div className="t-num" style={{ fontSize: 12.5, color: has ? (v >= 0 ? T.green : T.red) : "var(--faint)" }}>
+                  {has ? signedPct(v) : "—"}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
+
+      {targetRows ? (
+        <>
+          {spanOk && (
+            <div style={{ padding: "0 2px 14px" }}>
+              <div style={{ position: "relative", height: 6, background: "var(--surface-2)", borderRadius: 999 }}>
+                <div style={{
+                  position: "absolute", left: 0, top: 0, bottom: 0, width: `${pricePos}%`,
+                  background: `color-mix(in srgb, ${up ? T.green : T.red} 55%, transparent)`, borderRadius: 999,
+                }} />
+                {targetRows.map((t) => {
+                  const p = pos(t.p);
+                  return p == null ? null : (
+                    <span key={t.key} style={{
+                      position: "absolute", left: `${p}%`, top: -3, width: 2, height: 12, marginLeft: -1,
+                      background: t.hit || t.cleared ? T.green : "var(--line-strong)", borderRadius: 1,
+                    }} />
+                  );
+                })}
+                <span style={{
+                  position: "absolute", left: `${pricePos}%`, top: -5, width: 10, height: 16, marginLeft: -5,
+                  borderRadius: 3, background: "var(--ink)", border: "2px solid var(--surface)",
+                }} />
+              </div>
+              <div className="t-cap" style={{ display: "flex", justifyContent: "space-between", color: "var(--faint)", marginTop: 5 }}>
+                <span>{px(lo)} invalid</span>
+                <span>{px(hi)} T3</span>
+              </div>
+            </div>
+          )}
+
+          <div style={{ background: "var(--surface-2)", borderRadius: 12, padding: "2px 12px", marginBottom: 12 }}>
+            {targetRows.map((t, i) => {
+              const on = t.hit || t.cleared;
+              return (
+                <div key={t.key} style={{ display: "flex", alignItems: "center", gap: 10, minHeight: 40, borderTop: i ? "0.5px solid var(--line)" : "none" }}>
+                  <span className="t-cap" style={{ color: on ? T.green : "var(--faint)", fontWeight: 600, width: 30, flex: "none" }}>{t.label}</span>
+                  <span className="t-num" style={{ fontSize: 14, color: on ? T.green : "var(--ink)", flex: 1, minWidth: 0 }}>{px(t.p)}</span>
+                  <span className="t-cap t-num" style={{ color: on ? T.green : "var(--sub)", flex: "none" }}>
+                    {t.cleared ? (t.hit ? "✓ cleared" : "cleared")
+                      : t.pct == null ? "—"
+                      : t.hit ? `hit · back ${signedPct(-t.pct)}`
+                      : `${signedPct(t.pct)} away`}
+                  </span>
+                </div>
+              );
+            })}
+            <div style={{ display: "flex", alignItems: "center", gap: 10, minHeight: 40, borderTop: "0.5px solid var(--line)" }}>
+              <span className="t-cap" style={{ color: T.red, fontWeight: 600, width: 30, flex: "none" }}>Inv</span>
+              <span className="t-num" style={{ fontSize: 14, color: T.red, flex: 1, minWidth: 0 }}>{px(targets.invalidation)}</span>
+              <span className="t-cap t-num" style={{ color: T.red, flex: "none" }}>
+                {targets.invPct == null ? "—" : `${signedPct(targets.invPct)} below`}
+              </span>
+            </div>
+          </div>
+        </>
+      ) : (
+        <div className="t-foot" style={{ color: "var(--sub)", marginBottom: 12, lineHeight: 1.5 }}>
+          No published levels — the 20-session structure is too flat to target.
+        </div>
+      )}
+
+      {episode && (
+        <div className="t-foot" style={{ color: "var(--sub)", marginBottom: 10, lineHeight: 1.5 }}>
+          {tier && <>{tier.label} · </>}Flagged {flaggedWord} at {px(episode.flagPrice)}
+          {episode.peakPct != null && <> · peak <span className="t-num" style={{ color: episode.peakPct >= 0 ? T.green : T.red }}>{signedPct(episode.peakPct)}</span></>}
+        </div>
+      )}
+
+      {score != null && (
+        <div style={{ marginBottom: 12 }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 5 }}>
+            <span className="t-foot" style={{ color: "var(--sub)" }}>
+              Score <span className="t-num" style={{ color: "var(--ink)", fontWeight: 600 }}>{score}</span>
+              <span style={{ color: "var(--faint)" }}>/100</span>
+            </span>
+            {band && <TonePill tone={BAND_TONE[band] || T.faint} style={{ marginLeft: "auto" }}>{band}</TonePill>}
+          </div>
+          <div style={{ height: 4, background: "var(--surface-2)", borderRadius: 999 }}>
+            <div style={{
+              width: `${Math.max(0, Math.min(100, score))}%`, height: "100%", borderRadius: 999,
+              background: BAND_TONE[band] || T.accent,
+            }} />
+          </div>
+        </div>
+      )}
+
+      {/* WHAT A NORMAL DAY LOOKS LIKE FOR THIS ONE. A 6% target is a routine
+          session on a biotech and a month's work on a utility, and nothing
+          else on this sheet says which one you are holding. This is the size
+          intuition — never a dollar figure. */}
+      {row && (Number.isFinite(row.atrPct) || Number.isFinite(row.rvol)) && (
+        <div className="t-cap" style={{ color: "var(--faint)", marginBottom: facts.length ? 10 : 0, lineHeight: 1.5 }}>
+          {Number.isFinite(row.atrPct) && `a normal day for this one is ±${row.atrPct.toFixed(1)}%`}
+          {Number.isFinite(row.rvol) && `${Number.isFinite(row.atrPct) ? " · " : ""}traded ${row.rvol}× its normal volume`}
+          {row.sector && ` · ${row.sector}`}
+        </div>
+      )}
+
+      {facts.length > 0 && (
+        <div style={{ display: "flex", flexDirection: "column", gap: 5, paddingBottom: 4 }}>
+          {facts.map((f, i) => (
+            <div key={i} className="t-foot" style={{ color: "var(--sub)", lineHeight: 1.5, display: "flex", gap: 7 }}>
+              <span style={{ color: "var(--faint)", flex: "none" }}>·</span>
+              <span style={{ minWidth: 0 }}>{f}</span>
+            </div>
+          ))}
+        </div>
+      )}
+    </Sheet>
+  );
+}

@@ -1,3 +1,4 @@
+import { useEffect, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { callFnFull } from "../lib/functions.js";
 
@@ -40,4 +41,51 @@ export function useStockQuotes() {
     queryFn: fnQuery("markets"),
     refetchInterval: 300_000,
   });
+}
+
+// The stock screener. NOTHING ABOUT THIS POLLS LIKE THE CRYPTO ONE, and the
+// difference is the market's clock rather than a preference:
+//
+//   · stock-scan makes zero upstream calls and the cron settles once a session,
+//     so a 60s poll would re-read an identical payload ~60 times an hour.
+//   · the poll is DISABLED while the market is shut. Re-fetching a finished
+//     tape on a timer is theatre, and this tab is checked on a phone.
+//   · focus refetch stays on: coming back to the tab is a real signal that you
+//     want to know whether anything moved, and it costs one cached read.
+//
+// The 5-minute interval while open matches the tick's own hourly cadence with
+// room to spare — the payload only changes when a tick writes.
+export function useStockScan() {
+  const [open, setOpen] = useState(() => marketMayBeOpen());
+  useEffect(() => {
+    const iv = setInterval(() => setOpen(marketMayBeOpen()), 60_000);
+    return () => clearInterval(iv);
+  }, []);
+  return useQuery({
+    queryKey: ["stock-scan"],
+    queryFn: fnQuery("stock-scan"),
+    refetchInterval: open ? 300_000 : false,
+    staleTime: 120_000,
+    refetchOnWindowFocus: true,
+  });
+}
+
+/**
+ * Could the US market be open right now — a CHEAP GUESS, used only to decide
+ * whether to poll. The payload's `session.state` is the authority, and it comes
+ * from SPY's own printed sessions; this is a weekday-and-clock heuristic that
+ * exists so a phone left on the tab over a weekend does not poll all weekend.
+ * It is deliberately allowed to be wrong on a market holiday: the cost is a few
+ * cached reads, and the tab never renders anything off it.
+ */
+function marketMayBeOpen(now = new Date()) {
+  const f = new Intl.DateTimeFormat("en-US", {
+    timeZone: "America/New_York", weekday: "short", hour: "2-digit", minute: "2-digit", hour12: false,
+  });
+  const parts = {};
+  for (const p of f.formatToParts(now)) if (p.type !== "literal") parts[p.type] = p.value;
+  if (parts.weekday === "Sat" || parts.weekday === "Sun") return false;
+  const h = Number(parts.hour) === 24 ? 0 : Number(parts.hour);
+  const mins = h * 60 + Number(parts.minute);
+  return mins >= 9 * 60 + 30 && mins < 16 * 60;
 }

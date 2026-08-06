@@ -67,6 +67,8 @@ const USAGE_META = {
   "alt-scan": { label: "Alt Season board + movers" },
   "alt-cron-background": { label: "Alt Season hourly screener" },
   "alt-candles": { label: "Alt coin candles · CoinGecko" },
+  "stock-scan": { label: "Stocks board + movers" },
+  "stock-cron-background": { label: "Stocks session screener" },
   wire: { label: "Crypto headlines · CoinDesk + Cointelegraph" },
   calendar: { label: "US econ calendar" },
   "calendar-events": { label: "Meetings from your iCal" },
