@@ -746,6 +746,17 @@ try {
   const scanSrc2 = readFileSync(`${FN_DIR}/stock-scan.js`, "utf8");
   check("and a block older than the window is no longer fatal to the read",
     /FEED_BLOCK_FATAL_MS/.test(scanSrc2) && /Date\.now\(\) - since < FEED_BLOCK_FATAL_MS/.test(scanSrc2));
+  // The read's fatal window must cover the engine's backoff exactly. Inside the
+  // backoff the engine does not try, so it cannot clear the flag — a read that
+  // stops reporting earlier claims health over a stopped screener. Two files,
+  // no shared import (house rule), so the coupling is asserted.
+  {
+    const engineBackoffH = Number((settleSrc.match(/now - since < (\d+) \* HOUR/) || [])[1]);
+    const readFatalH = Number((scanSrc2.match(/FEED_BLOCK_FATAL_MS = (\d+) \* 60 \* 60 \* 1000/) || [])[1]);
+    check("the read's fatal window equals the engine's backoff",
+      Number.isFinite(engineBackoffH) && engineBackoffH === readFatalH,
+      `engine backs off ${engineBackoffH}h, read reports for ${readFatalH}h`);
+  }
 
   // ─── a rejected pass does not relabel the board it did not replace ───────
   check("a thin pass records itself as a rejected attempt, not as the board's coverage",
@@ -817,6 +828,47 @@ try {
   check("the tick reads the newest PRINTED session, not the last settled one",
     /function newestPrinted/.test(settleSrc)
     && !/sessionState\(now, prev\.settledSession\)/.test(codeOnly(settleSrc)));
+
+  // ─── batch 4: a session is settled only when it was actually graded ──────
+  check("a failed flag stage does not advance the settled marker",
+    /settledSession: flagsGraded \? sessionDate : \(prev && prev\.settledSession\) \|\| null/.test(settleSrc),
+    "settledSession still advances unconditionally");
+  check("...and every flag failure path clears the flag",
+    (settleSrc.match(/flagsGraded = false;/g) || []).length === 3,
+    `${(settleSrc.match(/flagsGraded = false;/g) || []).length} of 3 failure paths`);
+
+  // ─── the crypto engine gets the equity engine's coverage discipline ──────
+  {
+    const cronSrc = readFileSync(`${FN_DIR}/alt-cron-background.js`, "utf8");
+    check("a thin CoinGecko page cannot redefine the board or the season score",
+      /const MIN_UNIVERSE = \d+;/.test(cronSrc) && /parsed\.length >= MIN_UNIVERSE/.test(cronSrc));
+    check("...and the floor is a real fraction of the page it asks for",
+      Number((cronSrc.match(/MIN_UNIVERSE = (\d+)/) || [])[1]) >= 150);
+    check("...and the rejection is reported rather than silent",
+      /usable rows \(need \$\{MIN_UNIVERSE\}\)/.test(cronSrc));
+  }
+
+  // ─── the client's failure states ─────────────────────────────────────────
+  {
+    const panel = readFileSync("src/pages/markets/StocksPanel.jsx", "utf8");
+    check("a failed or fruitless Run now is visible with a board on screen",
+      /\{\(timedOut \|\| run\.isError\) && \(/.test(panel), "run failures are still only rendered in the no-data branch");
+    check("...and it offers a way out rather than just a message",
+      /onRetry=\{\(\) => \{ setRunState\(null\); run\.reset\(\); q\.refetch\(\); \}\}/.test(panel));
+    check("the chart modal is mounted in BOTH returns, so a watchlist tap is never a dead control",
+      (panel.match(/\{chartModal\}/g) || []).length === 2,
+      `${(panel.match(/\{chartModal\}/g) || []).length} mount points`);
+
+    const modal = readFileSync("src/BtcChartModal.jsx", "utf8");
+    check("an empty candle series is an error, not a blank sheet",
+      /else if \(rows\) setCandleErr\("No price history/.test(modal));
+
+    const qc = readFileSync("src/lib/queryClient.js", "utf8");
+    check("offline reads fail visibly instead of pausing on a silent skeleton",
+      /networkMode: "offlineFirst"/.test(qc));
+    check("...while mutations keep the default, so a write waits rather than losing the edit",
+      !/mutations:\s*\{[^}]*networkMode/.test(qc));
+  }
 
   const catalysts = ["accumulation", "squeeze", "gap", "volume"];
   check("every catalyst the cron can emit has a label in the panel",

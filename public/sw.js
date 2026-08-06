@@ -38,7 +38,7 @@
 // number instead of an em-dash, and the coin sheet was rebuilt. Every one of
 // those is checked by LOOKING at the tab, which is exactly the case the v6
 // note says must bump this file.
-const VERSION = "br-v26";
+const VERSION = "br-v27";
 const ASSET_CACHE = `${VERSION}-assets`;
 const PAGE_CACHE = `${VERSION}-pages`;
 

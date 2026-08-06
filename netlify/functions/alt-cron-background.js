@@ -41,6 +41,11 @@ const { createClient } = require("@supabase/supabase-js");
 
 const MARKETS_URL =
   "https://api.coingecko.com/api/v3/coins/markets?vs_currency=usd&order=market_cap_desc&per_page=250&page=1&sparkline=true&price_change_percentage=1h%2C24h%2C7d%2C30d";
+// The page asks for 250. Anything under this is a broken response rather than
+// a smaller market, and must not be allowed to redefine the board or the season
+// score. Same intent as the equity engine's 80% coverage gate, against a
+// universe whose size we control by request rather than by authored list.
+const MIN_UNIVERSE = 200;
 const GLOBAL_URL = "https://api.coingecko.com/api/v3/global";
 const FNG_URL = "https://api.alternative.me/fng/?limit=1";
 
@@ -778,10 +783,21 @@ function domTrendOf(domHistory, facts = []) {
     facts.push(`${window.length} recent dominance sample${window.length === 1 ? "" : "s"} stored — the trend needs ${MIN_DOM_SAMPLES} and stays unknown until then`);
     return { trend: null, changePts: null, samples: window.length };
   }
-  const change = window[window.length - 1].dom - window[0].dom;
+  const first = window[0], last = window[window.length - 1];
+  const change = last.dom - first.dom;
   const trend = change < -DOM_FLAT_PTS ? "falling" : change > DOM_FLAT_PTS ? "rising" : "flat";
-  facts.push(`BTC dominance ${trend}: ${signed(change, 2)} pts over the last ${DOM_WINDOW_DAYS} days${trend === "falling" ? " — capital is leaving BTC" : ""}`);
-  return { trend, changePts: change, samples: window.length };
+  // THE SPAN IS MEASURED, NOT ASSUMED. DOM_WINDOW_DAYS is the window we are
+  // willing to look back over; it is not how far back the samples actually go.
+  // Seven of them can sit inside six days — after a deploy, or on the far side
+  // of a gap in the history — and this sentence announced them as "over the
+  // last 30 days" regardless. That is the whole claim: a dominance move of
+  // −0.61 points is a real signal over a month and noise over a week, and the
+  // reader has no other way to tell which one they are looking at. Dominance
+  // is worth 20 of the season's 100 points, so the sentence is load-bearing.
+  const spanDays = Math.max(0, Math.round((last.t - first.t) / DAY));
+  const over = spanDays >= 1 ? `${spanDays} day${spanDays === 1 ? "" : "s"}` : "under a day";
+  facts.push(`BTC dominance ${trend}: ${signed(change, 2)} pts over the last ${over}${trend === "falling" ? " — capital is leaving BTC" : ""}`);
+  return { trend, changePts: change, samples: window.length, spanDays };
 }
 
 /**
@@ -1277,8 +1293,28 @@ async function runPass() {
 
   let universe = null;
   if (mktRes.status === "fulfilled" && Array.isArray(mktRes.value)) {
-    universe = mktRes.value.map(parseMarketsRow).filter(Boolean);
-    counts.universe = universe.length;
+    const parsed = mktRes.value.map(parseMarketsRow).filter(Boolean);
+    counts.universe = parsed.length;
+    // A MINIMUM-UNIVERSE GATE, which the equity engine has always had (it
+    // refuses to publish a board under 80% coverage) and this one did not.
+    // `universe && universe.length` accepted ANY non-empty page, so a
+    // truncated response during a CoinGecko incident — or a burst of rows
+    // whose price came back null and got filtered out here — rebuilt the whole
+    // board and RE-DERIVED THE SEASON SCORE off whatever survived. The board
+    // silently shrank from sixty rows to a handful, coins the reader was
+    // tracking vanished, breadth was computed over a biased sample of the very
+    // largest caps, and it all stood for an hour until the next pass.
+    //
+    // Below the floor the pass keeps everything it can that does not depend on
+    // the universe — dominance, fear & greed, the flag transitions — and
+    // leaves the stored board alone, which is the same trade the equity side
+    // makes: a stale complete board beats a fresh partial one.
+    if (parsed.length >= MIN_UNIVERSE) {
+      universe = parsed;
+    } else {
+      errors.push(`markets returned ${parsed.length} usable rows (need ${MIN_UNIVERSE}) — board and season left as they were`);
+      counts.universeRejected = parsed.length;
+    }
   } else {
     errors.push(`markets: ${mktRes.status === "fulfilled" ? "malformed payload" : settledError(mktRes)}`);
   }
@@ -1553,3 +1589,4 @@ exports.flagTier = flagTier;
 exports.transitionFlags = transitionFlags;
 exports.gateFor = gateFor;
 exports.PHASE_GATE = PHASE_GATE;
+exports.domTrendOf = domTrendOf;

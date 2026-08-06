@@ -650,6 +650,41 @@ try {
   check("no episode means no give-back number", mv(ctxOf(), live(100), 100).offPeakPct === null);
   check("a flag sitting at its own high reports no give-back",
     mv(ctxOf(), live(100), 100, epi(30, 30)).offPeakPct === null);
+
+  // ─── the dominance sentence states the span it MEASURED ────────────────────
+  // DOM_WINDOW_DAYS is how far back we are WILLING to look, not how far back
+  // the samples go. Seven of them can sit inside six days — after a deploy, or
+  // the far side of a gap in the history — and the sentence announced them as
+  // "over the last 30 days" regardless. A -0.61 point move is a signal over a
+  // month and noise over a week, the reader has no other way to tell which one
+  // they are looking at, and dominance carries 20 of the season's 100 points.
+  {
+    const { domTrendOf } = cron;
+    const D = 86400000;
+    const at = (daysAgo, dom) => ({ t: Date.now() - daysAgo * D, dom });
+    const say = (rows) => { const f = []; domTrendOf(rows, f); return f.join(" "); };
+
+    const sixDays = [at(6, 58.0), at(5, 57.9), at(4, 57.8), at(3, 57.7), at(2, 57.6), at(1, 57.5), at(0, 57.4)];
+    check("seven samples inside six days say SIX days, not thirty",
+      /over the last 6 days/.test(say(sixDays)), say(sixDays));
+    check("...and the change itself is still measured end to end",
+      Math.abs(domTrendOf(sixDays).changePts + 0.6) < 1e-9, String(domTrendOf(sixDays).changePts));
+    check("...and the real span rides on the return for anything downstream",
+      domTrendOf(sixDays).spanDays === 6, String(domTrendOf(sixDays).spanDays));
+
+    const fullMonth = Array.from({ length: 10 }, (_, i) => at(28 - i * 3, 58 - i * 0.1));
+    check("a genuine month still says the month it covers",
+      /over the last 2[0-9] days/.test(say(fullMonth)), say(fullMonth));
+
+    const sameDay = Array.from({ length: 7 }, (_, i) => ({ t: Date.now() - i * 3600000, dom: 58 - i * 0.05 }));
+    check("samples inside one day do not claim a day",
+      /under a day/.test(say(sameDay)), say(sameDay));
+
+    check("too few samples still refuses to call a trend at all",
+      domTrendOf([at(3, 58), at(2, 57.9), at(1, 57.8)]).trend === null);
+    check("an empty history is not a trend",
+      domTrendOf([]).trend === null && domTrendOf(null).samples === 0);
+  }
 } catch (e) {
   failed++;
   console.error(`FAIL: smoke crashed — ${(e && e.stack) || e}`);

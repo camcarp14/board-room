@@ -1756,14 +1756,28 @@ async function settle(db, prev, spy, now, decision) {
   }
 
   // ── flags ──
+  // A SESSION IS ONLY SETTLED WHEN ITS FLAGS HAVE BEEN GRADED AGAINST IT.
+  // Every failure below used to push an error and fall through to stamp
+  // `settledSession`, which is the one marker decidePass consults — so a single
+  // statement timeout on the flags read or either upsert left that session
+  // permanently ungraded. Its high and low were never tested: an episode that
+  // tagged T2 that day was never credited, one that lost its stop was never
+  // closed, and no later pass would ever look again, because the marker said
+  // the work was done.
+  //
+  // Re-settling is already safe by construction — flag ids are
+  // `${ticker}:${session}` with ignoreDuplicates, the ladder ratchets up only,
+  // and targets are frozen — so the honest response is to leave the marker
+  // alone and let the next hourly fire try again.
+  let flagsGraded = true;
   const { data: openRows, error: openErr } = await db.from("stock_flags").select("*").is("resolved_at", null);
-  if (openErr) errors.push(`flags read: ${openErr.message}`);
+  if (openErr) { errors.push(`flags read: ${openErr.message}`); flagsGraded = false; }
   else {
     const byId = new Map(finalRows.map((r) => [r.id, r]));
     const { inserts, updates } = transitionFlags(openRows || [], byId, { date: sessionDate, at: nowIso, index: sessionIndex, dates: spyDates }, gate, floor.value);
     if (inserts.length) {
       const up = await db.from("stock_flags").upsert(inserts, { onConflict: "id", ignoreDuplicates: true }).select("id");
-      if (up.error) errors.push(`flag insert: ${up.error.message}`);
+      if (up.error) { errors.push(`flag insert: ${up.error.message}`); flagsGraded = false; }
       else counts.flagsInserted = (up.data || []).length;
     }
     if (updates.length) {
@@ -1774,7 +1788,7 @@ async function settle(db, prev, spy, now, decision) {
       const openById = new Map((openRows || []).map((r) => [r.id, r]));
       const merged = updates.map((u) => ({ ...openById.get(u.id), ...u }));
       const up = await db.from("stock_flags").upsert(merged, { onConflict: "id" }).select("id");
-      if (up.error) errors.push(`flag update: ${up.error.message}`);
+      if (up.error) { errors.push(`flag update: ${up.error.message}`); flagsGraded = false; }
       else {
         counts.flagsUpdated = (up.data || []).length;
         counts.flagsClosed = updates.filter((u) => u.resolved_at).length;
@@ -1833,7 +1847,9 @@ async function settle(db, prev, spy, now, decision) {
   const payload = {
     engine: ENGINE_VERSION,
     asOf: nowIso,
-    settledSession: sessionDate,
+    // Not advanced when the flag stage failed: the board is still worth
+    // publishing, but this session has not been graded and must be retried.
+    settledSession: flagsGraded ? sessionDate : (prev && prev.settledSession) || null,
     settledAt: nowIso,
     session: {
       state: sessionState(now, spyDates[spyDates.length - 1]),

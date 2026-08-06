@@ -22,10 +22,19 @@ const { createClient } = require("@supabase/supabase-js");
 
 let cache = { data: null, ts: 0 };
 const TTL_MS = 60 * 1000;
-// How long a feed block stays fatal. Longer than the hourly cadence, so a real
-// block survives to be seen; short enough that one cannot outlive the outage
-// that caused it by a trading day.
-const FEED_BLOCK_FATAL_MS = 3 * 60 * 60 * 1000;
+// How long a feed block stays fatal to this read.
+//
+// IT MUST MATCH THE ENGINE'S BACKOFF, which is 12h (see the `backoff` branch in
+// stock-settle-background.js). During that window the engine deliberately does
+// not try, so it cannot discover the feed has recovered and cannot clear the
+// flag — the tab going quiet in there means claiming health precisely while the
+// screener is provably dead. Shipped briefly at 3h, which left nine hours of
+// completely normal-looking board over a stopped engine.
+//
+// The two constants cannot be imported from one another — functions are
+// self-contained by house rule — so scripts/stocks-smoke.mjs asserts they are
+// equal instead. Change one, change the other.
+const FEED_BLOCK_FATAL_MS = 12 * 60 * 60 * 1000;
 
 const json = (code, body) => ({
   statusCode: code,

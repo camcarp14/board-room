@@ -45,7 +45,17 @@ export default function BtcChartModal({ isMobile, onClose, callFnFull, title = "
     setCandleErr(null);
     callFnFull(fn, { interval, ...(fnArgs || {}) }).then(({ ok, data }) => {
       if (cancelled) return;
-      if (ok && data?.success) setCandles(data.candles);
+      // AN EMPTY SERIES IS NOT A SUCCESS. `success: true` with zero candles —
+      // a recently listed coin, a range the upstream has no history for, or
+      // every row holed and filtered out — set candles to [] and cleared the
+      // error, and the draw effect then bailed on `!candles.length`. The sheet
+      // opened on a completely blank body: no chart, no spinner, no message and
+      // no Retry, with the close button the only way out. Saying so puts the
+      // existing error UI back in play, and the interval pills beside it are
+      // usually the actual fix.
+      const rows = ok && data?.success && Array.isArray(data.candles) ? data.candles : null;
+      if (rows && rows.length) setCandles(rows);
+      else if (rows) setCandleErr("No price history for this range — try a longer interval.");
       else setCandleErr(data?.error || "Couldn't load candles — try again in a moment.");
     });
     return () => { cancelled = true; };

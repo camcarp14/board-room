@@ -286,6 +286,30 @@ export function StocksPanel({ isMobile }) {
 
   const tileGrid = { display: "grid", gridTemplateColumns: isMobile ? "repeat(2, minmax(0, 1fr))" : "repeat(auto-fit, minmax(120px, 1fr))", gap: 8 };
 
+  /* THE CHART MODAL LIVES IN BOTH RETURNS.
+     It used to be mounted only in the main one, below the `data == null` early
+     return — while the WATCHLIST renders in both. So tapping Gold or NVDA while
+     the screener was still loading (an everyday path: the Brief warms the
+     quotes query, so tiles paint instantly and the board does not) set the
+     state and drew nothing: a live-looking tile with a press animation and no
+     result. Then the board landed and the chart sprang open by itself, minutes
+     after the tap that asked for it. */
+  const chartModal = (chart || tickerChart) ? (
+    <Suspense fallback={null}>
+      <BtcChartModal
+        key={(chart || tickerChart).symbol || tickerChart.key}
+        isMobile={isMobile}
+        onClose={() => { setChart(null); setTickerChart(null); }}
+        callFnFull={callFnFull}
+        title={(chart || tickerChart).symbol || tickerChart.label}
+        fn="ticker-candles"
+        fnArgs={{ symbol: (chart ? chart.symbol : tickerChart.key) }}
+        defaultInterval="1d"
+        z={480}
+      />
+    </Suspense>
+  ) : null;
+
   const watchlist = (
     <CollapsibleCard {...coll("watchlist")} title="Watchlist">
       {quotes.data ? (
@@ -327,6 +351,7 @@ export function StocksPanel({ isMobile }) {
               onRetry={() => { setRunState(null); q.refetch(); }} />
           </Card>
         ) : <PanelSkeleton />}
+        {chartModal}
       </div>
     );
   }
@@ -642,6 +667,23 @@ export function StocksPanel({ isMobile }) {
         {runNow}
       </div>
 
+      {/* A RUN THAT FAILED, OR FINISHED WITH NOTHING NEW.
+          The Screener card carrying these messages lives in the `!data` branch,
+          so with a board on screen — the ordinary case — a failed Run now was
+          completely silent: the button greyed to "Running…" for the full five
+          minutes, fired twenty-five pointless refetches, then flipped back with
+          no error, no timeout, nothing. The one control on this tab that exists
+          because the scheduler cannot be relied on had no failure state at all. */}
+      {(timedOut || run.isError) && (
+        <div style={{ padding: "0 0 8px" }}>
+          <FallbackRow
+            detail={run.isError
+              ? `Couldn't start the screener — ${run.error?.message || "unreachable"}`
+              : `The pass didn't produce a new board inside ${Math.round(RUN_TIMEOUT_MS / 60000)} minutes. ${q.error?.message || "It may still be running; the log will say."}`}
+            onRetry={() => { setRunState(null); run.reset(); q.refetch(); }} />
+        </div>
+      )}
+
       {/* A PASS CAME BACK TOO THIN AND WAS THROWN AWAY. The board above is the
           previous session's and is whole — the engine declines to publish off a
           partial sample rather than quietly serving one. Worth saying out loud
@@ -663,21 +705,7 @@ export function StocksPanel({ isMobile }) {
           onChart={() => setChart({ id: sel.symbol, symbol: sel.symbol })}
         />
       )}
-      {(chart || tickerChart) && (
-        <Suspense fallback={null}>
-          <BtcChartModal
-            key={(chart || tickerChart).symbol || tickerChart.key}
-            isMobile={isMobile}
-            onClose={() => { setChart(null); setTickerChart(null); }}
-            callFnFull={callFnFull}
-            title={(chart || tickerChart).symbol || tickerChart.label}
-            fn="ticker-candles"
-            fnArgs={{ symbol: (chart ? chart.symbol : tickerChart.key) }}
-            defaultInterval="1d"
-            z={480}
-          />
-        </Suspense>
-      )}
+      {chartModal}
     </div>
   );
 }
