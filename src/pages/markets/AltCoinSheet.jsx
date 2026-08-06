@@ -13,6 +13,7 @@
 // reads like a loss, when what it means is the target is already behind you.
 import { Sheet, Button, Delta } from "../../ui/kit.jsx";
 import { NumTween, Sparkline } from "../../ui/primitives.jsx";
+import ScoreCard from "./ScoreCard.jsx";
 import { T } from "../../theme.js";
 
 /* ── tone vocabulary — lives in this leaf so AltSeasonPanel can import it
@@ -50,6 +51,62 @@ export const HIT_LABEL = { hit_t1: "T1 ✓", hit_t2: "T2 ✓", hit_t3: "T3 ✓" 
 
 // A tinted read-only tag. Not the kit's Pill — that one is a filter control
 // (a <button>), and these sit inside rows that are already buttons.
+/* ── the score, as five blocks — the equity sheet's twin ──────────────────────
+   alt-cron's parts[] and stock-settle's parts[] have the identical shape and
+   the identical weights: 25 trend, 30 pace, 15 volume, 20 structure, 10
+   headroom. Only the KEYS and the words differ, which is why one ScoreCard
+   serves both and only this table is per-tab.
+
+   "Range & break" rather than "Structure", because STAGE_LABEL.broken above is
+   already "Structure lost". */
+const CRYPTO_BLOCKS = [
+  {
+    key: "trend", label: "Trend vs BTC", keys: ["rs7", "rs30"],
+    sub: (r) => join(num(r?.rsVsBtc7d) && `7d ${sgn(r.rsVsBtc7d)}`, num(r?.rsVsBtc30d) && `30d ${sgn(r.rsVsBtc30d)}`),
+  },
+  {
+    key: "pace", label: "Pace", keys: ["accel24", "accel7v30"],
+    sub: (r) => join(
+      num(r?.accel?.d24VsWeek) && `24h ${sgn(r.accel.d24VsWeek)} vs its week`,
+      num(r?.accel?.weekVsMonth) && `week ${sgn(r.accel.weekVsMonth)}/day`,
+    ),
+  },
+  {
+    key: "turnover", label: "Turnover", keys: ["turnover"],
+    sub: (r) => (num(r?.turnover) ? `${(r.turnover * 100).toFixed(1)}% of its cap in a day` : null),
+  },
+  {
+    key: "break", label: "Range & break", keys: ["range", "break"],
+    sub: (r) => join(
+      num(r?.range7d?.pos) && `${Math.round(r.range7d.pos * 100)}% up its range`,
+      num(r?.range7d?.priorHigh) && `level ${px(r.range7d.priorHigh)}`,
+    ),
+  },
+  {
+    key: "room", label: "Room from its high", keys: ["room"],
+    sub: (r) => (num(r?.athChangePct) ? `${Math.abs(Math.round(r.athChangePct))}% below the all-time high` : null),
+  },
+];
+const num = (v) => Number.isFinite(v);
+const sgn = (n, d = 1) => (Number.isFinite(n) ? `${n >= 0 ? "+" : ""}${n.toFixed(d)}` : null);
+const join = (...xs) => xs.filter(Boolean).join(" · ") || null;
+
+/** A labelled read: one short phrase over one number. Twin of the stock sheet's. */
+function Read({ label, value, tone, big }) {
+  return (
+    <div style={{ minWidth: 0 }}>
+      <div className="t-cap" style={{ fontSize: 10.5, letterSpacing: "0.06em", textTransform: "uppercase", color: "var(--faint)" }}>
+        {label}
+      </div>
+      <div className="t-num" style={{
+        fontSize: big ? 17 : 13, fontWeight: big ? 600 : 500, marginTop: 2,
+        color: tone || (big ? "var(--ink)" : "var(--sub)"),
+        whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis",
+      }}>{value}</div>
+    </div>
+  );
+}
+
 export function TonePill({ tone, children, style }) {
   return (
     <span className="t-cap" style={{
@@ -314,53 +371,41 @@ export default function AltCoinSheet({ sel, row, episode, onClose, onChart }) {
         </div>
       )}
 
-      {episode && (
-        <div className="t-foot" style={{ color: "var(--sub)", marginBottom: 10, lineHeight: 1.5 }}>
-          {tier && <>{tier.label} · </>}Flagged {flaggedWord} at {px(episode.flagPrice)}
-          {episode.peakPct != null && <> · peak <span className="t-num" style={{ color: episode.peakPct >= 0 ? T.green : T.red }}>{signedPct(episode.peakPct)}</span></>}
-        </div>
-      )}
-
-      {/* the score, as a bar as well as a number — 82 means nothing without the
-          100 beside it, and the bar carries that without a second label */}
-      {score != null && (
-        <div style={{ marginBottom: 12 }}>
-          <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 5 }}>
-            <span className="t-foot" style={{ color: "var(--sub)" }}>
-              Score <span className="t-num" style={{ color: "var(--ink)", fontWeight: 600 }}>{score}</span>
-              <span style={{ color: "var(--faint)" }}>/100</span>
-            </span>
-            {band && <TonePill tone={BAND_TONE[band] || T.faint} style={{ marginLeft: "auto" }}>{band}</TonePill>}
-          </div>
-          <div style={{ height: 4, background: "var(--surface-2)", borderRadius: 999 }}>
-            <div style={{
-              width: `${Math.max(0, Math.min(100, score))}%`, height: "100%", borderRadius: 999,
-              background: BAND_TONE[band] || T.accent,
-            }} />
-          </div>
-        </div>
-      )}
-
-      {/* the size of the thing — a 90-score micro-cap and a 90-score major are
-          not the same trade, and nothing above this line says which one it is */}
+      {/* THE SIZE OF THE THING. A 90-score micro-cap and a 90-score major are
+          not the same trade, and nothing above this line says which one it is.
+          The equity twin puts ATR here for the same reason — it is the ruler
+          the percentages above are denominated in. Crypto has no ATR and no
+          200-day worth trusting off a 7-day sparkline, so the ruler is size and
+          liquidity instead: the two facts that decide whether a target is
+          reachable and whether you could get back out of it. */}
       {row && (Number.isFinite(row.mcap) || Number.isFinite(row.vol24h)) && (
-        <div className="t-cap" style={{ color: "var(--faint)", marginBottom: facts.length ? 10 : 0 }}>
-          {Number.isFinite(row.rank) && `#${row.rank} · `}
-          {usd(row.mcap)} cap · {usd(row.vol24h)} 24h vol
+        <div style={{ display: "grid", gridTemplateColumns: "1.25fr 1fr 1fr", gap: 10, marginBottom: 13 }}>
+          <Read big label="Market cap" value={Number.isFinite(row.mcap) ? usd(row.mcap) : "—"} />
+          <Read label="24h volume" value={Number.isFinite(row.vol24h) ? usd(row.vol24h) : "—"} />
+          <Read label="Rank" value={Number.isFinite(row.rank) ? `#${row.rank}` : "—"} />
         </div>
       )}
 
-      {/* the screener's evidence, verbatim — plain English, one claim a line */}
-      {facts.length > 0 && (
-        <div style={{ display: "flex", flexDirection: "column", gap: 5, paddingBottom: 4 }}>
-          {facts.map((f, i) => (
-            <div key={i} className="t-foot" style={{ color: "var(--sub)", lineHeight: 1.5, display: "flex", gap: 7 }}>
-              <span style={{ color: "var(--faint)", flex: "none" }}>·</span>
-              <span style={{ minWidth: 0 }}>{f}</span>
-            </div>
-          ))}
+      {/* THE FLAG, not the coin — its own line rather than middot-joined onto
+          the score, which is about something else. Twin of the stock sheet. */}
+      {episode && (
+        <div style={{ display: "flex", alignItems: "center", gap: 8, minWidth: 0, marginBottom: 11 }}>
+          {tier && <TonePill tone={tier.tone}>{tier.label}</TonePill>}
+          <span className="t-cap" style={{ color: "var(--sub)", minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+            Flagged {flaggedWord} at {px(episode.flagPrice)}
+          </span>
+          {episode.peakPct != null && (
+            <span className="t-cap t-num" style={{ marginLeft: "auto", flex: "none", color: episode.peakPct >= 0 ? T.green : T.red }}>
+              peak {signedPct(episode.peakPct)}
+            </span>
+          )}
         </div>
       )}
+
+      <ScoreCard
+        row={row} parts={row?.parts} score={score} band={band}
+        bandTone={BAND_TONE[band] || T.faint} blocks={CRYPTO_BLOCKS} facts={facts}
+      />
     </Sheet>
   );
 }

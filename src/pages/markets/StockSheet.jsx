@@ -1,8 +1,17 @@
 // ─── Stock sheet — one name, the levels you'd act on ─────────────────────────
 // The AltCoinSheet's anatomy, because the vocabulary has to be identical across
 // the two tabs: verdict first, then the stage spelled out, then the chart, the
-// session windows, the level rail, the target table, the score and the
-// screener's evidence verbatim.
+// session windows, the level rail, the target table, and then — below all of it
+// — the ruler, the catalyst, the flag, and the score broken into its blocks.
+//
+// EVERYTHING BELOW THE TARGET TABLE USED TO BE PROSE. A grey run-on that
+// wrapped and ended on a bare sector word, then eight middot bullets, ~470px of
+// a 1017px sheet, most of them restating something already drawn above: the
+// sparkline caption, the stage line, the ATR clause. Meanwhile the row carried
+// three things the sheet never rendered at all — parts[], catalyst, and news —
+// and the score sat there as "70/100" with no account of where the other 30
+// went. The fix was not to tidy the sentences; it was to draw the data that was
+// already there and let the prose retire behind a disclosure.
 //
 // Three things are equity-specific and each earns its line:
 //   · the windows are SESSION counts. There is no 4h return on a market that
@@ -14,6 +23,7 @@
 //     A close-only series cannot produce it; Yahoo's true OHLC can.
 import { Sheet, Button, Delta } from "../../ui/kit.jsx";
 import { NumTween, Sparkline } from "../../ui/primitives.jsx";
+import ScoreCard from "./ScoreCard.jsx";
 import { T } from "../../theme.js";
 
 /* ── tone vocabulary — lives in this leaf so StocksPanel can import it without
@@ -62,13 +72,63 @@ function px(x) {
   return `$${x.toPrecision(4).replace(/(\.\d*?)0+$/, "$1").replace(/\.$/, "")}`;
 }
 const signedPct = (n, d = 1) => (n == null || !isFinite(n) ? "—" : `${n >= 0 ? "+" : ""}${n.toFixed(d)}%`);
-function usd(x) {
-  if (!Number.isFinite(x)) return "—";
-  const a = Math.abs(x);
-  if (a >= 1e9) return `$${(x / 1e9).toFixed(1)}B`;
-  if (a >= 1e6) return `$${(x / 1e6).toFixed(0)}M`;
-  if (a >= 1e3) return `$${Math.round(x / 1e3)}k`;
-  return `$${Math.round(x)}`;
+
+/* ── the score, as five blocks ────────────────────────────────────────────────
+   Keys map to the engine's parts[]; the MAX of each block is summed from its
+   own members inside ScoreCard, never written here, so reweighting a part in
+   the screener moves the picture without a client change.
+
+   "Range & break", not "Structure" — STAGE_LABEL.broken is already "Structure
+   lost", and a row reading "Structure 20/20" two inches beneath it is exactly
+   the vocabulary collision the shared exports in this file exist to prevent. */
+const SCORE_BLOCKS = [
+  {
+    key: "trend", label: "Trend vs SPY", keys: ["rs5", "rs21"],
+    sub: (r) => join(num(r?.rs5) && `5 sess ${sgn(r.rs5)}`, num(r?.rs21) && `21 sess ${sgn(r.rs21)}`),
+  },
+  {
+    key: "pace", label: "Pace", keys: ["accelSession", "accel5v21"],
+    sub: (r) => join(
+      num(r?.accel?.dSessionVsWeek) && `last sess ${sgn(r.accel.dSessionVsWeek)} vs its week`,
+      num(r?.accel?.weekVsMonth) && `week ${sgn(r.accel.weekVsMonth)}/sess`,
+    ),
+  },
+  {
+    key: "volume", label: "Volume behind it", keys: ["rvol"],
+    sub: (r) => (num(r?.rvol) ? `${r.rvol}× its 20-session median` : null),
+  },
+  {
+    key: "break", label: "Range & break", keys: ["range", "break"],
+    sub: (r) => join(
+      num(r?.range20?.pos) && `${Math.round(r.range20.pos * 100)}% up its range`,
+      num(r?.range20?.priorHigh) && `level ${px(r.range20.priorHigh)}`,
+    ),
+  },
+  {
+    key: "high", label: "Near its high", keys: ["high"],
+    sub: (r) => (num(r?.fromHighPct) && num(r?.windowHigh)
+      ? `${Math.abs(Math.round(r.fromHighPct))}% under ${px(r.windowHigh)}${r.windowSessions ? ` · ${r.windowSessions} sessions` : ""}`
+      : null),
+  },
+];
+const num = (v) => Number.isFinite(v);
+const sgn = (n, d = 1) => (Number.isFinite(n) ? `${n >= 0 ? "+" : ""}${n.toFixed(d)}` : null);
+const join = (...xs) => xs.filter(Boolean).join(" · ") || null;
+
+/** A labelled read: one short phrase over one number. */
+function Read({ label, value, tone, big }) {
+  return (
+    <div style={{ minWidth: 0 }}>
+      <div className="t-cap" style={{ fontSize: 10.5, letterSpacing: "0.06em", textTransform: "uppercase", color: "var(--faint)" }}>
+        {label}
+      </div>
+      <div className="t-num" style={{
+        fontSize: big ? 17 : 13, fontWeight: big ? 600 : 500, marginTop: 2,
+        color: tone || (big ? "var(--ink)" : "var(--sub)"),
+        whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis",
+      }}>{value}</div>
+    </div>
+  );
 }
 
 const STATUS_RANK = { active: 0, hit_t1: 1, hit_t2: 2, hit_t3: 3 };
@@ -95,6 +155,11 @@ export default function StockSheet({ sel, row, episode, session, onClose, onChar
 
   const entry = episode?.entry || row?.entry || null;
   const move = episode?.move || row?.move || null;
+  // The episode carries its own copies once a flag is open (stock-scan rides
+  // them along so a flag row needs no join back to the board); the board row
+  // is the fallback for anything screened but not flagged.
+  const catalyst = episode?.catalyst || row?.catalyst || null;
+  const headline = (episode?.news || row?.news || [])[0] || null;
 
   const days = episode?.firstFlaggedAt ? Math.max(0, Math.floor((Date.now() - Date.parse(episode.firstFlaggedAt)) / 86400000)) : null;
   const flaggedWord = days == null ? null : days === 0 ? "today" : days === 1 ? "yesterday" : `${days} days ago`;
@@ -267,53 +332,69 @@ export default function StockSheet({ sel, row, episode, session, onClose, onChar
         </div>
       )}
 
-      {episode && (
-        <div className="t-foot" style={{ color: "var(--sub)", marginBottom: 10, lineHeight: 1.5 }}>
-          {tier && <>{tier.label} · </>}Flagged {flaggedWord} at {px(episode.flagPrice)}
-          {episode.peakPct != null && <> · peak <span className="t-num" style={{ color: episode.peakPct >= 0 ? T.green : T.red }}>{signedPct(episode.peakPct)}</span></>}
+      {/* THE RULER. Everything above this line is a percentage; this is what a
+          percentage is WORTH on this name. It sits directly under the targets
+          because that is what it calibrates — +6.4% to T1 is a session and a
+          half on FCX at ±4.3% a day, and a fortnight on a utility at ±0.9%.
+          The sheet does not do that division for you (the client formats, it
+          never derives); it puts both numbers inside one glance.
+
+          This replaces a grey run-on that wrapped to two lines and ended on a
+          bare sector word reading like a typo. rvol left with it — "traded
+          1.18× its normal volume" is a statistic, while the same fact scored
+          as 4 out of a possible 15 is a verdict, and the score card says it. */}
+      {row && (Number.isFinite(row.atrPct) || row.sector || row.aboveSma200 != null) && (
+        <div style={{ display: "grid", gridTemplateColumns: "1.25fr 1fr 1fr", gap: 10, marginBottom: 13 }}>
+          <Read big label="Normal day" value={Number.isFinite(row.atrPct) ? `±${row.atrPct.toFixed(1)}%` : "—"} />
+          <Read label="200-day"
+            value={row.aboveSma200 == null ? "—" : row.aboveSma200 ? "above" : "below"}
+            tone={row.aboveSma200 == null ? "var(--faint)" : row.aboveSma200 ? T.green : T.red} />
+          <Read label="Sector" value={row.sector || "—"} />
         </div>
       )}
 
-      {score != null && (
-        <div style={{ marginBottom: 12 }}>
-          <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 5 }}>
-            <span className="t-foot" style={{ color: "var(--sub)" }}>
-              Score <span className="t-num" style={{ color: "var(--ink)", fontWeight: 600 }}>{score}</span>
-              <span style={{ color: "var(--faint)" }}>/100</span>
-            </span>
-            {band && <TonePill tone={BAND_TONE[band] || T.faint} style={{ marginLeft: "auto" }}>{band}</TonePill>}
+      {/* WHY IT MIGHT MOVE. The row has carried `catalyst` since the engine
+          shipped and this sheet has never rendered it once — the single
+          highest-value thing already in the payload and not on screen. The
+          headline underneath is relevance-filtered server-side, so what lands
+          here is about this company rather than whatever the search matched. */}
+      {(catalyst || headline) && (
+        <div style={{ background: "var(--surface-2)", borderRadius: 12, padding: "10px 13px", marginBottom: 12 }}>
+          <div className="t-cap" style={{ color: "var(--faint)", letterSpacing: "0.06em", textTransform: "uppercase", marginBottom: 3 }}>
+            Why it might move
           </div>
-          <div style={{ height: 4, background: "var(--surface-2)", borderRadius: 999 }}>
-            <div style={{
-              width: `${Math.max(0, Math.min(100, score))}%`, height: "100%", borderRadius: 999,
-              background: BAND_TONE[band] || T.accent,
-            }} />
-          </div>
-        </div>
-      )}
-
-      {/* WHAT A NORMAL DAY LOOKS LIKE FOR THIS ONE. A 6% target is a routine
-          session on a biotech and a month's work on a utility, and nothing
-          else on this sheet says which one you are holding. This is the size
-          intuition — never a dollar figure. */}
-      {row && (Number.isFinite(row.atrPct) || Number.isFinite(row.rvol)) && (
-        <div className="t-cap" style={{ color: "var(--faint)", marginBottom: facts.length ? 10 : 0, lineHeight: 1.5 }}>
-          {Number.isFinite(row.atrPct) && `a normal day for this one is ±${row.atrPct.toFixed(1)}%`}
-          {Number.isFinite(row.rvol) && `${Number.isFinite(row.atrPct) ? " · " : ""}traded ${row.rvol}× its normal volume`}
-          {row.sector && ` · ${row.sector}`}
-        </div>
-      )}
-
-      {facts.length > 0 && (
-        <div style={{ display: "flex", flexDirection: "column", gap: 5, paddingBottom: 4 }}>
-          {facts.map((f, i) => (
-            <div key={i} className="t-foot" style={{ color: "var(--sub)", lineHeight: 1.5, display: "flex", gap: 7 }}>
-              <span style={{ color: "var(--faint)", flex: "none" }}>·</span>
-              <span style={{ minWidth: 0 }}>{f}</span>
+          {catalyst?.note && (
+            <div className="t-foot" style={{ color: "var(--ink)", lineHeight: 1.45 }}>{catalyst.note}</div>
+          )}
+          {headline && (
+            <div className="t-cap" style={{ color: "var(--sub)", lineHeight: 1.45, marginTop: catalyst?.note ? 5 : 0 }}>
+              {headline.title}
+              {headline.publisher && <span style={{ color: "var(--faint)" }}> · {headline.publisher}</span>}
             </div>
-          ))}
+          )}
         </div>
       )}
+
+      {/* THE FLAG, not the stock — so it gets its own line rather than being
+          middot-joined onto the score, which is about something else. */}
+      {episode && (
+        <div style={{ display: "flex", alignItems: "center", gap: 8, minWidth: 0, marginBottom: 11 }}>
+          {tier && <TonePill tone={tier.tone}>{tier.label}</TonePill>}
+          <span className="t-cap" style={{ color: "var(--sub)", minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+            Flagged {flaggedWord} at {px(episode.flagPrice)}
+          </span>
+          {episode.peakPct != null && (
+            <span className="t-cap t-num" style={{ marginLeft: "auto", flex: "none", color: episode.peakPct >= 0 ? T.green : T.red }}>
+              peak {signedPct(episode.peakPct)}
+            </span>
+          )}
+        </div>
+      )}
+
+      <ScoreCard
+        row={row} parts={row?.parts} score={score} band={band}
+        bandTone={BAND_TONE[band] || T.faint} blocks={SCORE_BLOCKS} facts={facts}
+      />
     </Sheet>
   );
 }
