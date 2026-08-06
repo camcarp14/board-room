@@ -14,6 +14,7 @@ import {
   deleteOccurrence, deleteFuture, deleteSeries, editOccurrence, editFuture,
 } from "../../lib/recurrence.js";
 import { spanDayKeys, spanPosition, withOverlays } from "../../lib/calendar-overlays.js";
+import { weeksOfMonth, layoutWeek, segmentShowsTitle } from "../../lib/calendar-layout.js";
 import { useBirthdays } from "../../data/birthdays.js";
 import { callClaude } from "../../lib/claude.js";
 import { localDayKey, todayISO } from "../../lib/dates.js";
@@ -29,6 +30,15 @@ export const EVENT_CATEGORIES = [
   { key: "health", label: "Health", color: T.green },
   { key: "bills", label: "Bills / Finance", color: T.red },
 ];
+
+// Bar geometry. A day column is a seventh of 390pt — about 50px — and at one
+// line "Standup" truncates to "Stan…". LANE_H 26 buys a second line, so short
+// titles read whole and only genuinely long ones clip. A week is only as tall
+// as the lanes it actually uses (layoutWeek reports laneCount), so a quiet
+// week stays one lane and a busy one grows to three.
+const LANE_H = 26;
+const LANE_GAP = 3;
+const DATE_H = 26;
 
 // Timestamp of the last Brief-deep-link new-event signal we've acted on, kept
 // at module scope so it survives this panel remounting on tab navigation.
@@ -407,10 +417,10 @@ Only extract entries you can read with real confidence — skip anything blurry,
 
   // ─── Month grid math ───
   const gridYear = viewMonth.getFullYear(), gridMonth = viewMonth.getMonth();
-  const firstOfMonth = new Date(gridYear, gridMonth, 1);
-  const daysInMonth = new Date(gridYear, gridMonth + 1, 0).getDate();
-  const leadingBlanks = firstOfMonth.getDay(); // 0 = Sunday
-  const cells = [...Array(leadingBlanks).fill(null), ...Array.from({ length: daysInMonth }, (_, i) => i + 1)];
+  // Whole weeks, Sunday-first, INCLUDING the neighbouring months' days. The
+  // grid used to render blanks there, which meant a bar starting Jan 31 and
+  // running to Feb 2 had nowhere to be drawn on either side of the boundary.
+  const weeks = weeksOfMonth(gridYear, gridMonth);
   // Occurrences, not rows: a repeating event is ONE stored row, and the grid
   // wants every day it lands on. Expanded across the visible month with a
   // week of slack on each side so the leading/trailing cells of the grid (which
@@ -441,8 +451,6 @@ Only extract entries you can read with real confidence — skip anything blurry,
       .filter((o) => o.all_day || new Date(o.end_time || o.start_time).getTime() >= now);
     return withOverlays(real, { birthdays: birthdays || [], from, to }).slice(0, 60);
   })();
-  const dateKey = (day) => `${gridYear}-${String(gridMonth + 1).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
-  const isToday = (day) => dateKey(day) === todayStr;
   const monthLabel = viewMonth.toLocaleDateString("en-US", { month: "long", year: "numeric" });
   const changeMonth = (delta) => setViewMonth(new Date(gridYear, gridMonth + delta, 1));
 
@@ -675,61 +683,99 @@ Only extract entries you can read with real confidence — skip anything blurry,
               <div key={i} className="t-num" style={{ textAlign: "center", fontSize: 10.5, color: "var(--faint)", padding: "2px 0" }}>{d}</div>
             ))}
           </div>
-          {/* minmax(0,1fr) + minWidth:0/overflow:hidden on each cell: nothing in a
-              day cell (dot rows, "+N" counts) can force its column wider than
-              1/7th — content truncates instead of the whole month grid pushing
-              past the card's right edge on a phone. (Kept from the old pill
-              grid, where a nowrap event pill did exactly that.) */}
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(7, minmax(0, 1fr))", gap: 4 }}>
-            {cells.map((day, i) => {
-              if (day === null) return <div key={`b${i}`} />;
-              const key = dateKey(day);
-              const dayEvents = eventsByDay[key] || [];
-              const todayFlag = isToday(day);
+          {/* ── WEEK ROWS, NOT DAY CELLS ────────────────────────────────
+              A multi-day event is ONE THING, and the grid used to draw it as
+              a separate chip in every day it touched — which is not a smaller
+              version of a bar, it is a different claim. Four chips reading
+              "Austin trip" look like four events that share a name, and
+              nothing on screen said the 6th and the 9th were the same trip.
+
+              So each week is a positioning context: the date numbers sit in a
+              7-column grid, and the bars are absolutely positioned over them
+              by column and span. That is the part a per-cell render cannot
+              do — a bar covering Wed→Sat has to sit at the SAME height in all
+              four columns, and a day cell has no way to know what height that
+              is. lib/calendar-layout.js packs them into lanes for exactly
+              that reason. */}
+          <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
+            {weeks.map((week, wi) => {
+              const { segments, overflow, laneCount } = layoutWeek(monthOccurrences, week);
+              const lanes = Math.max(laneCount, 1);
+              const bodyH = lanes * (LANE_H + LANE_GAP) + 4;
               return (
-                // a day with events opens its agenda; an empty day starts a new
-                // event pre-dated to it
-                <button key={key} onClick={() => (dayEvents.length ? setSelectedDay(key) : openNew(key))}
-                  aria-label={`${monthLabel} ${day}${dayEvents.length ? `, ${dayEvents.length} event${dayEvents.length > 1 ? "s" : ""}: ${dayEvents.map(e => e.title).join(", ")}` : ""}`}
-                  style={{
-                    display: "flex", flexDirection: "column", alignItems: "center", gap: 2,
-                    padding: "4px 2px 5px", minHeight: 70, minWidth: 0, overflow: "hidden",
-                    background: "none", border: "none", borderRadius: 10, cursor: "pointer",
-                  }}>
-                  <span className="t-num" style={{
-                    width: 24, height: 24, borderRadius: "50%", display: "inline-flex", alignItems: "center", justifyContent: "center", flex: "none",
-                    fontSize: 13, fontWeight: todayFlag ? 600 : 500,
-                    background: todayFlag ? "var(--accent)" : "transparent",
-                    color: todayFlag ? "var(--on-accent)" : "var(--ink)",
-                  }}>{day}</span>
-                  {/* Event titles, truncated to the column: a low-tint chip in the
-                      category color with the title (or its start). Up to two, then
-                      a +N overflow. Tap the day for the full agenda. */}
-                  {dayEvents.length > 0 && (
-                    <span style={{ display: "flex", flexDirection: "column", gap: 2, width: "100%", minWidth: 0 }}>
-                      {dayEvents.slice(0, 2).map((ev, j) => {
-                        // Birthdays and holidays are CONTEXT for the day; your
-                        // own events are the day. So overlays get no category
-                        // colour and no tint — a month with eleven federal
-                        // holidays in it must not read as eleven commitments.
-                        const tone = ev.overlay ? "var(--faint)" : catColor(ev.category);
-                        return (
-                          <span key={j} title={ev.title} style={{
-                            width: "100%", minWidth: 0, textAlign: "left",
-                            fontSize: 10.5, lineHeight: 1.25, fontWeight: ev.overlay ? 500 : 600,
-                            padding: "1px 3px", borderRadius: 4,
-                            background: ev.overlay ? "transparent" : `color-mix(in srgb, ${tone} 14%, transparent)`,
-                            color: tone,
-                            overflow: "hidden", display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical", wordBreak: "break-word",
-                          }}>{ev.title}</span>
-                        );
-                      })}
-                      {dayEvents.length > 2 && (
-                        <span className="t-num" style={{ fontSize: 10, lineHeight: 1.2, color: "var(--faint)", textAlign: "left", paddingLeft: 3 }}>+{dayEvents.length - 2}</span>
-                      )}
-                    </span>
-                  )}
-                </button>
+                <div key={week[0]} style={{ position: "relative", minWidth: 0 }}>
+                  {/* the tap targets and the date numbers */}
+                  <div style={{ display: "grid", gridTemplateColumns: "repeat(7, minmax(0, 1fr))", gap: 2 }}>
+                    {week.map((key) => {
+                      const inMonth = Number(key.slice(5, 7)) === gridMonth + 1;
+                      const dayNum = Number(key.slice(8, 10));
+                      const dayEvents = eventsByDay[key] || [];
+                      const todayFlag = key === todayStr;
+                      const more = overflow[key] || 0;
+                      return (
+                        <button key={key} onClick={() => setSelectedDay(key)}
+                          aria-label={`${new Date(`${key}T00:00:00`).toLocaleDateString("en-US", { month: "long", day: "numeric" })}${dayEvents.length ? `, ${dayEvents.length} event${dayEvents.length > 1 ? "s" : ""}: ${dayEvents.map(e => e.title).join(", ")}` : ", nothing scheduled"}`}
+                          style={{
+                            display: "flex", flexDirection: "column", alignItems: "center",
+                            padding: "3px 0 0", minWidth: 0, minHeight: DATE_H + bodyH,
+                            background: "none", border: "none", borderRadius: 8, cursor: "pointer",
+                          }}>
+                          <span className="t-num" style={{
+                            width: 22, height: 22, borderRadius: "50%", display: "inline-flex", alignItems: "center", justifyContent: "center", flex: "none",
+                            fontSize: 12.5, fontWeight: todayFlag ? 700 : 500,
+                            background: todayFlag ? "var(--accent)" : "transparent",
+                            // Neighbouring-month days stay visible but recede —
+                            // they exist so bars can cross the boundary, not to
+                            // compete with the month you are looking at.
+                            color: todayFlag ? "var(--on-accent)" : inMonth ? "var(--ink)" : "var(--faint)",
+                          }}>{dayNum}</span>
+                          {more > 0 && (
+                            <span className="t-num" style={{ fontSize: 9.5, color: "var(--faint)", marginTop: "auto", paddingBottom: 2 }}>+{more}</span>
+                          )}
+                        </button>
+                      );
+                    })}
+                  </div>
+                  {/* the bars, over the top */}
+                  <div style={{ position: "absolute", left: 0, right: 0, top: DATE_H, height: bodyH, pointerEvents: "none" }}>
+                    {segments.map((seg) => {
+                      const { ev } = seg;
+                      const tone = ev.overlay ? null : catColor(ev.category);
+                      const w = `calc(${(seg.span / 7) * 100}% - 3px)`;
+                      const l = `calc(${(seg.col / 7) * 100}% + 1.5px)`;
+                      // A cut end is the WEEK boundary, not the event's own —
+                      // squaring that corner is the only thing on screen that
+                      // says the trip keeps going on the row below.
+                      const radius = `${seg.continuesLeft ? 0 : 5}px ${seg.continuesRight ? 0 : 5}px ${seg.continuesRight ? 0 : 5}px ${seg.continuesLeft ? 0 : 5}px`;
+                      return (
+                        <div key={seg.key} title={ev.title}
+                          style={{
+                            position: "absolute", left: l, width: w, top: seg.lane * (LANE_H + LANE_GAP),
+                            height: LANE_H, borderRadius: radius, overflow: "hidden",
+                            display: "flex", alignItems: "center",
+                            padding: "0 4px", minWidth: 0,
+                            // Overlays stay flat and quiet; your own events get
+                            // the solid category colour and white text.
+                            // --on-accent is defined per palette AND per
+                            // theme to sit legibly on a saturated fill, which
+                            // is exactly this job. Hard-coded white fails in
+                            // the dark themes, where the data palette lightens
+                            // to around 3:1 against it.
+                            background: tone || "var(--surface-2)",
+                            color: tone ? "var(--on-accent)" : "var(--sub)",
+                          }}>
+                          <span style={{
+                            fontSize: 10.5, lineHeight: 1.15, fontWeight: 600, minWidth: 0,
+                            overflow: "hidden", display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical",
+                            wordBreak: "break-word",
+                          }}>
+                            {segmentShowsTitle(seg) ? ev.title : ""}
+                          </span>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
               );
             })}
           </div>
