@@ -71,6 +71,21 @@ const MIN_GAP_MS = 2000;          // token bucket: sustained 0.5 req/s
 const HOUR = 3600 * 1000;
 const DAY = 24 * HOUR;
 
+// THE STORED VERDICT REMEMBERS WHICH BRAIN WROTE IT.
+//
+// A settle happens once a session, so a deploy that changes how the screen
+// SCORES leaves the last board standing — computed under the old rules, with
+// the old gate printed on it — until the next close. That is up to a full
+// trading day of showing a verdict the code no longer agrees with, and it is
+// exactly what happened the first time these floors moved: the fix shipped,
+// the board kept saying "68/100 to flag", and nothing on the tab could
+// possibly have told you why.
+//
+// So the payload carries the version of the judgment that produced it, and a
+// pass whose stored version does not match re-settles itself. BUMP THIS on any
+// change to the screen, the bands, the regime, the targets or the gate.
+const ENGINE_VERSION = 2;
+
 const SESSION_KEEP = 260;         // ~one year, counted in SESSIONS not calendar days
 const BOARD_SIZE = 96;
 const SPARK_POINTS = 28;
@@ -1345,11 +1360,16 @@ async function runPass(now = Date.now(), opts = {}) {
   // safe: flag ids are `${ticker}:${session}` with ignoreDuplicates, the
   // ladder ratchets up only, and the partial unique index refuses a second
   // open episode per ticker.
-  const decision = opts.force && spyDates.length
+  // A stored board written by a different version of the judgment is not a
+  // board, it is a stale opinion — re-settle it without waiting for a close.
+  const engineStale = !prev || prev.engine !== ENGINE_VERSION;
+  const forceSettle = opts.force || (engineStale && spyDates.length > 0);
+  const decision = forceSettle && spyDates.length
     ? { pass: "settle", et, newest: spyDates[spyDates.length - 1] }
     : decidePass(now, spyDates, settled);
   counts.pass = decision.pass;
   if (opts.force) counts.forced = true;
+  if (engineStale && !opts.force) counts.forced = `engine ${prev ? prev.engine ?? "unversioned" : "none"} → ${ENGINE_VERSION}`;
 
   if (decision.pass === "idle") return { counts, errors };
   if (decision.pass === "tick") {
@@ -1540,6 +1560,7 @@ async function settle(db, prev, spy, now, decision) {
     .map(({ r, v }) => ({ id: r.id, symbol: r.symbol, name: r.company, price: r.price, pct: r1(v), spark: sampleSpark(r.bars, SPARK_POINTS) }));
 
   const payload = {
+    engine: ENGINE_VERSION,
     asOf: nowIso,
     settledSession: sessionDate,
     settledAt: nowIso,
@@ -1725,3 +1746,4 @@ exports.decidePass = decidePass;
 exports.etParts = etParts;
 exports.sessionDateOf = sessionDateOf;
 exports.PHASE_GATE = PHASE_GATE;
+exports.ENGINE_VERSION = ENGINE_VERSION;

@@ -354,6 +354,10 @@ export function StocksPanel({ isMobile }) {
   const openMover = (m) => (boardById.has(m.id) ? openStock(m) : setChart({ id: m.symbol, symbol: m.symbol }));
 
   const list = movers ? movers[win] : null;
+  // What a name would have needed, and the few that came closest. The board is
+  // already sorted by score, so "closest" is just the top of it.
+  const gateFloor = regime?.gate ? (regime.gate.effectiveFloor ?? regime.gate.floor ?? null) : null;
+  const nearMisses = active.length === 0 ? board.slice(0, 4) : [];
   // THE HEADINGS SAY WHEN. "Worth an entry now" is a claim about a tape that is
   // printing; on a Saturday the honest version names the session it came from.
   const asOfWord = open ? "now" : session?.lastSessionLabel ? `at ${session.lastSessionLabel}'s close` : "at the last close";
@@ -519,10 +523,44 @@ export function StocksPanel({ isMobile }) {
             })}
           </div>
         ) : (
-          <EmptyState title="Nothing to take at the open"
-            sub={data.qualifiers
-              ? `${data.qualifiers} names cleared the screen but not the bar this tape sets. Nothing is a position.`
-              : "Nothing cleared the bar off the last session. The screener re-settles after every close."} />
+          // AN EMPTY LIST IS NOT AN EMPTY SCREEN. "Nothing to take at the
+          // open" over a blank card reads as a broken tool, when what is
+          // actually true is that a full board exists and none of it cleared
+          // the bar — which is itself information, and useless without the
+          // near misses beside it. So the strongest few come with it, with the
+          // number they would have needed.
+          <div>
+            <EmptyState title="Nothing to take at the open"
+              sub={`Nothing cleared ${gateFloor != null ? `${gateFloor}/100` : "the bar"} off ${session?.lastSessionLabel || "the last session"}. Not a fault — a short list is the point.`}
+              style={{ padding: "18px 16px 10px" }} />
+            {nearMisses.length > 0 && (
+              <>
+                <div className="t-cap" style={{ color: "var(--faint)", lineHeight: 1.5, padding: "0 0 4px" }}>
+                  Closest to it — watch these for a close over their level.
+                </div>
+                <CellGroup style={inCardGroup}>
+                  {nearMisses.map((r) => (
+                    <Cell key={r.id}
+                      onClick={() => openStock(r)}
+                      title={r.symbol} titleStyle={{ fontSize: 14, fontWeight: 600 }}
+                      sub={planLine(r, "watch") || stageLine(r.move) || r.name}
+                      trailing={
+                        <span style={{ display: "inline-flex", alignItems: "center", gap: 10, flex: "none" }}>
+                          <span className="t-num" style={{ fontSize: 14, fontWeight: 600, color: "var(--ink)" }}>{r.score}</span>
+                          {gateFloor != null && (
+                            <span className="t-cap t-num" style={{ color: "var(--faint)", minWidth: 42, textAlign: "right" }}>
+                              {r.score >= gateFloor ? "over" : `−${gateFloor - r.score}`}
+                            </span>
+                          )}
+                          <Delta pct={r.chgSession} digits={1} />
+                        </span>
+                      }
+                    />
+                  ))}
+                </CellGroup>
+              </>
+            )}
+          </div>
         )}
       </CollapsibleCard>
 

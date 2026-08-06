@@ -58,6 +58,20 @@ try {
   const C = mods["stock-settle-background"];
   const S = mods["stock-scan"];
 
+  // ─── 0a0. the stored verdict knows which brain wrote it ───────────────────
+  // A settle happens once a session, so a deploy that changes how the screen
+  // scores leaves the last board standing — under the old rules, with the old
+  // gate printed on it — for up to a full trading day. That is not a stale
+  // cache, it is the tab confidently showing a verdict the code no longer
+  // agrees with, and nothing on screen could tell you.
+  check("the engine stamps a judgment version it can compare against",
+    Number.isFinite(C.ENGINE_VERSION) && C.ENGINE_VERSION >= 1, String(C.ENGINE_VERSION));
+  const engineSrc = readFileSync("netlify/functions/stock-settle-background.js", "utf8");
+  check("the version is written into every payload",
+    /engine:\s*ENGINE_VERSION/.test(engineSrc));
+  check("...and a mismatch forces a re-settle without waiting for a close",
+    /prev\.engine\s*!==\s*ENGINE_VERSION/.test(engineSrc) && /engineStale/.test(engineSrc));
+
   // ─── 0a. the split that makes the tab runnable ────────────────────────────
   // Netlify will not route HTTP to a function that carries a `schedule`, so
   // the engine must NOT carry one — if it does, the Run now button 404s and
