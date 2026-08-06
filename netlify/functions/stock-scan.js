@@ -199,30 +199,76 @@ function episodeView(row, livePrice) {
   return view;
 }
 
-/** Base rates over the WHOLE log, open episodes included. */
+/**
+ * The track record, graded over CLOSED episodes only.
+ *
+ * The denominator is what makes a hit rate honest. An open flag is not a miss
+ * — it has not finished — so counting it below the line prints a rate that
+ * drops every time the screener flags something new. And the outcome bar only
+ * adds up if wins and losses are drawn from the same population: folding an
+ * open T1-tagger into the green side while its still-running twin has yet to
+ * fail makes every width on that bar a lie. So everything graded here is
+ * resolved-only, and `open` is reported beside it rather than inside it.
+ *
+ * Everything a performance view needs comes from here rather than from the
+ * client counting rows: the client only ever holds the last 25 closed
+ * episodes, so any rate it computed itself would silently be "the last 25"
+ * wearing the label "all time".
+ */
 function flagStats(rows) {
   const rank = { hit_t1: 1, hit_t2: 2, hit_t3: 3 };
-  let hitT1 = 0, hitT2 = 0, hitT3 = 0, invalidated = 0, faded = 0;
+  let hitT1 = 0, hitT2 = 0, hitT3 = 0, invalidated = 0, faded = 0, open = 0, expired = 0;
   const peaks = [];
+  const held = [];
+  let best = null, worst = null;
+  const form = [];   // newest first: what each resolved episode did
+
   for (const r of rows) {
+    if (!r.resolved_at) { open++; continue; }   // still running — not a result yet
+
     const lvl = rank[r.status] || 0;
     if (lvl >= 1) hitT1++;
     if (lvl >= 2) hitT2++;
     if (lvl >= 3) hitT3++;
     if (r.status === "invalidated") invalidated++;
-    if (r.status === "faded") faded++;
+    else if (r.status === "faded") faded++;
+    // A 14-day timeout keeps whatever ladder status the episode earned, so a
+    // closed row can still read 'active' — the went-nowhere close, counted as
+    // expired. Every resolved row lands in exactly one of these buckets, which
+    // is what lets the stacked bar sum to `resolved`.
+    else if (r.status === "active") expired++;
+
     const p = pctOff(num(r.peak_price), num(r.flag_price));
-    if (p != null) peaks.push(p);
+    if (p != null) {
+      peaks.push(p);
+      if (!best || p > best.pct) best = { symbol: r.symbol, pct: p };
+    }
+    // The OUTCOME, which is not the peak: what it did by the time it closed.
+    const outcome = pctOff(num(r.last_price), num(r.flag_price));
+    if (outcome != null && (!worst || outcome < worst.pct)) worst = { symbol: r.symbol, pct: outcome };
+
+    if (r.first_flagged_at) {
+      const d = (Date.parse(r.resolved_at) - Date.parse(r.first_flagged_at)) / 86400000;
+      if (Number.isFinite(d) && d >= 0) held.push(d);
+    }
+    if (form.length < 20) form.push({ symbol: r.symbol, status: r.status, pct: outcome });
   }
-  peaks.sort((a, b) => a - b);
-  const mid = peaks.length >> 1;
-  const med = !peaks.length ? null : peaks.length % 2 ? peaks[mid] : (peaks[mid - 1] + peaks[mid]) / 2;
+
+  const mid = (xs) => {
+    if (!xs.length) return null;
+    const a = xs.slice().sort((x, y) => x - y);
+    const m = a.length >> 1;
+    return a.length % 2 ? a[m] : (a[m - 1] + a[m]) / 2;
+  };
   const total = rows.length;
+  const resolved = total - open;
   return {
-    total, hitT1, hitT2, hitT3, invalidated, faded,
+    total, resolved, open, hitT1, hitT2, hitT3, invalidated, faded, expired,
     // A base rate over two episodes is a lie with a decimal point.
-    hitT1Rate: total >= 3 ? r1((hitT1 / total) * 100) : null,
-    medianPeakPct: total >= 3 && med != null ? r1(med) : null,
+    hitT1Rate: resolved >= 3 ? r1((hitT1 / resolved) * 100) : null,
+    medianPeakPct: resolved >= 3 && peaks.length ? r1(mid(peaks)) : null,
+    medianHeldDays: held.length >= 3 ? r1(mid(held)) : null,
+    best, worst, form,
   };
 }
 
@@ -244,7 +290,7 @@ exports.handler = async (event) => {
       supabase.from("stock_state").select("updated_at, payload").eq("id", "latest").maybeSingle(),
       supabase.from("stock_flags").select("*").is("resolved_at", null),
       supabase.from("stock_flags").select("*").not("resolved_at", "is", null).order("resolved_at", { ascending: false }).limit(25),
-      supabase.from("stock_flags").select("status, flag_price, peak_price"),
+      supabase.from("stock_flags").select("symbol, status, flag_price, peak_price, last_price, first_flagged_at, resolved_at").order("resolved_at", { ascending: false, nullsFirst: false }),
     ]);
     if (stateQ.error) throw new Error(`stock_state: ${stateQ.error.message}`);
     if (openQ.error) throw new Error(`stock_flags: ${openQ.error.message}`);

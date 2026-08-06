@@ -19,6 +19,7 @@ import { NumTween, Sparkline } from "../../ui/primitives.jsx";
 import { callFnFull } from "../../lib/functions.js";
 import { useAltScan } from "../../data/altseason.js";
 import AltCoinSheet, { TonePill, HIT_LABEL, STAGE_LABEL, MOTION_LABEL } from "./AltCoinSheet.jsx";
+import RecordCard from "./RecordCard.jsx";
 
 // Lazy — lightweight-charts stays in its own chunk until a chart is opened.
 const BtcChartModal = lazy(() => import("../../BtcChartModal.jsx"));
@@ -35,8 +36,6 @@ function px(x) {
   if (a === 0) return "$0";
   return `$${x.toPrecision(4).replace(/(\.\d*?)0+$/, "$1").replace(/\.$/, "")}`;
 }
-const signedPct = (n, d = 1) => (n == null || !isFinite(n) ? "—" : `${n >= 0 ? "+" : ""}${n.toFixed(d)}%`);
-const fmtDay = (iso) => { const d = new Date(iso); return isNaN(d) ? "—" : d.toLocaleDateString("en-US", { month: "short", day: "numeric" }); };
 const fmtTime = (iso) => { const d = new Date(iso); return isNaN(d) ? "—" : d.toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" }); };
 // Accepts both stamp shapes: alt-scan ships ISO strings throughout, but a
 // number is legal input too (fixtures and future callers) — and the number
@@ -175,18 +174,6 @@ function ageWord(iso) {
   return d <= 0 ? "today" : `${d}d`;
 }
 
-// Terminal outcome tags for the record. A 14-day timeout keeps the ladder
-// status it earned, so a closed row can still read 'active' — that's the
-// went-nowhere close, labeled as what it was.
-const OUTCOME = {
-  hit_t3: { label: "Hit T3", tone: T.green },
-  hit_t2: { label: "Hit T2", tone: T.green },
-  hit_t1: { label: "Hit T1", tone: T.green },
-  invalidated: { label: "Invalidated", tone: T.red },
-  faded: { label: "Faded", tone: T.faint },
-  active: { label: "Expired", tone: T.faint },
-};
-
 // CellGroup inside a Card: drop the group's own surface and bleed into the
 // pad-md padding so separators run edge to edge (FoodPanel's idiom).
 const inCardGroup = { boxShadow: "none", background: "transparent", borderRadius: 0, margin: "0 -16px -8px" };
@@ -236,10 +223,13 @@ export default function AltSeasonPanel({ isMobile }) {
   const q = useAltScan();
   const data = q.data;
 
-  // Board and Record fold by default — the daily glance is score, radar,
-  // movers; the deep lists are one tap away. User choices persist over that.
+  // The board folds by default — it is 60 rows of evidence, one tap away. The
+  // RECORD does not, any more: it used to be a grey sentence and a list of
+  // tickers, worth hiding; now it is the answer to "should I believe any of
+  // this", which is not a question to make someone go looking for. A stored
+  // choice still wins over both.
   const [collapsed, setCollapsed] = useState(() => {
-    const defaults = { board: true, record: true };
+    const defaults = { board: true, record: false };
     try { return { ...defaults, ...JSON.parse(localStorage.getItem("br_alt_collapsed") || "{}") }; }
     catch { return defaults; }
   });
@@ -316,13 +306,6 @@ export default function AltSeasonPanel({ isMobile }) {
 
   const list = movers ? movers[win] : null;
   const readyHours = movers?.readyIn?.[win] ?? null;
-
-  const statsLine = (() => {
-    if (!stats || stats.total < 3 || stats.hitT1Rate == null) return "The log needs a few resolved flags before rates mean anything.";
-    let s = `${stats.total} flags · ${stats.hitT1Rate}% reached T1`;
-    if (stats.medianPeakPct != null) s += ` · median peak ${signedPct(stats.medianPeakPct)}`;
-    return s;
-  })();
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 12, minWidth: 0 }}>
@@ -589,32 +572,10 @@ export default function AltSeasonPanel({ isMobile }) {
         )}
       </CollapsibleCard>
 
-      {/* ── RECORD — the graded log, base rates first ──────────────────────── */}
-      <CollapsibleCard {...coll("record")} title="Record" tight>
-        <div className="t-foot" style={{ color: "var(--sub)", marginBottom: recent.length ? 4 : 0, lineHeight: 1.5 }}>
-          {statsLine}
-        </div>
-        {recent.length > 0 && (
-          <CellGroup style={inCardGroup}>
-            {recent.map((f) => {
-              const o = OUTCOME[f.status] || OUTCOME.active;
-              const fa = fmtDay(f.firstFlaggedAt), fb = fmtDay(f.resolvedAt);
-              return (
-                <Cell key={f.id}
-                  title={<span className="t-label" style={{ color: "var(--ink)", letterSpacing: "0.04em" }}>{f.symbol}</span>}
-                  sub={fa === fb ? fa : `${fa} → ${fb}`}
-                  trailing={
-                    <span style={{ display: "inline-flex", alignItems: "center", gap: 10, flex: "none" }}>
-                      <TonePill tone={o.tone}>{o.label}</TonePill>
-                      <Delta pct={f.peakPct} digits={1} />
-                    </span>
-                  }
-                />
-              );
-            })}
-          </CellGroup>
-        )}
-      </CollapsibleCard>
+      {/* ── RECORD — the graded log, base rates first ────────────────────────
+          Shared with the Stocks tab so the two screeners cannot grade
+          themselves by different arithmetic. */}
+      <RecordCard stats={stats} recent={recent} collapseProps={coll("record")} noun="flags" />
 
       {/* Freshness, split honestly: the screener pass and the price overlay
           age independently, so they're stamped independently. */}

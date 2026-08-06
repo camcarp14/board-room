@@ -26,6 +26,7 @@ import { NumTween, Sparkline } from "../../ui/primitives.jsx";
 import { callFnFull } from "../../lib/functions.js";
 import { useStockQuotes, useStockScan, useRunStockScreener } from "../../data/altseason.js";
 import StockSheet, { TonePill, STAGE_LABEL, MOTION_LABEL, HIT_LABEL } from "./StockSheet.jsx";
+import RecordCard from "./RecordCard.jsx";
 
 const BtcChartModal = lazy(() => import("../../BtcChartModal.jsx"));
 
@@ -90,15 +91,6 @@ const stateOf = (x) => (x && x.entry && ENTRY_META[x.entry.state] ? x.entry.stat
 
 const STAGE_CLAUSE = { base: "level", atLevel: "level", breaking: "motion", extending: "motion" };
 
-const OUTCOME = {
-  hit_t3: { label: "Hit T3", tone: T.green },
-  hit_t2: { label: "Hit T2", tone: T.green },
-  hit_t1: { label: "Hit T1", tone: T.green },
-  invalidated: { label: "Invalidated", tone: T.red },
-  faded: { label: "Faded", tone: T.faint },
-  active: { label: "Expired", tone: T.faint },
-};
-
 const inCardGroup = { boxShadow: "none", background: "transparent", borderRadius: 0, margin: "0 -16px -8px" };
 
 function px(x) {
@@ -109,7 +101,6 @@ function px(x) {
   if (a === 0) return "$0";
   return `$${x.toPrecision(4).replace(/(\.\d*?)0+$/, "$1").replace(/\.$/, "")}`;
 }
-const signedPct = (n, d = 1) => (n == null || !isFinite(n) ? "—" : `${n >= 0 ? "+" : ""}${n.toFixed(d)}%`);
 
 /** "Breaking out · pace picking up" — the stage, and the one thing worth adding. */
 function stageLine(move, short) {
@@ -260,7 +251,8 @@ export function StocksPanel({ isMobile }) {
 
   const [tickerChart, setTickerChart] = useState(null);
   const [collapsed, setCollapsed] = useState(() => {
-    const defaults = { board: true, record: true, watchlist: false };
+    // Same call as the Alt Season tab: the board hides, the record does not.
+    const defaults = { board: true, record: false, watchlist: false };
     try { return { ...defaults, ...JSON.parse(localStorage.getItem("br_stock_collapsed") || "{}") }; }
     catch { return defaults; }
   });
@@ -361,13 +353,6 @@ export function StocksPanel({ isMobile }) {
   // THE HEADINGS SAY WHEN. "Worth an entry now" is a claim about a tape that is
   // printing; on a Saturday the honest version names the session it came from.
   const asOfWord = open ? "now" : session?.lastSessionLabel ? `at ${session.lastSessionLabel}'s close` : "at the last close";
-
-  const statsLine = (() => {
-    if (!stats || stats.total < 3 || stats.hitT1Rate == null) return "The log needs a few resolved flags before rates mean anything.";
-    let s = `${stats.total} flags · ${stats.hitT1Rate}% reached T1`;
-    if (stats.medianPeakPct != null) s += ` · median peak ${signedPct(stats.medianPeakPct)}`;
-    return s;
-  })();
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 12, minWidth: 0 }}>
@@ -639,31 +624,9 @@ export function StocksPanel({ isMobile }) {
         )}
       </CollapsibleCard>
 
-      {/* ── RECORD ───────────────────────────────────────────────────────── */}
-      <CollapsibleCard {...coll("record")} title="Record" tight>
-        <div className="t-foot" style={{ color: "var(--sub)", marginBottom: recent.length ? 4 : 0, lineHeight: 1.5 }}>{statsLine}</div>
-        {recent.length > 0 && (
-          <CellGroup style={inCardGroup}>
-            {recent.map((f) => {
-              const o = OUTCOME[f.status] || OUTCOME.active;
-              const day = (iso) => { const d = new Date(iso); return isNaN(d) ? "—" : d.toLocaleDateString("en-US", { month: "short", day: "numeric" }); };
-              const fa = day(f.firstFlaggedAt), fb = day(f.resolvedAt);
-              return (
-                <Cell key={f.id}
-                  title={<span className="t-label" style={{ color: "var(--ink)", letterSpacing: "0.04em" }}>{f.symbol}</span>}
-                  sub={fa === fb ? fa : `${fa} → ${fb}`}
-                  trailing={
-                    <span style={{ display: "inline-flex", alignItems: "center", gap: 10, flex: "none" }}>
-                      <TonePill tone={o.tone}>{o.label}</TonePill>
-                      <Delta pct={f.peakPct} digits={1} />
-                    </span>
-                  }
-                />
-              );
-            })}
-          </CellGroup>
-        )}
-      </CollapsibleCard>
+      {/* ── RECORD — shared with the Alt Season tab, so both screeners are
+          graded by the same arithmetic ───────────────────────────────────── */}
+      <RecordCard stats={stats} recent={recent} collapseProps={coll("record")} noun="flags" />
 
       {/* NOTHING COUNTS UP IN SECONDS. A market that is shut is not stale — it
           is finished, and the footer says which session it finished. */}
