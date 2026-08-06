@@ -106,6 +106,29 @@ try {
   check("clean ignition parts[] sums to score", sumParts(clean) === clean.score);
   check("clean ignition bands 'starting'", clean.band === "starting", clean.band);
 
+  // MEASURED IS NOT ZERO — the same stamp the equity engine carries, because
+  // the two sheets that read parts[] are twins and a per-part bar must not
+  // draw "BTC didn't return" as "worst coin on the board".
+  check("every part says whether it was measured",
+    clean.parts.every((p) => typeof p.measured === "boolean"),
+    clean.parts.filter((p) => typeof p.measured !== "boolean").map((p) => p.key).join(","));
+  check("with BTC present, every part of a full row is measured",
+    clean.parts.every((p) => p.measured), clean.parts.filter((p) => !p.measured).map((p) => p.key).join(","));
+  const noBtc = screenCoin(cleanRaw, {});
+  const cKey = Object.fromEntries(noBtc.parts.map((p) => [p.key, p]));
+  check("no BTC row marks RS unmeasured rather than scoring it zero",
+    cKey.rs7.measured === false && cKey.rs30.measured === false && cKey.rs7.points === 0,
+    JSON.stringify([cKey.rs7, cKey.rs30]));
+  check("...while turnover and structure, which never needed BTC, stay measured",
+    cKey.range.measured && cKey.room.measured);
+  check("an unmeasured part still contributes its 0, so the sum survives",
+    sumParts(noBtc) === noBtc.score, `${sumParts(noBtc)} vs ${noBtc.score}`);
+  // Both engines must agree on the block architecture — one shared sheet
+  // component reads both, so a max that drifts on one side silently rescales
+  // every bar on the other.
+  const maxOf = (r) => r.parts.filter((p) => p.max > 0).reduce((s, p) => s + p.max, 0);
+  check("the crypto ladder offers exactly 100 points", maxOf(clean) === 100, String(maxOf(clean)));
+
   // A blow-off that EARNED only 6 points: the −25 must land as −6, not drive
   // the score below zero and not break the by-eye arithmetic.
   const blowoff = screenCoin({ id: "moon", symbol: "MOON", name: "Moon Token", price: 2, chg24h: 45, chg7d: 308 }, {});

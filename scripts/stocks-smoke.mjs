@@ -220,6 +220,30 @@ try {
   const clean = screenStock({ id: "x", symbol: "X", sector: "tech", company: "X Co", bars: tape }, { bench });
   const sumParts = (r) => r.parts.reduce((s, p) => s + p.points, 0);
   check("parts[] always sums to score", sumParts(clean) === clean.score, `${sumParts(clean)} vs ${clean.score}`);
+
+  // ─── MEASURED IS NOT ZERO ─────────────────────────────────────────────────
+  // step() returns 0 for "bottom of the table" AND for "the benchmark did not
+  // come back". Identical on the wire, opposite in meaning, and the difference
+  // becomes visible the instant anything draws a per-part bar: an empty bar
+  // that actually means "not measured" is a claim about the stock that nobody
+  // made. This is the same Number(null)===0 trap that has already cost this
+  // codebase a fake "decelerating hard" and a fleet of price-0 rows.
+  check("every part says whether it was measured",
+    clean.parts.every((p) => typeof p.measured === "boolean"),
+    clean.parts.filter((p) => typeof p.measured !== "boolean").map((p) => p.key).join(","));
+  check("with a full tape and a benchmark, every part is measured",
+    clean.parts.every((p) => p.measured), clean.parts.filter((p) => !p.measured).map((p) => p.key).join(","));
+
+  // No benchmark at all: RS is UNMEASURABLE, and must not read as "worst in class".
+  const noBench = screenStock({ id: "x", symbol: "X", sector: "tech", company: "X Co", bars: tape }, { bench: {} });
+  const byKey = Object.fromEntries(noBench.parts.map((p) => [p.key, p]));
+  check("a missing benchmark marks RS unmeasured rather than scoring it zero",
+    byKey.rs5.measured === false && byKey.rs21.measured === false && byKey.rs5.points === 0,
+    JSON.stringify([byKey.rs5, byKey.rs21]));
+  check("...while the parts that never needed the benchmark stay measured",
+    byKey.rvol.measured && byKey.range.measured && byKey.high.measured);
+  check("an unmeasured part still contributes its 0, so the sum survives",
+    sumParts(noBench) === noBench.score, `${sumParts(noBench)} vs ${noBench.score}`);
   check("a clean breakout scores well and bands 'starting'",
     clean.score >= 55 && clean.band === "starting", `${clean.score}/${clean.band}`);
   check("every window is a SESSION count", Number.isFinite(clean.chg5) && Number.isFinite(clean.chg21));

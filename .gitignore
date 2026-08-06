@@ -6,3 +6,7 @@ dist/
 .env.*.local
 # Holds the Supabase service-role key for scripts/miner-push.mjs.
 .env.miner
+
+# Scratch harness for rendering sheets at 390pt during design work.
+.preview/
+.preview-dist/

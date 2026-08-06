@@ -588,30 +588,39 @@ function screenStock(row, ctx = {}) {
   const parts = [];
   const facts = [];
 
+  // MEASURED IS NOT THE SAME AS ZERO, and step() cannot tell you which it gave
+  // you — it returns 0 both for "this name is genuinely bottom of the table"
+  // and for "SPY did not come back on this pass". Identical on the wire,
+  // opposite in meaning, and the moment anything draws a per-part bar the
+  // difference becomes visible: an empty bar that means "not measured" is a
+  // claim about the stock that nobody made. So each part carries the nullity
+  // test its own label already performs.
+  const gauged = (v) => Number.isFinite(v);
+
   // ── relative strength vs SPY (0-25) ──
-  parts.push({ key: "rs5", max: 15, points: step(rs5, RS5), label: rs5 == null ? "no 5-session RS (SPY or symbol missing)" : `5-session RS vs SPY ${pts(rs5)}` });
-  parts.push({ key: "rs21", max: 10, points: step(rs21, RS21), label: rs21 == null ? "no 21-session RS" : `21-session RS vs SPY ${pts(rs21)}` });
+  parts.push({ key: "rs5", max: 15, points: step(rs5, RS5), measured: gauged(rs5), label: rs5 == null ? "no 5-session RS (SPY or symbol missing)" : `5-session RS vs SPY ${pts(rs5)}` });
+  parts.push({ key: "rs21", max: 10, points: step(rs21, RS21), measured: gauged(rs21), label: rs21 == null ? "no 21-session RS" : `21-session RS vs SPY ${pts(rs21)}` });
   if (rs5 != null) facts.push(`5 sessions ${pct(chg5)} vs SPY ${pct(b5)} — ${pts(rs5)} of relative strength`);
   if (rs21 != null) facts.push(`21 sessions ${pct(chg21)} vs SPY ${pct(b21)} — ${pts(rs21)}`);
 
   // ── acceleration (0-30) — the "starting, not started" block ──
-  parts.push({ key: "accelSession", max: 18, points: step(dSessionVsWeek, A_SESSION), label: dSessionVsWeek == null ? "no session acceleration" : `last session vs the week's pace ${pts(dSessionVsWeek)}` });
-  parts.push({ key: "accel5v21", max: 12, points: step(weekVsMonth, A_5V21), label: weekVsMonth == null ? "no week/month acceleration" : `week vs month pace ${pts(weekVsMonth)}/session` });
+  parts.push({ key: "accelSession", max: 18, points: step(dSessionVsWeek, A_SESSION), measured: gauged(dSessionVsWeek), label: dSessionVsWeek == null ? "no session acceleration" : `last session vs the week's pace ${pts(dSessionVsWeek)}` });
+  parts.push({ key: "accel5v21", max: 12, points: step(weekVsMonth, A_5V21), measured: gauged(weekVsMonth), label: weekVsMonth == null ? "no week/month acceleration" : `week vs month pace ${pts(weekVsMonth)}/session` });
   if (dSessionVsWeek != null) facts.push(`last session ${pct(chgSession)} against a 5-session pace of ${pct(daily5, 2)}/session — ${pts(dSessionVsWeek)} of one-day excess`);
 
   // ── relative volume (0-15) — replaces turnover, which is uncomputable here ──
-  parts.push({ key: "rvol", max: 15, points: step(rvol, RVOL_T), label: rvol == null ? "no volume history" : `${rvol}x its own 20-session median volume` });
+  parts.push({ key: "rvol", max: 15, points: step(rvol, RVOL_T), measured: gauged(rvol), label: rvol == null ? "no volume history" : `${rvol}x its own 20-session median volume` });
   if (rvol != null) facts.push(`traded ${rvol}x its normal volume — ${usd(dollarVol)} a day is its median`);
 
   // ── 20-session structure (0-20) ──
-  parts.push({ key: "range", max: 10, points: step(range20.pos, POS), label: range20.pos == null ? "no 20-session range" : `${Math.round(range20.pos * 100)}% up its own 20-session range` });
-  parts.push({ key: "break", max: 10, points: range20.freshBreak ? 10 : 0, label: range20.priorHigh == null ? "no break read" : range20.freshBreak ? "closed above the prior 19-session high" : range20.probing ? "poked through the level intraday, closed back under" : "no break of the prior 19-session high" });
+  parts.push({ key: "range", max: 10, points: step(range20.pos, POS), measured: gauged(range20.pos), label: range20.pos == null ? "no 20-session range" : `${Math.round(range20.pos * 100)}% up its own 20-session range` });
+  parts.push({ key: "break", max: 10, points: range20.freshBreak ? 10 : 0, measured: range20.priorHigh != null, label: range20.priorHigh == null ? "no break read" : range20.freshBreak ? "closed above the prior 19-session high" : range20.probing ? "poked through the level intraday, closed back under" : "no break of the prior 19-session high" });
   if (range20.pos != null) facts.push(`price sits ${Math.round(range20.pos * 100)}% up its 20-session range (${px(range20.low)}–${px(range20.high)})`);
   if (range20.freshBreak) facts.push(`the last session closed above the prior 19-session high ${px(range20.priorHigh)}`);
   else if (range20.probing) facts.push(`it traded through ${px(range20.priorHigh)} intraday and closed back under it`);
 
   // ── distance from the window high (0-10) — INVERTED from crypto's ROOM ──
-  parts.push({ key: "high", max: 10, points: step(fromHighPct, HIGH_T), label: fromHighPct == null ? "no high reference" : `${Math.abs(Math.round(fromHighPct))}% below its ${bars.length}-session high` });
+  parts.push({ key: "high", max: 10, points: step(fromHighPct, HIGH_T), measured: gauged(fromHighPct), label: fromHighPct == null ? "no high reference" : `${Math.abs(Math.round(fromHighPct))}% below its ${bars.length}-session high` });
   if (fromHighPct != null) facts.push(`${Math.abs(Math.round(fromHighPct))}% below its ${bars.length}-session high ${px(windowHigh)}`);
 
   // ── penalties, clamped to points earned so the floor is a true 0 and parts[]
@@ -623,7 +632,7 @@ function screenStock(row, ctx = {}) {
   if (parabolic) {
     const applied = -Math.min(budget, 25);
     budget += applied;
-    parts.push({ key: "parabolic", max: 0, points: applied, label: "parabolic — already gone" });
+    parts.push({ key: "parabolic", max: 0, points: applied, measured: true, label: "parabolic — already gone" });
     facts.push(chgSession != null && chgSession > PARABOLIC_SESSION
       ? `PARABOLIC: ${pct(chgSession)} in one session — this is a chase, not an entry`
       : `PARABOLIC: ${pct(chg5)} in five sessions — this is a chase, not an entry`);
@@ -631,7 +640,7 @@ function screenStock(row, ctx = {}) {
   if (thinLiquidity) {
     const applied = -Math.min(budget, 15);
     budget += applied;
-    parts.push({ key: "thin", max: 0, points: applied, label: "too thin to trade" });
+    parts.push({ key: "thin", max: 0, points: applied, measured: true, label: "too thin to trade" });
     facts.push(`only ${usd(dollarVol)} of median daily volume — you can get in but not out`);
   }
 

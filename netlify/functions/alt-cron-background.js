@@ -411,13 +411,20 @@ function screenCoin(row, ctx = {}) {
   const parts = [];
   const facts = [];
 
+  // MEASURED IS NOT THE SAME AS ZERO. step() returns 0 both for "this coin is
+  // genuinely bottom of the table" and for "BTC did not come back on this
+  // pass" — identical on the wire, opposite in meaning, and visible the moment
+  // anything draws a per-part bar. Same stamp as the equity engine, because
+  // the sheets that read it are twins.
+  const gauged = (v) => Number.isFinite(v);
+
   // ── relative strength vs BTC (0–25) ──
   parts.push({
-    key: "rs7", max: 15, points: step(rsVsBtc7d, RS7),
+    key: "rs7", max: 15, points: step(rsVsBtc7d, RS7), measured: gauged(rsVsBtc7d),
     label: rsVsBtc7d == null ? "no 7d RS (BTC or coin 7d missing)" : `7d RS vs BTC ${pts(rsVsBtc7d)}`,
   });
   parts.push({
-    key: "rs30", max: 10, points: step(rsVsBtc30d, RS30),
+    key: "rs30", max: 10, points: step(rsVsBtc30d, RS30), measured: gauged(rsVsBtc30d),
     label: rsVsBtc30d == null ? "no 30d RS (BTC or coin 30d missing)" : `30d RS vs BTC ${pts(rsVsBtc30d)}`,
   });
   if (rsVsBtc7d != null) facts.push(`7d ${pct(chg7d)} vs BTC ${pct(btc7d)} — ${pts(rsVsBtc7d)} of relative strength`);
@@ -425,11 +432,11 @@ function screenCoin(row, ctx = {}) {
 
   // ── acceleration (0–30) — the "starting, not started" block ──
   parts.push({
-    key: "accel24", max: 18, points: step(d24VsWeek, A24),
+    key: "accel24", max: 18, points: step(d24VsWeek, A24), measured: gauged(d24VsWeek),
     label: d24VsWeek == null ? "no 24h acceleration (24h or 7d missing)" : `24h vs the week's pace ${pts(d24VsWeek)}`,
   });
   parts.push({
-    key: "accel7v30", max: 12, points: step(weekVsMonth, A7V30),
+    key: "accel7v30", max: 12, points: step(weekVsMonth, A7V30), measured: gauged(weekVsMonth),
     label: weekVsMonth == null ? "no week/month acceleration (7d or 30d missing)" : `week vs month pace ${pts(weekVsMonth)}/day`,
   });
   if (d24VsWeek != null) {
@@ -441,7 +448,7 @@ function screenCoin(row, ctx = {}) {
 
   // ── turnover (0–15) ──
   parts.push({
-    key: "turnover", max: 15, points: step(turnover, TURN),
+    key: "turnover", max: 15, points: step(turnover, TURN), measured: gauged(turnover),
     label: turnover == null ? "no turnover (volume or market cap missing)" : `turnover ${(turnover * 100).toFixed(1)}% of cap`,
   });
   if (turnover != null) {
@@ -450,11 +457,11 @@ function screenCoin(row, ctx = {}) {
 
   // ── 7-day structure (0–20) ──
   parts.push({
-    key: "range", max: 10, points: step(range7d.pos, POS),
+    key: "range", max: 10, points: step(range7d.pos, POS), measured: gauged(range7d.pos),
     label: range7d.pos == null ? "no 7d range (sparkline missing or flat)" : `${Math.round(range7d.pos * 100)}% up its own 7d range`,
   });
   parts.push({
-    key: "break", max: 10, points: range7d.freshBreak ? 10 : 0,
+    key: "break", max: 10, points: range7d.freshBreak ? 10 : 0, measured: range7d.priorHigh != null,
     label: range7d.priorHigh == null ? "no break read (sparkline too short)"
       : range7d.freshBreak ? "last 24h broke the prior 6d high" : "no break of the prior 6d high",
   });
@@ -467,7 +474,7 @@ function screenCoin(row, ctx = {}) {
   // verdict but because it has no overhead supply to sell into you; it earns
   // its points in structure and RS instead. ──
   parts.push({
-    key: "room", max: 10, points: step(drawdownFromAthPct, ROOM),
+    key: "room", max: 10, points: step(drawdownFromAthPct, ROOM), measured: gauged(drawdownFromAthPct),
     label: drawdownFromAthPct == null ? "no ATH reference" : `${Math.round(drawdownFromAthPct)}% below the all-time high`,
   });
   if (drawdownFromAthPct != null) {
@@ -487,7 +494,7 @@ function screenCoin(row, ctx = {}) {
   if (parabolic) {
     const applied = -Math.min(budget, 25);
     budget += applied;
-    parts.push({ key: "parabolic", max: 0, points: applied, label: "parabolic — already gone" });
+    parts.push({ key: "parabolic", max: 0, points: applied, measured: true, label: "parabolic — already gone" });
     facts.push(chg24h != null && chg24h > PARABOLIC_24H
       ? `PARABOLIC: ${pct(chg24h)} in 24h — this is a chase, not an entry`
       : `PARABOLIC: ${pct(chg7d)} in 7d — this is a chase, not an entry`);
@@ -495,7 +502,7 @@ function screenCoin(row, ctx = {}) {
   if (thinLiquidity) {
     const applied = -Math.min(budget, 15);
     budget += applied;
-    parts.push({ key: "thin", max: 0, points: applied, label: "too thin to trade" });
+    parts.push({ key: "thin", max: 0, points: applied, measured: true, label: "too thin to trade" });
     facts.push(`only ${usd(row.vol24h)} of 24h volume — you can get in but not out`);
   }
 
