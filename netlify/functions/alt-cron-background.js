@@ -1221,7 +1221,10 @@ function boardRow(r) {
     // after a deploy when the 12h baseline doesn't exist yet — shipping the
     // cron's own number is what stops the client re-deriving a screener input.
     accel: r.accel,
-    turnover: r.turnover, rsVsBtc7d: r.rsVsBtc7d,
+    // BOTH RS legs. The 30d one was computed at screen time and dropped here,
+    // which was invisible until the sheet started drawing the trend block from
+    // published fields and could only show half of it.
+    turnover: r.turnover, rsVsBtc7d: r.rsVsBtc7d, rsVsBtc30d: r.rsVsBtc30d,
     drawdownFromAthPct: r.drawdownFromAthPct,
     range7d: {
       low: r.range7d.low, high: r.range7d.high, pos: r.range7d.pos,

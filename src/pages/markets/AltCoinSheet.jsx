@@ -83,8 +83,11 @@ const CRYPTO_BLOCKS = [
     ),
   },
   {
+    // drawdownFromAthPct, NOT athChangePct — the board row publishes the
+    // former (already signed positive), and reading the latter rendered this
+    // block with a bare "0/10" and no explanation on every live coin.
     key: "room", label: "Room from its high", keys: ["room"],
-    sub: (r) => (num(r?.athChangePct) ? `${Math.abs(Math.round(r.athChangePct))}% below the all-time high` : null),
+    sub: (r) => (num(r?.drawdownFromAthPct) ? `${Math.abs(Math.round(r.drawdownFromAthPct))}% below its all-time high` : null),
   },
 ];
 const num = (v) => Number.isFinite(v);

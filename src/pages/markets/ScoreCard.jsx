@@ -53,6 +53,17 @@ export function groupParts(parts, blocks) {
       key: b.key,
       label: b.label,
       sub: b.sub,
+      // THE SERVER'S OWN WORDS, as the floor under every block. Each part
+      // carries a label the engine wrote from the value it actually scored, so
+      // it is correct by construction and cannot go stale. A block's sub() is
+      // a shorter, better-phrased version built from PUBLISHED FIELDS — and a
+      // published field can be renamed, or trimmed out of the board row on its
+      // way to the client, and then sub() silently returns null and the block
+      // renders as a bare "0/10" with nothing saying why. That is exactly what
+      // shipped: the crypto room block read athChangePct when the row carries
+      // drawdownFromAthPct. A number with no account of itself is the one
+      // thing this card exists to stop, so there is always a line.
+      serverSub: mine.map((p) => p.label).filter(Boolean).join(" · ") || null,
       max: mine.reduce((s, p) => s + p.max, 0),
       points: mine.reduce((s, p) => s + (Number.isFinite(p.points) ? p.points : 0), 0),
       // A block is measured when ANY member was. A half-measured block still
@@ -66,7 +77,7 @@ export function groupParts(parts, blocks) {
   // row of its own with the server's own label, so the columns keep summing.
   const orphans = list
     .filter((p) => p.max > 0 && !claimed.has(p.key))
-    .map((p) => ({ key: p.key, label: p.label, max: p.max, points: p.points || 0, measured: p.measured !== false, sub: null }));
+    .map((p) => ({ key: p.key, label: p.label, max: p.max, points: p.points || 0, measured: p.measured !== false, sub: null, serverSub: null }));
 
   const penalties = list.filter((p) => p.max === 0 && Number.isFinite(p.points) && p.points < 0);
   return { blocks: [...grouped, ...orphans], penalties };
@@ -189,7 +200,7 @@ export default function ScoreCard({ row, parts, score, band, bandTone, blocks, f
       )}
 
       <div style={{ display: "flex", flexDirection: "column", gap: 11 }}>
-        {rows.map((b) => <Meter key={b.key} b={b} sub={typeof b.sub === "function" ? b.sub(row) : null} />)}
+        {rows.map((b) => <Meter key={b.key} b={b} sub={(typeof b.sub === "function" ? b.sub(row) : null) || b.serverSub} />)}
       </div>
 
       {/* THE SCREENER'S OWN WORDS, one tap away and never deleted. The blocks

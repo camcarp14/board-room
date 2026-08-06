@@ -232,6 +232,56 @@ try {
   check("...and the bare trailing sector word got a label",
     /label="Sector"/.test(stockSrc) && !/` · \$\{row\.sector\}`/.test(stockBody));
 
+  // ─── every block must actually SAY something ─────────────────────────────
+  // A block's sub() reads PUBLISHED fields off the board row, and a published
+  // field can be renamed or trimmed on its way to the client. When that
+  // happens sub() returns null and the block renders as a bare "0/10" with
+  // nothing accounting for it — which is precisely what shipped: the crypto
+  // room block read athChangePct while the row carries drawdownFromAthPct, so
+  // every live coin drew an unexplained zero.
+  //
+  // These two rows are verbatim from the live payloads. If a field is renamed
+  // upstream, or a block starts reading one the row does not carry, the
+  // matching line here goes empty and this fails.
+  const LIVE_FCX = {
+    rs5: 10.1, rs21: 14, rvol: 1.18, fromHighPct: -4, windowHigh: 72.27999877929688, windowSessions: 251,
+    accel: { dSessionVsWeek: -0.028362602974608464, weekVsMonth: 2.326426023940059 },
+    range20: { pos: 0.9196429694279211, priorHigh: 67.8499984741211 },
+  };
+  const LIVE_BTW = {
+    rsVsBtc7d: 117.79882628633746, rsVsBtc30d: 168.5, turnover: 0.05145559078771449, drawdownFromAthPct: 8.24122,
+    accel: { d24VsWeek: 20.549837100387116, weekVsMonth: 11.309100769451678 },
+    range7d: { pos: 1, priorHigh: 0.13596064694351276 },
+  };
+  // Static check rather than evaluating the sheets (they pull the whole kit):
+  // every field name a sub() dereferences off `r` must exist on the live row.
+  const fieldsRead = (src, marker) => {
+    const seg = src.slice(src.indexOf(marker), src.indexOf("const num ="));
+    return [...new Set([...seg.matchAll(/r\?\.([a-zA-Z0-9]+)/g)].map((m) => m[1]))];
+  };
+  for (const [tab, src, marker, live] of [
+    ["stock", stockSrc, "SCORE_BLOCKS", LIVE_FCX],
+    ["crypto", cryptoSrc, "CRYPTO_BLOCKS", LIVE_BTW],
+  ]) {
+    const missing = fieldsRead(src, marker).filter((f) => live[f] === undefined);
+    check(`every field the ${tab} blocks read is published on the live board row`,
+      missing.length === 0, `absent from the payload: ${missing.join(", ")}`);
+  }
+
+  // And the floor under all of it: the server's own part labels, always
+  // present, used whenever sub() cannot produce a line.
+  check("a block carries the server's labels as a fallback sub-line",
+    /serverSub:\s*mine\.map\(\(p\) => p\.label\)/.test(cardSrc));
+  check("...and the meter prefers sub() but never renders nothing",
+    /b\.sub\(row\) : null\) \|\| b\.serverSub/.test(cardSrc));
+  const withLabels = groupParts(
+    [{ key: "rs5", max: 15, points: 6, measured: true, label: "5-session RS vs SPY +0.0 pts" },
+     { key: "rs21", max: 10, points: 5, measured: true, label: "21-session RS vs SPY +0.0 pts" }],
+    [{ key: "trend", label: "Trend vs SPY", keys: ["rs5", "rs21"] }]);
+  check("the fallback joins every member's label",
+    withLabels.blocks[0].serverSub === "5-session RS vs SPY +0.0 pts · 21-session RS vs SPY +0.0 pts",
+    withLabels.blocks[0].serverSub);
+
   // ─── house rules ─────────────────────────────────────────────────────────
   const sizes = [...cardSrc.matchAll(/fontSize:\s*([\d.]+)/g)].map((m) => Number(m[1]));
   check("nothing on the card is under the 10.5px floor", sizes.every((n) => n >= 10.5), sizes.filter((n) => n < 10.5).join(","));
