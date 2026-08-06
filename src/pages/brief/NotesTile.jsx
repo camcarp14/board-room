@@ -18,6 +18,26 @@ const LIST_CAP = 5; // first N notes in-page; the rest behind "Show all" (no nes
 const PREVIEW_ROWS = 5;
 const PREVIEW_MAX_H = Math.round(PREVIEW_ROWS * 13 * 1.5);
 
+/**
+ * The reordered ids, followed by everything the drag could not see.
+ *
+ * SortableList only ever knows about the rows on screen, and both note surfaces
+ * hand it a SLICE — the Brief shows the newest few, the Notes panel filters by
+ * search and by seal. Persisting that slice as the whole order meant a single
+ * drag on the Brief wrote a five-id notes_order, and applyNotesOrder puts
+ * anything unlisted AFTER the listed ids — so the five newest notes were
+ * buried at the bottom of both surfaces by one drag on a card. With a search
+ * active in the panel it was worse: every note not matching the query went to
+ * the end.
+ *
+ * The reorder is authoritative for the rows it covers; the rest keep the
+ * sequence they already had.
+ */
+function mergeOrder(ids, full) {
+  const seen = new Set(ids);
+  return [...ids, ...orderOf(full || []).filter((id) => !seen.has(id))];
+}
+
 export function NotesTile({ isMobile, refreshSignal, onOpenNotes, collapsed, onToggle, settings, updateSetting }) {
   // refreshSignal is accepted but unused here — freshness comes from the
   // useNotes query cache; the prop stays wired for parity with the other cards.
@@ -168,7 +188,7 @@ export function NotesTile({ isMobile, refreshSignal, onOpenNotes, collapsed, onT
             <SortableList
               items={visible}
               disabled={!!editing}
-              onReorder={(ids) => saveOrder(ids)}
+              onReorder={(ids) => saveOrder(mergeOrder(ids, sorted))}
             >{(n, { dragging }) => editing?.id === n.id ? (
               <div key={n.id} style={{ background: "var(--surface-2)", borderRadius: 12, padding: 12, margin: "6px 0", display: "flex", flexDirection: "column", gap: 8 }}>
                 <Field className="on-well" value={editing.title} onChange={e => setEditing(ed => ({ ...ed, title: e.target.value }))}

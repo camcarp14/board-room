@@ -198,4 +198,81 @@ check("a forever rule over a wide window still terminates",
   occurrenceDays(ev({ rrule: { freq: "daily", interval: 1 } }), D(2026, 8, 3), D(2060, 1, 1)).length <= 750);
 
 if (failed) { console.log(`\n${failed} recurrence check(s) failed`); process.exit(1); }
+
+// ─── "All events in the series" must not delete the past ─────────────────────
+// The edit form is seeded from the OCCURRENCE you tapped, and draftFields
+// rebuilds start_time out of that date — so writing the result straight onto
+// the master moved the SERIES START to whichever occurrence was on screen.
+// occurrenceDays walks forward from master.start_time, so everything before it
+// stopped existing: editing a weekly "Team sync" from an August occurrence,
+// purely to fix a typo, took the series from 35 occurrences to 5. The scope
+// sheet's own words are "All events in the series — including the ones already
+// past"; it removed them instead.
+//
+// seriesFields carries the day the user moved the event BY, not the day they
+// moved it TO. This is that arithmetic, lifted from CalendarPanel.
+{
+  const { calendarDaysBetween } = await import("../src/lib/dates.js");
+  const seriesFields = (master, day, fields) => {
+    const out = { ...fields };
+    const formStart = new Date(fields.start_time);
+    const masterStart = new Date(master.start_time);
+    if (!day || isNaN(formStart) || isNaN(masterStart)) return out;
+    const deltaDays = calendarDaysBetween(`${day}T12:00:00`, formStart);
+    if (deltaDays == null) return out;
+    const shift = (iso, refIso) => {
+      if (!iso) return iso;
+      const t = new Date(iso), ref = new Date(refIso);
+      if (isNaN(t) || isNaN(ref)) return iso;
+      const span = calendarDaysBetween(refIso, t) || 0;
+      const d = new Date(masterStart.getFullYear(), masterStart.getMonth(),
+        masterStart.getDate() + deltaDays + span, t.getHours(), t.getMinutes(), 0, 0);
+      return d.toISOString();
+    };
+    out.start_time = shift(fields.start_time, fields.start_time);
+    if (fields.end_time) out.end_time = shift(fields.end_time, fields.start_time);
+    return out;
+  };
+
+  const master = {
+    id: "m1", title: "Team sync", all_day: false,
+    start_time: new Date(2026, 0, 5, 9, 0).toISOString(),
+    end_time: new Date(2026, 0, 5, 9, 30).toISOString(),
+    rrule: { freq: "weekly", interval: 1, byWeekday: [1] },
+  };
+  const nOcc = (ev) => expandEvents([ev], new Date(2026, 0, 1), new Date(2026, 7, 31)).length;
+  const tapped = "2026-08-03";
+  const at = (mo, d, h, mi) => new Date(2026, mo, d, h, mi).toISOString();
+  const base = { title: "Team sync", notes: "", all_day: false, location: "", category: "work" };
+
+  check("the series has its full history to begin with", nOcc(master) === 35, String(nOcc(master)));
+
+  const titleOnly = { ...base, title: "renamed", start_time: at(7, 3, 9, 0), end_time: at(7, 3, 9, 30) };
+  const afterTitle = { ...master, ...seriesFields(master, tapped, titleOnly) };
+  check("a title-only edit from an August occurrence keeps every occurrence",
+    nOcc(afterTitle) === 35, `${nOcc(afterTitle)} of 35 survived`);
+  check("...because the master's start was not touched at all",
+    afterTitle.start_time === master.start_time);
+
+  const moved = { ...base, start_time: at(7, 5, 9, 0), end_time: at(7, 5, 9, 30) };
+  const afterMove = { ...master, ...seriesFields(master, tapped, moved) };
+  check("moving the occurrence two days moves the SERIES two days, not to August",
+    new Date(afterMove.start_time).getMonth() === 0 && new Date(afterMove.start_time).getDate() === 7,
+    new Date(afterMove.start_time).toDateString());
+
+  const retimed = { ...base, start_time: at(7, 3, 14, 30), end_time: at(7, 3, 15, 0) };
+  const afterTime = { ...master, ...seriesFields(master, tapped, retimed) };
+  check("retiming the series keeps its start DAY and takes the new clock time",
+    new Date(afterTime.start_time).getDate() === 5 && new Date(afterTime.start_time).getHours() === 14
+    && nOcc(afterTime) === 35,
+    `${new Date(afterTime.start_time).toDateString()} ${new Date(afterTime.start_time).getHours()}h, ${nOcc(afterTime)} occ`);
+
+  check("a multi-day span keeps its length through the shift",
+    (() => {
+      const span = { ...base, start_time: at(7, 3, 9, 0), end_time: at(7, 5, 17, 0) };
+      const r = seriesFields(master, tapped, span);
+      return calendarDaysBetween(r.start_time, new Date(r.end_time)) === 2;
+    })());
+}
+
 console.log("\nRECURRENCE SMOKE PASS");

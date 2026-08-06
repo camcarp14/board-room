@@ -407,8 +407,29 @@ export default function WorkoutPanel({ isMobile, supabase, settings, updateSetti
             const working = ex.sets.filter((s) => !isWU(s));
             const dsets = working.filter((s) => s.done);
             const ref = dsets.length ? dsets : working;
-            const last = ref[ref.length - 1];
-            return { id: uuid(), name: ex.name, targetSets: ref.length, targetReps: last.reps, weight: last.weight, restSec: ex.restSec };
+            // THE LAST SET IS THE WRONG SET. This took targetReps and weight
+            // from `ref[ref.length - 1]`, which is whatever you happened to
+            // finish on — and the last working set is very often the weakest
+            // one you did: a drop set, a back-off, or the one where you ran out
+            // of reps. So a single 3-rep failure set permanently rewrote the
+            // routine down to 3 reps, and a drop set rewrote its weight down to
+            // the drop. The routine is what drives the next session's
+            // progression cue, so one bad set did not just misreport a workout
+            // — it stalled the programme, and there was no undo because the
+            // write-back is silent.
+            //
+            // The heaviest working set is what the session actually proved, and
+            // reps come from that same set so the pair stays a real set you did
+            // rather than two numbers from different ones.
+            const best = ref.reduce((a, b) => {
+              const aw = Number(a?.weight), bw = Number(b?.weight);
+              if (!Number.isFinite(bw)) return a;
+              if (!Number.isFinite(aw)) return b;
+              if (bw !== aw) return bw > aw ? b : a;
+              // Same weight: more reps is the better set.
+              return (Number(b?.reps) || 0) > (Number(a?.reps) || 0) ? b : a;
+            }, ref[0]);
+            return { id: uuid(), name: ex.name, targetSets: ref.length, targetReps: best.reps, weight: best.weight, restSec: ex.restSec };
           });
         await wdb.saveTemplate({ ...src, unit: a.unit, exercises });
       }

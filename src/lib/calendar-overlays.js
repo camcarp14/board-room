@@ -128,7 +128,12 @@ export function birthdayOccurrences(birthdays, from, to) {
         location: "",
         category: "personal",
         all_day: true,
-        start_time: `${key}T00:00:00.000Z`,
+        // LOCAL midnight, not UTC. The grid never noticed — startDayKey
+    // short-circuits on all_day and slices the string — but the agenda and
+    // Upcoming rows PARSE this instant to label the day, and an evening in the
+    // Americas parses a UTC midnight as the previous day. Every birthday and
+    // every holiday was announced one day early in both lists.
+    start_time: `${key}T00:00:00`,
         end_time: null,
         turns,
       });
@@ -147,7 +152,7 @@ export function holidayOccurrences(from, to) {
     location: "",
     category: "personal",
     all_day: true,
-    start_time: `${h.day}T00:00:00.000Z`,
+    start_time: `${h.day}T00:00:00`,
     end_time: null,
     federal: h.federal,
   }));

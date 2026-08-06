@@ -17,7 +17,7 @@ import { spanDayKeys, spanPosition, withOverlays } from "../../lib/calendar-over
 import { weeksOfMonth, layoutWeek, segmentShowsTitle } from "../../lib/calendar-layout.js";
 import { useBirthdays } from "../../data/birthdays.js";
 import { callClaude } from "../../lib/claude.js";
-import { localDayKey, todayISO } from "../../lib/dates.js";
+import { localDayKey, todayISO, calendarDaysBetween } from "../../lib/dates.js";
 import { tint } from "../../ui/styles.js";
 import { Card, SectionHeader, Button, Cell, CellGroup, Sheet, useConfirm, EmptyState, Dot, Pill, Switch } from "../../ui/kit.jsx";
 import { IcChevronLeft, IcChevronRight, IcCalendar, IcClose, IcTrash } from "../../ui/icons.jsx";
@@ -342,6 +342,56 @@ Only extract entries you can read with real confidence — skip anything blurry,
     };
   };
 
+  /**
+   * The fields for a scope-"all" edit — a SHIFT of the master, never a
+   * replacement of its start.
+   *
+   * THIS OPTION USED TO DELETE HISTORY. The form is seeded from the occurrence
+   * you tapped (openEdit takes `date` from that occurrence's own day), and
+   * draftFields rebuilds start_time out of that date. Writing the result
+   * straight onto the master therefore moved the SERIES START to whichever
+   * occurrence happened to be on screen — and occurrenceDays walks the series
+   * forward from master.start_time, so every occurrence before it stopped
+   * existing. Editing a weekly "Team sync" from an August occurrence, purely to
+   * fix a typo in its title, took the series from 35 occurrences to 5. The
+   * scope sheet's own words for this option are "All events in the series —
+   * including the ones already past"; it removed them instead.
+   *
+   * So the day the user moved the event BY is what carries over, not the day
+   * they moved it TO: take the delta between the occurrence they opened and the
+   * date they left in the form, and apply that same delta to the master's own
+   * start. A title-only edit produces a zero delta and the start is untouched.
+   * Moving the occurrence forward two days moves the whole series forward two
+   * days, which is what "all events" has to mean. The time of day is taken
+   * verbatim, because changing the time of a series is not a shift of anything.
+   */
+  const seriesFields = (master, day, fields) => {
+    const out = { ...fields };
+    const formStart = new Date(fields.start_time);
+    const masterStart = new Date(master.start_time);
+    if (!day || isNaN(formStart) || isNaN(masterStart)) return out;
+
+    const deltaDays = calendarDaysBetween(`${day}T12:00:00`, formStart);
+    if (deltaDays == null) return out;
+
+    // Rebuild off the MASTER's calendar day plus the delta, keeping the clock
+    // time the form is carrying. Local parts throughout — the whole file's rule.
+    const shift = (iso, refIso) => {
+      if (!iso) return iso;
+      const t = new Date(iso), ref = new Date(refIso);
+      if (isNaN(t) || isNaN(ref)) return iso;
+      // How many days past the master's start this stamp sits, so a multi-day
+      // span keeps its length instead of collapsing onto one day.
+      const span = calendarDaysBetween(refIso, t) || 0;
+      const d = new Date(masterStart.getFullYear(), masterStart.getMonth(),
+        masterStart.getDate() + deltaDays + span, t.getHours(), t.getMinutes(), 0, 0);
+      return d.toISOString();
+    };
+    out.start_time = shift(fields.start_time, fields.start_time);
+    if (fields.end_time) out.end_time = shift(fields.end_time, fields.start_time);
+    return out;
+  };
+
   const runPlan = (plan) => {
     setSaving(true);
     setSaveErr(null);
@@ -399,8 +449,9 @@ Only extract entries you can read with real confidence — skip anything blurry,
     }
     if (scope === "one") return runPlan(editOccurrence(master, day, fields, crypto.randomUUID()));
     if (scope === "future") return runPlan(editFuture(master, day, { ...fields, rrule }, crypto.randomUUID()));
-    // All: the master keeps its identity, its exdates and its series.
-    return runPlan({ update: [{ id: master.id, ...fields, rrule }], insert: [], delete: [] });
+    // All: the master keeps its identity, its exdates, its series — AND ITS
+    // START. See seriesFields for why that last one had to be spelled out.
+    return runPlan({ update: [{ id: master.id, ...seriesFields(master, day, fields), rrule }], insert: [], delete: [] });
   };
 
   const dayLabel = (iso) => {

@@ -19,6 +19,26 @@ export const NOTES_UPGRADE_SQL = `-- Notes upgrade — pins + color seals (safe 
 alter table public.personal_notes add column if not exists pinned boolean not null default false;
 alter table public.personal_notes add column if not exists color text;`;
 
+/**
+ * The reordered ids, followed by everything the drag could not see.
+ *
+ * SortableList only ever knows about the rows on screen, and both note surfaces
+ * hand it a SLICE — the Brief shows the newest few, the Notes panel filters by
+ * search and by seal. Persisting that slice as the whole order meant a single
+ * drag on the Brief wrote a five-id notes_order, and applyNotesOrder puts
+ * anything unlisted AFTER the listed ids — so the five newest notes were
+ * buried at the bottom of both surfaces by one drag on a card. With a search
+ * active in the panel it was worse: every note not matching the query went to
+ * the end.
+ *
+ * The reorder is authoritative for the rows it covers; the rest keep the
+ * sequence they already had.
+ */
+function mergeOrder(ids, full) {
+  const seen = new Set(ids);
+  return [...ids, ...orderOf(full || []).filter((id) => !seen.has(id))];
+}
+
 export function NotesPanel({ isMobile, openSignal, settings, updateSetting }) {
   const { data: notesData, error: notesErr } = useNotes();
   const notes = notesData?.rows ?? null; // null = loading
@@ -128,7 +148,17 @@ export function NotesPanel({ isMobile, openSignal, settings, updateSetting }) {
     const id = crypto.randomUUID();
     if (openEditor) {
       setQuick("");
-      skipNextAutosave.current = true;
+      // NO SUPPRESSOR HERE. This branch is the ⇧Enter path: it hands real typed
+      // text straight into the editor. Both setState calls batch into one
+      // render, so the autosave effect fires exactly once — and arming the
+      // suppressor ate that one firing, leaving the text alive only in React
+      // state. Close the editor without typing another character and it was
+      // gone, with the quick-add box already cleared.
+      //
+      // The other two suppressor sites keep it and should: openNote loads a
+      // note that is already saved, and newNote opens an empty draft that the
+      // effect's own empty check skips anyway. This one carries content, which
+      // is exactly the case that must not be skipped.
       setActiveId(id);
       setDraft({ title: "", body: t, pinned: false, color: null });
       return;
@@ -439,7 +469,7 @@ export function NotesPanel({ isMobile, openSignal, settings, updateSetting }) {
         <SortableList
           items={visible}
           disabled={selectMode || !!activeId}
-          onReorder={(ids) => saveOrder(ids)}
+          onReorder={(ids) => saveOrder(mergeOrder(ids, sorted))}
           style={isMobile ? { gap: 10 } : { display: "block", columns: 2, columnGap: 12 }}
         >{(n, { dragging }) => {
             const isSel = selected.has(n.id);

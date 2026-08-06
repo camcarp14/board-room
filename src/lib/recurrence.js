@@ -94,19 +94,44 @@ export function normalizeRule(rrule) {
  * function of the sequence, not an offset, so seeking would drift. The walk
  * is bounded by MAX_OCCURRENCES and short-circuits once past `to`.
  */
+// A span wider than this is a corrupt end_time rather than a real event, and
+// widening the search window by it would make every expansion walk years.
+const MAX_SPAN_DAYS = 400;
+
 export function occurrenceDays(master, from, to) {
   const rule = normalizeRule(master && master.rrule);
   const start = master && master.start_time ? new Date(master.start_time) : null;
   if (!start || Number.isNaN(start.getTime())) return [];
   const startDay = startOfDay(start);
+
+  // A MULTI-DAY EVENT IS IN THE WINDOW IF ANY OF ITS DAYS IS, not only its
+  // first. This tested membership on the START day alone, and the callers hand
+  // it a window barely wider than what is on screen — so a conference that
+  // began the Thursday before the visible month disappeared from every cell it
+  // covered, and a five-day trip that started yesterday was missing from
+  // Upcoming entirely. spanDayKeys runs AFTER expansion, so it never got the
+  // chance to paint days for an occurrence expansion had already dropped.
+  //
+  // The span is whole local days between start and end, so widening the low
+  // bound by it lets an occurrence that starts before the window but reaches
+  // into it still be emitted; the day keys it covers are worked out downstream
+  // exactly as before.
+  const spanDays = (() => {
+    const end = master && master.end_time ? new Date(master.end_time) : null;
+    if (!end || Number.isNaN(end.getTime())) return 0;
+    const d = Math.round((startOfDay(end) - startDay) / 86400000);
+    return Number.isFinite(d) && d > 0 ? Math.min(d, MAX_SPAN_DAYS) : 0;
+  })();
+  const widen = (d) => (spanDays ? new Date(d.getFullYear(), d.getMonth(), d.getDate() - spanDays) : d);
+
   if (!rule) {
     const k = dayKey(startDay);
-    return startDay >= startOfDay(from) && startDay <= startOfDay(to) ? [k] : [];
+    return startDay >= widen(startOfDay(from)) && startDay <= startOfDay(to) ? [k] : [];
   }
 
   const exdates = new Set(Array.isArray(master.exdates) ? master.exdates.map(String) : []);
   const untilDay = rule.until ? parseDayKey(rule.until) : null;
-  const lo = startOfDay(from);
+  const lo = widen(startOfDay(from));
   const hi = startOfDay(to);
   const out = [];
 

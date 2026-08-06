@@ -99,7 +99,16 @@ async function sb(path, init, c) {
 // file. THE SIGN IS THE WHOLE POINT: Plaid documents `amount` as POSITIVE when
 // money moves OUT, the opposite of every Chase export, so it is negated exactly
 // once, here. finance-smoke.mjs asserts the client-side twin of this.
+// NULL IS NOT ZERO, and this is the money path. Number(null) is 0 and Number("")
+// is 0, both finite, so the obvious version returned a real 0 for an absent
+// figure — and every downstream "we don't have a balance for this account"
+// guard tests for null, so all of them were dead. A bank that answers with no
+// balance (a closed card, an account Plaid could not refresh, an unfunded
+// brokerage sub-account) was published as holding exactly $0.00 and summed into
+// net worth as a confident zero. `available` and `limit` are legitimately
+// absent on most depository accounts, which is how routine this input is.
 const toCents = (v) => {
+  if (v == null || v === "") return null;
   const n = Number(v);
   return Number.isFinite(n) ? Math.round(n * 100) : null;
 };

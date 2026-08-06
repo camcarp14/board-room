@@ -65,6 +65,7 @@ export function UpkeepPanel({ isMobile }) {
   const [saving, setSaving] = useState(false);
   const [saveErr, setSaveErr] = useState(null);
   const [doneFlash, setDoneFlash] = useState(null); // id that just got logged
+  const [doneErr, setDoneErr] = useState(null);     // {id, msg} — a log that did NOT land
   const [confirmEl, confirm] = useConfirm();
 
   const openNew = () => {
@@ -99,9 +100,20 @@ export function UpkeepPanel({ isMobile }) {
     // date logged in the evening reads as "done tomorrow" and adds a day to the
     // whole rotation.
     const today = todayISO();
-    setDoneFlash(it.id);
-    setTimeout(() => setDoneFlash(null), 1600);
-    markDoneMut.mutate({ item: it, today }); // optimistic cache update lives in the hook
+    // THE FLASH IS THE ONLY FEEDBACK THIS ROW HAS, and it used to fire before
+    // the write and regardless of it — so a failed log showed a green "✓ Logged"
+    // tick and then quietly reverted at the next refetch. The upkeep rotation
+    // is driven entirely off last_done, so a lost completion does not just
+    // disappear: the item stays overdue, keeps nagging from the Brief, and the
+    // only signal that anything went wrong is that it never went away.
+    setDoneErr(null);
+    markDoneMut.mutate({ item: it, today }, {
+      onSuccess: () => {
+        setDoneFlash(it.id);
+        setTimeout(() => setDoneFlash(null), 1600);
+      },
+      onError: (e) => setDoneErr({ id: it.id, msg: e.message || "Couldn't log it — tap to try again." }),
+    });
   };
 
   if (needsSetup) return (
@@ -193,7 +205,13 @@ export function UpkeepPanel({ isMobile }) {
               <div key={it.id} className="cell" style={{ paddingRight: 10 }}>
                 <button className="cell-body" onClick={() => openEdit(it)} style={rowBtn}>
                   <span className="cell-title">{it.name}</span>
-                  <span className="cell-sub">{upkeepIntervalLabel(it.interval_days)} · last {lastLabel}{it.notes ? ` · ${it.notes}` : ""}</span>
+                  <span className="cell-sub">
+                    {/* A log that did not land says so, in the row it failed on
+                        — the green tick no longer fires unless the write did. */}
+                    {doneErr && doneErr.id === it.id
+                      ? <span style={{ color: "var(--red)" }}>{doneErr.msg}</span>
+                      : `${upkeepIntervalLabel(it.interval_days)} · last ${lastLabel}${it.notes ? ` · ${it.notes}` : ""}`}
+                  </span>
                 </button>
                 <span style={{ display: "inline-flex", alignItems: "center", gap: 6, flex: "none" }}>
                   <Dot tone={c} size={6} />

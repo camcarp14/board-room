@@ -128,4 +128,39 @@ check("plateauRead: flat fires, rising silent, 4 points silent",
   plateauRead(flat) !== null && plateauRead(rising) === null && plateauRead(flat.slice(0, 4)) === null);
 
 if (failed > 0) { console.error(`\nWORKOUT SMOKE: ${failed} FAILURE(S)`); process.exit(1); }
+
+// ─── the routine write-back takes the SET YOU PROVED, not the last one ───────
+// It used to read ref[ref.length - 1] — whatever you happened to finish on, and
+// the last working set is very often the weakest: a drop set, a back-off, or
+// the one where the reps ran out. A single 3-rep failure permanently rewrote
+// the routine down to 3 reps and a drop set rewrote its weight down to the
+// drop. The routine drives the next session's progression cue, so one bad set
+// stalled the programme, silently and with no undo.
+{
+  const bestOf = (ref) => ref.reduce((a, b) => {
+    const aw = Number(a?.weight), bw = Number(b?.weight);
+    if (!Number.isFinite(bw)) return a;
+    if (!Number.isFinite(aw)) return b;
+    if (bw !== aw) return bw > aw ? b : a;
+    return (Number(b?.reps) || 0) > (Number(a?.reps) || 0) ? b : a;
+  }, ref[0]);
+
+  const dropSet = [{ weight: 185, reps: 5 }, { weight: 185, reps: 5 }, { weight: 135, reps: 12 }];
+  check("a drop set does not rewrite the routine down to the drop",
+    bestOf(dropSet).weight === 185, String(bestOf(dropSet).weight));
+  const failed = [{ weight: 225, reps: 5 }, { weight: 225, reps: 5 }, { weight: 225, reps: 2 }];
+  check("a failure set does not rewrite the target reps down to 2",
+    bestOf(failed).reps === 5, String(bestOf(failed).reps));
+  const climbing = [{ weight: 135, reps: 8 }, { weight: 155, reps: 6 }, { weight: 175, reps: 5 }];
+  check("a genuine top set IS carried into the routine",
+    bestOf(climbing).weight === 175 && bestOf(climbing).reps === 5);
+  const sameWeight = [{ weight: 185, reps: 5 }, { weight: 185, reps: 8 }];
+  check("at equal weight the better set is the one with more reps",
+    bestOf(sameWeight).reps === 8);
+  check("a set with no weight recorded never wins",
+    bestOf([{ weight: 100, reps: 5 }, { weight: null, reps: 20 }]).weight === 100);
+  check("...and an all-unweighted exercise still yields a set rather than undefined",
+    bestOf([{ weight: null, reps: 12 }, { weight: null, reps: 10 }]) != null);
+}
+
 console.log("\nWORKOUT SMOKE: ALL CLEAN");

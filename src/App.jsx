@@ -137,20 +137,31 @@ export default function App() {
     let alive = true;
     setLoadingData(true);
     (async () => {
-      let chat, notes, sets;
-      try {
-        [chat, notes, sets] = await Promise.all([db.loadChat(), db.loadSeatNotes(), db.loadSettings()]);
-      } catch {
-        // A load failed (offline, RLS blip). Don't clobber whatever we already
-        // have, and don't get stuck on skeletons — just drop the loading state
-        // so the persisted query cache / prior state shows through.
-        if (alive) setLoadingData(false);
-        return;
-      }
+      // ALL-OR-NOTHING WAS THE BUG. Every one of these readers throws on any
+      // error (db.js does `if (error) throw error`), and Promise.all rejects on
+      // the first — so a blip on the CHAT read discarded the settings too, and
+      // `settings` stayed null for the whole session. Downstream that is not
+      // merely a missing preference: the Tabs panel treats a null settings
+      // object as "no saved nav" and writes the DEFAULT tab layout back over
+      // his saved one the moment he opens it. One transient read failure could
+      // permanently overwrite a configuration.
+      //
+      // allSettled applies each slice independently, so a failure costs exactly
+      // its own slice and nothing else.
+      const [chatR, notesR, setsR] = await Promise.allSettled([
+        db.loadChat(), db.loadSeatNotes(), db.loadSettings(),
+      ]);
       if (!alive) return;
-      setMessages(chat); setSeatNotes(notes); setSettings(sets);
-      setDataStamp(Date.now());
+      const chat = chatR.status === "fulfilled" ? chatR.value : null;
+      if (chat) setMessages(chat);
+      if (notesR.status === "fulfilled") setSeatNotes(notesR.value);
+      // Only stamp the settings when they actually arrived. Leaving the prior
+      // value in place is what stops a failed read reading as "unconfigured".
+      if (setsR.status === "fulfilled") { setSettings(setsR.value); setDataStamp(Date.now()); }
       setLoadingData(false);
+      // The migration prompt compares against the CHAT read, so it only gets to
+      // run when that read is the one that succeeded.
+      if (!chat) return;
       if (!sm.get("migrated")) {
         const localChat = sm.get("chat") || [];
         const localNotes = sm.get("seat_notes") || {};
