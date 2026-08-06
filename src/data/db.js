@@ -120,7 +120,7 @@ export const db = {
   },
   async loadEvents() {
     const { data, error } = await supabase.from("personal_events")
-      .select("id,title,notes,start_time,end_time,all_day,location,category")
+      .select("id,title,notes,start_time,end_time,all_day,location,category,rrule,exdates,series_id")
       .order("start_time", { ascending: true });
     if (error) throw error;
     return data || [];
@@ -132,10 +132,51 @@ export const db = {
       id: ev.id, user_id, title: ev.title, notes: ev.notes || "",
       start_time: ev.start_time, end_time: ev.end_time || null, all_day: !!ev.all_day,
       location: ev.location || "", category: ev.category || "personal",
+      // A one-off writes rrule null and an empty exdates rather than omitting
+      // them: editing a repeating event down to "Does not repeat" has to CLEAR
+      // the rule, and an omitted key in an upsert leaves the old one standing.
+      rrule: ev.rrule || null,
+      exdates: Array.isArray(ev.exdates) ? ev.exdates : [],
+      series_id: ev.series_id || null,
     };
     const { data, error } = await supabase.from("personal_events").upsert(row, { onConflict: "id" }).select().single();
     if (error) throw error;
     return data;
+  },
+  /**
+   * Apply one scoped edit/delete plan from lib/recurrence.js.
+   *
+   * Order is load-bearing: updates and inserts land BEFORE deletes, so a
+   * failure part-way leaves a duplicate occurrence on screen (obvious, and
+   * fixable by hand) rather than a deleted series and no replacement (silent,
+   * and unrecoverable). `update` rows are partial patches by design — a scope
+   * plan that only caps an rrule must not have to restate the whole event.
+   */
+  async applyEventPlan(plan) {
+    const user_id = await db.uid();
+    if (!user_id) throw new Error("Not signed in");
+    const { update = [], insert = [], delete: del = [] } = plan || {};
+    for (const patch of update) {
+      const { id, ...fields } = patch;
+      if (!id || !Object.keys(fields).length) continue;
+      const { error } = await supabase.from("personal_events").update(fields).eq("id", id);
+      if (error) throw error;
+    }
+    if (insert.length) {
+      const rows = insert.map((e) => ({
+        id: e.id, user_id, title: e.title, notes: e.notes || "",
+        start_time: e.start_time, end_time: e.end_time || null, all_day: !!e.all_day,
+        location: e.location || "", category: e.category || "personal",
+        rrule: e.rrule || null, exdates: Array.isArray(e.exdates) ? e.exdates : [],
+        series_id: e.series_id || null,
+      }));
+      const { error } = await supabase.from("personal_events").upsert(rows, { onConflict: "id" });
+      if (error) throw error;
+    }
+    if (del.length) {
+      const { error } = await supabase.from("personal_events").delete().in("id", del);
+      if (error) throw error;
+    }
   },
   async deleteEvent(id) {
     const { error } = await supabase.from("personal_events").delete().eq("id", id);

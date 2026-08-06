@@ -8,7 +8,11 @@ import { useState, useRef, useEffect } from "react";
 import { T } from "../../theme.js";
 import { db } from "../../data/db.js";
 import { queryClient } from "../../lib/queryClient.js";
-import { useEvents, useSaveEvent, useDeleteEvent } from "../../data/calendar.js";
+import { useEvents, useSaveEvent, useDeleteEvent, useApplyEventPlan } from "../../data/calendar.js";
+import {
+  expandEvents, describeRule, normalizeRule, WEEKDAY_LABELS,
+  deleteOccurrence, deleteFuture, deleteSeries, editOccurrence, editFuture,
+} from "../../lib/recurrence.js";
 import { callClaude } from "../../lib/claude.js";
 import { localDayKey, todayISO } from "../../lib/dates.js";
 import { tint } from "../../ui/styles.js";
@@ -33,6 +37,7 @@ export function CalendarPanel({ isMobile, newEventSignal }) {
   const loadErr = error ? (error.message || "Couldn't load your calendar.") : null;
   const saveMut = useSaveEvent();
   const delMut = useDeleteEvent();
+  const planMut = useApplyEventPlan();
   const [confirmEl, confirm] = useConfirm();
   const [form, setForm] = useState(null); // null = closed; object = open (new or editing)
   const [saving, setSaving] = useState(false);
@@ -40,6 +45,8 @@ export function CalendarPanel({ isMobile, newEventSignal }) {
   const today0 = new Date(); today0.setHours(0, 0, 0, 0);
   const [viewMonth, setViewMonth] = useState(() => new Date(today0.getFullYear(), today0.getMonth(), 1));
   const [selectedDay, setSelectedDay] = useState(null); // "YYYY-MM-DD" or null — grid shows when null
+  const [scopeAsk, setScopeAsk] = useState(null); // {mode, master, day, fields?, rrule?} — the this/future/all sheet
+  const [showUpcoming, setShowUpcoming] = useState(false);
 
   const [bulkOpen, setBulkOpen] = useState(false);
   const [bulkImages, setBulkImages] = useState([]); // {id, name, dataUrl, base64, mediaType}
@@ -173,6 +180,10 @@ Only extract entries you can read with real confidence — skip anything blurry,
   const blankDraft = (presetDate) => ({
     id: crypto.randomUUID(), title: "", notes: "", location: "", category: "personal",
     date: presetDate || todayStr, time: "09:00", endTime: "", allDay: false,
+    // Repeat, held flat in the draft and assembled into an rrule on save.
+    // freq "" is "Does not repeat" — the default, so nothing repeats by
+    // accident.
+    freq: "", interval: 1, byWeekday: [], endMode: "never", until: "", count: 12,
   });
 
   const openNew = (presetDate) => { setSaveErr(null); setForm(blankDraft(presetDate)); };
@@ -191,36 +202,112 @@ Only extract entries you can read with real confidence — skip anything blurry,
   const openEdit = (ev) => {
     setSaveErr(null);
     const d = new Date(ev.start_time);
+    const rule = normalizeRule(ev.rrule);
     setForm({
-      id: ev.id, title: ev.title, notes: ev.notes || "", allDay: ev.all_day,
+      // An occurrence's `id` is synthetic (`master@day`) — the draft carries
+      // the MASTER's id so a save can never try to upsert a row that has no
+      // database identity, plus the occurrence day so the scope helpers know
+      // which one of the series the user was actually looking at.
+      id: ev.masterId || ev.id,
+      occurrenceDay: ev.occurrenceDay || null,
+      wasRecurring: !!rule,
+      title: ev.title, notes: ev.notes || "", allDay: ev.all_day,
       location: ev.location || "", category: ev.category || "personal",
       // Local parts, not toISOString() — otherwise opening an 8pm event for
       // edit shows tomorrow's date, and saving it unchanged shifts it +1 day.
       date: localDayKey(d),
       time: ev.all_day ? "09:00" : d.toTimeString().slice(0, 5),
       endTime: ev.end_time ? new Date(ev.end_time).toTimeString().slice(0, 5) : "",
+      freq: rule ? rule.freq : "",
+      interval: rule ? rule.interval : 1,
+      byWeekday: rule ? rule.byWeekday : [],
+      endMode: rule ? (rule.until ? "on" : rule.count ? "after" : "never") : "never",
+      until: rule && rule.until ? rule.until : "",
+      count: rule && rule.count ? rule.count : 12,
     });
   };
   const closeForm = () => setForm(null);
 
-  const save = () => {
-    if (!form.title.trim()) { setSaveErr("Give it a title."); return; }
-    const start_time = form.allDay
-      ? new Date(`${form.date}T00:00:00`).toISOString()
-      : new Date(`${form.date}T${form.time}:00`).toISOString();
-    const end_time = (!form.allDay && form.endTime) ? new Date(`${form.date}T${form.endTime}:00`).toISOString() : null;
+  // The draft's repeat fields → a stored rrule, or null for a one-off.
+  const draftRule = (f) => {
+    if (!f.freq) return null;
+    const rule = { freq: f.freq, interval: Math.max(1, Number(f.interval) || 1) };
+    if (f.freq === "weekly" && f.byWeekday.length) rule.byWeekday = [...f.byWeekday].sort((a, b) => a - b);
+    if (f.endMode === "on" && f.until) rule.until = f.until;
+    if (f.endMode === "after") rule.count = Math.max(1, Number(f.count) || 1);
+    return rule;
+  };
+
+  const draftFields = (f) => {
+    const start_time = f.allDay
+      ? new Date(`${f.date}T00:00:00`).toISOString()
+      : new Date(`${f.date}T${f.time}:00`).toISOString();
+    const end_time = (!f.allDay && f.endTime) ? new Date(`${f.date}T${f.endTime}:00`).toISOString() : null;
+    return {
+      title: f.title.trim(), notes: f.notes, start_time, end_time,
+      all_day: f.allDay, location: f.location, category: f.category,
+    };
+  };
+
+  const runPlan = (plan) => {
     setSaving(true);
     setSaveErr(null);
-    saveMut.mutate({ id: form.id, title: form.title.trim(), notes: form.notes, start_time, end_time, all_day: form.allDay, location: form.location, category: form.category }, {
+    planMut.mutate(plan, {
+      onSuccess: () => { setSaving(false); setScopeAsk(null); closeForm(); },
+      onError: (e) => { setSaving(false); setScopeAsk(null); setSaveErr(e.message || "Couldn't save."); },
+    });
+  };
+
+  const save = () => {
+    if (!form.title.trim()) { setSaveErr("Give it a title."); return; }
+    const fields = draftFields(form);
+    const rrule = draftRule(form);
+    const master = (events || []).find((e) => e.id === form.id) || null;
+
+    // Editing one occurrence of a series that ALREADY repeated is the only
+    // ambiguous case — "did you mean this one, or all of them?" — so it is the
+    // only one that asks. Everything else (a new event, a one-off, or turning
+    // repetition on for the first time) has exactly one meaning.
+    if (master && form.wasRecurring && form.occurrenceDay) {
+      setScopeAsk({ mode: "edit", master, day: form.occurrenceDay, fields, rrule });
+      return;
+    }
+    setSaving(true);
+    setSaveErr(null);
+    saveMut.mutate({
+      id: form.id, ...fields, rrule,
+      exdates: master ? master.exdates : [],
+      series_id: rrule ? (master && master.series_id) || form.id : null,
+    }, {
       onSuccess: () => { setSaving(false); closeForm(); },
       onError: (e) => { setSaving(false); setSaveErr(e.message || "Couldn't save."); },
     });
   };
 
-  const removeEvent = async (id, e) => {
+  // `occ` is an expanded occurrence, so it knows both its master and its day.
+  const removeEvent = async (occ, e) => {
     e?.stopPropagation();
+    const master = (events || []).find((x) => x.id === (occ.masterId || occ.id));
+    if (master && normalizeRule(master.rrule) && occ.occurrenceDay) {
+      setScopeAsk({ mode: "delete", master, day: occ.occurrenceDay });
+      return;
+    }
     if (!(await confirm({ title: "Delete this event?", confirmLabel: "Delete", destructive: true }))) return;
-    delMut.mutate(id, { onSuccess: () => { if (form?.id === id) closeForm(); } });
+    delMut.mutate(occ.masterId || occ.id, { onSuccess: () => { if (form?.id === (occ.masterId || occ.id)) closeForm(); } });
+  };
+
+  // One of "one" | "future" | "all", answered in the scope sheet.
+  const applyScope = (scope) => {
+    const { mode, master, day, fields, rrule } = scopeAsk;
+    if (mode === "delete") {
+      if (scope === "one") return runPlan(deleteOccurrence(master, day));
+      if (scope === "future") return runPlan(deleteFuture(master, day));
+      return runPlan(deleteSeries(master, events || []));
+    }
+    if (scope === "one") return runPlan(editOccurrence(master, day, fields, crypto.randomUUID()));
+    if (scope === "future") return runPlan(editFuture(master, day, { ...fields, rrule }, crypto.randomUUID()));
+    // All: the master keeps its identity, its exdates and its series.
+    return runPlan({ update: [{ id: master.id, ...fields, rrule }], insert: [], delete: [] });
   };
 
   const dayLabel = (iso) => {
@@ -241,13 +328,33 @@ Only extract entries you can read with real confidence — skip anything blurry,
   const daysInMonth = new Date(gridYear, gridMonth + 1, 0).getDate();
   const leadingBlanks = firstOfMonth.getDay(); // 0 = Sunday
   const cells = [...Array(leadingBlanks).fill(null), ...Array.from({ length: daysInMonth }, (_, i) => i + 1)];
-  const eventsByDay = {}; // "YYYY-MM-DD" -> [events]
-  (events || []).forEach(ev => {
+  // Occurrences, not rows: a repeating event is ONE stored row, and the grid
+  // wants every day it lands on. Expanded across the visible month with a
+  // week of slack on each side so the leading/trailing cells of the grid (which
+  // belong to the neighbouring months) are populated too.
+  const monthOccurrences = expandEvents(
+    events || [],
+    new Date(gridYear, gridMonth, -7),
+    new Date(gridYear, gridMonth + 1, 7),
+  );
+  const eventsByDay = {}; // "YYYY-MM-DD" -> [occurrences]
+  monthOccurrences.forEach(ev => {
     // Local day-key so an evening event lands on the day the user sees on the
     // clock, matching dateKey()/isToday() below (start_time is stored UTC).
     const key = ev.all_day ? String(ev.start_time).slice(0, 10) : localDayKey(ev.start_time);
     (eventsByDay[key] = eventsByDay[key] || []).push(ev);
   });
+
+  // The next 90 days, flat — the view a month grid genuinely cannot give you:
+  // "what is actually coming up", across month boundaries, in order.
+  const upcoming = (() => {
+    const from = new Date(); from.setHours(0, 0, 0, 0);
+    const to = new Date(from.getFullYear(), from.getMonth(), from.getDate() + 90);
+    const now = Date.now();
+    return expandEvents(events || [], from, to)
+      .filter((o) => o.all_day || new Date(o.end_time || o.start_time).getTime() >= now)
+      .slice(0, 60);
+  })();
   const dateKey = (day) => `${gridYear}-${String(gridMonth + 1).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
   const isToday = (day) => dateKey(day) === todayStr;
   const monthLabel = viewMonth.toLocaleDateString("en-US", { month: "long", year: "numeric" });
@@ -292,7 +399,7 @@ Only extract entries you can read with real confidence — skip anything blurry,
       onClick={() => openEdit(ev)}
       leading={<Dot tone={catColor(ev.category)} size={8} />}
       title={ev.title}
-      sub={[dayLabel(ev.start_time), ev.location, ev.notes].filter(Boolean).join(" · ")}
+      sub={[dayLabel(ev.start_time), ev.isRecurring ? "Repeats" : null, ev.location, ev.notes].filter(Boolean).join(" · ")}
       value={
         <span className="t-num" style={{ fontSize: 12 }}>
           {timeLabel(ev.start_time, ev.all_day)}
@@ -301,8 +408,8 @@ Only extract entries you can read with real confidence — skip anything blurry,
       }
       trailing={
         <span role="button" tabIndex={0} aria-label="Delete event" className="icon-btn"
-          onClick={(e) => removeEvent(ev.id, e)}
-          onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); removeEvent(ev.id, e); } }}
+          onClick={(e) => removeEvent(ev, e)}
+          onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); removeEvent(ev, e); } }}
           style={{ width: 38, height: 38, marginRight: -8, color: "var(--faint)" }}>
           <IcTrash size={16} />
         </span>
@@ -316,6 +423,10 @@ Only extract entries you can read with real confidence — skip anything blurry,
         title="Calendar"
         trailing={
           <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
+            <button className="sec-link" style={{ color: showUpcoming ? "var(--accent)" : "var(--sub)", padding: "10px 8px", margin: "-10px -2px" }}
+              onClick={() => { setShowUpcoming(v => !v); setSelectedDay(null); }}>
+              {showUpcoming ? "Month" : "Upcoming"}
+            </button>
             <button className="sec-link" style={{ color: bulkOpen ? "var(--accent)" : "var(--sub)", padding: "10px 8px", margin: "-10px -2px" }}
               onClick={() => setBulkOpen(o => !o)}>
               {bulkOpen ? "Close import" : "Import"}
@@ -410,8 +521,25 @@ Only extract entries you can read with real confidence — skip anything blurry,
         </Card>
       )}
 
+      {/* ── upcoming ──────────────────────────────────────────────────────
+          The next 90 days as one ordered list. A month grid answers "what is
+          on the 14th"; it cannot answer "what is next", which is the question
+          you actually open a calendar with — and it silently hides anything
+          that falls a few days into the following month. */}
+      {!loadErr && events !== null && !bulkOpen && showUpcoming && (
+        <Card pad="md">
+          {upcoming.length === 0 ? (
+            <EmptyState icon={<IcCalendar size={24} />} title="Nothing coming up"
+              sub="The next 90 days are clear."
+              action={<Button kind="tinted" size="sm" onClick={() => openNew(null)}>Add event</Button>} />
+          ) : (
+            <CellGroup>{upcoming.map(renderEvent)}</CellGroup>
+          )}
+        </Card>
+      )}
+
       {/* ── month grid ── */}
-      {!loadErr && events !== null && !bulkOpen && selectedDay === null && (
+      {!loadErr && events !== null && !bulkOpen && !showUpcoming && selectedDay === null && (
         <Card pad="md" style={{ touchAction: "pan-y" }}
           onPointerDown={onGridPointerDown} onPointerUp={onGridPointerUp} onPointerCancel={() => { swipeStart.current = null; }}>
           <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 4 }}>
@@ -479,7 +607,7 @@ Only extract entries you can read with real confidence — skip anything blurry,
       )}
 
       {/* ── day agenda ── */}
-      {!loadErr && events !== null && !bulkOpen && selectedDay !== null && (
+      {!loadErr && events !== null && !bulkOpen && !showUpcoming && selectedDay !== null && (
         <>
           <div style={{ display: "flex", alignItems: "center", gap: 8, minHeight: 40 }}>
             <Button kind="plain" size="sm" onClick={() => setSelectedDay(null)} style={{ paddingLeft: 2, marginLeft: -8, height: 40 }}>
@@ -507,7 +635,7 @@ Only extract entries you can read with real confidence — skip anything blurry,
           footer={
             <>
               {isEdit && (
-                <Button kind="danger" size="lg" onClick={(e) => removeEvent(form.id, e)} style={{ flex: "none" }}>Delete</Button>
+                <Button kind="danger" size="lg" onClick={(e) => removeEvent({ masterId: form.id, id: form.id, occurrenceDay: form.occurrenceDay }, e)} style={{ flex: "none" }}>Delete</Button>
               )}
               <Button kind="primary" size="lg" disabled={saving} onClick={save} style={{ flex: 1 }}>
                 {saving ? "Saving…" : "Save"}
@@ -559,6 +687,82 @@ Only extract entries you can read with real confidence — skip anything blurry,
                 </>
               )}
             </div>
+            {/* ── Repeat ──────────────────────────────────────────────────
+                Progressive: one row of pills until something other than
+                "Once" is chosen, and only then do the interval, the weekday
+                picker and the end condition appear. A repeat block that shows
+                all six controls to someone adding a dentist appointment is
+                the reason most calendar forms feel heavy. */}
+            <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+              <span className="t-cap" style={{ color: "var(--faint)" }}>Repeat</span>
+              <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+                {[["", "Once"], ["daily", "Daily"], ["weekly", "Weekly"], ["monthly", "Monthly"], ["yearly", "Yearly"]].map(([k, label]) => (
+                  <Pill key={k || "once"} active={form.freq === k}
+                    onClick={() => setForm(f => ({ ...f, freq: k, interval: 1, byWeekday: [] }))}>{label}</Pill>
+                ))}
+              </div>
+
+              {form.freq && (
+                <>
+                  <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                    <span className="t-foot" style={{ color: "var(--sub)" }}>Every</span>
+                    <input type="number" min="1" max="52" className="field t-num" value={form.interval}
+                      onChange={e => setForm(f => ({ ...f, interval: e.target.value.replace(/\D/g, "") || 1 }))}
+                      style={{ width: 64, flex: "none", textAlign: "center" }} aria-label="Repeat interval" />
+                    <span className="t-foot" style={{ color: "var(--sub)" }}>
+                      {form.freq === "daily" ? "day(s)" : form.freq === "weekly" ? "week(s)" : form.freq === "monthly" ? "month(s)" : "year(s)"}
+                    </span>
+                  </div>
+
+                  {form.freq === "weekly" && (
+                    <div style={{ display: "flex", gap: 4 }}>
+                      {WEEKDAY_LABELS.map((lbl, i) => {
+                        const on = form.byWeekday.includes(i);
+                        return (
+                          <button key={i} aria-label={`Repeat on weekday ${i}`} aria-pressed={on}
+                            onClick={() => setForm(f => ({
+                              ...f,
+                              byWeekday: f.byWeekday.includes(i) ? f.byWeekday.filter(d => d !== i) : [...f.byWeekday, i],
+                            }))}
+                            style={{
+                              flex: 1, height: 40, borderRadius: 10, border: "none", cursor: "pointer",
+                              fontSize: 12.5, fontWeight: 600,
+                              background: on ? tint(T.accent, 16) : "var(--surface-2)",
+                              color: on ? "var(--accent)" : "var(--sub)",
+                            }}>{lbl}</button>
+                        );
+                      })}
+                    </div>
+                  )}
+
+                  <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+                    {[["never", "Forever"], ["on", "Until"], ["after", "For N"]].map(([k, label]) => (
+                      <Pill key={k} active={form.endMode === k} onClick={() => setForm(f => ({ ...f, endMode: k }))}>{label}</Pill>
+                    ))}
+                    {form.endMode === "on" && (
+                      <input type="date" className="field" value={form.until} min={form.date}
+                        onChange={e => setForm(f => ({ ...f, until: e.target.value }))}
+                        style={{ flex: "1 1 150px", fontFamily: "var(--font-mono)" }} aria-label="Repeat until" />
+                    )}
+                    {form.endMode === "after" && (
+                      <span style={{ display: "inline-flex", alignItems: "center", gap: 8 }}>
+                        <input type="number" min="1" max="750" className="field t-num" value={form.count}
+                          onChange={e => setForm(f => ({ ...f, count: e.target.value.replace(/\D/g, "") || 1 }))}
+                          style={{ width: 72, flex: "none", textAlign: "center" }} aria-label="Number of occurrences" />
+                        <span className="t-foot" style={{ color: "var(--sub)" }}>times</span>
+                      </span>
+                    )}
+                  </div>
+
+                  {/* The rule read back in English — the only way to be sure
+                      the pills above say what you meant. */}
+                  <div className="t-foot" style={{ color: "var(--sub)" }}>
+                    {describeRule(draftRule(form), new Date(`${form.date}T12:00:00`))}
+                  </div>
+                </>
+              )}
+            </div>
+
             <input
               className="field"
               value={form.location}
@@ -574,6 +778,47 @@ Only extract entries you can read with real confidence — skip anything blurry,
               style={{ lineHeight: 1.5, resize: "vertical" }}
             />
             {saveErr && <div className="t-foot" style={{ color: "var(--red)" }}>{saveErr}</div>}
+          </div>
+        </Sheet>
+      )}
+
+      {/* ── Which ones did you mean? ────────────────────────────────────────
+          The question every calendar has to ask, asked only when it is
+          genuinely ambiguous: editing or deleting ONE occurrence of something
+          that repeats. A one-off never sees this sheet. "This event" is
+          listed first and styled plainest because it is the safe answer —
+          the destructive one should never be the easy mis-tap. */}
+      {scopeAsk && (
+        <Sheet
+          onClose={() => setScopeAsk(null)}
+          title={scopeAsk.mode === "delete" ? "Delete repeating event" : "Save repeating event"}
+        >
+          <div className="t-foot" style={{ color: "var(--sub)", lineHeight: 1.55, paddingBottom: 12 }}>
+            {/* Only the first letter drops case — lowercasing the whole
+                sentence turned "Mon, Wed, Fri" into "mon, wed, fri". */}
+            “{scopeAsk.master.title}” repeats — {(() => {
+              const s = describeRule(scopeAsk.master.rrule, scopeAsk.master.start_time);
+              return s.charAt(0).toLowerCase() + s.slice(1);
+            })()}.
+            {scopeAsk.mode === "delete" ? " Which occurrences should go?" : " Which occurrences should change?"}
+          </div>
+          <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+            {[
+              ["one", "This event only", "Leaves the rest of the series exactly as it is."],
+              ["future", "This and all future", "Earlier occurrences keep what they already had."],
+              ["all", "All events in the series", "Including the ones already past."],
+            ].map(([scope, label, sub]) => (
+              <button key={scope} onClick={() => applyScope(scope)} disabled={saving}
+                style={{
+                  textAlign: "left", background: "var(--surface-2)", border: "none", borderRadius: 12,
+                  padding: "12px 14px", cursor: "pointer", color: "inherit", font: "inherit",
+                  opacity: saving ? 0.6 : 1,
+                }}>
+                <div className="t-body" style={{ fontWeight: 500, color: scope === "all" && scopeAsk.mode === "delete" ? "var(--red)" : "var(--ink)" }}>{label}</div>
+                <div className="t-cap" style={{ color: "var(--faint)", marginTop: 2 }}>{sub}</div>
+              </button>
+            ))}
+            <Button kind="quiet" size="md" onClick={() => setScopeAsk(null)} disabled={saving}>Cancel</Button>
           </div>
         </Sheet>
       )}
