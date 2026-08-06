@@ -7,6 +7,8 @@ import { Card, Dot } from "../../ui/kit.jsx";
 import { IcChevronRight, IcCheck } from "../../ui/icons.jsx";
 import { T } from "../../theme.js";
 import { useEvents } from "../../data/calendar.js";
+import { expandEvents } from "../../lib/recurrence.js";
+import { spanDayKeys, spanPosition } from "../../lib/calendar-overlays.js";
 import { useUpkeep, useMarkUpkeepDone } from "../../data/upkeep.js";
 import { upkeepDue } from "../../lib/upkeep.js";
 import { nextBirthdayOccurrence, todayISO } from "../../lib/dates.js";
@@ -23,11 +25,24 @@ export function DocketCard({ isMobile, birthdays, macroEvents, settings, onOpenC
   // due list on the next render.
   const logUpkeepDone = (it) => { const { meta, ...item } = it; markUpkeepDone.mutate({ item, today: todayISO() }); };
   const now = new Date();
-  const sameDay = (iso) => {
-    const x = new Date(iso);
-    return x.getFullYear() === now.getFullYear() && x.getMonth() === now.getMonth() && x.getDate() === now.getDate();
-  };
-  const todayEvents = allEvents ? allEvents.filter(e => e.start_time && sameDay(e.start_time)) : (eventsErr ? [] : null);
+  // TODAY'S CALENDAR, FROM OCCURRENCES — not from stored rows.
+  //
+  // This filtered `allEvents` on start_time matching today, which got two
+  // whole classes of event wrong. A repeating event is ONE row whose
+  // start_time is the day the series began, so the weekly standup appeared in
+  // the Docket exactly once, in whatever week it was created, and never again.
+  // And a multi-day event only ever showed on its first day — day two of a
+  // four-day trip read as a clear calendar.
+  //
+  // expandEvents gives the occurrences; spanDayKeys says which days each one
+  // covers. Same two functions the month grid uses, so the Brief and the
+  // Calendar cannot disagree about what today holds.
+  const todayKey = todayISO();
+  const todayEvents = allEvents
+    ? expandEvents(allEvents, new Date(now.getFullYear(), now.getMonth(), now.getDate() - 92), now)
+      .filter((o) => spanDayKeys(o).includes(todayKey))
+      .sort((a, b) => new Date(a.start_time) - new Date(b.start_time))
+    : (eventsErr ? [] : null);
   const upkeepDueItems = allUpkeep
     ? allUpkeep.map(it => ({ ...it, meta: upkeepDue(it) }))
         .filter(x => x.meta.never || x.meta.dueIn <= 3)
@@ -44,7 +59,12 @@ export function DocketCard({ isMobile, birthdays, macroEvents, settings, onOpenC
   const queued = (settings?.mini_tasks || []).filter(t => t.status === "queued").length;
   const loading = todayEvents === null || upkeepDueItems === null;
 
-  const fmtEvTime = (e) => e.all_day ? "All day" : new Date(e.start_time).toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" });
+  // A trip says which day of it today is; everything else says its time.
+  const fmtEvTime = (e) => {
+    const span = spanPosition(e, todayKey);
+    if (span.total > 1) return `Day ${span.index + 1}/${span.total}`;
+    return e.all_day ? "All day" : new Date(e.start_time).toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" });
+  };
   const bdayTag = (b) => b.daysUntil === 0 ? "Today" : b.daysUntil === 1 ? "Tmrw" : b.next.toLocaleDateString("en-US", { weekday: "short" });
 
   // one flat, prioritized list: birthdays today → calendar → macro → upkeep → queue
