@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { callFnFull } from "../lib/functions.js";
 
 // ─── Markets tab feeds — the alt-season scan and the stock watchlist ─────────
@@ -67,6 +67,34 @@ export function useStockScan() {
     refetchInterval: open ? 300_000 : false,
     staleTime: 120_000,
     refetchOnWindowFocus: true,
+  });
+}
+
+/**
+ * Run the screener NOW.
+ *
+ * THE TAB MUST NOT DEPEND ON A CRON HAVING FIRED. Its whole job is having the
+ * next open's plan ready, and "the scheduler will get to it" is not a plan —
+ * a missed fire used to mean an empty card until the following hour, and there
+ * was no way for anyone to do anything about it.
+ *
+ * stock-settle-background is a BACKGROUND function: it answers 202 the instant
+ * it starts and then runs for a couple of minutes. So there is nothing to await
+ * — the mutation resolves on the ack, and the caller polls stock-scan until a
+ * board appears. Invalidating the query on success is what starts that polling.
+ */
+export function useRunStockScreener() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async () => {
+      const { ok, status } = await callFnFull("stock-settle-background", { source: "manual" });
+      // 202 Accepted is the success case for a background function, and it is
+      // NOT ok:true — treating it as a failure would show an error on the one
+      // path that worked.
+      if (!ok && status !== 202) throw new Error(status ? `HTTP ${status}` : "couldn't reach the screener");
+      return true;
+    },
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["stock-scan"] }),
   });
 }
 

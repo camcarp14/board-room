@@ -45,7 +45,7 @@ mkdirSync(OUT_DIR, { recursive: true });
 
 try {
   const mods = {};
-  for (const name of ["stock-cron-background", "stock-scan"]) {
+  for (const name of ["stock-settle-background", "stock-cron-background", "stock-scan"]) {
     const out = resolve(OUT_DIR, `${name}.cjs`);
     esbuild.buildSync({
       entryPoints: [join(FN_DIR, `${name}.js`)],
@@ -55,8 +55,29 @@ try {
     check(`${name} bundles with a callable handler`, typeof mods[name].handler === "function",
       `exports are ${JSON.stringify(Object.keys(mods[name] || {}))}`);
   }
-  const C = mods["stock-cron-background"];
+  const C = mods["stock-settle-background"];
   const S = mods["stock-scan"];
+
+  // ─── 0a. the split that makes the tab runnable ────────────────────────────
+  // Netlify will not route HTTP to a function that carries a `schedule`, so
+  // the engine must NOT carry one — if it does, the Run now button 404s and
+  // the only thing that can ever start a pass is the scheduler again. That is
+  // the exact failure this split exists to prevent, and it is invisible until
+  // someone taps the button on an empty tab, so it is asserted here.
+  const toml = readFileSync("netlify.toml", "utf8");
+  check("the hourly schedule is on the SHIM",
+    /\[functions\."stock-cron-background"\][\s\S]{0,120}?schedule\s*=/.test(toml), "no schedule found for stock-cron-background");
+  check("the ENGINE carries no schedule, so it stays HTTP-invocable",
+    !/\[functions\."stock-settle-background"\][\s\S]{0,120}?schedule\s*=/.test(toml));
+  const shim = readFileSync("netlify/functions/stock-cron-background.js", "utf8");
+  check("the shim invokes the engine by name",
+    shim.includes("/.netlify/functions/stock-settle-background"));
+  check("...over HTTP rather than requiring it — a shim that imports the brain is a second copy of it",
+    !/require\(["'][.]/.test(shim));
+  check("...and it does not block on the pass, only on the 202",
+    /AbortSignal\.timeout\(\d+\)/.test(shim));
+  check("the shim reads the site URL from the environment, never a hardcoded host",
+    shim.includes("process.env.URL") && !/https:\/\/[a-z-]+\.netlify\.app/.test(shim));
 
   // ─── 0. the universe is a product decision, so it gets asserted ───────────
   const { EQUITIES, INSTRUMENTS } = C;

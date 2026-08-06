@@ -17,14 +17,14 @@
 // The watchlist tiles stay at the top: they are the four things he checks
 // fastest, one of them (gold) is not an equity and is not screenable, and the
 // screener does not replace a glance at a price.
-import { lazy, Suspense, useState } from "react";
+import { lazy, Suspense, useEffect, useState } from "react";
 import { T } from "../../theme.js";
 import { Card, CollapsibleCard, CellGroup, Cell, StatTile, Button, PillRow, EmptyState, Dot, Delta } from "../../ui/kit.jsx";
 import { IcChevronDown } from "../../ui/icons.jsx";
 import { StatusTag, CARD_STATES } from "../../ui/shared.jsx";
 import { NumTween, Sparkline } from "../../ui/primitives.jsx";
 import { callFnFull } from "../../lib/functions.js";
-import { useStockQuotes, useStockScan } from "../../data/altseason.js";
+import { useStockQuotes, useStockScan, useRunStockScreener } from "../../data/altseason.js";
 import StockSheet, { TonePill, STAGE_LABEL, MOTION_LABEL, HIT_LABEL } from "./StockSheet.jsx";
 
 const BtcChartModal = lazy(() => import("../../BtcChartModal.jsx"));
@@ -204,7 +204,27 @@ function PanelSkeleton() {
 export function StocksPanel({ isMobile }) {
   const quotes = useStockQuotes();
   const q = useStockScan();
+  const run = useRunStockScreener();
   const data = q.data;
+
+  // A manual pass takes a couple of minutes (it is paced deliberately slowly to
+  // stay well under the quote feed's patience), so the button keeps saying
+  // "Running" and the query keeps re-asking until a board lands. `isPending`
+  // alone would stop the moment the 202 came back, which is the moment the work
+  // STARTS — the least useful place to stop.
+  const running = run.isPending || (run.isSuccess && !data?.settledSession);
+  useEffect(() => {
+    if (!running) return undefined;
+    const iv = setInterval(() => q.refetch(), 15_000);
+    return () => clearInterval(iv);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [running]);
+
+  const runNow = (
+    <Button kind="quiet" size="sm" disabled={running} onClick={() => run.mutate()} style={{ height: 44, flex: "none" }}>
+      {running ? "Running…" : "Run now"}
+    </Button>
+  );
 
   const [tickerChart, setTickerChart] = useState(null);
   const [collapsed, setCollapsed] = useState(() => {
@@ -266,8 +286,11 @@ export function StocksPanel({ isMobile }) {
         {watchlist}
         {q.isError ? (
           <Card pad="md">
-            <span className="t-head" style={{ display: "block", marginBottom: 9 }}>Screener</span>
-            <FallbackRow detail={q.error?.message} onRetry={() => q.refetch()} />
+            <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 9 }}>
+              <span className="t-head">Screener</span>
+              <span style={{ marginLeft: "auto" }}>{runNow}</span>
+            </div>
+            <FallbackRow detail={running ? "Running the screener — this takes a couple of minutes." : q.error?.message} onRetry={() => q.refetch()} />
           </Card>
         ) : <PanelSkeleton />}
       </div>
@@ -566,11 +589,14 @@ export function StocksPanel({ isMobile }) {
 
       {/* NOTHING COUNTS UP IN SECONDS. A market that is shut is not stale — it
           is finished, and the footer says which session it finished. */}
-      <div className="t-cap t-num" style={{ color: "var(--faint)", textAlign: "center", padding: "2px 0 6px", lineHeight: 1.6 }}>
-        {open ? "Market open · " : ""}
-        settled {session?.lastSessionLabel || "—"}
-        {data.coverage != null && data.coverage < 1 ? ` · ${Math.round(data.coverage * 100)}% of the universe reached` : ""}
-        {open && data.liveAsOf ? " · flagged names refreshed hourly" : ""}
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 10, padding: "2px 0 6px" }}>
+        <span className="t-cap t-num" style={{ color: "var(--faint)", lineHeight: 1.6 }}>
+          {open ? "Market open · " : ""}
+          settled {session?.lastSessionLabel || "—"}
+          {data.coverage != null && data.coverage < 1 ? ` · ${Math.round(data.coverage * 100)}% reached` : ""}
+          {open && data.liveAsOf ? " · flags refreshed hourly" : ""}
+        </span>
+        {runNow}
       </div>
 
       {sel && (
