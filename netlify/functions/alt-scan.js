@@ -105,6 +105,11 @@ function episodeView(row, livePrice) {
     targets,
   };
   if (!open) view.resolvedAt = row.resolved_at;
+  // WHY it closed, which the status cannot say. A flag that tagged T2 and then
+  // lost its level keeps status 'hit_t2' — correctly, the target printed — and
+  // only `closedBy` distinguishes that from one that held. The cron has been
+  // writing this since it shipped and nothing ever read it out.
+  if (row.notes && row.notes.closedBy) view.closedBy = row.notes.closedBy;
   return view;
 }
 
@@ -321,7 +326,7 @@ function liveTargets(t, price) {
  */
 function flagStats(rows) {
   const rank = { hit_t1: 1, hit_t2: 2, hit_t3: 3 };
-  let hitT1 = 0, hitT2 = 0, hitT3 = 0, invalidated = 0, faded = 0, open = 0, expired = 0;
+  let hitT1 = 0, hitT2 = 0, hitT3 = 0, invalidated = 0, faded = 0, open = 0, expired = 0, roundTrip = 0;
   const peaks = [];
   const held = [];
   let best = null, worst = null;
@@ -334,6 +339,13 @@ function flagStats(rows) {
     if (lvl >= 1) hitT1++;
     if (lvl >= 2) hitT2++;
     if (lvl >= 3) hitT3++;
+    // A WIN THAT GAVE IT ALL BACK. The rung is kept when a flag that already
+    // printed a target later loses its level — correctly, the target printed —
+    // so the hit rate cannot tell "reached T2 and held" from "reached T2 and
+    // round-tripped through the stop". `closedBy` is the only thing that can,
+    // and on a tool whose whole job is deciding what to buy, the difference is
+    // the difference between a signal and a tease.
+    if (lvl >= 1 && (r.notes || {}).closedBy === "invalidation") roundTrip++;
     if (r.status === "invalidated") invalidated++;
     else if (r.status === "faded") faded++;
     // A 14-day timeout keeps whatever ladder status the episode earned, so a
@@ -367,7 +379,7 @@ function flagStats(rows) {
   const total = rows.length;
   const resolved = total - open;
   return {
-    total, resolved, open, hitT1, hitT2, hitT3, invalidated, faded, expired,
+    total, resolved, open, hitT1, hitT2, hitT3, invalidated, faded, expired, roundTrip,
     // A base rate over two episodes is a lie with a decimal point.
     hitT1Rate: resolved >= 3 ? r1((hitT1 / resolved) * 100) : null,
     medianPeakPct: resolved >= 3 && peaks.length ? r1(mid(peaks)) : null,
@@ -402,7 +414,7 @@ exports.handler = async (event) => {
       supabase.from("alt_state").select("updated_at, payload").eq("id", "latest").maybeSingle(),
       supabase.from("alt_flags").select("*").is("resolved_at", null),
       supabase.from("alt_flags").select("*").not("resolved_at", "is", null).order("resolved_at", { ascending: false }).limit(25),
-      supabase.from("alt_flags").select("symbol, status, flag_price, peak_price, last_price, first_flagged_at, resolved_at").order("resolved_at", { ascending: false, nullsFirst: false }),
+      supabase.from("alt_flags").select("symbol, status, flag_price, peak_price, last_price, first_flagged_at, resolved_at, notes").order("resolved_at", { ascending: false, nullsFirst: false }),
       fetchLiveRows().catch((e) => ({ liveError: e.message || String(e) })),
     ]);
 

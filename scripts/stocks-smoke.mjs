@@ -629,6 +629,62 @@ try {
   const sheet = readFileSync("src/pages/markets/StockSheet.jsx", "utf8");
   const panel = readFileSync("src/pages/markets/StocksPanel.jsx", "utf8");
   const stages = ["base", "atLevel", "breaking", "extending", "spent", "broken", "none", "offboard"];
+  // ─── the earned rung survives a stop ──────────────────────────────────────
+  // The two engines used to grade the identical event in opposite directions:
+  // a flag that tagged T2 and later lost its level was filed "hit_t2" (a win)
+  // by the crypto cron and "invalidated" (a loss) by this one. The Record is
+  // the only card that answers "should I believe any of this", so the two tabs
+  // grading it differently is the worst possible place for a disagreement.
+  const settleSrc = readFileSync("netlify/functions/stock-settle-background.js", "utf8");
+  check("a stop-out only writes 'invalidated' when no rung was ever reached",
+    /if \(\(STATUS_RANK\[row\.status\] \?\? 0\) === 0\) patch\.status = "invalidated";/.test(settleSrc),
+    "invalidation still overwrites the earned status");
+  check("...and it records WHY it closed, so a round-trip stays distinguishable",
+    /closedBy: "invalidation"/.test(settleSrc));
+  check("fade and stale closes are labelled too",
+    /closedBy: "faded"/.test(settleSrc) && /closedBy: "stale"/.test(settleSrc));
+  check("the crypto engine already agreed, and still does",
+    /STATUS_RANK\[status\] === 0/.test(readFileSync("netlify/functions/alt-cron-background.js", "utf8")));
+
+  // ─── flag age is counted in real sessions ────────────────────────────────
+  // Two bugs were cancelling. The reader asked for `first_session_index`, a
+  // column that does not exist, so it always fell through to a calendar-days
+  // estimate that happens to be roughly right. Underneath, the index it WOULD
+  // have read was `spyDates.length` against a ROLLING range=1y window — near
+  // constant, so the age would have been ~0 forever and nothing would ever
+  // fade or go stale. Renaming the field alone makes the bug real.
+  // Comments stripped first: the doc block above flagAgeSessions names the dead
+  // column deliberately, to explain why it is dead. Only live code counts.
+  const codeOnly = (src) => src.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
+  check("no live code reads the column that never existed",
+    !/first_session_index/.test(codeOnly(settleSrc)), "first_session_index is still dereferenced");
+  check("age is counted off the session calendar SPY printed",
+    /function flagAgeSessions/.test(settleSrc) && /dates\.indexOf\(flagged\)/.test(settleSrc));
+  check("...and the calendar is actually handed to the transition",
+    /dates: spyDates/.test(settleSrc));
+  check("the rolling bar count is no longer used as an age reference",
+    !/sessionIndex - row\./.test(settleSrc));
+  {
+    // The real shape: SPY's ascending session dates, with the settled session last.
+    const dates = ["2026-07-27", "2026-07-28", "2026-07-29", "2026-07-30", "2026-07-31", "2026-08-03", "2026-08-04", "2026-08-05"];
+    const session = { at: "2026-08-06T00:00:00Z", dates };
+    const age = (flagSession, firstFlaggedAt) =>
+      C.flagAgeSessions({ notes: flagSession ? { flagSession } : null, first_flagged_at: firstFlaggedAt }, session);
+    check("a flag made this session is 0 sessions old", age("2026-08-05") === 0, String(age("2026-08-05")));
+    check("a flag made the session before is 1", age("2026-08-04") === 1, String(age("2026-08-04")));
+    // Fri 31 Jul -> Wed 5 Aug is 3 SESSIONS but 5 calendar days. Counting days
+    // would age it two sessions too fast, every single weekend.
+    check("a weekend costs no sessions", age("2026-07-31") === 3, String(age("2026-07-31")));
+    check("the oldest session in the window is the window length minus one",
+      age("2026-07-27") === 7, String(age("2026-07-27")));
+    check("a flag older than the fetched window falls back to the calendar estimate",
+      age("2026-01-02", "2026-06-06T00:00:00Z") > 20, String(age("2026-01-02", "2026-06-06T00:00:00Z")));
+    check("a flag with no notes at all still ages rather than throwing",
+      Number.isFinite(age(null, "2026-07-01T00:00:00Z")));
+    check("a flag with neither notes nor a stamp ages 0, never NaN",
+      C.flagAgeSessions({}, session) === 0);
+  }
+
   const catalysts = ["accumulation", "squeeze", "gap", "volume"];
   check("every catalyst the cron can emit has a label in the panel",
     catalysts.every((c) => panel.includes(`${c}:`)), catalysts.filter((c) => !panel.includes(`${c}:`)).join(","));

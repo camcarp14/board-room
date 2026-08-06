@@ -1236,6 +1236,46 @@ const STALE_SESSIONS = 20;   // ~one trading month, counted in SESSIONS
  * opening gap, which is why its hourly close sampler was adequate and ours
  * would not be.
  */
+/**
+ * How many SESSIONS old a flag is — counted off the calendar SPY actually
+ * printed, which is the only place this engine can learn that a Thursday was a
+ * holiday.
+ *
+ * TWO BUGS WERE CANCELLING HERE, and fixing either one alone made it worse.
+ *
+ * The reader asked for `row.first_session_index`; the writer stores the index
+ * in `notes.flagSessionIndex`. No such column exists, so the expression was
+ * always null and every flag fell through to a calendar-days ÷ 1.4 estimate.
+ * That estimate is roughly right on average, which is why nothing looked wrong.
+ *
+ * The masked bug is worse. That index was `spyDates.length`, and the sweep asks
+ * Yahoo for `range=1y` — a ROLLING window, so it returns ~251 bars today and
+ * ~251 bars next month. The index barely moves, so `now - flagged` is ~0
+ * forever. Rename the field to match and flags stop ageing entirely: nothing
+ * fades, nothing goes stale, the log grows without bound and the record fills
+ * with positions that were never closed.
+ *
+ * So neither field is used. The flag's own session DATE is stored in
+ * `notes.flagSession`, and `session.dates` is the ascending list of sessions
+ * SPY printed — counting between them is exact and needs no schema change. A
+ * flag older than the window (or predating the notes) falls back to the
+ * calendar estimate, which is the honest answer when the calendar itself is
+ * out of reach.
+ */
+function flagAgeSessions(row, session) {
+  const dates = Array.isArray(session.dates) ? session.dates : null;
+  const flagged = row && row.notes && row.notes.flagSession;
+  if (dates && dates.length && flagged) {
+    const i = dates.indexOf(flagged);
+    // Found: sessions printed since, current session included as index 0.
+    if (i >= 0) return dates.length - 1 - i;
+  }
+  const ms = Date.parse(session.at) - Date.parse(row && row.first_flagged_at);
+  // ~5 sessions per 7 calendar days. Only reachable for flags older than the
+  // fetched window, where being approximately right beats refusing to age.
+  return Number.isFinite(ms) ? Math.floor(ms / DAY / 1.4) : 0;
+}
+
 function transitionFlags(openRows, screenedById, session, gate = DEFAULT_GATE, floorValue = null) {
   const asOf = session.at;
   const sessionIndex = session.index ?? 0;
@@ -1266,10 +1306,23 @@ function transitionFlags(openRows, screenedById, session, gate = DEFAULT_GATE, f
 
     // Invalidation first: a level lost is lost even if the same session also
     // tagged a target, because the stop would have been hit on the way.
+    //
+    // THE EARNED RUNG SURVIVES. This used to write "invalidated" over whatever
+    // the flag had already reached, so a name that tagged T2 last week and got
+    // stopped this week was filed as a loss — while the crypto engine, on the
+    // identical event, kept "hit_t2" and filed a win. Two tabs grading the same
+    // thing in opposite directions, on the one card that answers "should I
+    // believe any of this". Crypto has it right: the screener's claim is that
+    // it finds moves which reach their targets, and that claim was satisfied
+    // the day the target printed. Whether the exit got taken is the reader's
+    // business, not the screener's record. Only a flag that never reached a
+    // rung closes as invalidated. `closedBy` below carries the rest of the
+    // story, so a win that gave it all back is still distinguishable.
     const inv = num(row.invalidation);
     if (inv != null && low <= inv) {
-      patch.status = "invalidated";
       patch.resolved_at = asOf;
+      if ((STATUS_RANK[row.status] ?? 0) === 0) patch.status = "invalidated";
+      patch.notes = { ...(row.notes || {}), closedBy: "invalidation" };
       updates.push(patch);
       continue;
     }
@@ -1283,13 +1336,16 @@ function transitionFlags(openRows, screenedById, session, gate = DEFAULT_GATE, f
     if (status !== row.status) patch.status = status;
     if (status === "hit_t3") patch.resolved_at = asOf;
 
-    const ageSessions = Number.isFinite(row.first_session_index) ? sessionIndex - row.first_session_index : null;
-    const age = ageSessions != null ? ageSessions : Math.floor((Date.parse(asOf) - Date.parse(row.first_flagged_at)) / DAY / 1.4);
+    const age = flagAgeSessions(row, session);
     if (!patch.resolved_at && age >= FADE_MIN_SESSIONS && Number.isFinite(s.score) && s.score < FADE_SCORE) {
       patch.status = "faded";
       patch.resolved_at = asOf;
+      patch.notes = { ...(row.notes || {}), closedBy: "faded" };
     }
-    if (!patch.resolved_at && age >= STALE_SESSIONS) patch.resolved_at = asOf;
+    if (!patch.resolved_at && age >= STALE_SESSIONS) {
+      patch.resolved_at = asOf;
+      patch.notes = { ...(row.notes || {}), closedBy: "stale" };
+    }
     updates.push(patch);
   }
 
@@ -1557,7 +1613,7 @@ async function settle(db, prev, spy, now, decision) {
   if (openErr) errors.push(`flags read: ${openErr.message}`);
   else {
     const byId = new Map(finalRows.map((r) => [r.id, r]));
-    const { inserts, updates } = transitionFlags(openRows || [], byId, { date: sessionDate, at: nowIso, index: sessionIndex }, gate, floor.value);
+    const { inserts, updates } = transitionFlags(openRows || [], byId, { date: sessionDate, at: nowIso, index: sessionIndex, dates: spyDates }, gate, floor.value);
     if (inserts.length) {
       const up = await db.from("stock_flags").upsert(inserts, { onConflict: "id", ignoreDuplicates: true }).select("id");
       if (up.error) errors.push(`flag insert: ${up.error.message}`);
@@ -1817,3 +1873,4 @@ exports.PHASE_GATE = PHASE_GATE;
 exports.ENGINE_VERSION = ENGINE_VERSION;
 exports.aboutSymbol = aboutSymbol;
 exports.EQUITIES = EQUITIES;
+exports.flagAgeSessions = flagAgeSessions;

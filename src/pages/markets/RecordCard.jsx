@@ -186,6 +186,19 @@ export default function RecordCard({ stats, recent, collapseProps, noun = "flags
 
           {/* 4 — lately */}
           <FormStrip form={s.form} />
+
+          {/* THE ASTERISK ON THE HIT RATE. A flag that printed its target and
+              then lost its level keeps the rung it earned — the target really
+              did print — so it counts as a win up there. It is not the same
+              win as one that held, and a screener whose hits mostly round-trip
+              is a tease rather than a signal. The number is only worth saying
+              when it is a real share of them. */}
+          {s.roundTrip > 0 && s.hitT1 > 0 && (
+            <div className="t-cap" style={{ color: "var(--faint)", marginTop: 11, lineHeight: 1.5 }}>
+              <span className="t-num" style={{ color: s.roundTrip / s.hitT1 >= 0.5 ? T.amber : "var(--sub)" }}>{s.roundTrip}</span>
+              {" "}of those {s.hitT1} hit their target and then lost the level
+            </div>
+          )}
         </>
       )}
 

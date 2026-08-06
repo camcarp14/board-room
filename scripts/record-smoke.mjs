@@ -142,6 +142,43 @@ try {
     allOpen.hitT1Rate === null && allOpen.resolved === 0 && allOpen.best === null && allOpen.worst === null);
   check("an empty log does not throw", S.flagStats([]).total === 0);
 
+  // ─── a win that gave it all back ─────────────────────────────────────────
+  // The rung survives a stop-out on BOTH engines now, which is right — the
+  // target really did print. But it means the hit rate cannot tell "reached T2
+  // and held" from "reached T2 and round-tripped through the stop", and on a
+  // tool for deciding what to buy that is the difference between a signal and
+  // a tease. closedBy is the only field that distinguishes them.
+  const withNotes = [
+    ep("AAA", "hit_t2", { peak: 124, last: 96 }),   // tagged T2, then stopped
+    ep("BBB", "hit_t1", { peak: 112, last: 111 }),  // tagged T1 and held
+    ep("CCC", "hit_t1", { peak: 113, last: 90 }),   // tagged T1, then stopped
+    ep("DDD", "invalidated", { peak: 101, last: 91 }),
+    ep("EEE", "faded", { peak: 102, last: 99 }),
+  ];
+  withNotes[0].notes = { closedBy: "invalidation" };
+  withNotes[2].notes = { closedBy: "invalidation" };
+  withNotes[1].notes = { closedBy: "stale" };
+  withNotes[3].notes = { closedBy: "invalidation" };   // never reached a rung
+  const rt = S.flagStats(withNotes);
+  check("a win that round-tripped through the stop is counted", rt.roundTrip === 2, String(rt.roundTrip));
+  check("...and still counts as a hit, because the target really did print",
+    rt.hitT1 === 3 && rt.hitT2 === 1, `hitT1=${rt.hitT1} hitT2=${rt.hitT2}`);
+  check("a stop-out that never reached a rung is NOT a round-trip",
+    rt.invalidated === 1 && rt.roundTrip === 2);
+  check("a win closed by timeout is not a round-trip either", rt.roundTrip === 2);
+  check("both tabs compute it identically", A.flagStats(withNotes).roundTrip === 2);
+  check("a log with no notes at all yields 0 rather than NaN",
+    S.flagStats(mixed).roundTrip === 0, String(S.flagStats(mixed).roundTrip));
+  check("the select actually asks for notes, or the count is always zero",
+    /select\("symbol, status, flag_price, peak_price, last_price, first_flagged_at, resolved_at, notes"\)/.test(readFileSync(`${FN_DIR}/stock-scan.js`, "utf8"))
+    && /select\("symbol, status, flag_price, peak_price, last_price, first_flagged_at, resolved_at, notes"\)/.test(readFileSync(`${FN_DIR}/alt-scan.js`, "utf8")));
+  check("both scan functions surface closedBy on an episode, not just in the stats",
+    /notes\.closedBy\) view\.closedBy/.test(readFileSync(`${FN_DIR}/stock-scan.js`, "utf8"))
+    && /notes\.closedBy\) view\.closedBy/.test(readFileSync(`${FN_DIR}/alt-scan.js`, "utf8")));
+  const cardSrc = readFileSync("src/pages/markets/RecordCard.jsx", "utf8");
+  check("the card says it out loud when it happens", /lost the level/.test(cardSrc));
+  check("...and never divides by a zero hit count", /s\.roundTrip > 0 && s\.hitT1 > 0/.test(cardSrc));
+
   // ─── 5. one arithmetic, two tabs ──────────────────────────────────────────
   const grab = (src) => {
     const i = src.indexOf("/**\n * The track record");
