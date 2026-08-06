@@ -870,6 +870,41 @@ try {
       !/mutations:\s*\{[^}]*networkMode/.test(qc));
   }
 
+  // ─── batch 5: the twins, and the session clock on the client ─────────────
+  {
+    const panel = readFileSync("src/pages/markets/StocksPanel.jsx", "utf8");
+    const sheet = readFileSync("src/pages/markets/StockSheet.jsx", "utf8");
+    const scanSrc3 = readFileSync(`${FN_DIR}/stock-scan.js`, "utf8");
+
+    // A SESSION-CLOCKED TAB AGES ITS FLAGS IN SESSIONS. Batch 3 moved these off
+    // millisecond division onto calendar days, which is right for the 24/7 tab
+    // and wrong here: a plan made at Friday's close read "3d" on Monday when
+    // exactly one session had passed.
+    check("the engine publishes its session calendar for the client to count against",
+      /sessionDates: spyDates\.slice\(-\d+\)/.test(settleSrc));
+    check("the read turns it into a session age on every episode",
+      /view\.ageSessions = sessionDates\.length - 1 - i/.test(scanSrc3));
+    check("the panel prefers sessions and marks the day fallback differently",
+      /ageSessions <= 0 \? "this session" : `\$\{ageSessions\}s`/.test(panel) && /\$\{d\}d`/.test(panel));
+    check("the sheet says sessions too",
+      /sess === 1 \? "last session" : `\$\{sess\} sessions ago`/.test(sheet));
+
+    // probing QUALIFIES ONE STAGE. "Breaking out · poked through intraday,
+    // closed back under" is two claims that cannot both hold for one session.
+    check("the sheet scopes the probing clause to 'At its level', as the list does",
+      /move\.probing && move\.stage === "atLevel"/.test(sheet));
+
+    // ONE TIER TABLE, TWO TABS.
+    const crypto = readFileSync("src/pages/markets/CryptoPanel.jsx", "utf8");
+    check("the crypto board reads the shared tier table rather than re-deciding the pill",
+      /TIER_META\[r\.flag\.tier\]/.test(crypto) && !/tier === "igniting" \? T\.green/.test(crypto));
+
+    // A WINDOW IS NOT NAMED UNLESS IT WAS THE ONE MEASURED.
+    const coinSheet = readFileSync("src/pages/markets/AltCoinSheet.jsx", "utf8");
+    check("the coin sheet no longer hard-labels the pace window it may not have used",
+      !/`12h \$\{MOTION_LABEL/.test(coinSheet));
+  }
+
   const catalysts = ["accumulation", "squeeze", "gap", "volume"];
   check("every catalyst the cron can emit has a label in the panel",
     catalysts.every((c) => panel.includes(`${c}:`)), catalysts.filter((c) => !panel.includes(`${c}:`)).join(","));

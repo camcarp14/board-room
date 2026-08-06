@@ -166,9 +166,15 @@ function NumberCell({ move, entry, tone }) {
 }
 
 /** How many SESSIONS ago the flag fired — never "3 days", which counts weekends. */
-function ageWord(iso) {
-  // CALENDAR days, not elapsed 24-hour blocks — see calendarDaysBetween. A flag
-  // fired after Thursday's close read "today" all Friday morning.
+/**
+ * How old a flag is — IN SESSIONS, because this tab counts sessions everywhere
+ * else and a plan made at Friday's close is one session old on Monday, not
+ * three days stale. stock-scan publishes ageSessions off the engine's own
+ * calendar; the calendar-day fallback is for flags older than the published
+ * window, and it says "d" so the two are never confused for one another.
+ */
+function ageWord(iso, ageSessions) {
+  if (Number.isFinite(ageSessions)) return ageSessions <= 0 ? "this session" : `${ageSessions}s`;
   const d = calendarDaysBetween(iso);
   if (d == null) return null;
   return d <= 0 ? "today" : `${d}d`;
@@ -485,7 +491,7 @@ export function StocksPanel({ isMobile }) {
                       <div className="t-cap" style={{ color: "var(--faint)", lineHeight: 1.5, paddingBottom: 6 }}>{meta.rule}</div>
                       <CellGroup style={inCardGroup}>
                         {shown.map((f) => {
-                          const age = ageWord(f.firstFlaggedAt);
+                          const age = ageWord(f.firstFlaggedAt, f.ageSessions);
                           const hit = HIT_LABEL[f.status];
                           const mark = f.move?.thin ? { text: "can't exit", tone: T.red }
                             : hit ? { text: hit, tone: T.green } : null;

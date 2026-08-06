@@ -14,7 +14,7 @@ import { CARD_STATES } from "../../ui/shared.jsx";
 import { NumTween, Sparkline } from "../../ui/primitives.jsx";
 import { callFnFull } from "../../lib/functions.js";
 import { useAltScan } from "../../data/altseason.js";
-import AltCoinSheet, { TonePill } from "./AltCoinSheet.jsx";
+import AltCoinSheet, { TonePill, TIER_META } from "./AltCoinSheet.jsx";
 
 // Lazy — lightweight-charts stays in its own chunk until a chart is opened.
 const BtcChartModal = lazy(() => import("../../BtcChartModal.jsx"));
@@ -169,10 +169,15 @@ export function CryptoPanel({ isMobile, btc }) {
                   <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 7 }}>
                     <span className="t-label">{r.symbol}</span>
                     <span className="t-cap" style={{ color: "var(--faint)", flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{r.name}</span>
-                    {r.flag && (
-                      <TonePill tone={r.flag.tier === "igniting" ? T.green : T.amber}>
-                        {r.flag.tier === "igniting" ? "Igniting" : "Building"}
-                      </TonePill>
+                    {/* THE SHARED VOCABULARY, not a second copy of it. This
+                        re-derived the tier pill inline — green "Igniting"
+                        whenever tier was igniting — while the Alt Season tab
+                        renders the same coin from its ENTRY verdict and can
+                        show it grey as "Late". One coin, two tabs, opposite
+                        colours, same payload. TIER_META is exported from the
+                        sheet precisely so both tabs read one table. */}
+                    {r.flag && TIER_META[r.flag.tier] && (
+                      <TonePill tone={TIER_META[r.flag.tier].tone}>{TIER_META[r.flag.tier].label}</TonePill>
                     )}
                     <span className="t-num" style={{ fontWeight: 600, flex: "none" }}>{px(r.price)}</span>
                   </div>

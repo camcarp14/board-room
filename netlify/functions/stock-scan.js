@@ -180,7 +180,13 @@ function liveTargets(t, price) {
 }
 
 /** One stock_flags row → the client episode shape. */
-function episodeView(row, livePrice) {
+/**
+ * @param sessionDates ascending session dates the engine published. Equities
+ *   are session-clocked, so a flag's age is a SESSION count — the crypto twin
+ *   of this function deliberately has no equivalent, because a 24/7 tape has
+ *   no distinction between a day and a session.
+ */
+function episodeView(row, livePrice, sessionDates) {
   const open = row.resolved_at == null;
   const flagPrice = num(row.flag_price);
   const last = open && Number.isFinite(livePrice) ? livePrice : num(row.last_price);
@@ -209,6 +215,14 @@ function episodeView(row, livePrice) {
   };
   if (!open) view.resolvedAt = row.resolved_at;
   if (row.notes && row.notes.closedBy) view.closedBy = row.notes.closedBy;
+  // Sessions since the flag fired, counted off the calendar rather than the
+  // clock. Absent when the flag predates the published window, in which case
+  // the client falls back to calendar days and says "days".
+  const flagged = row.notes && row.notes.flagSession;
+  if (Array.isArray(sessionDates) && flagged) {
+    const i = sessionDates.indexOf(flagged);
+    if (i >= 0) view.ageSessions = sessionDates.length - 1 - i;
+  }
   return view;
 }
 
@@ -381,7 +395,7 @@ exports.handler = async (event) => {
 
     const active = (openQ.data || [])
       .map((row) => {
-        const v = episodeView(row, num(live[row.symbol]));
+        const v = episodeView(row, num(live[row.symbol]), p.sessionDates);
         // An open flag IS one of the names the tick quotes, so its price is
         // live whenever the tick got a quote for it — same rule as the board.
         v.priceLive = num(live[row.symbol]) != null;
@@ -398,7 +412,7 @@ exports.handler = async (event) => {
         return v;
       })
       .sort((a, b) => (a.tier === b.tier ? (b.score || 0) - (a.score || 0) : a.tier === "igniting" ? -1 : 1));
-    const recent = (closedQ.data || []).map((row) => episodeView(row));
+    const recent = (closedQ.data || []).map((row) => episodeView(row, null, p.sessionDates));
 
     const out = {
       success: true,

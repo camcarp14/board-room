@@ -182,7 +182,21 @@ function entryRead(ctx, targets, price) {
   if (Number.isFinite(nextPct) && nextPct <= 0) return out("late", "already through T1 — the entry was lower");
   if (rr != null && rr < RR_MIN) return out("watch", `pays ${rr}× the risk — too thin`);
   if (band === "starting") return out("entry", "breaking its level with the stop close");
-  if (band === "underway") return out("entry", "trend intact and T1 still ahead");
+  // 'underway' IS NOT AN ENTRY ON THIS TAB, and the divergence from the equity
+  // version of this function is deliberate: the two engines mean different
+  // things by the word. bandOf here is `chg7d >= 15` and better than halfway up
+  // its range — a coin already fifteen percent into its week. The equity one is
+  // `chg5 >= 5`, an ordinary healthy trend.
+  //
+  // alt-cron's flagTier has always refused to flag underway for exactly that
+  // reason, while this called it "trend intact and T1 still ahead" — so the
+  // board painted a green Entry pill and the sheet led with a green Entry
+  // banner on coins the Flags card could never contain, and no amount of
+  // scrolling the flag list would explain why. This is the same contradiction
+  // the equity side had in the opposite direction, where the answer was to
+  // widen the ladder because there the band really is a buyable trend. Here the
+  // answer is the other one: agree with the engine.
+  if (band === "underway") return out("watch", "already well into the move — a base is a better entry");
   if (band === "warming") return out("watch", "lifting, hasn't taken its level yet");
   if (!band) return out("watch", "off the board — no current read");
   return out("watch", "nothing lifting it yet");

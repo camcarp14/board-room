@@ -494,8 +494,14 @@ try {
   check("room is measured to T3, not T1", cleanEntry.roomPct === 30, String(cleanEntry.roomPct));
   check("risk is the invalidation, signed negative", cleanEntry.riskPct === -10, String(cleanEntry.riskPct));
   check("rr is room over the stop", cleanEntry.rr === 3, String(cleanEntry.rr));
-  check("'underway' with T1 ahead is still an entry",
-    entryRead({ band: "underway", flags: {} }, live(100), 100).state === "entry");
+  // 'underway' USED TO READ AS AN ENTRY HERE, and this assertion pinned it.
+  // alt-cron's flagTier has never flagged that band — on this tab it means a
+  // coin already 15%+ into its week — so the board painted green Entry pills on
+  // coins the Flags card could never contain. The read now agrees with the
+  // ladder; the invariant a few blocks down is what stops it drifting back.
+  check("'underway' is a watch on the crypto side, because the ladder will not flag it",
+    entryRead({ band: "underway", flags: {} }, live(100), 100).state === "watch",
+    entryRead({ band: "underway", flags: {} }, live(100), 100).state);
   check("'warming' is a watch — nothing has taken the level yet",
     entryRead({ band: "warming", flags: {} }, live(100), 100).state === "watch");
   check("'quiet' and 'cold' are watches, not entries",
@@ -650,6 +656,40 @@ try {
   check("no episode means no give-back number", mv(ctxOf(), live(100), 100).offPeakPct === null);
   check("a flag sitting at its own high reports no give-back",
     mv(ctxOf(), live(100), 100, epi(30, 30)).offPeakPct === null);
+
+  // ─── the read and the ladder must agree about what is buyable ─────────────
+  // The equity side once had this backwards: flagTier refused a band entryRead
+  // simultaneously called an entry, and the board painted green Entry pills on
+  // names the Flags card could never contain. Crypto had the SAME
+  // contradiction in the same direction and it survived that fix — 'underway'
+  // here is chg7d >= 15, a coin already well into its week, which alt-cron has
+  // always refused to flag.
+  {
+    const { entryRead: er } = mods["alt-scan"];
+    const good = { t1: 110, t2: 120, t3: 140, invalidation: 95, t1Pct: 10, t3Pct: 40, invPct: -5 };
+    const verdictFor = (band) => er({ band, flags: {} }, good, 100).state;
+    check("'underway' is not called an entry on a tab whose ladder will not flag it",
+      verdictFor("underway") !== "entry", verdictFor("underway"));
+    check("...and says why, rather than going quiet",
+      /already well into the move/.test(er({ band: "underway", flags: {} }, good, 100).why));
+    check("'starting' is still an entry — the ladder does flag it", verdictFor("starting") === "entry");
+    check("'warming' is still a watch", verdictFor("warming") === "watch");
+
+    // The invariant, stated once: every band this read calls an ENTRY is a band
+    // the ladder is willing to flag.
+    const { flagTier: ft } = cron;
+    const flagRow = (band) => ({
+      symbol: "AAA", score: 90, band, flags: {}, rsVsBtc7d: 5, vol24h: 5e7,
+      mcap: 5e8, targets: { t1Pct: 10 },
+    });
+    const flaggable = ["starting", "warming", "underway", "quiet", "cold", "late"]
+      .filter((band) => ft(flagRow(band), { floor: 50 }));
+    const entryBands = ["starting", "warming", "underway", "quiet", "cold", "late"]
+      .filter((band) => verdictFor(band) === "entry");
+    check("every band the read calls an ENTRY is a band the ladder will flag",
+      entryBands.every((b) => flaggable.includes(b)),
+      `entry: ${entryBands.join(",")} | flaggable: ${flaggable.join(",")}`);
+  }
 
   // ─── the dominance sentence states the span it MEASURED ────────────────────
   // DOM_WINDOW_DAYS is how far back we are WILLING to look, not how far back

@@ -166,8 +166,15 @@ export default function StockSheet({ sel, row, episode, session, onClose, onChar
   // shipped) must read as a close, because claiming live is the failure.
   const priceLive = row?.price != null ? row.priceLive === true : episode?.priceLive === true;
 
-  const days = episode?.firstFlaggedAt ? Math.max(0, calendarDaysBetween(episode.firstFlaggedAt) ?? 0) : null;
-  const flaggedWord = days == null ? null : days === 0 ? "today" : days === 1 ? "yesterday" : `${days} days ago`;
+  // SESSIONS FIRST on a session-clocked tab — see StocksPanel's ageWord. A plan
+  // made at Friday's close is one session old on Monday, and calling it "3 days
+  // ago" is the same category error this whole tab exists to avoid.
+  const sess = Number.isFinite(episode?.ageSessions) ? episode.ageSessions : null;
+  const days = sess != null ? null
+    : episode?.firstFlaggedAt ? Math.max(0, calendarDaysBetween(episode.firstFlaggedAt) ?? 0) : null;
+  const flaggedWord = sess != null
+    ? (sess === 0 ? "this session" : sess === 1 ? "last session" : `${sess} sessions ago`)
+    : days == null ? null : days === 0 ? "today" : days === 1 ? "yesterday" : `${days} days ago`;
   const tier = episode ? (TIER_META[episode.tier] || TIER_META.building) : null;
 
   // TWO DIFFERENT TRUTHS PER LEVEL.
@@ -239,7 +246,16 @@ export default function StockSheet({ sel, row, episode, session, onClose, onChar
         <div style={{ marginBottom: 12 }}>
           <div className="t-foot" style={{ color: "var(--ink)", lineHeight: 1.5 }}>
             {STAGE_LABEL[move.stage]}
-            {move.probing && <span style={{ color: "var(--sub)" }}> · poked through intraday, closed back under</span>}
+            {/* `probing` QUALIFIES "At its level" AND NOTHING ELSE. The sheet
+                appended it to whatever stage was showing, so a row could read
+                "Breaking out · poked through intraday, closed back under" —
+                two statements that cannot both be true of one session, side by
+                side, as the second line on the sheet. The list has always
+                scoped it (stageLine in StocksPanel) and so does stock-scan's
+                own contract; only the sheet did not. */}
+            {move.probing && move.stage === "atLevel" && (
+              <span style={{ color: "var(--sub)" }}> · poked through intraday, closed back under</span>
+            )}
             {move.thin && <span style={{ color: T.red }}> · too thin to exit</span>}
           </div>
           <div className="t-cap t-num" style={{ color: "var(--faint)", marginTop: 2, lineHeight: 1.5 }}>

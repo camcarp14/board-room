@@ -1847,6 +1847,13 @@ async function settle(db, prev, spy, now, decision) {
   const payload = {
     engine: ENGINE_VERSION,
     asOf: nowIso,
+    // THE SESSION CALENDAR, so the client can age a flag in sessions instead of
+    // days. This tab's whole premise is that windows are session counts — there
+    // is no "4h ago" on a Sunday — and the flag age was the one number still
+    // quoted in calendar days, so a plan generated at Friday's close read "3d
+    // stale" at Monday's open when exactly one session had passed. Forty
+    // entries covers STALE_SESSIONS twice over and costs a few hundred bytes.
+    sessionDates: spyDates.slice(-40),
     // Not advanced when the flag stage failed: the board is still worth
     // publishing, but this session has not been graded and must be retried.
     settledSession: flagsGraded ? sessionDate : (prev && prev.settledSession) || null,

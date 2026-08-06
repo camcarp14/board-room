@@ -266,7 +266,13 @@ export default function AltCoinSheet({ sel, row, episode, onClose, onChart }) {
               Number.isFinite(move.toLevelPct)
                 ? `${Math.abs(move.toLevelPct).toFixed(1)}% ${move.toLevelPct < 0 ? "under" : "over"} its level${row?.range7d?.priorHigh ? ` ${px(row.range7d.priorHigh)}` : ""}`
                 : null,
-              move.motion ? `12h ${MOTION_LABEL[move.motion]}` : null,
+              // NOT "12h ..." — moveRead produces this from the 12h leg when a
+              // baseline exists and from the cron's day-vs-week excess when it
+              // does not, and the sheet cannot tell which. Naming the window it
+              // might not have used is the one thing this tab refuses to do
+              // anywhere else: the movers card would rather say "ready in ~Nh"
+              // than rank a window it has not measured.
+              move.motion ? MOTION_LABEL[move.motion] : null,
               Number.isFinite(move.offPeakPct) ? `${Math.abs(move.offPeakPct).toFixed(1)}% off its own high` : null,
             ].filter(Boolean).join(" · ") || "no level drawn yet"}
           </div>
