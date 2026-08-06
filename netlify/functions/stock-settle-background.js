@@ -312,9 +312,25 @@ function parseChart(payload) {
     if (close == null || close <= 0) continue;      // a hole in the series, not a session
     const date = sessionDateOf(ts[i]);
     if (!date) continue;
+    // A MISSING LEG FALLS BACK TO THE CLOSE, which is right for high and low —
+    // a session whose extremes were not recorded at least reached its own
+    // close, and every consumer of those is a range or a ratchet that a close
+    // cannot corrupt.
+    //
+    // THE OPEN IS DIFFERENT, because exactly one thing reads it and that thing
+    // is a DIFFERENCE. `overnight` is open − previous close, so substituting
+    // the close turns the pre-open gap into the WHOLE SESSION'S move and
+    // publishes it under a label that means the opposite. It ranks the name in
+    // the Overnight movers pill, fills the O/N tile, and past ±2% it fires the
+    // gap catalyst — narrating "something printed overnight" about a session
+    // that may have drifted there over six hours with no news at all. Fabricated
+    // reasons are the worst thing this engine can emit, so the substitution is
+    // recorded and the one consumer refuses it.
+    const openReal = fin(q.open ? q.open[i] : null);
     bars.push({
       date,
-      open: fin(q.open ? q.open[i] : null) ?? close,
+      open: openReal ?? close,
+      openSynthetic: openReal == null,
       high: fin(q.high ? q.high[i] : null) ?? close,
       low: fin(q.low ? q.low[i] : null) ?? close,
       close,
@@ -547,6 +563,10 @@ function screenStock(row, ctx = {}) {
   const overnight = (() => {
     if (bars.length < 2) return null;
     const last = bars[bars.length - 1];
+    // No real open, no overnight number. Absent reads as "—" everywhere and
+    // drops the name out of the Overnight ranking, which is the honest answer;
+    // the alternative was the day's whole move wearing the gap's label.
+    if (last.openSynthetic) return null;
     return chgPct(last.open, bars[bars.length - 2].close);
   })();
 
@@ -1601,9 +1621,20 @@ async function settle(db, prev, spy, now, decision) {
 
   if (coverage < 0.8) {
     errors.push(`coverage ${Math.round(coverage * 100)}% — board and flags not written this pass`);
+    // COVERAGE DESCRIBES THE BOARD, and this pass is not becoming the board.
+    // Writing this pass's number over `coverage` left the previous session's
+    // COMPLETE board reporting itself as "62% reached" in the footer — the one
+    // line whose entire job is describing data quality, inverted: good data
+    // labelled bad, and the real provenance of what is on screen destroyed.
+    // The rejected attempt gets its own field, so the tab can say a pass came
+    // back thin AND that the board it is showing is still whole.
     await db.from("stock_state").upsert({
       id: "latest", updated_at: nowIso,
-      payload: { ...(prev || {}), coverage: r2(coverage), missing: health.notFound, feed: { blocked: false } },
+      payload: {
+        ...(prev || {}),
+        lastPass: { at: nowIso, coverage: r2(coverage), missing: health.notFound, rejected: true },
+        feed: { blocked: false },
+      },
     });
     return { counts, errors };
   }
@@ -1743,7 +1774,23 @@ async function tick(db, prev, spy, now) {
   if (!open.length && prev) {
     // Nothing to watch — just refresh the session state so the tab stops
     // saying "closed" the moment the bell rings.
-    const payload = { ...prev, asOf: nowIso, session: { ...(prev.session || {}), state: sessionState(now, prev.settledSession) } };
+    //
+    // AND IT CLEARS THE FEED BLOCK, because getting here is proof. This path
+    // used to spread `...prev` verbatim, which carried `feed.blocked: true`
+    // forward untouched — and stock-scan throws the whole tab down on that
+    // flag. So a breaker trip at a moment when nothing was flagged left the
+    // Stocks tab reading "the quote feed refused us" with a timestamp days old,
+    // for as long as no flag was open, long after the feed recovered. The only
+    // escape was a settle.
+    //
+    // We are entitled to clear it: the caller sweeps SPY before calling tick
+    // and returns early if that sweep is blocked, so reaching this line means
+    // the feed answered on this very pass. It is not an assumption, it is the
+    // request that just succeeded.
+    const payload = {
+      ...prev, asOf: nowIso, feed: { blocked: false },
+      session: { ...(prev.session || {}), state: sessionState(now, prev.settledSession) },
+    };
     await db.from("stock_state").upsert({ id: "latest", updated_at: nowIso, payload });
     counts.stateWritten = true;
     return { counts, errors };
@@ -1777,8 +1824,17 @@ async function tick(db, prev, spy, now) {
     if (peakStored == null || high > peakStored) { patch.peak_price = high; patch.peak_at = nowIso; }
 
     const inv = num(row.invalidation);
-    if (inv != null && low <= inv) { patch.status = "invalidated"; patch.resolved_at = nowIso; }
-    else {
+    // SAME RULE AS THE SETTLE, because this is the same event an hour earlier.
+    // The rung survives — only a flag that never reached one closes as
+    // invalidated — and the close is labelled so a round-trip stays visible in
+    // the Record. Fixing transitionFlags and leaving this path alone meant the
+    // grade a flag got depended on whether the stop was crossed inside the
+    // session or between two of them, which is not a distinction anyone made.
+    if (inv != null && low <= inv) {
+      patch.resolved_at = nowIso;
+      if ((STATUS_RANK[row.status] ?? 0) === 0) patch.status = "invalidated";
+      patch.notes = { ...(row.notes || {}), closedBy: "invalidation" };
+    } else {
       const rank = STATUS_RANK[row.status] ?? 0;
       const t3 = num(row.t3), t2 = num(row.t2), t1 = num(row.t1);
       if (t3 != null && high >= t3 && rank < 3) { patch.status = "hit_t3"; patch.resolved_at = nowIso; }

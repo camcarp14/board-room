@@ -160,6 +160,10 @@ export default function StockSheet({ sel, row, episode, session, onClose, onChar
   // is the fallback for anything screened but not flagged.
   const catalyst = episode?.catalyst || row?.catalyst || null;
   const headline = (episode?.news || row?.news || [])[0] || null;
+  // Whichever object supplied `price` above is the one that knows whether it
+  // was live. Default FALSE: an unstamped payload (one written before the flag
+  // shipped) must read as a close, because claiming live is the failure.
+  const priceLive = row?.price != null ? row.priceLive === true : episode?.priceLive === true;
 
   const days = episode?.firstFlaggedAt ? Math.max(0, Math.floor((Date.now() - Date.parse(episode.firstFlaggedAt)) / 86400000)) : null;
   const flaggedWord = days == null ? null : days === 0 ? "today" : days === 1 ? "yesterday" : `${days} days ago`;
@@ -192,11 +196,18 @@ export default function StockSheet({ sel, row, episode, session, onClose, onChar
           <span className="t-title1 t-num">{price != null ? <NumTween v={price} f={px} /> : "—"}</span>
           {row && <Delta pct={row.chgSession} digits={1} />}
         </span>
-        {/* WHEN this price is from. On a shut market it is a settled close, not
-            a live quote, and saying so is the difference between a number you
-            can act on and one you think you can. */}
+        {/* WHEN THIS PRICE IS FROM — read off the price, never off the clock.
+            This used to say "during the session" whenever the market was open,
+            which is true of the MARKET and false of almost every price here:
+            the tick only quotes names carrying an open flag, three of
+            forty-nine on a normal board. So the largest number on the sheet,
+            tweened as if it were ticking, was last session's close wearing a
+            live caption for ~94% of the names you can tap. stock-scan now
+            stamps each row with whether its price came from the tick. */}
         <span className="t-cap" style={{ marginLeft: "auto", color: "var(--faint)", flex: "none" }}>
-          {session?.state === "open" ? "during the session" : session?.lastSessionLabel ? `${session.lastSessionLabel} close` : "last close"}
+          {priceLive ? "during the session"
+            : session?.lastSessionLabel ? `${session.lastSessionLabel} close`
+            : "last close"}
         </span>
       </div>
 

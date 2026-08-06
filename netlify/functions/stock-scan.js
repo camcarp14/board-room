@@ -22,6 +22,10 @@ const { createClient } = require("@supabase/supabase-js");
 
 let cache = { data: null, ts: 0 };
 const TTL_MS = 60 * 1000;
+// How long a feed block stays fatal. Longer than the hourly cadence, so a real
+// block survives to be seen; short enough that one cannot outlive the outage
+// that caused it by a trading day.
+const FEED_BLOCK_FATAL_MS = 3 * 60 * 60 * 1000;
 
 const json = (code, body) => ({
   statusCode: code,
@@ -321,8 +325,20 @@ exports.handler = async (event) => {
     }
     const p = stateQ.data.payload;
 
+    // A BLOCK IS A STATEMENT ABOUT AN ATTEMPT, NOT A PROPERTY OF THE WORLD, so
+    // it expires. Blanking the whole tab is the right response to "the feed
+    // refused us ten minutes ago" and the wrong one to a flag left over from
+    // days ago: the board underneath is still the last good verdict, and
+    // throwing hides it behind an error about a request nobody is making any
+    // more. Past the window the block stops being fatal and the ordinary
+    // staleness machinery — which knows how old the board actually is — takes
+    // over, which is the honest report either way.
     if (p.feed && p.feed.blocked) {
-      throw new Error(`The quote feed refused us at ${p.feed.since || "an unknown time"} (${p.feed.reason || "no reason given"}) — the screener is backing off rather than hammering it.`);
+      const since = Date.parse(p.feed.since);
+      const fresh = !Number.isFinite(since) || Date.now() - since < FEED_BLOCK_FATAL_MS;
+      if (fresh) {
+        throw new Error(`The quote feed refused us at ${p.feed.since || "an unknown time"} (${p.feed.reason || "no reason given"}) — the screener is backing off rather than hammering it.`);
+      }
     }
     if (!Array.isArray(p.board) || !p.board.length) {
       throw new Error(p.coverage != null
@@ -336,9 +352,17 @@ exports.handler = async (event) => {
     const live = (p.live && p.live.prices) || {};
     const news = p.news || {};
     const board = p.board.map((row) => {
-      const price = num(live[row.symbol]) ?? row.price;
+      const livePx = num(live[row.symbol]);
+      const price = livePx ?? row.price;
       const targets = liveTargets(row.targets, price);
-      const merged = { ...row, price, targets, trigger: liveTrigger(row.trigger, price) };
+      // WHICH PRICE IS THIS. The tick only quotes names that have an OPEN FLAG
+      // on them — three of forty-nine on a typical board — so every other row
+      // carries the settled close even while the market is printing. The sheet
+      // used to caption its headline from `session.state` and therefore said
+      // "during the session" over a previous close for ~94% of names, on the
+      // largest number on the screen, animated as if it were ticking. The
+      // caption has to follow the PRICE, not the clock, so the price says.
+      const merged = { ...row, price, priceLive: livePx != null, targets, trigger: liveTrigger(row.trigger, price) };
       merged.entry = entryRead(merged, targets, price);
       merged.move = moveRead(merged, targets, price, null);
       if (news[row.symbol]) merged.news = news[row.symbol];
@@ -349,6 +373,9 @@ exports.handler = async (event) => {
     const active = (openQ.data || [])
       .map((row) => {
         const v = episodeView(row, num(live[row.symbol]));
+        // An open flag IS one of the names the tick quotes, so its price is
+        // live whenever the tick got a quote for it — same rule as the board.
+        v.priceLive = num(live[row.symbol]) != null;
         const ctx = ctxById.get(row.ticker_id) || null;
         v.entry = entryRead(ctx, v.targets, v.lastPrice);
         v.move = moveRead(ctx, v.targets, v.lastPrice, v);
@@ -378,6 +405,9 @@ exports.handler = async (event) => {
       board,
       movers: p.movers || null,
       coverage: p.coverage ?? null,
+      // The most recent REJECTED pass, when there is one. Distinct from
+      // coverage, which describes the board actually on screen.
+      lastPass: p.lastPass || null,
       missing: p.missing || [],
       universeHealth: p.universeHealth || null,
       flags: { active, recent, stats: flagStats(allQ.data || []) },

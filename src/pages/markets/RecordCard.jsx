@@ -175,8 +175,12 @@ export default function RecordCard({ stats, recent, collapseProps, noun = "flags
 
           {/* 3 — what you get, and how long it takes */}
           <div style={{ display: "flex", gap: 10, marginTop: 14 }}>
+            {/* `null >= 0` is TRUE — relational comparison coerces null to 0 —
+                so an unmeasured median rendered a GREEN em-dash: a positive
+                colour on a statistic nobody computed, in the one card whose
+                job is not overstating. Absent has no tone. */}
             <Stat value={signedPct(s.medianPeakPct)} label="median peak"
-              tone={s.medianPeakPct >= 0 ? T.green : T.red} />
+              tone={!Number.isFinite(s.medianPeakPct) ? "var(--faint)" : s.medianPeakPct >= 0 ? T.green : T.red} />
             <Stat value={s.medianHeldDays != null ? `${Math.round(s.medianHeldDays)}d` : "—"} label="median hold" />
             <Stat value={s.best ? signedPct(s.best.pct, 0) : "—"} label={s.best ? `best · ${s.best.symbol}` : "best"}
               tone={T.green} />

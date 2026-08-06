@@ -224,6 +224,23 @@ try {
   // part of the label, not a sticker on it — which is the same call
   // AltCoinSheet's HIT_LABEL already made. Extended_Pictographic is exactly
   // the line between the two.
+  // `null >= 0` is TRUE — relational comparison coerces null to 0 — so an
+  // unmeasured median rendered a GREEN em-dash: a positive colour on a
+  // statistic nobody computed, in the one card whose job is not overstating.
+  check("an unmeasured median peak carries no tone",
+    /!Number\.isFinite\(s\.medianPeakPct\) \? "var\(--faint\)"/.test(card));
+  // Every `>= 0` tone comparison on a nullable stat must sit on a line that
+  // has already established the value is finite. Checked per line rather than
+  // by stripping the guard, which is how the first version of this assertion
+  // managed to strip the fix and then fail on what was left.
+  // hitT1Rate is excluded because it IS the gate: `thin` returns the empty
+  // state when it is null, so the headline cannot render with one. Everything
+  // else can be null inside the same branch and needs its own guard.
+  const unguarded = card.split("\n").filter((l) =>
+    /\bs\.(median[A-Za-z]*|roundTrip|best|worst)\s*>=\s*\d/.test(l) && !/Number\.isFinite|!= null|\?\?/.test(l));
+  check("...and every >= tone comparison on a nullable stat is guarded on its own line",
+    unguarded.length === 0, unguarded.map((l) => l.trim().slice(0, 80)).join(" | "));
+
   check("no emoji in the card's chrome", !/\p{Extended_Pictographic}/u.test(card));
 
   // ─── resolveSymbol — the chart that rejected its own board ────────────────

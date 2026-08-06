@@ -55,17 +55,33 @@ exports.handler = async (event) => {
     const rows = await res.json();
     if (!Array.isArray(rows)) throw new Error("CoinGecko: unexpected shape");
 
-    // Each row: [ms, open, high, low, close] — numbers already, but a row
-    // with a hole would crash the chart, so drop any that don't parse clean.
+    // Each row: [ms, open, high, low, close] — numbers already, but a row with
+    // a hole would crash the chart, so drop any that don't parse clean.
+    //
+    // NULL IS NOT ZERO, and the obvious version of this could not tell them
+    // apart: Number(null) and Number("") are both 0 and both finite, so a hole
+    // became a candle priced at exactly $0 and walked straight through the
+    // Number.isFinite filter that exists to catch it. One such candle and
+    // lightweight-charts autoscales its axis down to zero, collapsing the real
+    // price action into a hairline — a chart that looks broken rather than one
+    // that admits a gap. A zero timestamp does the same thing sideways, dating
+    // a candle to 1970 and stretching the time axis across fifty-six years.
+    const fin = (v) => {
+      if (v == null || v === "") return null;
+      const n = Number(v);
+      return Number.isFinite(n) ? n : null;
+    };
     const candles = rows
-      .map((r) => ({
-        time: Math.floor(r[0] / 1000), // unix seconds
-        open: Number(r[1]),
-        high: Number(r[2]),
-        low: Number(r[3]),
-        close: Number(r[4]),
-      }))
-      .filter((c) => Number.isFinite(c.time) && Number.isFinite(c.open) && Number.isFinite(c.high) && Number.isFinite(c.low) && Number.isFinite(c.close));
+      .map((r) => (Array.isArray(r) ? {
+        time: fin(r[0]) != null ? Math.floor(fin(r[0]) / 1000) : null, // unix seconds
+        open: fin(r[1]),
+        high: fin(r[2]),
+        low: fin(r[3]),
+        close: fin(r[4]),
+      } : null))
+      .filter((c) => c
+        && Number.isFinite(c.time) && c.time > 0
+        && [c.open, c.high, c.low, c.close].every((v) => Number.isFinite(v) && v > 0));
 
     const data = { success: true, id, interval: uiInterval, candles };
     cache.set(key, { data, ts: Date.now() });

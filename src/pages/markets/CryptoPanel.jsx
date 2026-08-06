@@ -112,6 +112,23 @@ export function CryptoPanel({ isMobile, btc }) {
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+      {/* A REFRESH THAT FAILED WHILE GOOD DATA IS ON SCREEN. Every card below
+          renders `alt.data ? board : alt.isError ? fallback : skeleton`, and
+          data wins — so once a payload has loaded, or been rehydrated from the
+          persisted query cache on reopen, a failing refresh drew the whole
+          sixty-coin board with prices and five change columns and said nothing
+          at all. This is the DEFAULT sub-tab: opening the app offline, or
+          during a Supabase outage, showed a confident stale tape.
+
+          The other two panels have carried this row at the top of their column
+          since they shipped. This one never did. Same anatomy, same wording,
+          same place — first in the column, so Retry cannot hide below the fold. */}
+      {alt.isError && (
+        <Card pad="sm">
+          <FallbackRow detail={`Refresh failed — showing the last good scan (${alt.error?.message || "unreachable"})`} onRetry={() => alt.refetch()} />
+        </Card>
+      )}
+
       {/* Bitcoin hero — price, day move, sparkline; the whole card taps to the chart */}
       <Card pad="md" pressable onClick={() => setBtcChartOpen(true)} title="Tap for the full chart">
         <div style={{ display: "flex", alignItems: "baseline", gap: 8, marginBottom: btc.price != null ? 10 : 4 }}>

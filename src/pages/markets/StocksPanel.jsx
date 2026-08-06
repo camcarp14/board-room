@@ -640,6 +640,17 @@ export function StocksPanel({ isMobile }) {
         {runNow}
       </div>
 
+      {/* A PASS CAME BACK TOO THIN AND WAS THROWN AWAY. The board above is the
+          previous session's and is whole — the engine declines to publish off a
+          partial sample rather than quietly serving one. Worth saying out loud
+          because the alternative reading of an unchanged board is that nothing
+          has been trying, and this says something IS trying and failing. */}
+      {data.lastPass && data.lastPass.rejected && (
+        <div className="t-cap t-num" style={{ color: "var(--faint)", textAlign: "center", padding: "0 0 6px", lineHeight: 1.5 }}>
+          Last attempt reached {Math.round((data.lastPass.coverage || 0) * 100)}% of the universe and was discarded — the board above is the last complete one.
+        </div>
+      )}
+
       {sel && (
         <StockSheet
           sel={sel}

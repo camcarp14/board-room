@@ -685,6 +685,76 @@ try {
       C.flagAgeSessions({}, session) === 0);
   }
 
+  // ─── the tick grades a stop-out the same way the settle does ─────────────
+  // Fixing transitionFlags and leaving the tick alone meant a flag's grade
+  // depended on whether the stop was crossed INSIDE a session or between two
+  // of them — a distinction nobody made and nobody could see.
+  const tickBlock = settleSrc.slice(settleSrc.indexOf("async function tick("));
+  check("the tick preserves an earned rung through a stop, exactly as the settle does",
+    /if \(\(STATUS_RANK\[row\.status\] \?\? 0\) === 0\) patch\.status = "invalidated";/.test(tickBlock),
+    "the tick still overwrites the earned status");
+  check("...and labels the close, so the round-trip reaches the record",
+    /closedBy: "invalidation"/.test(tickBlock));
+  check("neither path can write 'invalidated' unconditionally any more",
+    (settleSrc.match(/patch\.status = "invalidated";\s*\n\s*patch\.resolved_at/g) || []).length === 0);
+
+  // ─── a synthesized open is not an overnight gap ──────────────────────────
+  // parseChart falls a missing leg back to the close, which is right for high
+  // and low and catastrophic for open: `overnight` is open − prev close, so
+  // the substitution turns the pre-open gap into the WHOLE session's move,
+  // ranks the name in the Overnight pill on it, and past ±2% fires the gap
+  // catalyst — narrating "something printed overnight" about a drift.
+  const chart = (opens) => ({
+    chart: { result: [{
+      meta: { regularMarketPrice: 104 },
+      timestamp: [Date.parse("2026-08-04T20:00:00Z") / 1000, Date.parse("2026-08-05T20:00:00Z") / 1000],
+      indicators: { quote: [{ open: opens, high: [101, 105], low: [99, 99], close: [100, 104], volume: [1e6, 1e6] }] },
+    }] },
+  });
+  const realOpen = parseChart(chart([100, 100]));
+  const nullOpen = parseChart(chart([100, null]));
+  check("a real open produces a real overnight gap",
+    realOpen.bars[1].openSynthetic === false, JSON.stringify(realOpen.bars[1]));
+  check("a missing open is recorded as synthesized rather than passed off as data",
+    nullOpen.bars[1].openSynthetic === true && nullOpen.bars[1].open === 104,
+    JSON.stringify(nullOpen.bars[1]));
+  check("high and low still fall back to the close — a range a close cannot corrupt",
+    parseChart(chart([100, 100])).bars.length === 2);
+  {
+    const screenOf = (bars) => bars;
+    const overnightOf = (bars) => {
+      const last = bars[bars.length - 1];
+      if (last.openSynthetic) return null;
+      return last.open == null ? null : ((last.open - bars[bars.length - 2].close) / bars[bars.length - 2].close) * 100;
+    };
+    check("the real open reports a 0% overnight, not the day's +4%",
+      Math.abs(overnightOf(screenOf(realOpen.bars))) < 1e-9, String(overnightOf(realOpen.bars)));
+    check("the synthesized one reports NOTHING rather than the day's +4%",
+      overnightOf(screenOf(nullOpen.bars)) === null, String(overnightOf(nullOpen.bars)));
+  }
+  check("the engine's own overnight refuses a synthesized open",
+    /if \(last\.openSynthetic\) return null;/.test(settleSrc));
+
+  // ─── a stale feed block stops being fatal ────────────────────────────────
+  // A block is a statement about an ATTEMPT. The no-open-flags tick path spread
+  // `...prev` verbatim and carried `feed.blocked` forward untouched, and
+  // stock-scan throws the whole tab down on that flag — so one breaker trip at
+  // a moment when nothing was flagged blanked the Stocks tab until the next
+  // settle, with a timestamp days old.
+  check("the no-open-flags tick clears the block, which it has just disproved",
+    /feed: \{ blocked: false \},\s*\n\s*session: \{/.test(settleSrc));
+  const scanSrc2 = readFileSync(`${FN_DIR}/stock-scan.js`, "utf8");
+  check("and a block older than the window is no longer fatal to the read",
+    /FEED_BLOCK_FATAL_MS/.test(scanSrc2) && /Date\.now\(\) - since < FEED_BLOCK_FATAL_MS/.test(scanSrc2));
+
+  // ─── a rejected pass does not relabel the board it did not replace ───────
+  check("a thin pass records itself as a rejected attempt, not as the board's coverage",
+    /lastPass: \{ at: nowIso, coverage: r2\(coverage\), missing: health\.notFound, rejected: true \}/.test(settleSrc));
+  check("...and never overwrites coverage, which describes what is on screen",
+    !/coverage: r2\(coverage\), missing: health\.notFound, feed:/.test(settleSrc));
+  check("the read passes the rejected attempt through so the tab can say so",
+    /lastPass: p\.lastPass \|\| null/.test(scanSrc2));
+
   const catalysts = ["accumulation", "squeeze", "gap", "volume"];
   check("every catalyst the cron can emit has a label in the panel",
     catalysts.every((c) => panel.includes(`${c}:`)), catalysts.filter((c) => !panel.includes(`${c}:`)).join(","));
