@@ -589,7 +589,7 @@ export function budgetStatus(summary, budgets) {
  * The amount tolerance is proportional, so a $9.99 streaming service and a
  * $1,800 rent are judged on the same terms.
  */
-export function recurring(txs, { minMonths = 3, tolerance = 0.15, rules } = {}) {
+export function recurring(txs, { minMonths = 3, tolerance = 0.15, rules, now = null, staleDays = 75, maxPerMonth = 1.6 } = {}) {
   const by = new Map();
   for (const t of txs || []) {
     if (t.amount >= 0) continue;                       // money in isn't a subscription
@@ -602,12 +602,34 @@ export function recurring(txs, { minMonths = 3, tolerance = 0.15, rules } = {}) 
   for (const [k, list] of by) {
     const months = new Set(list.map((t) => monthOf(t.date)));
     if (months.size < minMonths) continue;
+
+    // ONE CHARGE A MONTH, ROUGHLY — the thing that separates a subscription
+    // from a habit. The header claims distinct months already handle this, and
+    // they do not: they rule out three charges in ONE month, not eleven coffees
+    // a month for three months. A daily coffee at the same shop for the same
+    // price cleared every existing guard and was published as a subscription
+    // with `yearly: typical * 12` — one coffee's price presented as its annual
+    // cost, which understates a real habit by an order of magnitude while
+    // inventing a bill that does not exist.
+    if (list.length / months.size > maxPerMonth) continue;
     const amounts = list.map((t) => Math.abs(t.amount));
     const typical = amounts.slice().sort((a, b) => a - b)[Math.floor(amounts.length / 2)];
     if (!typical) continue;
     const steady = amounts.filter((a) => Math.abs(a - typical) <= typical * tolerance).length;
     if (steady / amounts.length < 0.6) continue;       // amount jumps around — not a subscription
     const last = list.slice().sort((a, b) => a.date.localeCompare(b.date)).at(-1);
+
+    // A SUBSCRIPTION YOU CANCELLED IS NOT A SUBSCRIPTION. There was no recency
+    // test at all, so a service dropped a year ago still had its three distinct
+    // months sitting in the transaction history and stayed in the Recurring
+    // total forever — the number that is supposed to answer "what leaves my
+    // account every month whether I look or not" only ever grew, and cancelling
+    // something never made it fall. 75 days is a monthly cadence plus real
+    // slack for a late bill or a skipped cycle.
+    const ref = now != null ? new Date(now) : new Date();
+    const lastMs = Date.parse(`${last.date}T12:00:00`);
+    if (Number.isFinite(lastMs) && (ref.getTime() - lastMs) / 86400000 > staleDays) continue;
+
     out.push({
       key: k, merchant: merchantOf(last.description), typical, months: months.size,
       lastDate: last.date, category: effectiveCategory(last, rules),

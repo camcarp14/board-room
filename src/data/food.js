@@ -215,12 +215,22 @@ export function useClearCheckedGroceries() {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: async (items) => {
-      const tally = bumpFrequency(qc.getQueryData(GROCERY_FREQ) || {}, items);
+      // THE BASE HAS TO BE REAL. `getQueryData(...) || {}` fabricated one
+      // whenever the tally had never loaded — and bumpFrequency then returned
+      // a tally containing only this cart, which the write below put over the
+      // top of every buy count in the database. Losing them is not cosmetic:
+      // staples only surface once an item crosses STAPLE_MIN_BUYS, so the
+      // suggestions quietly stop and nothing says why.
+      //
+      // No trustworthy base means no tally write. The cart still clears, which
+      // is what was actually asked for; the counts simply do not move.
+      const base = qc.getQueryData(GROCERY_FREQ);
+      const tally = base && typeof base === "object" ? bumpFrequency(base, items) : null;
       // One un-landed row in the cart would 400 and take the whole clear down
       // with it, tally included. It leaves the screen either way — Promise.all
       // rejects on the first failure, so this is not a place to be optimistic.
       await Promise.all(items.filter((g) => !isTempId(g.id)).map((g) => db.deleteGroceryItem(g.id)));
-      await db.saveSetting(STAPLES_KEY, tally);
+      if (tally) await db.saveSetting(STAPLES_KEY, tally);
       return tally;
     },
     onMutate: async (items) => {
@@ -245,11 +255,17 @@ export function useGroceryFrequency() {
   return useQuery({
     queryKey: GROCERY_FREQ,
     queryFn: async () => {
-      try {
-        const all = await db.loadSettings();
-        const t = all?.[STAPLES_KEY];
-        return t && typeof t === "object" && !Array.isArray(t) ? t : {};
-      } catch { return {}; }
+      // A FAILED READ IS NOT AN EMPTY TALLY. This swallowed the error and
+      // returned {}, which react-query then cached as real data — and the next
+      // cart clear reads that cached tally, adds the cart to it, and writes the
+      // result back. So one settings blip permanently destroyed every buy count
+      // the app had learned, and with them the staple suggestions that only
+      // appear once a thing crosses STAPLE_MIN_BUYS. Throwing puts the query in
+      // `error` with the last good tally still in `data`, which is the whole
+      // contract the rest of the app's queries follow.
+      const all = await db.loadSettings();
+      const t = all?.[STAPLES_KEY];
+      return t && typeof t === "object" && !Array.isArray(t) ? t : {};
     },
     staleTime: 5 * 60 * 1000, // it only changes when you clear the cart
   });

@@ -651,5 +651,57 @@ check("every column the client writes exists",
   ["account", "date", "amount_cents", "description", "merchant", "category", "category_override"]
     .every((c) => new RegExp(`\\n\\s+${c}\\b`).test(SETUP_SQL)));
 
+
+// ─── Recurring: a habit is not a subscription, and a cancellation ends one ────
+// The header claimed distinct months already separated the two. They do not:
+// distinct months rule out three charges in ONE month, not eleven coffees a
+// month for three months. And there was no recency test at all, so a service
+// cancelled a year ago kept its three months in the history and stayed in the
+// total forever — a figure meant to answer "what leaves my account every month"
+// that only ever grew.
+{
+  const NOW = Date.parse("2026-08-06T12:00:00");
+  const tx = (date, description, amount) => ({ date, description, amount });
+  const run = (list, opts = {}) => recurring(list, { now: NOW, ...opts });
+
+  const netflix = [
+    tx("2026-06-04", "NETFLIX.COM", -15.99),
+    tx("2026-07-04", "NETFLIX.COM", -15.99),
+    tx("2026-08-04", "NETFLIX.COM", -15.99),
+  ];
+  check("a real monthly subscription is still detected", run(netflix).length === 1);
+  check("...with its yearly cost as twelve of the charge",
+    run(netflix)[0].yearly === 15.99 * 12);
+
+  // Eleven coffees a month, same shop, same price, three months running.
+  const coffee = [];
+  for (const mo of ["06", "07", "08"]) for (let d = 1; d <= 11; d++) {
+    coffee.push(tx(`2026-${mo}-${String(d).padStart(2, "0")}`, "BLUE BOTTLE COFFEE", -5.25));
+  }
+  check("a daily coffee habit is NOT reported as a subscription",
+    run(coffee).length === 0, `${run(coffee).length} found`);
+  check("...and it cleared every guard that existed before this one",
+    new Set(coffee.map((t) => t.date.slice(0, 7))).size === 3 && coffee.length === 33);
+
+  const cancelled = [
+    tx("2025-01-04", "OLDGYM MEMBERSHIP", -49.0),
+    tx("2025-02-04", "OLDGYM MEMBERSHIP", -49.0),
+    tx("2025-03-04", "OLDGYM MEMBERSHIP", -49.0),
+  ];
+  check("a subscription cancelled last year has left the Recurring total",
+    run(cancelled).length === 0, `${run(cancelled).length} still counted`);
+  check("...while one billed within the window is still counted",
+    run([...cancelled, tx("2026-07-04", "OLDGYM MEMBERSHIP", -49.0)]).length === 1);
+
+  // A monthly bill that skipped a cycle must survive the recency test.
+  const skipped = [
+    tx("2026-04-10", "CITY WATER", -62.4),
+    tx("2026-05-10", "CITY WATER", -61.9),
+    tx("2026-06-10", "CITY WATER", -63.1),
+  ];
+  check("a bill that skipped a cycle is not written off as cancelled",
+    run(skipped).length === 1, `${run(skipped).length}`);
+}
+
 console.log(failed ? `\n${failed} finance check(s) failed` : "\nFINANCE SMOKE PASS");
 process.exit(failed ? 1 : 0);

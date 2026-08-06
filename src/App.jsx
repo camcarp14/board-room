@@ -103,11 +103,23 @@ export default function App() {
     btc.refresh();
     queryClient.invalidateQueries(); // one call refetches every cached query (Movies today; more as features migrate)
     setBriefRefreshSignal(Date.now()); // legacy per-page signal — retired as each card moves onto the query cache
-    try {
-      const [chat, notes, sets] = await Promise.all([db.loadChat(), db.loadSeatNotes(), db.loadSettings()]);
-      setMessages(chat); setSeatNotes(notes); setSettings(sets);
-    } catch {}
-    setDataStamp(Date.now());
+    // THE STAMP IS THE FRESHNESS PILL, and it used to be set unconditionally
+    // after a catch that swallowed everything — so a refresh with no signal, or
+    // against a Supabase that was refusing reads, still turned the pill green
+    // and said "Live". That is the one label on the app shell, visible on every
+    // page, and its entire job is telling you whether what you are looking at
+    // is current. Tapping Refresh and watching it go green is exactly the
+    // moment you would stop doubting stale numbers.
+    //
+    // Per-slice, same as the initial load: a partial success is still progress
+    // and should stamp, but a total failure must not.
+    const [chatR, notesR, setsR] = await Promise.allSettled([
+      db.loadChat(), db.loadSeatNotes(), db.loadSettings(),
+    ]);
+    if (chatR.status === "fulfilled") setMessages(chatR.value);
+    if (notesR.status === "fulfilled") setSeatNotes(notesR.value);
+    if (setsR.status === "fulfilled") setSettings(setsR.value);
+    if ([chatR, notesR, setsR].some((r) => r.status === "fulfilled")) setDataStamp(Date.now());
     setNow(Date.now());
     setRefreshing(false);
   };

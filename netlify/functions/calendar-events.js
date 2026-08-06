@@ -94,15 +94,64 @@ function unfold(ics) {
   return ics.replace(/\r\n/g, "\n").replace(/\n[ \t]/g, "");
 }
 
-function parseIcsDate(raw) {
+/**
+ * How far `tz` is from UTC at a given instant, in ms. Intl is the only tz
+ * database available here and it is a complete one, so no library is needed:
+ * format the instant IN the zone, read the wall-clock parts back, and the
+ * difference between those parts read as UTC and the instant itself IS the
+ * offset. Returns 0 for a zone Intl does not recognise, which degrades to the
+ * old behaviour rather than throwing on a malformed feed.
+ */
+function tzOffsetMs(utcMs, tz) {
+  try {
+    const dtf = new Intl.DateTimeFormat("en-US", {
+      timeZone: tz, hour12: false,
+      year: "numeric", month: "2-digit", day: "2-digit",
+      hour: "2-digit", minute: "2-digit", second: "2-digit",
+    });
+    const p = {};
+    for (const x of dtf.formatToParts(new Date(utcMs))) if (x.type !== "literal") p[x.type] = x.value;
+    const hour = p.hour === "24" ? 0 : Number(p.hour);
+    const asUTC = Date.UTC(Number(p.year), Number(p.month) - 1, Number(p.day), hour, Number(p.minute), Number(p.second));
+    return asUTC - utcMs;
+  } catch { return 0; }
+}
+
+/**
+ * An iCal date, honouring its TZID.
+ *
+ * THE ZONE USED TO BE THROWN AWAY. The property regex captured the value and
+ * discarded the `;TZID=America/Chicago` parameter, so `20260806T140000` was
+ * handed to `new Date("2026-08-06T14:00:00")` — parsed in the SERVER's local
+ * zone, which in a Netlify function is UTC. A 2pm Chicago meeting was published
+ * as 2pm UTC and read back as 9am. Every timed event on a linked calendar was
+ * wrong by the UTC offset, in one direction or the other, all year.
+ *
+ * Three cases, and only the middle one was ever right:
+ *   · trailing Z      — already UTC, unchanged
+ *   · TZID=<zone>     — wall time IN that zone, converted here
+ *   · neither         — "floating" local time; iCal says interpret it in the
+ *                       viewer's zone, and the viewer is a phone, so it is
+ *                       left as a bare local-time string for the client.
+ */
+function parseIcsDate(raw, tzid) {
   if (!raw) return null;
   // All-day events: YYYYMMDD. Timed events: YYYYMMDDTHHMMSS[Z].
   const m = raw.match(/^(\d{4})(\d{2})(\d{2})(?:T(\d{2})(\d{2})(\d{2})(Z)?)?$/);
   if (!m) return null;
   const [, y, mo, d, h, mi, s, z] = m;
   if (h === undefined) return { date: new Date(`${y}-${mo}-${d}T00:00:00`), allDay: true };
-  const iso = `${y}-${mo}-${d}T${h}:${mi}:${s}${z ? "Z" : ""}`;
-  return { date: new Date(iso), allDay: false };
+  if (z) return { date: new Date(`${y}-${mo}-${d}T${h}:${mi}:${s}Z`), allDay: false };
+  if (tzid) {
+    // Treat the wall time as UTC, then correct by the zone's offset. Measured
+    // twice: the first offset is read at the wrong instant, and on the two DST
+    // nights a year that is exactly the hour that would come out wrong.
+    const guess = Date.UTC(Number(y), Number(mo) - 1, Number(d), Number(h), Number(mi), Number(s));
+    const once = guess - tzOffsetMs(guess, tzid);
+    const twice = guess - tzOffsetMs(once, tzid);
+    return { date: new Date(twice), allDay: false };
+  }
+  return { date: new Date(`${y}-${mo}-${d}T${h}:${mi}:${s}`), allDay: false };
 }
 
 function parseIcs(ics) {
@@ -115,8 +164,11 @@ function parseIcs(ics) {
       const m = body.match(new RegExp(`^${prop}(?:;[^:\\n]*)?:(.*)$`, "m"));
       return m ? m[1].trim().replace(/\\,/g, ",").replace(/\\n/gi, " ") : null;
     };
-    const dtstartRaw = (body.match(/^DTSTART(?:;[^:\n]*)?:(.*)$/m) || [])[1];
-    const parsed = parseIcsDate(dtstartRaw?.trim());
+    const dtstartLine = (body.match(/^DTSTART((?:;[^:\n]*)?):(.*)$/m) || []);
+    const dtstartRaw = dtstartLine[2];
+    // TZID=America/Chicago, possibly alongside other parameters.
+    const tzid = ((dtstartLine[1] || "").match(/;TZID=([^;:]+)/) || [])[1] || null;
+    const parsed = parseIcsDate(dtstartRaw?.trim(), tzid);
     if (!parsed) continue;
     events.push({
       title: get("SUMMARY") || "(untitled)",
@@ -178,3 +230,7 @@ exports.handler = async (event) => {
 
 // Exported only for functions-smoke.mjs. Netlify reads `handler`.
 exports.badUrl = badUrl;
+
+// Exported for scripts — Netlify only reads `handler`.
+exports.parseIcs = parseIcs;
+exports.parseIcsDate = parseIcsDate;

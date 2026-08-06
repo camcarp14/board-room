@@ -111,16 +111,27 @@ function upkeepDue(item) {
 // ── data fetch ───────────────────────────────────────────────────────────────
 async function loadAll(supabase, userId) {
   const scope = (q) => (userId ? q.eq("user_id", userId) : q);
+  // `r.data || []` USED TO SWALLOW EVERY FAILURE. A Supabase error returns
+  // data:null with the reason in r.error, so an RLS blip, a dropped connection
+  // or a schema slip all became an empty array — and the device, which has no
+  // screen furniture for an error, rendered a confident "Nothing scheduled".
+  // An e-ink brief that says your day is empty when it could not read your
+  // calendar is worse than one that says it could not read your calendar.
+  const errors = [];
+  const read = (table, cols) => scope(supabase.from(table).select(cols)).then((r) => {
+    if (r.error) { errors.push(`${table}: ${r.error.message}`); return null; }
+    return r.data || [];
+  });
   const [events, birthdays, upkeep] = await Promise.all([
-    scope(supabase.from("personal_events").select("id,title,notes,start_time,end_time,all_day,location,category")).then(r => r.data || []),
-    scope(supabase.from("personal_birthdays").select("id,name,month,day,year")).then(r => r.data || []),
-    scope(supabase.from("upkeep_items").select("id,name,interval_days,last_done")).then(r => r.data || []),
+    read("personal_events", "id,title,notes,start_time,end_time,all_day,location,category"),
+    read("personal_birthdays", "id,name,month,day,year"),
+    read("upkeep_items", "id,name,interval_days,last_done"),
   ]);
-  return { events, birthdays, upkeep };
+  return { events, birthdays, upkeep, errors };
 }
 
 // ── ICS view ─────────────────────────────────────────────────────────────────
-function renderIcs({ events, birthdays, upkeep }, include) {
+function renderIcs({ events = [], birthdays = [], upkeep = [] }, include) {
   const out = [];
 
   if (include.has("events")) {
@@ -175,7 +186,7 @@ function renderIcs({ events, birthdays, upkeep }, include) {
 }
 
 // ── JSON view (for a TRMNL Private Plugin, Polling) ──────────────────────────
-function renderJson({ events, birthdays, upkeep }) {
+function renderJson({ events = [], birthdays = [], upkeep = [] }) {
   const now = Date.now();
   const fmtDay = (d, opts) => d.toLocaleDateString("en-US", { timeZone: TZ, ...opts });
   const fmtDateTime = (d) => d.toLocaleString("en-US", { timeZone: TZ, weekday: "short", month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
@@ -285,6 +296,17 @@ exports.handler = async (event) => {
 
   try {
     const data = await loadAll(supabase, userId);
+    // A read that failed is not a day with nothing in it. Refuse to render
+    // rather than publish a confident blank to a device that cannot ask again
+    // until its next hourly refresh; the 15-minute cache header below would
+    // otherwise pin that blank in place long after the blip passed.
+    if (data.errors && data.errors.length) {
+      return {
+        statusCode: 502,
+        headers: { "Content-Type": "application/json", "Cache-Control": "no-store" },
+        body: JSON.stringify({ success: false, error: `couldn't read your data — ${data.errors.join("; ")}` }),
+      };
+    }
     const view = (q.view || "json").toLowerCase();
 
     if (view === "ics" || view === "ical" || view === "calendar") {
