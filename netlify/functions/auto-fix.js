@@ -49,7 +49,7 @@ function logSpend(userId, { modelKey, usage, ms, ok, detail }) {
   const inTok = (u.input_tokens || 0) + cacheWrite + cacheRead;
   const outTok = u.output_tokens || 0;
   try {
-    fetch(`${url}/rest/v1/usage_log`, {
+    fetch(`${url}/rest/v1/usage_log`, { signal: AbortSignal.timeout(30000),
       method: "POST",
       headers: { apikey: service, Authorization: `Bearer ${service}`, "Content-Type": "application/json", "Content-Profile": "boardroom", Prefer: "return=minimal" },
       body: JSON.stringify({ user_id: userId, fn: "auto-fix", kind: "anthropic", model: modelKey, in_tokens: inTok, out_tokens: outTok, cost_usd: estCost(modelKey, u.input_tokens || 0, outTok, cacheWrite, cacheRead), ms, ok, detail: detail ? String(detail).slice(0, 500) : undefined }),
@@ -67,7 +67,7 @@ const BASE_FILES = ["index.html", "public/index.html", "robots.txt", "public/rob
 const REPO_DIRS = ["", "apps/shell/"];
 
 async function ghGet(repo, path, token) {
-  const res = await fetch(`${GH}/repos/${repo}/contents/${path}`, {
+  const res = await fetch(`${GH}/repos/${repo}/contents/${path}`, { signal: AbortSignal.timeout(30000),
     headers: { Authorization: `Bearer ${token}`, "User-Agent": "board-room-auditor", Accept: "application/vnd.github+json" },
   });
   if (!res.ok) return null; // 404 here can mean "doesn't exist" OR "token can't see this repo" — GitHub deliberately conflates these
@@ -95,7 +95,7 @@ exports.handler = async (event) => {
   if (!supaUrl || !service || !owner) return json(503, { error: "server owner is not configured" });
   const token = (event.headers.authorization || event.headers.Authorization || "").replace(/^Bearer\s+/i, "");
   if (!token) return json(401, { error: "sign in first" });
-  const who = await fetch(`${supaUrl}/auth/v1/user`, { headers: { apikey: service, Authorization: `Bearer ${token}` } });
+  const who = await fetch(`${supaUrl}/auth/v1/user`, { signal: AbortSignal.timeout(30000), headers: { apikey: service, Authorization: `Bearer ${token}` } });
   if (!who.ok) return json(401, { error: "session expired — refresh and try again" });
   let userId = null;
   try { userId = (await who.json())?.id || null; } catch { return json(401, { error: "session expired — refresh and try again" }); }
@@ -107,7 +107,7 @@ exports.handler = async (event) => {
     if (body.action === "commit") {
       if (!body.path || body.content === undefined) return json(400, { error: "path and content are required to commit" });
       const current = await ghGet(body.repo, body.path, githubToken);
-      const putRes = await fetch(`${GH}/repos/${body.repo}/contents/${body.path}`, {
+      const putRes = await fetch(`${GH}/repos/${body.repo}/contents/${body.path}`, { signal: AbortSignal.timeout(30000),
         method: "PUT",
         headers: { Authorization: `Bearer ${githubToken}`, "User-Agent": "board-room-auditor", Accept: "application/vnd.github+json", "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -136,7 +136,7 @@ exports.handler = async (event) => {
     const filesBlock = found.map(f => `--- ${f.path} ---\n${f.content}`).join("\n\n");
     const system = `You edit static web files for a solo founder's site. Given an instruction and the current content of candidate files from the repo, decide which ONE file should change to satisfy it. Respond ONLY with JSON: {"path":"<one of the given paths, exactly>","content":"<the COMPLETE corrected file content>","note":"one sentence on what changed"}. If the instruction can't be satisfied by editing one of these static files (e.g. it needs a change to page content rendered by application code), respond {"path":null,"note":"one sentence explaining why not"}. No markdown, no prose outside the JSON.`;
     const aiT0 = Date.now();
-    const aiRes = await fetch("https://api.anthropic.com/v1/messages", {
+    const aiRes = await fetch("https://api.anthropic.com/v1/messages", { signal: AbortSignal.timeout(120000),
       method: "POST",
       headers: { "Content-Type": "application/json", "x-api-key": anthropicKey, "anthropic-version": "2023-06-01" },
       // Alias, not the dated snapshot this used to pin: same model, but the

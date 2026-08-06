@@ -44,7 +44,7 @@ const CHIEF = "You are the Chief of Staff for Cameron's board room — the singl
 
 async function claude(system, userContent, maxTokens = 700, cfg = null, stage = "board") {
   const t0 = Date.now();
-  const res = await fetch("https://api.anthropic.com/v1/messages", {
+  const res = await fetch("https://api.anthropic.com/v1/messages", { signal: AbortSignal.timeout(120000),
     method: "POST",
     headers: { "Content-Type": "application/json", "x-api-key": process.env.ANTHROPIC_API_KEY, "anthropic-version": "2023-06-01" },
     body: JSON.stringify({ model: HAIKU, max_tokens: maxTokens, system, messages: [{ role: "user", content: userContent }] }),
@@ -74,13 +74,13 @@ function sbConfig() {
   return { url: SUPABASE_URL.replace(/\/$/, ""), key: SUPABASE_SERVICE_ROLE_KEY, uid: BOARD_USER_ID };
 }
 async function sbGet(cfg, path) {
-  const res = await fetch(`${cfg.url}/rest/v1/${path}`, { headers: { apikey: cfg.key, Authorization: `Bearer ${cfg.key}`, "Accept-Profile": "boardroom" } });
+  const res = await fetch(`${cfg.url}/rest/v1/${path}`, { signal: AbortSignal.timeout(20000), headers: { apikey: cfg.key, Authorization: `Bearer ${cfg.key}`, "Accept-Profile": "boardroom" } });
   if (!res.ok) return null;
   return res.json();
 }
 async function sbInsert(cfg, table, rows) {
   try {
-    await fetch(`${cfg.url}/rest/v1/${table}`, {
+    await fetch(`${cfg.url}/rest/v1/${table}`, { signal: AbortSignal.timeout(20000),
       method: "POST",
       headers: { apikey: cfg.key, Authorization: `Bearer ${cfg.key}`, "Content-Type": "application/json", "Content-Profile": "boardroom", Prefer: "return=minimal" },
       body: JSON.stringify(rows),
@@ -147,7 +147,7 @@ export default async (req) => {
   }
 
   // 5. Edit the deferred Discord message.
-  await fetch(`https://discord.com/api/v10/webhooks/${application_id}/${token}/messages/@original`, {
+  await fetch(`https://discord.com/api/v10/webhooks/${application_id}/${token}/messages/@original`, { signal: AbortSignal.timeout(20000),
     method: "PATCH",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ content: (answer || "No answer produced.").slice(0, 1990) }),

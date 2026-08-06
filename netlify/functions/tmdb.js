@@ -31,7 +31,7 @@ exports.handler = async (event) => {
     const { title } = body;
     if (!title) return error(400, "title is required");
 
-    const res = await fetch(`https://api.themoviedb.org/3/search/movie?query=${encodeURIComponent(title)}&include_adult=false`, {
+    const res = await fetch(`https://api.themoviedb.org/3/search/movie?query=${encodeURIComponent(title)}&include_adult=false`, { signal: AbortSignal.timeout(8000),
       headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
     });
     if (!res.ok) throw new Error(`TMDb ${res.status}`);

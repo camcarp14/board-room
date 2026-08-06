@@ -106,7 +106,7 @@ function toEvent({ r, t }, nowMs) {
 }
 
 async function fetchWeek(name) {
-  const res = await fetch(`https://nfs.faireconomy.media/ff_calendar_${name}.json`, { headers: { "User-Agent": "Mozilla/5.0 (compatible; BoardRoom/1.0)" } });
+  const res = await fetch(`https://nfs.faireconomy.media/ff_calendar_${name}.json`, { signal: AbortSignal.timeout(8000), headers: { "User-Agent": "Mozilla/5.0 (compatible; BoardRoom/1.0)" } });
   const raw = await res.text();
   // Check status BEFORE parsing — a 429/500 returns an HTML "Request Denied"
   // page, and parsing it first threw a JSON SyntaxError that masked the real

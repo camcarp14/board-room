@@ -23,13 +23,13 @@ exports.handler = async (event) => {
   {
     const token = (event.headers.authorization || event.headers.Authorization || "").replace(/^Bearer\s+/i, "");
     if (!token) return json(401, { error: "sign in first" });
-    const who = await fetch(`${url}/auth/v1/user`, { headers: { apikey: key, Authorization: `Bearer ${token}` } });
+    const who = await fetch(`${url}/auth/v1/user`, { signal: AbortSignal.timeout(15000), headers: { apikey: key, Authorization: `Bearer ${token}` } });
     if (!who.ok) return json(401, { error: "session expired — refresh and try again" });
     const user = await who.json().catch(() => null);
     if (user?.id !== owner) return json(403, { error: "this account is not allowed to use Board Room" });
   }
 
-  const rest = (path, opts = {}) => fetch(`${url}/rest/v1/${path}`, {
+  const rest = (path, opts = {}) => fetch(`${url}/rest/v1/${path}`, { signal: AbortSignal.timeout(15000),
     ...opts,
     headers: { apikey: key, Authorization: `Bearer ${key}`, "Content-Type": "application/json", "Accept-Profile": "boardroom", "Content-Profile": "boardroom", Prefer: "count=exact", ...(opts.headers || {}) },
   });

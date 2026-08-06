@@ -128,7 +128,7 @@ const OWNER = String(process.env.BOARD_USER_ID || "").trim();
 
 async function verifyUser(token) {
   if (!token) return null;
-  const res = await fetch(`${SUPA}/auth/v1/user`, { headers: { apikey: SERVICE, Authorization: `Bearer ${token}` } });
+  const res = await fetch(`${SUPA}/auth/v1/user`, { signal: AbortSignal.timeout(20000), headers: { apikey: SERVICE, Authorization: `Bearer ${token}` } });
   if (!res.ok) return null;
   const u = await res.json().catch(() => null);
   return u?.id || null;
@@ -136,7 +136,7 @@ async function verifyUser(token) {
 
 async function readStore(userId) {
   const url = `${SUPA}/rest/v1/app_settings?select=setting_value&user_id=eq.${userId}&setting_key=eq.${RESULT_KEY}`;
-  const res = await fetch(url, { headers: { apikey: SERVICE, Authorization: `Bearer ${SERVICE}`, "Accept-Profile": "boardroom" } });
+  const res = await fetch(url, { signal: AbortSignal.timeout(20000), headers: { apikey: SERVICE, Authorization: `Bearer ${SERVICE}`, "Accept-Profile": "boardroom" } });
   if (!res.ok) return {};
   const rows = await res.json().catch(() => []);
   const v = rows?.[0]?.setting_value;
@@ -144,7 +144,7 @@ async function readStore(userId) {
 }
 
 async function writeStore(userId, store) {
-  await fetch(`${SUPA}/rest/v1/app_settings?on_conflict=user_id,setting_key`, {
+  await fetch(`${SUPA}/rest/v1/app_settings?on_conflict=user_id,setting_key`, { signal: AbortSignal.timeout(20000),
     method: "POST",
     headers: {
       apikey: SERVICE, Authorization: `Bearer ${SERVICE}`,

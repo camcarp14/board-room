@@ -317,7 +317,20 @@ export function StocksPanel({ isMobile }) {
   ) : null;
 
   const watchlist = (
-    <CollapsibleCard {...coll("watchlist")} title="Watchlist">
+    // The trailing chip is the same rule the Crypto board just got: `data ?
+    // tiles : isError ? fallback` means DATA WINS, so once the quotes have
+    // loaded a failing refresh keeps four confident prices on screen and says
+    // nothing. These four are the fastest glance on the tab and the ones most
+    // likely to be read without thinking, so a failed refresh has to be visible
+    // without displacing the last good numbers.
+    <CollapsibleCard {...coll("watchlist")} title="Watchlist"
+      trailing={quotes.data && quotes.isError ? (
+        <button type="button" onClick={() => quotes.refetch()}
+          style={{ background: "none", border: "none", padding: 0, font: "inherit", cursor: "pointer" }}>
+          <span className="t-cap" style={{ color: T.amber }}>stale · retry</span>
+        </button>
+      ) : null}
+    >
       {quotes.data ? (
         <div style={tileGrid}>
           {TICKERS.map(([label, key]) => {

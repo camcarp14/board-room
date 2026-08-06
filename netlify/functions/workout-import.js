@@ -38,7 +38,7 @@ function cfg() {
   return { url: process.env.SUPABASE_URL, service: process.env.SUPABASE_SERVICE_ROLE_KEY, owner: String(process.env.BOARD_USER_ID || "").trim() };
 }
 function rest(c, path, opts = {}) {
-  return fetch(`${c.url}/rest/v1/${path}`, {
+  return fetch(`${c.url}/rest/v1/${path}`, { signal: AbortSignal.timeout(8000),
     ...opts,
     headers: { apikey: c.service, Authorization: `Bearer ${c.service}`, "Content-Type": "application/json", "Accept-Profile": "boardroom", "Content-Profile": "boardroom", ...(opts.headers || {}) },
   });

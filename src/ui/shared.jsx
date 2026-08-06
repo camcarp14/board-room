@@ -34,6 +34,14 @@ export function StatusTag({ status }) {
     const at = status.at;
     if (!at) return null; // nothing to timestamp — quieter than a bare label
     const d = new Date(at), now = new Date();
+    // A MALFORMED STAMP RENDERS THE WORDS "Invalid Date". Every branch below
+    // survives a NaN date without throwing: toDateString() returns the string
+    // "Invalid Date" rather than matching, the day arithmetic yields NaN so the
+    // "yesterday" test is false, and toLocaleDateString hands back "Invalid
+    // Date" — which then appears as the freshness chip on any card that got a
+    // bad timestamp, on every page that uses this component. Absent is already
+    // handled one line up; unreadable deserves the same silence.
+    if (Number.isNaN(d.getTime())) return null;
     // Same-day data shows the time; older data reads as a date/relative age so a
     // bare "1:15 AM" from yesterday can't be mistaken for fresh.
     const label = d.toDateString() === now.toDateString()

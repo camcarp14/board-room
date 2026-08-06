@@ -57,20 +57,20 @@ function env() {
   return { anthropic: process.env.ANTHROPIC_API_KEY, url: process.env.SUPABASE_URL, service: process.env.SUPABASE_SERVICE_ROLE_KEY, owner: String(process.env.BOARD_USER_ID || "").trim() };
 }
 function rest(cfg, path, opts = {}) {
-  return fetch(`${cfg.url}/rest/v1/${path}`, {
+  return fetch(`${cfg.url}/rest/v1/${path}`, { signal: AbortSignal.timeout(30000),
     ...opts,
     headers: { apikey: cfg.service, Authorization: `Bearer ${cfg.service}`, "Content-Type": "application/json", "Accept-Profile": "boardroom", "Content-Profile": "boardroom", Prefer: "return=minimal", ...(opts.headers || {}) },
   });
 }
 async function verifyUser(cfg, token) {
-  const res = await fetch(`${cfg.url}/auth/v1/user`, { headers: { apikey: cfg.service, Authorization: `Bearer ${token}` } });
+  const res = await fetch(`${cfg.url}/auth/v1/user`, { signal: AbortSignal.timeout(30000), headers: { apikey: cfg.service, Authorization: `Bearer ${token}` } });
   if (!res.ok) return null;
   const u = await res.json();
   return u?.id || null;
 }
 async function claudeCall(cfg, modelKey, system, user, maxTokens, userId) {
   const t0 = Date.now();
-  const res = await fetch("https://api.anthropic.com/v1/messages", {
+  const res = await fetch("https://api.anthropic.com/v1/messages", { signal: AbortSignal.timeout(120000),
     method: "POST",
     headers: { "Content-Type": "application/json", "x-api-key": cfg.anthropic, "anthropic-version": "2023-06-01" },
     body: JSON.stringify({ model: MODEL_IDS[modelKey] || MODEL_IDS.haiku, max_tokens: maxTokens, system, messages: [{ role: "user", content: user }] }),

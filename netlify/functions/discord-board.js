@@ -29,7 +29,7 @@ export default async (req) => {
     const question = interaction.data?.options?.find(o => o.name === "question")?.value || "What should I know right now?";
     // Fire the background function (don't await completion — it outlives this request)
     const base = process.env.URL || `https://${req.headers.get("host")}`;
-    fetch(`${base}/.netlify/functions/board-work-background`, {
+    fetch(`${base}/.netlify/functions/board-work-background`, { signal: AbortSignal.timeout(8000),
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ question, application_id: interaction.application_id, token: interaction.token }),

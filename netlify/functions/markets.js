@@ -13,7 +13,7 @@ const TTL_MS = 5 * 60 * 1000;
 const SYMBOLS = { gold: "GC=F", nvda: "NVDA", mstr: "MSTR", strc: "STRC" };
 
 async function quote(symbol) {
-  const res = await fetch(`https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(symbol)}?range=1d&interval=1d`, {
+  const res = await fetch(`https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(symbol)}?range=1d&interval=1d`, { signal: AbortSignal.timeout(8000),
     headers: { "User-Agent": "Mozilla/5.0 (compatible; BoardRoom/1.0)" },
   });
   if (!res.ok) throw new Error(`${symbol} ${res.status}`);

@@ -21,7 +21,7 @@ exports.handler = async (event) => {
   if (!supaUrl || !service || !owner) return json(503, { error: "server owner is not configured" });
   const auth = (event.headers.authorization || event.headers.Authorization || "").replace(/^Bearer\s+/i, "");
   if (!auth) return json(401, { error: "sign in first" });
-  const who = await fetch(`${supaUrl}/auth/v1/user`, { headers: { apikey: service, Authorization: `Bearer ${auth}` } });
+  const who = await fetch(`${supaUrl}/auth/v1/user`, { signal: AbortSignal.timeout(15000), headers: { apikey: service, Authorization: `Bearer ${auth}` } });
   if (!who.ok) return json(401, { error: "session expired — refresh and try again" });
   const user = await who.json().catch(() => null);
   if (user?.id !== owner) return json(403, { error: "this account is not allowed to use Board Room" });
@@ -32,12 +32,12 @@ exports.handler = async (event) => {
   const headers = { Authorization: `Bearer ${token}`, "Content-Type": "application/json" };
   try {
     // Resolve slug/name → site_id
-    const sitesRes = await fetch(`${API}/sites?name=${encodeURIComponent(body.site)}`, { headers });
+    const sitesRes = await fetch(`${API}/sites?name=${encodeURIComponent(body.site)}`, { signal: AbortSignal.timeout(15000), headers });
     const sites = await sitesRes.json();
     const site = (Array.isArray(sites) ? sites : []).find(s => s.name === body.site) || sites[0];
     if (!site?.id) return json(404, { error: `site '${body.site}' not found for this token` });
 
-    const buildRes = await fetch(`${API}/sites/${site.id}/builds`, { method: "POST", headers, body: JSON.stringify({}) });
+    const buildRes = await fetch(`${API}/sites/${site.id}/builds`, { signal: AbortSignal.timeout(15000), method: "POST", headers, body: JSON.stringify({}) });
     const build = await buildRes.json();
     if (!buildRes.ok) return json(buildRes.status, { error: build.message || "build trigger failed" });
 

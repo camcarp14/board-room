@@ -31,7 +31,7 @@ async function denyUnlessSignedIn(event) {
   const token = String(h.authorization || h.Authorization || "").replace(/^Bearer\s+/i, "").trim();
   if (!token) return json(401, { success: false, error: "sign in first" });
   try {
-    const who = await fetch(`${url}/auth/v1/user`, { headers: { apikey: service, Authorization: `Bearer ${token}` } });
+    const who = await fetch(`${url}/auth/v1/user`, { signal: AbortSignal.timeout(30000), headers: { apikey: service, Authorization: `Bearer ${token}` } });
     if (!who.ok) return json(401, { success: false, error: "session expired — refresh and try again" });
     const u = await who.json();
     if (u?.id !== owner) return json(403, { success: false, error: "this account is not allowed to use Board Room" });
@@ -58,7 +58,7 @@ exports.handler = async (event) => {
 
   const headers = { apikey: key, Authorization: `Bearer ${key}` };
   const count = async (query) => {
-    const res = await fetch(`${url}/rest/v1/outreach?${query}&select=id`, { headers: { ...headers, Prefer: "count=exact", Range: "0-0" } });
+    const res = await fetch(`${url}/rest/v1/outreach?${query}&select=id`, { signal: AbortSignal.timeout(30000), headers: { ...headers, Prefer: "count=exact", Range: "0-0" } });
     if (!res.ok) throw new Error(`outreach query failed (${res.status}) — check the "outreach" table and its columns still match`);
     return parseInt(res.headers.get("content-range")?.split("/")[1] || "0", 10);
   };

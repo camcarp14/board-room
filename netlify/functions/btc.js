@@ -24,8 +24,8 @@ exports.handler = async (event) => {
 
   try {
     const [priceRes, chartRes] = await Promise.all([
-      fetch("https://api.coingecko.com/api/v3/simple/price?ids=bitcoin&vs_currencies=usd&include_24hr_change=true"),
-      fetch("https://api.coingecko.com/api/v3/coins/bitcoin/market_chart?vs_currency=usd&days=1"),
+      fetch("https://api.coingecko.com/api/v3/simple/price?ids=bitcoin&vs_currencies=usd&include_24hr_change=true", { signal: AbortSignal.timeout(8000) }),
+      fetch("https://api.coingecko.com/api/v3/coins/bitcoin/market_chart?vs_currency=usd&days=1", { signal: AbortSignal.timeout(8000) }),
     ]);
     if (!priceRes.ok || !chartRes.ok) throw new Error(`upstream ${priceRes.status}/${chartRes.status}`);
     const priceData = await priceRes.json();

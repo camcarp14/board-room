@@ -24,7 +24,7 @@ async function denyUnlessSignedIn(event) {
   const token = String(h.authorization || h.Authorization || "").replace(/^Bearer\s+/i, "").trim();
   if (!token) return json(401, { success: false, error: "sign in first" });
   try {
-    const who = await fetch(`${url}/auth/v1/user`, { headers: { apikey: service, Authorization: `Bearer ${token}` } });
+    const who = await fetch(`${url}/auth/v1/user`, { signal: AbortSignal.timeout(8000), headers: { apikey: service, Authorization: `Bearer ${token}` } });
     if (!who.ok) return json(401, { success: false, error: "session expired — refresh and try again" });
     const u = await who.json();
     if (u?.id !== owner) return json(403, { success: false, error: "this account is not allowed to use Board Room" });
@@ -89,7 +89,7 @@ async function getAccessToken(email, privateKey) {
   }
   const jwt = `${header}.${claims}.${sig}`;
 
-  const res = await fetch("https://oauth2.googleapis.com/token", {
+  const res = await fetch("https://oauth2.googleapis.com/token", { signal: AbortSignal.timeout(8000),
     method: "POST",
     headers: { "Content-Type": "application/x-www-form-urlencoded" },
     body: `grant_type=${encodeURIComponent("urn:ietf:params:oauth:grant-type:jwt-bearer")}&assertion=${jwt}`,
@@ -127,7 +127,7 @@ exports.handler = async (event) => {
   try {
     const token = await getAccessToken(email, privateKey);
     const query = async (startDaysAgo, endDaysAgo, byDate) => {
-      const res = await fetch(`https://www.googleapis.com/webmasters/v3/sites/${encodeURIComponent(site)}/searchAnalytics/query`, {
+      const res = await fetch(`https://www.googleapis.com/webmasters/v3/sites/${encodeURIComponent(site)}/searchAnalytics/query`, { signal: AbortSignal.timeout(8000),
         method: "POST",
         headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
         body: JSON.stringify({

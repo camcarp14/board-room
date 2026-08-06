@@ -28,7 +28,7 @@ exports.handler = async (event) => {
   if (!krakenInterval) return json(400, { error: `Unsupported interval "${uiInterval}". Use one of: ${Object.keys(INTERVAL_MAP).join(", ")}` });
 
   try {
-    const res = await fetch(`https://api.kraken.com/0/public/OHLC?pair=XBTUSD&interval=${krakenInterval}`);
+    const res = await fetch(`https://api.kraken.com/0/public/OHLC?pair=XBTUSD&interval=${krakenInterval}`, { signal: AbortSignal.timeout(8000) });
     if (!res.ok) {
       const text = await res.text().catch(() => "");
       throw new Error(`Kraken responded ${res.status}${text ? `: ${text.slice(0, 200)}` : ""}`);

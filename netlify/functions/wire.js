@@ -50,7 +50,7 @@ exports.handler = async (event) => {
 
   try {
     const results = await Promise.allSettled(FEEDS.map(async (f) => {
-      const res = await fetch(f.url, { headers: { "User-Agent": "Mozilla/5.0 (compatible; BoardRoom/1.0)" } });
+      const res = await fetch(f.url, { signal: AbortSignal.timeout(8000), headers: { "User-Agent": "Mozilla/5.0 (compatible; BoardRoom/1.0)" } });
       if (!res.ok) throw new Error(`${f.source} ${res.status}`);
       return parseRss(await res.text(), f.source);
     }));

@@ -35,7 +35,7 @@ async function denyUnlessSignedIn(event) {
   const token = String(h.authorization || h.Authorization || "").replace(/^Bearer\s+/i, "").trim();
   if (!token) return json(401, { success: false, error: "sign in first" });
   try {
-    const who = await fetch(`${url}/auth/v1/user`, { headers: { apikey: service, Authorization: `Bearer ${token}` } });
+    const who = await fetch(`${url}/auth/v1/user`, { signal: AbortSignal.timeout(15000), headers: { apikey: service, Authorization: `Bearer ${token}` } });
     if (!who.ok) return json(401, { success: false, error: "session expired — refresh and try again" });
     const u = await who.json();
     if (u?.id !== owner) return json(403, { success: false, error: "this account is not allowed to use Board Room" });
@@ -54,7 +54,7 @@ function normalizeShop(raw) {
 
 async function getToken(shop, clientId, clientSecret) {
   if (cachedToken && Date.now() < tokenExpiresAt - 60_000) return cachedToken;
-  const res = await fetch(`https://${shop}.myshopify.com/admin/oauth/access_token`, {
+  const res = await fetch(`https://${shop}.myshopify.com/admin/oauth/access_token`, { signal: AbortSignal.timeout(15000),
     method: "POST",
     headers: { "Content-Type": "application/x-www-form-urlencoded" },
     body: new URLSearchParams({ grant_type: "client_credentials", client_id: clientId, client_secret: clientSecret }),
@@ -72,7 +72,7 @@ async function getToken(shop, clientId, clientSecret) {
 }
 
 async function shopifyGraphQL(shop, token, query, variables) {
-  const res = await fetch(`https://${shop}.myshopify.com/admin/api/2026-04/graphql.json`, {
+  const res = await fetch(`https://${shop}.myshopify.com/admin/api/2026-04/graphql.json`, { signal: AbortSignal.timeout(15000),
     method: "POST",
     headers: { "Content-Type": "application/json", "X-Shopify-Access-Token": token },
     body: JSON.stringify({ query, variables }),

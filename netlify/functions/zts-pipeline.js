@@ -33,7 +33,7 @@ async function denyUnlessSignedIn(event) {
   const token = String(h.authorization || h.Authorization || "").replace(/^Bearer\s+/i, "").trim();
   if (!token) return json(401, { success: false, error: "sign in first" });
   try {
-    const who = await fetch(`${url}/auth/v1/user`, { headers: { apikey: service, Authorization: `Bearer ${token}` } });
+    const who = await fetch(`${url}/auth/v1/user`, { signal: AbortSignal.timeout(30000), headers: { apikey: service, Authorization: `Bearer ${token}` } });
     if (!who.ok) return json(401, { success: false, error: "session expired — refresh and try again" });
     const u = await who.json();
     if (u?.id !== owner) return json(403, { success: false, error: "this account is not allowed to use Board Room" });
@@ -70,7 +70,7 @@ exports.handler = async (event) => {
 
   try {
     // Accept-Profile selects the `zts` schema on the shared project.
-    const res = await fetch(`${url}/rest/v1/creators?select=stage,subscriber_count`, {
+    const res = await fetch(`${url}/rest/v1/creators?select=stage,subscriber_count`, { signal: AbortSignal.timeout(30000),
       headers: { apikey: key, Authorization: `Bearer ${key}`, "Accept-Profile": "zts" },
     });
     if (!res.ok) throw new Error(`creators query failed (${res.status}) — check the zts schema is exposed and the "creators" table has stage/subscriber_count columns`);

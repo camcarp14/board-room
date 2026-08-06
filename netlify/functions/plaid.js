@@ -50,7 +50,7 @@ async function whoami(event, c) {
   const token = String(h.authorization || h.Authorization || "").replace(/^Bearer\s+/i, "").trim();
   if (!token) return { err: json(401, { error: "sign in first" }) };
   try {
-    const r = await fetch(`${c.url}/auth/v1/user`, { headers: { apikey: c.service, Authorization: `Bearer ${token}` } });
+    const r = await fetch(`${c.url}/auth/v1/user`, { signal: AbortSignal.timeout(8000), headers: { apikey: c.service, Authorization: `Bearer ${token}` } });
     if (!r.ok) return { err: json(401, { error: "session expired — refresh and try again" }) };
     const u = await r.json();
     if (!u?.id) return { err: json(401, { error: "session expired — refresh and try again" }) };
@@ -62,7 +62,7 @@ async function whoami(event, c) {
 }
 
 async function plaid(path, body, c) {
-  const r = await fetch(`${PLAID_HOST()}${path}`, {
+  const r = await fetch(`${PLAID_HOST()}${path}`, { signal: AbortSignal.timeout(8000),
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ client_id: c.id, secret: c.secret, ...body }),
@@ -88,7 +88,7 @@ const sbHeaders = (c, extra = {}) => ({
   ...extra,
 });
 async function sb(path, init, c) {
-  const r = await fetch(`${c.url}/rest/v1/${path}`, { ...init, headers: sbHeaders(c, init?.headers) });
+  const r = await fetch(`${c.url}/rest/v1/${path}`, { signal: AbortSignal.timeout(8000), ...init, headers: sbHeaders(c, init?.headers) });
   if (!r.ok) throw new Error(`db: ${r.status} ${(await r.text()).slice(0, 200)}`);
   const t = await r.text();
   return t ? JSON.parse(t) : null;
@@ -315,7 +315,7 @@ exports.handler = async (event) => {
       // nothing. A 200 from a host means the keys ARE that host's keys.
       const probe = async (host) => {
         try {
-          const r = await fetch(`${host}/institutions/get`, {
+          const r = await fetch(`${host}/institutions/get`, { signal: AbortSignal.timeout(8000),
             method: "POST", headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ client_id: c.id, secret: c.secret, count: 1, offset: 0, country_codes: ["US"] }),
           });

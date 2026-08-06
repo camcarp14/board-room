@@ -214,9 +214,41 @@ for (const file of fns) {
 rmSync(OUT_DIR, { recursive: true, force: true });
 
 console.log(`\n${pass}/${fns.length} functions export a callable handler`);
+// ─── every outbound fetch carries a deadline ─────────────────────────────────
+// A fetch with no timeout in a Netlify function does not fail — it HANGS, until
+// the platform kills the invocation. On a synchronous function that is ~10
+// seconds of a spinner and then a 502 with nothing readable in it; on a
+// background one it burns the 15-minute budget doing nothing. Twenty of these
+// shipped without one, against CoinGecko, Yahoo, Plaid, Shopify, TMDB, the
+// Forex calendar and Anthropic — every upstream the app has.
+//
+// The deadline is sized to the work: a JSON API that has not answered in eight
+// seconds is not going to, and an LLM generation legitimately takes minutes.
+{
+  const { readdirSync, readFileSync: rf } = await import("node:fs");
+  const files = readdirSync("netlify/functions").filter((f) => f.endsWith(".js"));
+  const naked = [], tooShortForAnLLM = [];
+  for (const f of files) {
+    const src = rf(`netlify/functions/${f}`, "utf8");
+    if (!/\bfetch\(/.test(src)) continue;
+    if (!/AbortSignal\.timeout|AbortController/.test(src)) { naked.push(f); continue; }
+    // An Anthropic call on a short deadline is worse than none: it fails every
+    // time the model thinks for longer than a page load.
+    for (const line of src.split("\n")) {
+      const m = line.match(/api\.anthropic\.com[\s\S]*?AbortSignal\.timeout\((\d+)\)/);
+      if (m && Number(m[1]) < 60000) tooShortForAnLLM.push(`${f} (${m[1]}ms)`);
+    }
+  }
+  if (naked.length) failures.push(["outbound timeouts", `these fetch with no deadline: ${naked.join(", ")}`]);
+  else console.log(`ok:   every function that fetches carries a deadline`);
+  if (tooShortForAnLLM.length) failures.push(["LLM deadlines", `sized for a page load, not a generation: ${tooShortForAnLLM.join(", ")}`]);
+  else console.log(`ok:   LLM calls get generation-sized deadlines`);
+}
+
 if (failures.length) {
   for (const [name, why] of failures) console.error(`FAIL: ${name}\n      ${why}`);
   console.error("FUNCTION SMOKE FAILED");
   process.exit(1);
 }
+
 console.log("FUNCTION SMOKE PASS");

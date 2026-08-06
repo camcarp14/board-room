@@ -162,7 +162,12 @@ exports.handler = async (event) => {
     // 2. Ask Haiku for findings as strict JSON
     const system = `You audit websites for a solo founder. Given raw HTML and HTTP status, return ONLY a JSON array (no markdown, no prose) of 0-4 findings. Each finding: {"severity":"high"|"medium"|"low","area":"seo"|"performance"|"conversion"|"content"|"technical","finding":"one specific sentence","suggestion":"one actionable sentence"}. Only report things actually visible in the HTML. If the site looks healthy, return [].`;
     const aiT0 = Date.now();
+    // The AbortController above covers the page fetch only; this call had no
+    // deadline of its own, so a hung generation ran until the function's own
+    // budget expired and the caller got a 502 rather than an error it could
+    // read. Its own timeout, sized for a generation rather than a page load.
     const aiRes = await fetch("https://api.anthropic.com/v1/messages", {
+      signal: AbortSignal.timeout(120000),
       method: "POST",
       headers: { "Content-Type": "application/json", "x-api-key": key, "anthropic-version": "2023-06-01" },
       body: JSON.stringify({
