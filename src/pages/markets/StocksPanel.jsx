@@ -53,19 +53,34 @@ const PHASE_READ = {
   risk_off: "Nothing is bid — the best trade here is usually no trade.",
 };
 
+// THE SETTLE RUNS AFTER THE CLOSE, SO THIS WHOLE CARD IS A PLAN FOR THE NEXT
+// OPEN. It used to say "worth an entry at Wednesday's close" — a fact about a
+// session that is over, when the only thing you can act on is the bell. The
+// headings are written for the morning now, and the two lists are the two
+// questions you actually have: what do I take at the open, and what am I
+// getting ready for.
 const ENTRY_META = {
   entry: {
-    label: "Entry", tone: T.green, head: "Worth an entry",
-    rule: "First target still ahead, stop close, and the move pays 1.5×+ what being wrong costs.",
+    label: "Entry", tone: T.green,
+    head: "Take at the open", headOpen: "Worth an entry now",
+    rule: "Triggered and still worth it: the first target is ahead, the stop is close, and the move pays 1.5×+ what being wrong costs.",
   },
   watch: {
-    label: "Watch", tone: T.amber, head: "Setting up — not yet",
-    rule: "A real structure with nothing lifting it yet, or too thin a payoff from here.",
+    label: "Watch", tone: T.amber,
+    head: "Getting ready", headOpen: "Getting ready",
+    rule: "Not triggered yet. Each row says the price it has to reach — and why it might get there.",
   },
   late: {
-    label: "Late", tone: T.faint, head: "Already ran",
+    label: "Late", tone: T.faint,
+    head: "Already ran", headOpen: "Already ran",
     rule: "Past its first target, parabolic, or too thin to exit — you'd be buying the exit.",
   },
+};
+const CATALYST_LABEL = {
+  accumulation: "volume, no price",
+  squeeze: "coiled",
+  gap: "gapped",
+  volume: "heavy volume",
 };
 const ENTRY_ORDER = ["entry", "watch", "late"];
 const stateOf = (x) => (x && x.entry && ENTRY_META[x.entry.state] ? x.entry.state : "watch");
@@ -113,6 +128,24 @@ function stageLine(move, short) {
   // An ABSENT pace clause means not measured. "holding" means measured and flat.
   if (which === "motion" && move.motion) return `${head} · ${MOTION_LABEL[move.motion]}`;
   return head;
+}
+
+/**
+ * What this row needs you to do in the morning.
+ *
+ * The entry list is already triggered, so it says where the move is and gets
+ * out of the way. The "getting ready" list is the one that was useless before:
+ * it said a name was not ready and never said what ready would look like. Now
+ * it names the price and the distance.
+ */
+function planLine(row, state) {
+  const t = row.trigger;
+  if (state === "watch" && t && Number.isFinite(t.price)) {
+    const away = Number.isFinite(t.pct) ? ` · ${t.pct >= 0 ? "+" : ""}${t.pct.toFixed(1)}%` : "";
+    if (t.kind === "level") return `needs a close over ${px(t.price)}${away}`;
+    if (t.kind === "target") return `through its level · next ${px(t.price)}${away}`;
+  }
+  return null;
 }
 
 function numberSlot(move, entry, tone) {
@@ -350,8 +383,13 @@ export function StocksPanel({ isMobile }) {
                     style={{ display: "flex", alignItems: "center", gap: 8, width: "100%", minHeight: 44, background: "none", border: "none", padding: "6px 0", font: "inherit", color: "inherit", textAlign: "left", cursor: "pointer" }}>
                     <Dot tone={meta.tone} size={7} />
                     <span className="t-label" style={{ color: "var(--ink)", minWidth: 0 }}>
-                      {/* "now" is a claim about a printing tape. */}
-                      {state === "entry" ? `${meta.head} ${asOfWord}` : meta.head}
+                      {/* "now" is a claim about a printing tape; with the
+                          market shut the only actionable moment is the bell,
+                          and it is deliberately "the next open" rather than
+                          "tomorrow" — a Friday evening is not tomorrow, and
+                          naming the day needs a holiday calendar this
+                          refuses to hardcode. */}
+                      {open ? meta.headOpen : meta.head}
                     </span>
                     <span className="t-cap t-num" style={{ color: "var(--faint)" }}>{rows.length}</span>
                     <IcChevronDown size={12} style={{ marginLeft: "auto", flex: "none", color: "var(--faint)", transform: isOpen ? "none" : "rotate(-90deg)", transition: "transform var(--dur-2) var(--ease-out)" }} />
@@ -375,7 +413,17 @@ export function StocksPanel({ isMobile }) {
                                   {mark && <span className="t-cap t-num" style={{ color: mark.tone, fontWeight: 600 }}>{mark.text}</span>}
                                 </span>
                               }
-                              sub={stageLine(f.move) || "—"}
+                              sub={
+                                <span style={{ display: "inline-flex", flexDirection: "column", gap: 1, minWidth: 0 }}>
+                                  <span>{planLine(f, state) || stageLine(f.move) || "—"}</span>
+                                  {f.catalyst && (
+                                    <span style={{ color: "var(--faint)" }}>
+                                      {CATALYST_LABEL[f.catalyst.kind] || "worth a look"}
+                                      {f.news?.[0] ? ` · ${f.news[0].title}` : ""}
+                                    </span>
+                                  )}
+                                </span>
+                              }
                               trailing={
                                 <span style={{ display: "inline-flex", alignItems: "center", gap: 12, flex: "none" }}>
                                   <NumberCell move={f.move} entry={f.entry} tone={meta.tone} />

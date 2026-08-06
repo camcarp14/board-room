@@ -422,10 +422,60 @@ try {
     !grid.some((x) => ["broken", "spent", "extending"].includes(x.m.stage) && x.e.state === "entry"),
     JSON.stringify(grid.filter((x) => ["broken", "spent", "extending"].includes(x.m.stage) && x.e.state === "entry")));
 
+  // ─── 10b. the morning plan ────────────────────────────────────────────────
+  // The settle runs after the close, so the whole card is a plan for the next
+  // open. A "not yet" row that never says what ready looks like is a
+  // watchlist, not a plan — so the trigger price is asserted, not assumed.
+  const { triggerFor, catalystFor, squeezeRank } = C;
+  const { liveTrigger } = S;
+  check("under its level, the LEVEL is the trigger — and it takes a CLOSE",
+    (() => { const t = triggerFor({ price: 100, range20: { priorHigh: 106 }, targets: { t1: 112 } }); return t.kind === "level" && t.price === 106; })());
+  check("through its level, the first target is the next thing that matters",
+    (() => { const t = triggerFor({ price: 108, range20: { priorHigh: 106 }, targets: { t1: 112 } }); return t.kind === "target" && t.price === 112; })());
+  check("through its level with no target ahead reports 'held', not a trigger behind price",
+    triggerFor({ price: 120, range20: { priorHigh: 106 }, targets: { t1: 112 } }).kind === "held");
+  check("no structure means no trigger, never a guessed one",
+    triggerFor({ price: 100, range20: { priorHigh: null } }) === null &&
+    triggerFor({ price: null, range20: { priorHigh: 106 } }) === null);
+  check("the distance to the trigger is recomputed against the LIVE price",
+    liveTrigger({ price: 110, kind: "level" }, 100).pct === 10 &&
+    liveTrigger({ price: 110, kind: "level" }, 105).pct === 4.8);
+  check("a null price leaves the trigger untouched rather than dividing by it",
+    liveTrigger({ price: 110, kind: "level" }, null).pct === undefined);
+
+  // THE ACCUMULATION TELL is the one thing a price-only screen structurally
+  // cannot see, so it outranks everything else.
+  check("volume up with the price flat is the accumulation tell",
+    catalystFor({ rvol: 2.4, chgSession: 0.3 }).kind === "accumulation");
+  check("...and it outranks a plain heavy-volume day",
+    catalystFor({ rvol: 4.0, chgSession: 0.2 }).kind === "accumulation");
+  // Returns null here, and `(x || {}).kind` is deliberate: the point is that
+  // it does NOT claim accumulation, and null is a perfectly good way not to.
+  check("volume up WITH a big price move is not accumulation — that is just the move",
+    (catalystFor({ rvol: 2.4, chgSession: 5.0 }) || {}).kind !== "accumulation");
+  check("a coiled range is a catalyst on its own", catalystFor({ rvol: 1.0, chgSession: 0.2, squeezePctile: 0.1, squeezeLookback: 60 }).kind === "squeeze");
+  check("an overnight gap is named as one", catalystFor({ rvol: 1.0, chgSession: 3, overnight: 3.4 }).kind === "gap");
+  check("an ordinary session has no catalyst — silence beats a manufactured reason",
+    catalystFor({ rvol: 1.1, chgSession: 0.4, overnight: 0.2 }) === null);
+  check("a missing input never invents a catalyst", catalystFor({}) === null);
+
+  check("the squeeze rank refuses a series too short to rank against itself",
+    squeezeRank(Array.from({ length: 40 }, () => bar(100, 101, 99, 100))).pctile === null);
+  check("a contracting range ranks near the bottom of its own history",
+    (() => {
+      const wide = Array.from({ length: 60 }, (_, i) => bar(100, 110, 90, 100 + (i % 2)));
+      const tight = Array.from({ length: 20 }, () => bar(100, 100.5, 99.5, 100));
+      const r = squeezeRank([...wide, ...tight]);
+      return r.pctile != null && r.pctile <= 0.33;
+    })());
+
   // ─── 11. the vocabulary must cover everything the engines can emit ────────
   const sheet = readFileSync("src/pages/markets/StockSheet.jsx", "utf8");
   const panel = readFileSync("src/pages/markets/StocksPanel.jsx", "utf8");
   const stages = ["base", "atLevel", "breaking", "extending", "spent", "broken", "none", "offboard"];
+  const catalysts = ["accumulation", "squeeze", "gap", "volume"];
+  check("every catalyst the cron can emit has a label in the panel",
+    catalysts.every((c) => panel.includes(`${c}:`)), catalysts.filter((c) => !panel.includes(`${c}:`)).join(","));
   check("every stage the read can emit has a label in the sheet",
     stages.every((s) => new RegExp(`\\b${s}:`).test(sheet)), stages.filter((s) => !new RegExp(`\\b${s}:`).test(sheet)).join(","));
   const phases = Object.keys(PHASE_GATE);

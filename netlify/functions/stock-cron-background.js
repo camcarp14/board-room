@@ -534,6 +534,7 @@ function screenStock(row, ctx = {}) {
   const accel = { dSessionVsWeek, weekVsMonth, daily5, daily21 };
 
   const range20 = structure20(bars);
+  const squeeze = squeezeRank(bars);
 
   // RVOL against the MEDIAN of the prior 20 printed sessions. Median, not mean:
   // one 8x earnings day drags a mean up ~35% and desensitises the measure for a
@@ -627,6 +628,7 @@ function screenStock(row, ctx = {}) {
     chgSession, overnight, chg5, chg21, chg63,
     rs5, rs21, accel, rvol, dollarVol,
     fromHighPct, windowHigh, atrPct: atrPct(bars), aboveSma200,
+    squeezePctile: squeeze.pctile, squeezeLookback: squeeze.lookback,
     range20, price: last,
   };
 }
@@ -894,6 +896,152 @@ function targetsFor(row) {
   };
 }
 
+/* ═══ the morning plan ═══════════════════════════════════════════════════════
+ *
+ * THE SETTLE RUNS AFTER THE CLOSE, SO EVERYTHING IT PRODUCES IS ALREADY A PLAN
+ * FOR THE NEXT OPEN. That was true from the first build and the tab said it
+ * backwards — "worth an entry at Wednesday's close" is a fact about a session
+ * that is over, when the only thing you can act on is the bell tomorrow.
+ *
+ * Two things make a row morning-actionable, and neither existed:
+ *
+ *   trigger   the price this needs to reach to become a trade. On something
+ *             still under its level that is the LEVEL — a close over it is the
+ *             whole thesis. On something already through, it is T1. Without
+ *             this a "not yet" row says it is not ready and never says what
+ *             ready would look like, which is the difference between a
+ *             watchlist and a plan.
+ *   catalyst  why it might move. Every one of these is computed from bars we
+ *             already hold, so the tab never depends on a headline feed being
+ *             up to explain itself — see fetchNews for the part that does.
+ */
+function triggerFor(row) {
+  const price = row && Number.isFinite(row.price) ? row.price : null;
+  const r = row && row.range20 ? row.range20 : null;
+  const priorHigh = r && Number.isFinite(r.priorHigh) && r.priorHigh > 0 ? r.priorHigh : null;
+  if (price == null || priorHigh == null) return null;
+  // Still under the level: the level IS the trigger, and it has to be a CLOSE
+  // over it — an intraday poke is the `probing` state, not a break.
+  if (price <= priorHigh) return { price: priorHigh, kind: "level" };
+  // Already through it. The next thing that matters is the first target.
+  const t1 = row.targets && Number.isFinite(row.targets.t1) ? row.targets.t1 : null;
+  return t1 != null && t1 > price ? { price: t1, kind: "target" } : { price: priorHigh, kind: "held" };
+}
+
+const ACC_RVOL = 1.8;        // volume up this much with the price flat
+const ACC_FLAT_PCT = 1.0;
+const SQUEEZE_PCTILE = 0.33; // the 20-session range in the bottom third of its own year
+const GAP_PCT = 2.0;
+const HOT_RVOL = 3.0;
+
+/**
+ * Why this one might move, from data we own. First match wins, most specific
+ * first — a row shows ONE reason, because two is a paragraph nobody reads.
+ */
+function catalystFor(row) {
+  const rvol = Number.isFinite(row.rvol) ? row.rvol : null;
+  const cs = Number.isFinite(row.chgSession) ? row.chgSession : null;
+  const on = Number.isFinite(row.overnight) ? row.overnight : null;
+
+  // THE ACCUMULATION TELL. Volume well above normal while the price barely
+  // moved is the oldest "somebody knows something" read there is, and it is
+  // the one thing a price-only screen structurally cannot see.
+  if (rvol != null && rvol >= ACC_RVOL && cs != null && Math.abs(cs) <= ACC_FLAT_PCT) {
+    return { kind: "accumulation", note: `${rvol}× volume with the price flat — someone's building a position` };
+  }
+  if (Number.isFinite(row.squeezePctile) && row.squeezePctile <= SQUEEZE_PCTILE) {
+    return { kind: "squeeze", note: `its 20-session range is the tightest it has been in ${row.squeezeLookback || 60} sessions — these expand` };
+  }
+  if (on != null && Math.abs(on) >= GAP_PCT) {
+    return { kind: "gap", note: `gapped ${pct(on)} at the open — something printed overnight` };
+  }
+  if (rvol != null && rvol >= HOT_RVOL) {
+    return { kind: "volume", note: `${rvol}× its normal volume` };
+  }
+  return null;
+}
+
+/**
+ * How tight the current 20-session range is against its own history — the
+ * volatility-contraction read. Returns the percentile (0 = tightest it has
+ * been), or null when there is not enough history to rank it against.
+ */
+function squeezeRank(bars, lookback = 60) {
+  if (!Array.isArray(bars) || bars.length < 20 + lookback) return { pctile: null, lookback: 0 };
+  const widthAt = (end) => {
+    const w = bars.slice(end - 20, end);
+    const hi = Math.max(...w.map((b) => b.high));
+    const lo = Math.min(...w.map((b) => b.low));
+    const last = w[w.length - 1].close;
+    return last > 0 && hi > lo ? ((hi - lo) / last) * 100 : null;
+  };
+  const now = widthAt(bars.length);
+  if (now == null) return { pctile: null, lookback: 0 };
+  const hist = [];
+  for (let i = bars.length - lookback; i < bars.length; i++) {
+    const w = widthAt(i);
+    if (w != null) hist.push(w);
+  }
+  if (hist.length < 20) return { pctile: null, lookback: 0 };
+  const below = hist.filter((w) => w < now).length;
+  return { pctile: below / hist.length, lookback: hist.length };
+}
+
+/**
+ * Headlines for the short list only.
+ *
+ * SAME HOST as the chart endpoint, which is the only one this repo has
+ * evidence for, and JSON rather than the RSS feed's XML. It is UNVERIFIED from
+ * the session this was written in (no network route to Yahoo), so it is built
+ * to be worthless rather than harmful when it fails: its own try/catch, its
+ * own breaker, a hard cap, and nothing downstream reads it except one optional
+ * line in the UI. The data-derived catalysts above are what the card actually
+ * relies on to explain itself.
+ */
+const NEWS_URL = (sym) =>
+  `https://query1.finance.yahoo.com/v1/finance/search?q=${encodeURIComponent(sym)}&quotesCount=0&newsCount=4&enableFuzzyQuery=false`;
+const NEWS_MAX_SYMBOLS = 16;
+const NEWS_MAX_AGE_MS = 4 * DAY;
+
+async function fetchNews(symbols, now) {
+  const out = {};
+  const list = (symbols || []).slice(0, NEWS_MAX_SYMBOLS);
+  let blocked = false;
+  for (const sym of list) {
+    if (blocked) break;
+    try {
+      await new Promise((r) => setTimeout(r, MIN_GAP_MS));
+      const res = await fetch(NEWS_URL(sym), {
+        headers: { "User-Agent": UA, Accept: "application/json" },
+        signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
+      });
+      if (res.status === 429 || res.status === 401 || res.status === 403) { blocked = true; break; }
+      if (!res.ok) continue;
+      const ct = String(res.headers.get("content-type") || "");
+      if (!ct.includes("json")) { blocked = true; break; }
+      const body = await res.json();
+      const items = Array.isArray(body && body.news) ? body.news : [];
+      const kept = [];
+      for (const it of items) {
+        const t = str(it && it.title);
+        const at = fin(it && it.providerPublishTime);
+        if (!t) continue;
+        // Old news is not news. Anything past four days is context the chart
+        // has already absorbed.
+        if (at != null && now - at * 1000 > NEWS_MAX_AGE_MS) continue;
+        kept.push({ title: t.slice(0, 140), publisher: str(it.publisher) || null, at: at != null ? new Date(at * 1000).toISOString() : null });
+        if (kept.length >= 2) break;
+      }
+      if (kept.length) out[sym] = kept;
+    } catch { /* a headline is a nicety; it never fails a pass */ }
+  }
+  return out;
+}
+
+function str(v) {
+  return typeof v === "string" && v.trim() ? v.trim() : null;
+}
+
 /* ═══ step 5 — flags ═════════════════════════════════════════════════════════
  *
  * Two tiers: 'igniting' (the move is starting now) and 'building' (a base
@@ -1095,6 +1243,12 @@ function boardRow(r) {
     },
     spark: sampleSpark(r.bars, SPARK_POINTS),
     targets: r.targets || null,
+    // THE MORNING PLAN. `trigger` is the price that turns this into a trade —
+    // without it a "not yet" row says it is not ready and never says what
+    // ready would look like. `catalyst` is why it might move, from bars we
+    // already hold, so the card can explain itself with no feed up.
+    trigger: triggerFor(r),
+    catalyst: catalystFor(r),
   };
 }
 
@@ -1247,7 +1401,10 @@ async function settle(db, prev, spy, now, decision) {
   // The regime needs the screened rows, so it is computed after — but the
   // sector facts wanted it. One more cheap pass rather than a wrong fact.
   const finalRows = screenUniverse(rows, { bench, sectorMedians, regime });
-  for (const r of finalRows) r.targets = targetsFor(r);
+  for (const r of finalRows) {
+    r.targets = targetsFor(r);
+    r.trigger = triggerFor(r);
+  }
 
   const scores = finalRows.map((r) => r.score).filter(Number.isFinite).sort((a, b) => a - b);
   const at = (q) => (scores.length ? scores[Math.min(scores.length - 1, Math.floor(q * scores.length))] : null);
@@ -1307,6 +1464,22 @@ async function settle(db, prev, spy, now, decision) {
   const board = finalRows.slice(0, BOARD_SIZE).map(boardRow);
   counts.board = board.length;
 
+  // Headlines for the SHORT LIST only — the names carrying an open plan plus
+  // the handful closest to triggering. Sixteen requests once a day, on a feed
+  // that is allowed to be dead: nothing on the page depends on it.
+  const shortList = [];
+  const { data: openNow } = await db.from("stock_flags").select("symbol").is("resolved_at", null);
+  for (const r of openNow || []) if (!shortList.includes(r.symbol)) shortList.push(r.symbol);
+  for (const r of finalRows) {
+    if (shortList.length >= NEWS_MAX_SYMBOLS) break;
+    const t = r.trigger;
+    if (t && Number.isFinite(t.price) && r.price > 0 && (t.price / r.price - 1) * 100 <= 5 && !shortList.includes(r.symbol)) {
+      shortList.push(r.symbol);
+    }
+  }
+  const news = await fetchNews(shortList, now);
+  counts.news = Object.keys(news).length;
+
   const spanOf = (n) => {
     if (spyDates.length < 2) return null;
     const prevDate = spyDates[spyDates.length - 2];
@@ -1345,6 +1518,7 @@ async function settle(db, prev, spy, now, decision) {
     missing: health.notFound,
     scoreDist, qualifiers,
     universeHealth: { tooYoung: health.tooYoung, noPrint: health.noPrint, notFound: health.notFound },
+    news,
     live: null,
     feed: { blocked: false },
   };
@@ -1490,6 +1664,9 @@ exports.screenUniverse = screenUniverse;
 exports.bandOf = bandOf;
 exports.regimeRead = regimeRead;
 exports.targetsFor = targetsFor;
+exports.triggerFor = triggerFor;
+exports.catalystFor = catalystFor;
+exports.squeezeRank = squeezeRank;
 exports.flagTier = flagTier;
 exports.effectiveFloor = effectiveFloor;
 exports.transitionFlags = transitionFlags;

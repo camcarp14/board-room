@@ -146,6 +146,16 @@ function moveRead(ctx, targets, price, episode) {
   return out("offboard");
 }
 
+/**
+ * How far this is from the price that turns it into a trade, against the LIVE
+ * price. The trigger PRICE is the cron's and frozen for the session — what
+ * moves is your distance to it, which is the number you act on in the morning.
+ */
+function liveTrigger(t, price) {
+  if (!t || !Number.isFinite(t.price) || !Number.isFinite(price) || !(price > 0)) return t || null;
+  return { ...t, pct: pctOff(t.price, price) };
+}
+
 /** Target PRICES are the cron's and never move; the % distances are live. */
 function liveTargets(t, price) {
   if (!t || !Number.isFinite(price) || !(price > 0)) return t || null;
@@ -265,12 +275,14 @@ exports.handler = async (event) => {
     // else is as of the last close — which is the honest state of a market that
     // is shut most of the time, and the footer says so.
     const live = (p.live && p.live.prices) || {};
+    const news = p.news || {};
     const board = p.board.map((row) => {
       const price = num(live[row.symbol]) ?? row.price;
       const targets = liveTargets(row.targets, price);
-      const merged = { ...row, price, targets };
+      const merged = { ...row, price, targets, trigger: liveTrigger(row.trigger, price) };
       merged.entry = entryRead(merged, targets, price);
       merged.move = moveRead(merged, targets, price, null);
+      if (news[row.symbol]) merged.news = news[row.symbol];
       return merged;
     });
     const ctxById = new Map(board.map((r) => [r.id, r]));
@@ -281,6 +293,13 @@ exports.handler = async (event) => {
         const ctx = ctxById.get(row.ticker_id) || null;
         v.entry = entryRead(ctx, v.targets, v.lastPrice);
         v.move = moveRead(ctx, v.targets, v.lastPrice, v);
+        // The plan and the reason ride with the episode so a flag row can say
+        // what it needs and why, without the panel joining back to the board.
+        if (ctx) {
+          v.trigger = liveTrigger(ctx.trigger, v.lastPrice);
+          v.catalyst = ctx.catalyst || null;
+          if (ctx.news) v.news = ctx.news;
+        }
         return v;
       })
       .sort((a, b) => (a.tier === b.tier ? (b.score || 0) - (a.score || 0) : a.tier === "igniting" ? -1 : 1));
@@ -322,5 +341,6 @@ exports.handler = async (event) => {
 exports.entryRead = entryRead;
 exports.moveRead = moveRead;
 exports.liveTargets = liveTargets;
+exports.liveTrigger = liveTrigger;
 exports.episodeView = episodeView;
 exports.flagStats = flagStats;
