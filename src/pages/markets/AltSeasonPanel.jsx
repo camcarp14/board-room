@@ -14,11 +14,11 @@ import { lazy, Suspense, useEffect, useState } from "react";
 import { T } from "../../theme.js";
 import { Card, CollapsibleCard, CellGroup, Cell, Button, PillRow, EmptyState, Dot, Delta } from "../../ui/kit.jsx";
 import { IcChevronDown } from "../../ui/icons.jsx";
-import { StancePill, StatusTag, CARD_STATES } from "../../ui/shared.jsx";
+import { StatusTag, CARD_STATES } from "../../ui/shared.jsx";
 import { NumTween, Sparkline } from "../../ui/primitives.jsx";
 import { callFnFull } from "../../lib/functions.js";
 import { useAltScan } from "../../data/altseason.js";
-import AltCoinSheet, { TonePill, TIER_META, HIT_LABEL } from "./AltCoinSheet.jsx";
+import AltCoinSheet, { TonePill, HIT_LABEL, STAGE_LABEL, MOTION_LABEL } from "./AltCoinSheet.jsx";
 
 // Lazy — lightweight-charts stays in its own chunk until a chart is opened.
 const BtcChartModal = lazy(() => import("../../BtcChartModal.jsx"));
@@ -56,20 +56,21 @@ const MOVER_WINDOWS = ["1h", "4h", "12h", "24h", "7d", "30d"];
 // half; past that a section is a database dump, not a list.
 const SECTION_PREVIEW = 10;
 
-// StancePill tone by regime phase. majors_rotating rides with green — it's the
+// Regime dot tone by phase. majors_rotating rides with green — it's the
 // "get ready" reading, not a warning; mixed is the genuine coin-flip.
 const PHASE_TONE = { alt_season: T.green, majors_rotating: T.green, mixed: T.amber, btc_only: T.red, risk_off: T.red };
 
-// What the regime means for what you do, in one sentence. The score and the
-// breadth count are the evidence; this is the read, and it goes first — a
-// number out of a hundred is not an instruction, and "39/100, Bitcoin only"
-// left the entire "so what" to the reader every single time.
+// What the regime means for what you do, in one sentence — the read, not the
+// number, because "39/100, Bitcoin only" left the entire "so what" to the
+// reader every single time. One LINE each. The three-line versions were written for a card that no
+// longer exists; in the strip a wrap eats the space the strip was built to
+// reclaim, so every one of these is held under ~50 characters.
 const PHASE_READ = {
-  alt_season: "Alts are getting paid. Setups here work more often than they don't.",
-  majors_rotating: "Money is moving, but into the majors first. Alt setups are early rather than wrong.",
-  mixed: "No rotation in either direction. Only the cleanest setups are worth the risk.",
-  btc_only: "Bitcoin is taking the flow. Most alt setups will chop here — be picky, and be small.",
-  risk_off: "Nothing is being bid. The best trade in this tape is usually no trade.",
+  alt_season: "Alts are getting paid — setups here work more often than not.",
+  majors_rotating: "Money's moving, majors first — alt setups are early.",
+  mixed: "No rotation either way — only the cleanest setups pay.",
+  btc_only: "Bitcoin is taking the flow — be picky, and be small.",
+  risk_off: "Nothing is bid — the best trade here is usually no trade.",
 };
 
 /* ── the entry read, as the page's spine ──────────────────────────────────────
@@ -87,15 +88,15 @@ const PHASE_READ = {
 const ENTRY_META = {
   entry: {
     label: "Entry", tone: T.green, head: "Worth an entry now", open: true,
-    rule: "The first target is still ahead, the invalidation is close enough to define the risk, and the full move pays at least 1.5× what the stop costs.",
+    rule: "First target still ahead, stop close, and the move pays 1.5×+ what being wrong costs.",
   },
   watch: {
     label: "Watch", tone: T.amber, head: "Setting up — not yet", open: false,
-    rule: "A real structure with nothing lifting it yet, or a payoff too thin from here to be worth the stop.",
+    rule: "A real structure with nothing lifting it yet, or too thin a payoff from here.",
   },
   late: {
     label: "Late", tone: T.faint, head: "Already ran", open: false,
-    rule: "Past its own first target, parabolic, or too thin to exit. Starting here is buying somebody else's exit.",
+    rule: "Past its first target, parabolic, or too thin to exit — you'd be buying the exit.",
   },
 };
 const ENTRY_ORDER = ["entry", "watch", "late"];
@@ -103,23 +104,75 @@ const ENTRY_ORDER = ["entry", "watch", "late"];
 // verdict on it. It is not an entry until something says it is.
 const stateOf = (x) => (x && x.entry && ENTRY_META[x.entry.state] ? x.entry.state : "watch");
 
-/* How much it has left, as the one number the row leads with. Distance to T3 —
-   the measured move — not to T1, because T1 is a checkpoint and the question
-   is how far this goes. Past T3 the honest answer is that the plan is spent. */
-function RoomCell({ entry, tone }) {
+/* ── the stage vocabulary — where the move actually is ────────────────────────
+   alt-scan's moveRead names the stage; these name it in English. The words are
+   the whole answer to "where's each one at", so they say something a reader
+   already knows the meaning of: no ladder names (T1/T2/T3 are internal
+   vocabulary, defensible in the sheet where a price table teaches them, tokens
+   to decode on a list), no band names, no jargon.
+
+   The clause after the middot is chosen BY the stage rather than stacked on
+   top of it: below the level the question is how close to firing, above it the
+   question is whether it is still accelerating, and on the terminal reads
+   there is no question left. Same slot, one fact, never two. */
+const STAGE_CLAUSE = { base: "level", atLevel: "level", breaking: "motion", extending: "motion" };
+
+/** "In its base · 8.1% under" — the stage, and the one thing worth adding. */
+function stageLine(move, short) {
+  const stage = (move && STAGE_LABEL[move.stage]) ? move.stage : null;
+  if (!stage) return null;
+  const head = STAGE_LABEL[stage];
+  // Movers rows carry a sparkline, so there is no room for a clause and it
+  // would clip mid-word under .cell-sub's overflow rather than shorten.
+  if (short) return head;
+  const which = STAGE_CLAUSE[stage];
+  if (which === "level" && Number.isFinite(move.toLevelPct)) {
+    const v = move.toLevelPct;
+    return `${head} · ${Math.abs(v).toFixed(1)}% ${v < 0 ? "under" : "over"}`;
+  }
+  // An ABSENT pace clause means not measured. "holding" means measured and
+  // flat. Collapsing those into one word is the thing this codebase refuses to
+  // do anywhere — season parts label themselves "not scored", the movers card
+  // says "ready in ~Nh" rather than rank a fake zero.
+  if (which === "motion" && move.motion) return `${head} · ${MOTION_LABEL[move.motion]}`;
+  return head;
+}
+
+/* The one number on the row, and WHICH number it is depends on what the row
+   is doing. A "+22% room" on a coin whose stop is already gone is not a
+   smaller truth than "stop gone", it is a false one. */
+function numberSlot(move, entry, tone) {
+  const stage = move && move.stage;
+  if (stage === "broken") return { text: "stop gone", tone: T.red, caption: null };
+  if (stage === "spent") return { text: "done", tone: "var(--faint)", caption: "past T3" };
+  // Off its own high by enough to matter — the give-back is the story on a
+  // flag that ran and came back, and it outranks room it may never see again.
+  if (move && Number.isFinite(move.offPeakPct)) {
+    return { text: `${move.offPeakPct.toFixed(0)}%`, tone: T.red, caption: "off high" };
+  }
   const room = entry ? entry.roomPct : null;
-  const has = Number.isFinite(room);
-  const spent = has && room <= 0;
+  if (Number.isFinite(room) && room > 0) return { text: `+${Math.round(room)}%`, tone, caption: "left" };
+  return { text: "—", tone: "var(--faint)", caption: null };
+}
+
+function NumberCell({ move, entry, tone }) {
+  const slot = numberSlot(move, entry, tone);
   return (
-    <span style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 1, minWidth: 50, flex: "none" }}>
-      <span className="t-num" style={{ fontSize: 13.5, fontWeight: 600, color: has && !spent ? tone : "var(--faint)" }}>
-        {!has ? "—" : spent ? "done" : `+${Math.round(room)}%`}
-      </span>
-      {/* No label under an em-dash — "— room" reads as a measurement of
+    <span style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 1, minWidth: 54, flex: "none" }}>
+      <span className="t-num" style={{ fontSize: 13.5, fontWeight: 600, color: slot.tone }}>{slot.text}</span>
+      {/* No label under an em-dash — "— left" reads as a measurement of
           nothing rather than the absence of one. */}
-      {has && <span className="t-cap" style={{ color: "var(--faint)", fontSize: 10 }}>{spent ? "past T3" : "room"}</span>}
+      {slot.caption && <span className="t-cap" style={{ color: "var(--faint)", fontSize: 10.5 }}>{slot.caption}</span>}
     </span>
   );
+}
+
+/** How old the flag is, as a word. A malformed stamp renders nothing at all. */
+function ageWord(iso) {
+  const t = Date.parse(iso);
+  if (!Number.isFinite(t)) return null;
+  const d = Math.floor((Date.now() - t) / 86400000);
+  return d <= 0 ? "today" : `${d}d`;
 }
 
 // Terminal outcome tags for the record. A 14-day timeout keeps the ladder
@@ -281,61 +334,57 @@ export default function AltSeasonPanel({ isMobile }) {
         </Card>
       )}
 
-      {/* ── SEASON — the one-number answer ─────────────────────────────────── */}
-      <CollapsibleCard {...coll("season")} title="Alt Season"
-        trailing={
-          <span style={{ display: "inline-flex", alignItems: "center", gap: 10, minWidth: 0 }}>
-            {season?.label && <StancePill text={season.label} color={PHASE_TONE[season.phase] || T.sub} />}
-            {staleTag && <StatusTag status={staleTag} />}
+      {/* ── REGIME — a strip, not a card ──────────────────────────────────
+          It was a whole Card for one number you cannot act on: ~195px of the
+          first screen spent on the answer to a question you ask once a day.
+          The regime is CONTEXT, and the house rule says separation is by
+          surface — so dropping the surface is how you say "this is
+          background, not content". Two lines on the canvas, everything else
+          still one tap behind Why. */}
+      <div style={{ padding: "0 2px 2px" }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 8, minHeight: 30, minWidth: 0 }}>
+          <Dot tone={PHASE_TONE[season?.phase] || T.faint} size={7} />
+          <span className="t-label" style={{ color: "var(--ink)", minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+            {season?.label || "No read"}
           </span>
-        }
-      >
-        {season?.score != null ? (
-          <>
-            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 }}>
-              <span style={{ display: "inline-flex", alignItems: "baseline", gap: 5, minWidth: 0 }}>
-                <span className="t-title1 t-num"><NumTween v={season.score} f={(n) => String(Math.round(n))} /></span>
-                <span className="t-cap" style={{ color: "var(--faint)" }}>/100</span>
-              </span>
+          {season?.score != null && (
+            <span className="t-num" style={{ fontSize: 13, color: "var(--faint)", flex: "none" }}>
+              <NumTween v={season.score} f={(n) => String(Math.round(n))} />
+            </span>
+          )}
+          <span style={{ marginLeft: "auto", display: "inline-flex", alignItems: "center", gap: 8, flex: "none" }}>
+            {staleTag && <StatusTag status={staleTag} />}
+            {/* No score, no Why — there is nothing behind it to show, and a
+                button that opens an empty table is worse than no button. */}
+            {season?.score != null && (
               <Button kind="plain" size="sm" onClick={() => setWhyOpen((v) => !v)}
-                style={{ height: 44, margin: "-8px -10px", padding: "0 10px", flex: "none" }}>
+                style={{ height: 44, margin: "-11px -10px", padding: "0 10px" }}>
                 {whyOpen ? "Hide" : "Why"}
               </Button>
-            </div>
-            {/* the read, then the evidence for it, then what it costs you —
-                in that order, because the instruction is the part you came
-                for and the breadth count is what backs it up */}
-            {PHASE_READ[season.phase] && (
-              <div className="t-foot" style={{ color: "var(--ink)", marginTop: 5, lineHeight: 1.5 }}>{PHASE_READ[season.phase]}</div>
             )}
+          </span>
+        </div>
+        <div className="t-cap" style={{ color: "var(--sub)", lineHeight: 1.5 }}>
+          {season?.score != null
+            ? (PHASE_READ[season.phase] || "")
+            : "The score publishes once the screener has breadth to measure — unmeasured parts are dropped, never guessed."}
+        </div>
+        {whyOpen && (
+          <div style={{ marginTop: 6 }}>
             {season.facts?.[0] && (
-              <div className="t-cap" style={{ color: "var(--faint)", marginTop: 4, lineHeight: 1.5 }}>{season.facts[0]}</div>
+              <div className="t-foot" style={{ color: "var(--sub)", lineHeight: 1.5, paddingBottom: 2 }}>{season.facts[0]}</div>
             )}
-            {season.gate && (
-              <div className="t-cap" style={{ color: "var(--faint)", marginTop: 2, lineHeight: 1.5 }}>
-                In this tape the screener carries at most <span className="t-num">{season.gate.max}</span> flags,
-                and only setups over <span className="t-num">{season.gate.floor}</span>/100.
+            {(season.parts || []).map((p) => (
+              <div key={p.key} style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", gap: 10, padding: "4px 0" }}>
+                <span className="t-foot" style={{ color: "var(--sub)", minWidth: 0, lineHeight: 1.45 }}>{p.label}</span>
+                <span className="t-cap t-num" style={{ color: p.points == null ? "var(--faint)" : "var(--ink)", flex: "none" }}>
+                  {p.points == null ? "—" : p.points}/{p.max}
+                </span>
               </div>
-            )}
-            {whyOpen && (
-              <div style={{ marginTop: 8 }}>
-                {(season.parts || []).map((p) => (
-                  <div key={p.key} style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", gap: 10, padding: "4px 0" }}>
-                    <span className="t-foot" style={{ color: "var(--sub)", minWidth: 0, lineHeight: 1.45 }}>{p.label}</span>
-                    <span className="t-cap t-num" style={{ color: p.points == null ? "var(--faint)" : "var(--ink)", flex: "none" }}>
-                      {p.points == null ? "—" : p.points}/{p.max}
-                    </span>
-                  </div>
-                ))}
-              </div>
-            )}
-          </>
-        ) : (
-          <EmptyState title="Not enough measured inputs yet"
-            sub="The score publishes once the hourly screener has breadth to measure — unmeasured parts are dropped, never guessed."
-            style={{ padding: "20px 16px" }} />
+            ))}
+          </div>
         )}
-      </CollapsibleCard>
+      </div>
 
       {/* ── FLAGS — sorted by whether it is time, not by tier ──────────────── */}
       {/* THE CARD IS A SHORTLIST, NOT A LEDGER. The screener's regime gate
@@ -352,6 +401,14 @@ export default function AltSeasonPanel({ isMobile }) {
           </span>
         ) : null}
       >
+        {/* The gate sentence lives here, not on the regime strip, because
+            season.gate literally governs THIS list. One line, not four. */}
+        {season?.gate && (
+          <div className="t-cap" style={{ color: "var(--faint)", lineHeight: 1.5, paddingBottom: 4 }}>
+            <span className="t-num">{season.gate.floor}</span>/100 to flag in this tape,
+            {" "}<span className="t-num">{season.gate.max}</span> open at a time.
+          </div>
+        )}
         {active.length ? (
           <div style={{ display: "flex", flexDirection: "column" }}>
             {ENTRY_ORDER.map((state) => {
@@ -380,30 +437,40 @@ export default function AltSeasonPanel({ isMobile }) {
                           state the test for is just a colour to memorise */}
                       <div className="t-cap" style={{ color: "var(--faint)", lineHeight: 1.5, paddingBottom: 6 }}>{meta.rule}</div>
                       <CellGroup style={inCardGroup}>
+                        {/* THE ROW SAYS WHERE THE MOVE IS, THE SECTION SAYS
+                            WHETHER TO ACT. Six slots, two numbers, one
+                            non-ink colour — and it is a net REDUCTION: the
+                            row gave up its price, its tier word, its risk %
+                            and its flag date to buy one sentence that
+                            actually answers the question. Price is one tap
+                            away and it is what freed the width the sentence
+                            needs to be legible at 390pt. */}
                         {shown.map((f) => {
-                          const tier = TIER_META[f.tier] || TIER_META.building;
+                          const age = ageWord(f.firstFlaggedAt);
                           const hit = HIT_LABEL[f.status];
-                          const risk = f.entry && Number.isFinite(f.entry.riskPct) ? `${signedPct(f.entry.riskPct)} risk` : null;
+                          // One mark, by priority. `thin` outranks a target
+                          // hit because flags.thinLiquidity is the first thing
+                          // entryRead checks and the LAST thing bandOf does —
+                          // without this a breaking-out coin nobody can exit
+                          // renders with no warning at all.
+                          const mark = f.move?.thin
+                            ? { text: "can't exit", tone: T.red }
+                            : hit ? { text: hit, tone: T.green } : null;
                           return (
                             <Cell key={f.id}
                               onClick={() => openCoin(f)}
                               title={
                                 <span style={{ display: "inline-flex", alignItems: "baseline", gap: 7, minWidth: 0 }}>
-                                  <span className="t-label" style={{ color: "var(--ink)", letterSpacing: "0.04em" }}>{f.symbol}</span>
-                                  {hit && <span className="t-cap t-num" style={{ color: T.green, fontWeight: 600 }}>{hit}</span>}
+                                  <span style={{ fontSize: 14, fontWeight: 600, letterSpacing: "0.04em", color: "var(--ink)" }}>{f.symbol}</span>
+                                  {age && <span className="t-cap t-num" style={{ color: "var(--faint)" }}>{age}</span>}
+                                  {mark && <span className="t-cap t-num" style={{ color: mark.tone, fontWeight: 600 }}>{mark.text}</span>}
                                 </span>
                               }
-                              // Tier is the move's expected PACE, which is only
-                              // information while the move can still happen —
-                              // "Igniting" over a coin filed under Already ran
-                              // is the same mixed signal this card exists to
-                              // kill. Dropped there, kept everywhere else.
-                              sub={[state === "late" ? null : tier.label, risk, fmtDay(f.firstFlaggedAt)].filter(Boolean).join(" · ")}
+                              sub={stageLine(f.move) || "—"}
                               trailing={
                                 <span style={{ display: "inline-flex", alignItems: "center", gap: 12, flex: "none" }}>
-                                  <RoomCell entry={f.entry} tone={meta.tone} />
-                                  <span style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 2, minWidth: 62 }}>
-                                    <span className="t-num" style={{ fontSize: 13.5, color: "var(--ink)" }}>{px(f.lastPrice)}</span>
+                                  <NumberCell move={f.move} entry={f.entry} tone={meta.tone} />
+                                  <span style={{ minWidth: 62, display: "flex", justifyContent: "flex-end" }}>
                                     <Delta pct={f.sinceFlagPct} digits={1} />
                                   </span>
                                 </span>
@@ -455,7 +522,10 @@ export default function AltSeasonPanel({ isMobile }) {
                 onClick={() => openMover(m)}
                 leading={<span className="t-cap t-num" style={{ color: "var(--faint)" }}>{i + 1}</span>}
                 title={m.symbol} titleStyle={{ fontSize: 14, fontWeight: 600 }}
-                sub={m.name}
+                // The stage where we have one, and the honest "Not screened"
+                // where we don't — which is also the reason tapping that row
+                // opens the chart instead of the sheet (see openMover).
+                sub={boardById.has(m.id) ? (stageLine(boardById.get(m.id).move, true) || m.name) : "Not screened"}
                 trailing={
                   <span style={{ display: "inline-flex", alignItems: "center", gap: 10, flex: "none" }}>
                     {m.spark?.length > 1 && (
@@ -491,7 +561,11 @@ export default function AltSeasonPanel({ isMobile }) {
                 <Cell key={r.id}
                   onClick={() => openCoin(r)}
                   title={r.symbol} titleStyle={{ fontSize: 14, fontWeight: 600 }}
-                  sub={r.band ? `${r.name} · ${r.band}` : r.name}
+                  // The stage, not the name and the band. `|| r.name` is the
+                  // fallback for a payload written before moveRead shipped;
+                  // name and band both live in the sheet, which already
+                  // titles itself "SEI · Sei" and renders band as a pill.
+                  sub={stageLine(r.move) || r.name}
                   trailing={
                     <span style={{ display: "inline-flex", alignItems: "center", gap: 10, flex: "none" }}>
                       <span className="t-num" style={{ fontSize: 14, fontWeight: 600, color: "var(--ink)" }}>{r.score}</span>

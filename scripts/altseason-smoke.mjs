@@ -520,6 +520,113 @@ try {
     moved.t1Pct === -12.5 && moved.invPct === -25, JSON.stringify(moved));
   check("liveTargets passes a null price through untouched",
     liveTargets(TGT, null) === TGT && liveTargets(null, 100) === null);
+
+  // ─── 11. the move read (alt-scan) ──────────────────────────────────────────
+  // entryRead says whether to act; this says WHERE THE MOVE IS, and it is the
+  // only thing on the row that claims to describe the chart. Two classes of
+  // bug are pinned here. The first is the confident wrong number: a division
+  // by a null that yields Infinity, a give-back formula that overstates on the
+  // biggest winners, a pace word invented for a coin whose 12h window has no
+  // baseline. The second is CONTRADICTION — the stage and the section sit two
+  // inches apart, so "Move spent" must be arithmetically incapable of
+  // appearing under "Worth an entry now".
+  const { moveRead } = mods["alt-scan"];
+  const RANGE = { low: 88, high: 104, pos: 0.75, freshBreak: false, priorHigh: 102, priorLow: 90, points: 168 };
+  const ctxOf = (over = {}) => ({ flags: {}, range7d: RANGE, chg12h: 2, chg24h: 3, accel: { d24VsWeek: 1 }, ...over });
+  const mv = (ctx, t, p, ep) => moveRead(ctx, t, p, ep || null);
+
+  // Baseline: price 100, level (priorHigh) 102, so 2% under it.
+  const base = mv(ctxOf({ range7d: { ...RANGE, priorHigh: 108 } }), live(100), 100);
+  check("well under the level, inside its range, is 'base'", base.stage === "base", JSON.stringify(base));
+  check("distance to the level is measured off priorHigh (108), not range7d.high (104)",
+    base.toLevelPct === -7.4, String(base.toLevelPct));
+  check("within 3% of the level is 'atLevel'",
+    mv(ctxOf({ range7d: { ...RANGE, priorHigh: 101 } }), live(100), 100).stage === "atLevel");
+  check("just past 3% under is still 'base', not 'atLevel'",
+    mv(ctxOf({ range7d: { ...RANGE, priorHigh: 104 } }), live(100), 100).stage === "base");
+  check("over the level is 'breaking'",
+    mv(ctxOf({ range7d: { ...RANGE, priorHigh: 98 } }), live(100), 100).stage === "breaking");
+  check("a fresh break on a full series is 'breaking' even from under the level",
+    mv(ctxOf({ flags: { freshBreak: true } }), live(100), 100).stage === "breaking");
+  const shortBreak = mv(ctxOf({ flags: { freshBreak: true }, range7d: { ...RANGE, priorHigh: 108, points: 30 } }), live(100), 100);
+  check("a fresh break on a SHORT series is not — 'one day' there is four hours",
+    shortBreak.stage === "base", JSON.stringify(shortBreak));
+
+  // The terminal reads, in the order they must win.
+  check("price at or through the invalidation is 'broken'",
+    mv(ctxOf(), live(89), 89).stage === "broken");
+  check("past T3 is 'spent'", mv(ctxOf(), live(140), 140).stage === "spent");
+  check("parabolic is 'spent' even with room left",
+    mv(ctxOf({ flags: { parabolic: true } }), live(100), 100).stage === "spent");
+  check("past T1 but not T3 is 'extending'", mv(ctxOf(), live(110), 110).stage === "extending");
+  check("'broken' outranks 'spent' — a lost stop is not a completed move",
+    mv(ctxOf({ flags: { parabolic: true } }), liveTargets({ ...TGT, invalidation: 200 }, 100), 100).stage === "broken");
+
+  // THE NON-CONTRADICTION INVARIANTS. These are the whole reason the stage can
+  // sit next to the verdict without a reader having to reconcile them.
+  const pairs = [89, 100, 106, 110, 140].flatMap((p) =>
+    [{}, { flags: { parabolic: true } }, { flags: { thinLiquidity: true } }].map((o) => {
+      const t = live(p);
+      return { p, o, m: mv(ctxOf(o), t, p), e: entryRead(ctxOf(o), t, p) };
+    }));
+  check("'broken' never lands on an entry — invPct IS entry.riskPct",
+    pairs.filter((x) => x.m.stage === "broken").every((x) => x.e.state !== "entry"));
+  check("...and on a clean row it is exactly entryRead's 'structure already lost'",
+    pairs.filter((x) => x.m.stage === "broken" && !x.o.flags).every((x) => x.e.state === "watch"));
+  check("'spent' always lands on a late — t3Pct <= 0 is entry.roomPct <= 0",
+    pairs.filter((x) => x.m.stage === "spent").every((x) => x.e.state === "late"));
+  check("'extending' always lands on a late — t1Pct <= 0 is entry.nextPct <= 0",
+    pairs.filter((x) => x.m.stage === "extending").every((x) => x.e.state === "late"));
+  check("no terminal stage can ever appear under 'Worth an entry now'",
+    !pairs.some((x) => ["broken", "spent", "extending"].includes(x.m.stage) && x.e.state === "entry"));
+
+  // thin is a FLAG, not a stage: a coin can be genuinely breaking out and
+  // still impossible to get out of, and the row has to say both.
+  const thinBreak = mv(ctxOf({ flags: { thinLiquidity: true }, range7d: { ...RANGE, priorHigh: 98 } }), live(100), 100);
+  check("thin liquidity rides alongside the stage rather than replacing it",
+    thinBreak.thin === true && thinBreak.stage === "breaking", JSON.stringify(thinBreak));
+
+  // The honest non-answers.
+  check("no targets is 'none', not a guessed stage", mv(ctxOf(), null, 100).stage === "none");
+  check("a coin off the 60-row board gets 'offboard', never a forward stage",
+    mv(null, live(100), 100).stage === "offboard");
+  check("a dead-flat series with no level is 'offboard', not 'base'",
+    mv(ctxOf({ range7d: { low: 100, high: 100, pos: null, priorHigh: null, priorLow: null, points: 168 } }), live(100), 100).stage === "offboard");
+  check("a null priorHigh yields a null distance, NEVER Infinity",
+    mv(ctxOf({ range7d: { ...RANGE, priorHigh: null } }), live(100), 100).toLevelPct === null);
+  check("a zero priorHigh is refused rather than dividing by it",
+    mv(ctxOf({ range7d: { ...RANGE, priorHigh: 0 } }), live(100), 100).toLevelPct === null);
+
+  // Pace: disjoint 12h legs, exact because the live price divides out.
+  // +2% this half-day after +0.98% the half-day before ⇒ turn ≈ +1.0pp.
+  check("the pace compares this 12h leg against the previous one",
+    mv(ctxOf({ chg12h: 6, chg24h: 3 }), live(100), 100).motion === "up",
+    JSON.stringify(mv(ctxOf({ chg12h: 6, chg24h: 3 }), live(100), 100)));
+  check("a decelerating tape reads 'down'",
+    mv(ctxOf({ chg12h: 1, chg24h: 8 }), live(100), 100).motion === "down");
+  check("an unchanged pace reads 'flat' — measured, and flat",
+    mv(ctxOf({ chg12h: 2, chg24h: 4.04 }), live(100), 100).motion === "flat",
+    JSON.stringify(mv(ctxOf({ chg12h: 2, chg24h: 4.04 }), live(100), 100).motion));
+  check("no 12h baseline falls back to the cron's day-vs-week excess",
+    mv(ctxOf({ chg12h: null, accel: { d24VsWeek: 5 } }), live(100), 100).motion === "up");
+  check("no baseline AND no fallback means NO pace word — absent never means flat",
+    mv(ctxOf({ chg12h: null, accel: null }), live(100), 100).motion === null,
+    String(mv(ctxOf({ chg12h: null, accel: null }), live(100), 100).motion));
+  check("a -99.5% row does not explode into violent acceleration",
+    mv(ctxOf({ chg12h: -99.5, chg24h: 3, accel: null }), live(100), 100).motion === null);
+
+  // The give-back. peakPct − sinceFlagPct is the wrong formula and it is wrong
+  // WORST on the winners: at peak +100 / since +50 it prints −50% for a coin
+  // that is 25% off its high.
+  const epi = (since, peak) => ({ sinceFlagPct: since, peakPct: peak });
+  check("off-high is percent off the PEAK, not the difference of two percentages",
+    mv(ctxOf(), live(100), 100, epi(50, 100)).offPeakPct === -25,
+    String(mv(ctxOf(), live(100), 100, epi(50, 100)).offPeakPct));
+  check("a small give-back is suppressed as noise",
+    mv(ctxOf(), live(100), 100, epi(48, 50)).offPeakPct === null);
+  check("no episode means no give-back number", mv(ctxOf(), live(100), 100).offPeakPct === null);
+  check("a flag sitting at its own high reports no give-back",
+    mv(ctxOf(), live(100), 100, epi(30, 30)).offPeakPct === null);
 } catch (e) {
   failed++;
   console.error(`FAIL: smoke crashed — ${(e && e.stack) || e}`);

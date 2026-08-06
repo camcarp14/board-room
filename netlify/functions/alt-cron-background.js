@@ -1209,11 +1209,20 @@ function boardRow(r) {
     // coin isn't an entry ("parabolic", "too thin") instead of inferring it
     // back out of the band, which collapses both into 'late'.
     flags: r.flags,
+    // The acceleration block, already computed at screen time and previously
+    // dropped on the floor. It is the FALLBACK pace reference for the ~12h
+    // after a deploy when the 12h baseline doesn't exist yet — shipping the
+    // cron's own number is what stops the client re-deriving a screener input.
+    accel: r.accel,
     turnover: r.turnover, rsVsBtc7d: r.rsVsBtc7d,
     drawdownFromAthPct: r.drawdownFromAthPct,
     range7d: {
       low: r.range7d.low, high: r.range7d.high, pos: r.range7d.pos,
       freshBreak: r.range7d.freshBreak, priorHigh: r.range7d.priorHigh, priorLow: r.range7d.priorLow,
+      // How many closes the structure was read from. Guards exactly one claim:
+      // "breaking out" must not be asserted off a 30-point series, where
+      // structure7d's "one day" is really about four hours.
+      points: r.range7d.points,
     },
     spark: sampleSpark(r.sparkline7d, SPARK_POINTS),
     targets: r.targets || null,

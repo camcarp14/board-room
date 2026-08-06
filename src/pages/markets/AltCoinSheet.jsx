@@ -31,6 +31,20 @@ export const TIER_META = {
 // the same word.
 export const ENTRY_TONE = { entry: T.green, watch: T.amber, late: T.faint };
 export const ENTRY_LABEL = { entry: "Entry", watch: "Watch", late: "Late" };
+// Where the move is, in the same words the panel uses. Kept here with the rest
+// of the shared vocabulary for the reason this block already exists: the list
+// and the sheet must not drift into two names for one state.
+export const STAGE_LABEL = {
+  base: "In its base",
+  atLevel: "At its level",
+  breaking: "Breaking out",
+  extending: "Extending",
+  spent: "Move spent",
+  broken: "Structure lost",
+  none: "No level drawn",
+  offboard: "Off the board",
+};
+export const MOTION_LABEL = { up: "pace picking up", flat: "pace holding", down: "pace easing off" };
 // Text, not emoji — the check is part of the type, not a sticker on it.
 export const HIT_LABEL = { hit_t1: "T1 ✓", hit_t2: "T2 ✓", hit_t3: "T3 ✓" };
 
@@ -88,6 +102,7 @@ export default function AltCoinSheet({ sel, row, episode, onClose, onChart }) {
   // read is judged against the levels it was flagged on, which is the trade
   // you'd actually be taking.
   const entry = episode?.entry || row?.entry || null;
+  const move = episode?.move || row?.move || null;
 
   const days = episode?.firstFlaggedAt ? Math.max(0, Math.floor((Date.now() - Date.parse(episode.firstFlaggedAt)) / 86400000)) : null;
   const flaggedWord = days == null ? null : days === 0 ? "today" : days === 1 ? "yesterday" : `${days} days ago`;
@@ -172,6 +187,28 @@ export default function AltCoinSheet({ sel, row, episode, onClose, onChart }) {
               {entry.rr != null && <> · pays {entry.rr}×</>}
             </div>
           )}
+        </div>
+      )}
+
+      {/* THE STAGE, SPELLED OUT. The list says "In its base · 8.1% under" in
+          the width a row has; here there is room to say what the level is and
+          to show both clauses instead of the one the row had to choose. Same
+          vocabulary as the panel — a coin that reads one way on the list and
+          another way in the sheet is worse than either. */}
+      {move && STAGE_LABEL[move.stage] && (
+        <div style={{ marginBottom: 12 }}>
+          <div className="t-foot" style={{ color: "var(--ink)", lineHeight: 1.5 }}>
+            {STAGE_LABEL[move.stage]}{move.thin && <span style={{ color: T.red }}> · too thin to exit</span>}
+          </div>
+          <div className="t-cap t-num" style={{ color: "var(--faint)", marginTop: 2, lineHeight: 1.5 }}>
+            {[
+              Number.isFinite(move.toLevelPct)
+                ? `${Math.abs(move.toLevelPct).toFixed(1)}% ${move.toLevelPct < 0 ? "under" : "over"} its level${row?.range7d?.priorHigh ? ` ${px(row.range7d.priorHigh)}` : ""}`
+                : null,
+              move.motion ? `12h ${MOTION_LABEL[move.motion]}` : null,
+              Number.isFinite(move.offPeakPct) ? `${Math.abs(move.offPeakPct).toFixed(1)}% off its own high` : null,
+            ].filter(Boolean).join(" · ") || "no level drawn yet"}
+          </div>
         </div>
       )}
 

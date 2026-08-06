@@ -24,7 +24,15 @@ const json = (code, body) => ({
   body: JSON.stringify(body),
 });
 
+// NULL IS NOT ZERO. Number(null) is 0 and Number("") is 0, both finite, so the
+// obvious version of this function turned every absent value into a confident
+// zero: a CoinGecko row with no price became price 0 and survived the
+// `price != null` filters downstream, and a coin with no 12h baseline read as
+// a 12h return of exactly zero — which the move read then differenced against
+// its 24h return and reported as a coin decelerating hard. Absent has to stay
+// absent all the way to the render, which is the whole contract of this file.
 const num = (v) => {
+  if (v == null || v === "") return null;
   const n = Number(v);
   return Number.isFinite(n) ? n : null;
 };
@@ -175,6 +183,112 @@ function entryRead(ctx, targets, price) {
   return out("watch", "nothing lifting it yet");
 }
 
+/* ═══ the move read ══════════════════════════════════════════════════════════
+ *
+ * entryRead answers SHOULD I ACT. This answers WHERE IS IT, which turns out to
+ * be a different question and the one that was missing: a coin can be a
+ * perfectly good "watch" because it is coiled under its level, or a perfectly
+ * good "watch" because it already ran and gave half of it back, and the tab
+ * said the same word for both.
+ *
+ * Six stages, first match wins, ordered so every gate is guaranteed its inputs
+ * by the gates above it:
+ *
+ *   broken     price is at or through the invalidation — the plan is over
+ *   spent      parabolic, or price is past T3 — the measured move is done
+ *   extending  past its own first target: working, but the entry was lower
+ *   breaking   through the level that triggers it, or breaking it today
+ *   atLevel    within 3% of the level, coiled right under it
+ *   base       inside its range with nothing at the level yet
+ *
+ * plus three honest non-answers — 'none' (no levels drawn), 'offboard' (the
+ * coin fell out of the screened 60 and there is no structure to read), and the
+ * separate `thin` flag, which is not a stage at all: it rides alongside so a
+ * coin that is genuinely breaking out AND impossible to exit says both.
+ *
+ * WHAT IS AND IS NOT CLAIMED. Three of the stages are provably consistent with
+ * entryRead because they are the same arithmetic: invPct IS entry.riskPct,
+ * t3Pct IS entry.roomPct, t1Pct IS entry.nextPct — so 'broken', 'spent' and
+ * 'extending' can never appear under "Worth an entry now". The three forward
+ * stages carry any verdict, and that is the point: the stage says where the
+ * move is, the section says whether to act, and neither is asked to do the
+ * other's job.
+ *
+ * Same reasoning as entryRead for living here rather than in the cron: it is a
+ * question about the CURRENT price against FROZEN levels. It is called at the
+ * same two sites with the same arguments, so it inherits that contract rather
+ * than reimplementing it.
+ */
+const AT_LEVEL_PCT = -3;      // within 3% under the level is "at" it
+const BREAK_MIN_POINTS = 48;  // a fresh break needs a real series behind it
+const MOTION_PP = 1;          // pace changed by a point or more to be worth a word
+const OFF_PEAK_NOISE = -5;    // a give-back smaller than this is not news
+
+function moveRead(ctx, targets, price, episode) {
+  const flags = (ctx && ctx.flags) || {};
+  const range = (ctx && ctx.range7d) || null;
+  const t = targets || null;
+  const p = Number.isFinite(price) && price > 0 ? price : null;
+
+  // Distance to the LEVEL — priorHigh, drawn from finished bars with today
+  // excluded (see structure7d's docstring in the cron). range7d.high is a
+  // range denominator and would make the level move with the price it is
+  // compared against. Guarded on > 0 because price/null is Infinity, not null,
+  // which is exactly how a number like this ships broken.
+  const priorHigh = range && Number.isFinite(range.priorHigh) && range.priorHigh > 0 ? range.priorHigh : null;
+  const toLevelPct = priorHigh != null && p != null ? r1((p / priorHigh - 1) * 100) : null;
+
+  // Is it accelerating RIGHT NOW: this 12h leg against the previous one. Both
+  // windows are ratios against the same live price, so the price divides out
+  // and this is exact rather than an estimate.
+  const c12 = num(ctx && ctx.chg12h);
+  const c24 = num(ctx && ctx.chg24h);
+  let turn = null;
+  if (c12 != null && c24 != null && 1 + c12 / 100 > 0.01 && 1 + c24 / 100 > 0.01) {
+    const prior12 = ((1 + c24 / 100) / (1 + c12 / 100) - 1) * 100;
+    turn = r1(c12 - prior12);
+  } else {
+    // No 12h baseline yet (the first half-day after a deploy). The cron's own
+    // day-versus-week excess is the honest stand-in; a wider band, because it
+    // is a coarser measure.
+    const a = ctx && ctx.accel && num(ctx.accel.d24VsWeek);
+    if (a != null) return finish(a >= 2 ? "up" : a <= -1 ? "down" : "flat");
+  }
+  const motion = turn == null ? null : turn >= MOTION_PP ? "up" : turn <= -MOTION_PP ? "down" : "flat";
+  return finish(motion);
+
+  function finish(motionToken) {
+    // True % off the episode's own high. NOT peakPct − sinceFlagPct: both are
+    // percentages off the same flagPrice base, so their difference is
+    // percentage points of flagPrice, not percent off the peak — at peak +100
+    // and since +50 that prints −50% for a coin 25% off its high, an
+    // overstatement that grows with the size of the move.
+    const since = num(episode && episode.sinceFlagPct);
+    const peak = num(episode && episode.peakPct);
+    const offPeakPct = since != null && peak != null && 1 + peak / 100 > 0.01
+      ? r1(((1 + since / 100) / (1 + peak / 100) - 1) * 100)
+      : null;
+
+    const out = (stage) => ({
+      stage,
+      thin: !!flags.thinLiquidity,
+      motion: motionToken,
+      toLevelPct,
+      offPeakPct: offPeakPct != null && offPeakPct <= OFF_PEAK_NOISE ? offPeakPct : null,
+    });
+
+    if (!t) return out("none");
+    if (Number.isFinite(t.invPct) && t.invPct >= 0) return out("broken");
+    if (flags.parabolic || (Number.isFinite(t.t3Pct) && t.t3Pct <= 0)) return out("spent");
+    if (Number.isFinite(t.t1Pct) && t.t1Pct <= 0) return out("extending");
+    if (!range) return out("offboard");
+    if ((flags.freshBreak && (range.points ?? 0) >= BREAK_MIN_POINTS) || (toLevelPct != null && toLevelPct > 0)) return out("breaking");
+    if (toLevelPct != null && toLevelPct >= AT_LEVEL_PCT) return out("atLevel");
+    if (range.pos != null) return out("base");
+    return out("offboard");
+  }
+}
+
 // Target PRICES are the cron's and never move; the % distances are against the
 // live price, so "6% away" means six percent away now rather than at :00.
 function liveTargets(t, price) {
@@ -307,21 +421,27 @@ exports.handler = async (event) => {
       const chg4h = chgVsBaseline("4h", row.id, price);
       const chg12h = chgVsBaseline("12h", row.id, price);
       const targets = liveTargets(row.targets, price);
-      const entry = entryRead(row, targets, price);
-      if (!live) return { ...row, flag, chg4h, chg12h, targets, entry };
-      return {
-        ...row,
-        price,
-        chg1h: live.chg1h ?? row.chg1h,
-        chg4h,
-        chg12h,
-        chg24h: live.chg24h ?? row.chg24h,
-        chg7d: live.chg7d ?? row.chg7d,
-        chg30d: live.chg30d ?? row.chg30d,
-        targets,
-        entry,
-        flag,
-      };
+      // The merged row is built BEFORE the reads, not after: moveRead's pace
+      // leg needs chg12h and chg24h, and those are exactly the two fields the
+      // live overlay supplies. Reading them off the stored row would price the
+      // turn off the hourly pass.
+      const merged = live
+        ? {
+          ...row,
+          price,
+          chg1h: live.chg1h ?? row.chg1h,
+          chg4h,
+          chg12h,
+          chg24h: live.chg24h ?? row.chg24h,
+          chg7d: live.chg7d ?? row.chg7d,
+          chg30d: live.chg30d ?? row.chg30d,
+          targets,
+        }
+        : { ...row, chg4h, chg12h, targets };
+      merged.entry = entryRead(merged, targets, price);
+      merged.move = moveRead(merged, targets, price, flag);
+      merged.flag = flag;
+      return merged;
     });
 
     // Movers: live rows when we have them, else the stored board (60 coins
@@ -382,7 +502,12 @@ exports.handler = async (event) => {
     const active = (openQ.data || [])
       .map((row) => {
         const v = episodeView(row, liveById.get(row.coin_id)?.price);
-        v.entry = entryRead(ctxById.get(row.coin_id) || null, v.targets, v.lastPrice);
+        const ctx = ctxById.get(row.coin_id) || null;
+        v.entry = entryRead(ctx, v.targets, v.lastPrice);
+        // The episode itself is the peak reference — an open flag knows how
+        // far off its own high it has come back, which a board row alone
+        // cannot say.
+        v.move = moveRead(ctx, v.targets, v.lastPrice, v);
         return v;
       })
       .sort((a, b) => (a.tier === b.tier ? (b.score || 0) - (a.score || 0) : a.tier === "igniting" ? -1 : 1));
@@ -422,4 +547,5 @@ exports.handler = async (event) => {
 // `handler`). The entry read is the one piece of judgment this function owns,
 // so it is the one piece that has to be pinned by fixtures.
 exports.entryRead = entryRead;
+exports.moveRead = moveRead;
 exports.liveTargets = liveTargets;
