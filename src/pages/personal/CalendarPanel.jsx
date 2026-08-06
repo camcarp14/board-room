@@ -13,6 +13,8 @@ import {
   expandEvents, describeRule, normalizeRule, WEEKDAY_LABELS,
   deleteOccurrence, deleteFuture, deleteSeries, editOccurrence, editFuture,
 } from "../../lib/recurrence.js";
+import { spanDayKeys, spanPosition, withOverlays } from "../../lib/calendar-overlays.js";
+import { useBirthdays } from "../../data/birthdays.js";
 import { callClaude } from "../../lib/claude.js";
 import { localDayKey, todayISO } from "../../lib/dates.js";
 import { tint } from "../../ui/styles.js";
@@ -32,8 +34,46 @@ export const EVENT_CATEGORIES = [
 // at module scope so it survives this panel remounting on tab navigation.
 let lastHandledNewEvent = null;
 
+const shortDay = (key) => {
+  const d = key ? new Date(`${key}T00:00:00`) : null;
+  return d && !Number.isNaN(d.getTime()) ? d.toLocaleDateString("en-US", { month: "short", day: "numeric" }) : "—";
+};
+const clock = (hhmm) => {
+  const m = /^(\d{2}):(\d{2})$/.exec(hhmm || "");
+  if (!m) return null;
+  const h = Number(m[1]);
+  return `${((h + 11) % 12) + 1}:${m[2]} ${h < 12 ? "AM" : "PM"}`;
+};
+
+/** The draft's dates and times, said back as one sentence. */
+function draftReadback(f) {
+  const timed = !f.allDay && !!f.time;
+  const multi = f.endDate && f.endDate > f.date;
+  const days = multi
+    ? Math.round((new Date(`${f.endDate}T00:00:00`) - new Date(`${f.date}T00:00:00`)) / 86400000) + 1
+    : 1;
+  if (!timed) {
+    const span = multi
+      ? `All day · ${shortDay(f.date)} – ${shortDay(f.endDate)} (${days} days)`
+      : `All day · ${shortDay(f.date)}`;
+    // The switch is off but no time was typed. That saves as all-day, which is
+    // right — but it has to SAY so, or the switch reads as a promise the save
+    // then quietly breaks.
+    return f.allDay ? span : `${span} — add a start time to give it one`;
+  }
+  const from = clock(f.time);
+  const to = clock(f.endTime);
+  if (multi) return `${shortDay(f.date)} ${from} → ${shortDay(f.endDate)} ${to || from} (${days} days)`;
+  return to ? `${shortDay(f.date)} · ${from} – ${to}` : `${shortDay(f.date)} · ${from}`;
+}
+
 export function CalendarPanel({ isMobile, newEventSignal }) {
   const { data: events = null, error } = useEvents();
+  // Birthdays ride along as an overlay — they are their own table, they repeat
+  // by construction, and nothing here writes to them. A failed birthdays load
+  // must not take the calendar with it, so this reads the data and ignores the
+  // error state: no birthdays is a quieter grid, not a broken one.
+  const { data: birthdays = null } = useBirthdays();
   const loadErr = error ? (error.message || "Couldn't load your calendar.") : null;
   const saveMut = useSaveEvent();
   const delMut = useDeleteEvent();
@@ -177,9 +217,14 @@ Only extract entries you can read with real confidence — skip anything blurry,
 
   const catColor = (key) => (EVENT_CATEGORIES.find(c => c.key === key) || EVENT_CATEGORIES[0]).color;
 
+  // ALL-DAY IS THE DEFAULT, AND THE TIME FIELDS START EMPTY. Most of what goes
+  // on a personal calendar is a day, not an appointment, and the form used to
+  // open pre-set to 9:00 AM — which is not a blank field, it is a wrong answer
+  // you have to notice and correct. `endDate` empty means "same day"; filling
+  // it is the whole multi-day story.
   const blankDraft = (presetDate) => ({
     id: crypto.randomUUID(), title: "", notes: "", location: "", category: "personal",
-    date: presetDate || todayStr, time: "09:00", endTime: "", allDay: false,
+    date: presetDate || todayStr, endDate: "", time: "", endTime: "", allDay: true,
     // Repeat, held flat in the draft and assembled into an rrule on save.
     // freq "" is "Does not repeat" — the default, so nothing repeats by
     // accident.
@@ -216,8 +261,15 @@ Only extract entries you can read with real confidence — skip anything blurry,
       // Local parts, not toISOString() — otherwise opening an 8pm event for
       // edit shows tomorrow's date, and saving it unchanged shifts it +1 day.
       date: localDayKey(d),
-      time: ev.all_day ? "09:00" : d.toTimeString().slice(0, 5),
-      endTime: ev.end_time ? new Date(ev.end_time).toTimeString().slice(0, 5) : "",
+      // The end DATE is only carried when it differs from the start — an
+      // ordinary same-day event must not open with its own date echoed into a
+      // second field the user then has to reason about.
+      endDate: (() => {
+        const keys = spanDayKeys(ev);
+        return keys.length > 1 ? keys[keys.length - 1] : "";
+      })(),
+      time: ev.all_day ? "" : d.toTimeString().slice(0, 5),
+      endTime: ev.all_day || !ev.end_time ? "" : new Date(ev.end_time).toTimeString().slice(0, 5),
       freq: rule ? rule.freq : "",
       interval: rule ? rule.interval : 1,
       byWeekday: rule ? rule.byWeekday : [],
@@ -238,14 +290,45 @@ Only extract entries you can read with real confidence — skip anything blurry,
     return rule;
   };
 
+  /**
+   * Draft → the stored row. Three things this now gets right that it didn't:
+   *
+   *   A BLANK TIME IS ALL-DAY, not midnight. The switch and the empty field are
+   *   two ways of saying the same thing, and treating an empty `time` as
+   *   00:00 silently filed a lunch as a 12am appointment.
+   *
+   *   THE END CAN BE ON A DIFFERENT DAY. `end_time` used to be built from
+   *   `f.date` no matter what, which made a multi-day event unrepresentable —
+   *   not hard, unrepresentable — and an end date earlier than the start is
+   *   clamped away rather than stored as a negative duration that expandEvents
+   *   would carry into every occurrence.
+   *
+   *   AN ALL-DAY SPAN ENDS AT MIDNIGHT ON ITS LAST DAY, inclusive: the grid
+   *   keys all-day rows off the stored date string (see calendar-overlays.js),
+   *   so `${endDate}T00:00:00` is exactly the last cell it should paint.
+   */
   const draftFields = (f) => {
-    const start_time = f.allDay
-      ? new Date(`${f.date}T00:00:00`).toISOString()
-      : new Date(`${f.date}T${f.time}:00`).toISOString();
-    const end_time = (!f.allDay && f.endTime) ? new Date(`${f.date}T${f.endTime}:00`).toISOString() : null;
+    const timed = !f.allDay && !!f.time;
+    const endDate = f.endDate && f.endDate > f.date ? f.endDate : null;
+    const start_time = timed
+      ? new Date(`${f.date}T${f.time}:00`).toISOString()
+      : new Date(`${f.date}T00:00:00`).toISOString();
+
+    let end_time = null;
+    if (timed) {
+      // A timed event's end takes the end date when there is one, and the end
+      // time when there is one; either alone is still an end.
+      if (f.endTime || endDate) {
+        end_time = new Date(`${endDate || f.date}T${f.endTime || f.time}:00`).toISOString();
+        if (new Date(end_time) < new Date(start_time)) end_time = null;
+      }
+    } else if (endDate) {
+      end_time = new Date(`${endDate}T00:00:00`).toISOString();
+    }
+
     return {
       title: f.title.trim(), notes: f.notes, start_time, end_time,
-      all_day: f.allDay, location: f.location, category: f.category,
+      all_day: !timed, location: f.location, category: f.category,
     };
   };
 
@@ -332,17 +415,20 @@ Only extract entries you can read with real confidence — skip anything blurry,
   // wants every day it lands on. Expanded across the visible month with a
   // week of slack on each side so the leading/trailing cells of the grid (which
   // belong to the neighbouring months) are populated too.
-  const monthOccurrences = expandEvents(
-    events || [],
-    new Date(gridYear, gridMonth, -7),
-    new Date(gridYear, gridMonth + 1, 7),
+  const gridFrom = new Date(gridYear, gridMonth, -7);
+  const gridTo = new Date(gridYear, gridMonth + 1, 7);
+  const monthOccurrences = withOverlays(
+    expandEvents(events || [], gridFrom, gridTo),
+    { birthdays: birthdays || [], from: gridFrom, to: gridTo },
   );
   const eventsByDay = {}; // "YYYY-MM-DD" -> [occurrences]
   monthOccurrences.forEach(ev => {
-    // Local day-key so an evening event lands on the day the user sees on the
-    // clock, matching dateKey()/isToday() below (start_time is stored UTC).
-    const key = ev.all_day ? String(ev.start_time).slice(0, 10) : localDayKey(ev.start_time);
-    (eventsByDay[key] = eventsByDay[key] || []).push(ev);
+    // EVERY day the occurrence covers, not just the one it starts on — a trip
+    // from the 6th to the 9th used to appear on the 6th and nowhere else,
+    // which looks exactly like never having entered it. spanDayKeys also owns
+    // the local-day convention (an evening event lands on the day the clock
+    // says, and an all-day row is keyed off its stored date string).
+    for (const key of spanDayKeys(ev)) (eventsByDay[key] = eventsByDay[key] || []).push(ev);
   });
 
   // The next 90 days, flat — the view a month grid genuinely cannot give you:
@@ -351,9 +437,9 @@ Only extract entries you can read with real confidence — skip anything blurry,
     const from = new Date(); from.setHours(0, 0, 0, 0);
     const to = new Date(from.getFullYear(), from.getMonth(), from.getDate() + 90);
     const now = Date.now();
-    return expandEvents(events || [], from, to)
-      .filter((o) => o.all_day || new Date(o.end_time || o.start_time).getTime() >= now)
-      .slice(0, 60);
+    const real = expandEvents(events || [], from, to)
+      .filter((o) => o.all_day || new Date(o.end_time || o.start_time).getTime() >= now);
+    return withOverlays(real, { birthdays: birthdays || [], from, to }).slice(0, 60);
   })();
   const dateKey = (day) => `${gridYear}-${String(gridMonth + 1).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
   const isToday = (day) => dateKey(day) === todayStr;
@@ -385,7 +471,14 @@ Only extract entries you can read with real confidence — skip anything blurry,
     changeMonth(dx < 0 ? 1 : -1);
   };
 
-  const selectedDayEvents = selectedDay ? (eventsByDay[selectedDay] || []).sort((a, b) => new Date(a.start_time) - new Date(b.start_time)) : [];
+  // Your own events first, in clock order; birthdays and holidays after them.
+  // Sorting the merged list by start_time alone would float every overlay to
+  // the top, because an all-day row is stored at midnight.
+  const selectedDayEvents = selectedDay
+    ? [...(eventsByDay[selectedDay] || [])].sort((a, b) =>
+      (a.overlay ? 1 : 0) - (b.overlay ? 1 : 0) ||
+      new Date(a.start_time) - new Date(b.start_time))
+    : [];
   const selectedDayLabel = selectedDay ? new Date(`${selectedDay}T00:00:00`).toLocaleDateString("en-US", { weekday: "long", month: "long", day: "numeric" }) : "";
 
   const isEdit = !!form && (events || []).some(e => e.id === form.id);
@@ -393,29 +486,55 @@ Only extract entries you can read with real confidence — skip anything blurry,
   const previewRows = bulkPreview ? (bulkShowAll ? bulkPreview : bulkPreview.slice(0, 8)) : [];
 
   // ─── Agenda row (day view) ───
-  const renderEvent = (ev) => (
-    <Cell
-      key={ev.id}
-      onClick={() => openEdit(ev)}
-      leading={<Dot tone={catColor(ev.category)} size={8} />}
-      title={ev.title}
-      sub={[dayLabel(ev.start_time), ev.isRecurring ? "Repeats" : null, ev.location, ev.notes].filter(Boolean).join(" · ")}
-      value={
-        <span className="t-num" style={{ fontSize: 12 }}>
-          {timeLabel(ev.start_time, ev.all_day)}
-          {ev.end_time && !ev.all_day ? `–${new Date(ev.end_time).toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" })}` : ""}
-        </span>
-      }
-      trailing={
-        <span role="button" tabIndex={0} aria-label="Delete event" className="icon-btn"
-          onClick={(e) => removeEvent(ev, e)}
-          onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); removeEvent(ev, e); } }}
-          style={{ width: 38, height: 38, marginRight: -8, color: "var(--faint)" }}>
-          <IcTrash size={16} />
-        </span>
-      }
-    />
-  );
+  // `day` is the cell this row is being drawn under, so a multi-day event can
+  // say which of its days this is. Absent (Upcoming), it reads as the span.
+  const renderEvent = (ev, day) => {
+    // OVERLAYS ARE NOT ROWS. A birthday lives in personal_birthdays and a
+    // holiday is computed from the year — neither has a database identity, so
+    // neither gets an edit tap or a delete button. Giving them one would open
+    // a form that can only fail on save.
+    if (ev.overlay) {
+      const sub = ev.overlay === "birthday"
+        ? (ev.turns != null ? `Birthday · turns ${ev.turns}` : "Birthday")
+        : (ev.federal ? "Holiday" : "Observance");
+      return (
+        <Cell key={ev.id}
+          leading={<Dot tone="var(--faint)" size={8} />}
+          title={<span style={{ color: "var(--sub)" }}>{ev.title}</span>}
+          sub={[dayLabel(ev.start_time), sub].filter(Boolean).join(" · ")}
+          value={<span className="t-num" style={{ fontSize: 12, color: "var(--faint)" }}>All day</span>}
+        />
+      );
+    }
+    const span = spanPosition(ev, day || null);
+    const multi = span.total > 1;
+    const spanLabel = multi
+      ? (day ? `Day ${span.index + 1} of ${span.total}` : `${dayLabel(ev.start_time)} → ${span.total} days`)
+      : dayLabel(ev.start_time);
+    return (
+      <Cell
+        key={`${ev.id}${day ? `#${day}` : ""}`}
+        onClick={() => openEdit(ev)}
+        leading={<Dot tone={catColor(ev.category)} size={8} />}
+        title={ev.title}
+        sub={[spanLabel, ev.isRecurring ? "Repeats" : null, ev.location, ev.notes].filter(Boolean).join(" · ")}
+        value={
+          <span className="t-num" style={{ fontSize: 12 }}>
+            {timeLabel(ev.start_time, ev.all_day)}
+            {ev.end_time && !ev.all_day ? `–${new Date(ev.end_time).toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" })}` : ""}
+          </span>
+        }
+        trailing={
+          <span role="button" tabIndex={0} aria-label="Delete event" className="icon-btn"
+            onClick={(e) => removeEvent(ev, e)}
+            onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); removeEvent(ev, e); } }}
+            style={{ width: 38, height: 38, marginRight: -8, color: "var(--faint)" }}>
+            <IcTrash size={16} />
+          </span>
+        }
+      />
+    );
+  };
 
   return (
     <section style={{ display: "flex", flexDirection: "column", gap: 10, minWidth: 0 }}>
@@ -533,7 +652,11 @@ Only extract entries you can read with real confidence — skip anything blurry,
               sub="The next 90 days are clear."
               action={<Button kind="tinted" size="sm" onClick={() => openNew(null)}>Add event</Button>} />
           ) : (
-            <CellGroup>{upcoming.map(renderEvent)}</CellGroup>
+            // (ev) => renderEvent(ev), NOT the bare reference: map's second
+            // argument is the index, and renderEvent's is the day a row is
+            // drawn under — passing 3 there makes a four-day trip claim to be
+            // "Day 1 of 4" on a list that shows it exactly once.
+            <CellGroup>{upcoming.map((ev) => renderEvent(ev))}</CellGroup>
           )}
         </Card>
       )}
@@ -584,16 +707,23 @@ Only extract entries you can read with real confidence — skip anything blurry,
                       a +N overflow. Tap the day for the full agenda. */}
                   {dayEvents.length > 0 && (
                     <span style={{ display: "flex", flexDirection: "column", gap: 2, width: "100%", minWidth: 0 }}>
-                      {dayEvents.slice(0, 2).map((ev, j) => (
-                        <span key={j} title={ev.title} style={{
-                          width: "100%", minWidth: 0, textAlign: "left",
-                          fontSize: 10.5, lineHeight: 1.25, fontWeight: 600,
-                          padding: "1px 3px", borderRadius: 4,
-                          background: `color-mix(in srgb, ${catColor(ev.category)} 14%, transparent)`,
-                          color: catColor(ev.category),
-                          overflow: "hidden", display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical", wordBreak: "break-word",
-                        }}>{ev.title}</span>
-                      ))}
+                      {dayEvents.slice(0, 2).map((ev, j) => {
+                        // Birthdays and holidays are CONTEXT for the day; your
+                        // own events are the day. So overlays get no category
+                        // colour and no tint — a month with eleven federal
+                        // holidays in it must not read as eleven commitments.
+                        const tone = ev.overlay ? "var(--faint)" : catColor(ev.category);
+                        return (
+                          <span key={j} title={ev.title} style={{
+                            width: "100%", minWidth: 0, textAlign: "left",
+                            fontSize: 10.5, lineHeight: 1.25, fontWeight: ev.overlay ? 500 : 600,
+                            padding: "1px 3px", borderRadius: 4,
+                            background: ev.overlay ? "transparent" : `color-mix(in srgb, ${tone} 14%, transparent)`,
+                            color: tone,
+                            overflow: "hidden", display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical", wordBreak: "break-word",
+                          }}>{ev.title}</span>
+                        );
+                      })}
                       {dayEvents.length > 2 && (
                         <span className="t-num" style={{ fontSize: 10, lineHeight: 1.2, color: "var(--faint)", textAlign: "left", paddingLeft: 3 }}>+{dayEvents.length - 2}</span>
                       )}
@@ -613,6 +743,12 @@ Only extract entries you can read with real confidence — skip anything blurry,
             <Button kind="plain" size="sm" onClick={() => setSelectedDay(null)} style={{ paddingLeft: 2, marginLeft: -8, height: 40 }}>
               <IcChevronLeft size={15} /> {monthLabel}
             </Button>
+            {/* Always reachable. Holidays and birthdays mean a day can be
+                "occupied" without you having put anything on it, and the tap
+                that used to start a new event now opens this view instead —
+                so the add has to live here rather than only in the empty
+                state it would otherwise hide behind. */}
+            <Button kind="plain" size="sm" onClick={() => openNew(selectedDay)} style={{ marginLeft: "auto", height: 40 }}>Add event</Button>
           </div>
           <div className="t-head" style={{ padding: "0 4px" }}>{selectedDayLabel}</div>
           {selectedDayEvents.length === 0 ? (
@@ -622,7 +758,7 @@ Only extract entries you can read with real confidence — skip anything blurry,
                 action={<Button kind="tinted" size="sm" onClick={() => openNew(selectedDay)}>Add event</Button>} />
             </Card>
           ) : (
-            <CellGroup>{selectedDayEvents.map(renderEvent)}</CellGroup>
+            <CellGroup>{selectedDayEvents.map((ev) => renderEvent(ev, selectedDay))}</CellGroup>
           )}
         </>
       )}
@@ -666,27 +802,50 @@ Only extract entries you can read with real confidence — skip anything blurry,
               <span className="t-body">All-day</span>
               <Switch on={form.allDay} onToggle={() => setForm(f => ({ ...f, allDay: !f.allDay }))} aria-label="All-day event" />
             </div>
+            {/* Two DATES, always — the end one is what makes a multi-day event
+                expressible at all. Leave it blank for a single day; the
+                readback under the row says which you have. Times appear only
+                when the all-day switch is off, and they start EMPTY. */}
             <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
               <label style={{ flex: "1 1 130px", display: "flex", flexDirection: "column", gap: 4 }}>
-                <span className="t-cap" style={{ color: "var(--faint)" }}>Date</span>
-                <input type="date" className="field" value={form.date} onChange={e => setForm(f => ({ ...f, date: e.target.value }))}
+                <span className="t-cap" style={{ color: "var(--faint)" }}>Starts</span>
+                <input type="date" className="field" value={form.date}
+                  onChange={e => setForm(f => ({
+                    ...f,
+                    date: e.target.value,
+                    // Dragging the start past the end would otherwise store a
+                    // backwards span that renders as a single day with no
+                    // explanation. The end follows instead.
+                    endDate: f.endDate && f.endDate < e.target.value ? "" : f.endDate,
+                  }))}
                   style={{ fontFamily: "var(--font-mono)" }} />
+              </label>
+              <label style={{ flex: "1 1 130px", display: "flex", flexDirection: "column", gap: 4 }}>
+                <span className="t-cap" style={{ color: "var(--faint)" }}>Ends</span>
+                <input type="date" className="field" value={form.endDate} min={form.date}
+                  onChange={e => setForm(f => ({ ...f, endDate: e.target.value }))}
+                  title="End date — leave blank for a single day" style={{ fontFamily: "var(--font-mono)" }} />
               </label>
               {!form.allDay && (
                 <>
                   <label style={{ flex: "1 1 96px", display: "flex", flexDirection: "column", gap: 4 }}>
-                    <span className="t-cap" style={{ color: "var(--faint)" }}>Starts</span>
+                    <span className="t-cap" style={{ color: "var(--faint)" }}>From</span>
                     <input type="time" className="field" value={form.time} onChange={e => setForm(f => ({ ...f, time: e.target.value }))}
-                      style={{ fontFamily: "var(--font-mono)" }} />
+                      title="Start time (optional — blank stays all-day)" style={{ fontFamily: "var(--font-mono)" }} />
                   </label>
                   <label style={{ flex: "1 1 96px", display: "flex", flexDirection: "column", gap: 4 }}>
-                    <span className="t-cap" style={{ color: "var(--faint)" }}>Ends</span>
+                    <span className="t-cap" style={{ color: "var(--faint)" }}>To</span>
                     <input type="time" className="field" value={form.endTime} onChange={e => setForm(f => ({ ...f, endTime: e.target.value }))}
                       title="End time (optional)" style={{ fontFamily: "var(--font-mono)" }} />
                   </label>
                 </>
               )}
             </div>
+            {/* What those four fields actually add up to, in English. The
+                all-day switch, an empty time and a second date interact, and
+                a form where you have to simulate the save to know what you
+                get is a form that gets it wrong. */}
+            <div className="t-cap" style={{ color: "var(--faint)", lineHeight: 1.5, marginTop: -4 }}>{draftReadback(form)}</div>
             {/* ── Repeat ──────────────────────────────────────────────────
                 Progressive: one row of pills until something other than
                 "Once" is chosen, and only then do the interval, the weekday
