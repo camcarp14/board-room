@@ -93,8 +93,10 @@ async function claudeCall(cfg, modelKey, system, user, maxTokens, userId) {
 }
 
 async function loadUserBundle(cfg, userId) {
-  // mind_prompt is the compiled Mind (doctrine only — see mindGenome.js). It's
-  // read SERVER-SIDE from app_settings rather than taken off the request body:
+  // mind_prompt is the compiled Mind (doctrine only). The editor that compiled
+  // it has been deleted, so this row is now FROZEN at whatever the last save
+  // wrote — it still shapes every run, but nothing can change it any more.
+  // It's read SERVER-SIDE from app_settings rather than taken off the request body:
   // the client used to POST `mind: <compiled prompt>` and this function never
   // read it, so tuning a Neuron changed nothing about what a queue run produced.
   // Reading it here also means we don't trust a client-supplied system prompt.

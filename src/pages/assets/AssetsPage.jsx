@@ -6,13 +6,12 @@
 // live in one place. The connections hook is hosted at the page level so Status
 // results survive a hop to another tab and back.
 //
-// Mind used to be the first tab here and the page's landing. It has been removed
-// from the app's surface entirely — not hidden behind a flag, and not left as a
-// deep-linkable key — so BoardPage/MiniMePage/LearnPanel are no longer reachable
-// from any UI. The modules and the Supabase tables are untouched, so this is a
-// one-import-and-one-array reversal if it's ever wanted back. Note that skills
-// still load from the database and still shape prompts (buildSkillsBlock); only
-// the editor for them is gone.
+// Mind used to be the first tab here and the page's landing. It is gone — first
+// unrouted, now deleted: the canvas, the genome, the seat pages and the Learn
+// editor are all out of the tree. The Supabase tables it wrote to are untouched,
+// and the data still does work: skills load from the database and still shape
+// prompts (buildSkillsBlock), and mini-worker still reads the compiled
+// `mind_prompt` row. What's gone is every editor for any of it.
 
 import { useState, useEffect, useRef } from "react";
 import {
