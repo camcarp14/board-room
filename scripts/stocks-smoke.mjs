@@ -516,6 +516,81 @@ try {
     catalystFor({ rvol: 1.1, chgSession: 0.4, overnight: 0.2 }) === null);
   check("a missing input never invents a catalyst", catalystFor({}) === null);
 
+  // ─── the headline actually being about the company ────────────────────────
+  // The news endpoint searches a QUERY STRING, not a ticker. On the first live
+  // pass it filed a PayPal story under BA and a Comcast note under GE — 13 of
+  // 32 headlines named a different company than the row they sat on, including
+  // both of NVDA's, and NVDA was one of three flagged names. A plausible
+  // sentence about somebody else is the most expensive thing this can return:
+  // the entire value of the getting-ready list is that the reason is attached
+  // to the name.
+  //
+  // The fixtures below are those exact 32 headlines with relatedTickers
+  // ABSENT — the degraded path — because that is the half verifiable without a
+  // route to Yahoo, and because if the tag turns out not to exist in the
+  // response at all, this fallback is the whole filter.
+  const { aboutSymbol, EQUITIES: UNI } = C;
+  const co = {};
+  for (const e of UNI) co[e.symbol] = e.company;
+  const LIVE_NEWS = [
+    ["AVGO", "Alphabet CEO Sundar Pichai Just Made a $200 Billion Infrastructure Move. Nvidia, Micron, and Broadcom Investors Should Rejoice.", true],
+    ["AVGO", "Marvell Is Positioned to Absorb a Disproportionate Amount of This AI Capex Surge, So I Keep Buying", false],
+    ["BA", "PayPal to Stripe: The Offer Is Too Low", false],
+    ["BA", "Boeing-Lockheed Martin’s ULA said to plan $500m private bond sale", true],
+    ["BAC", "Bank of America spending $250M a year on GLP-1 weight loss drugs", true],
+    ["CRM", "Magnite (MGNI) Q2 Earnings and Revenues Top Estimates", false],
+    ["CRM", "CRM, NOW, INTU, ADBE: Software Stocks Slide After Figma Flags Surging AI Costs", true],
+    ["FCX", "FCX Flashes Buy Signal; This Is Fueling Copper, Rare Earth Stocks", true],
+    ["FCX", "5 Non-Ferrous Metal Mining Stocks to Watch in a Challenging Industry", false],
+    ["GE", "Analyst Report: Comcast Corporation", false],
+    ["GOOGL", "Alphabet Post-Earnings Rebound is On: Buy at $363?", true],
+    ["HD", "Home Depot reshuffles leadership to accelerate tech innovation", true],
+    ["HON", "Honeywell Aerospace Q2 Earnings Call Highlights", true],
+    ["JPM", "Tetragon Financial Group Limited Announcement of Tender Offer to Purchase $50,000,000 of Tetragon Non-Voting Shares", false],
+    ["KO", "This Dividend King Yields Over 4% and Trades Near Its 52-Week Lows, But Don’t Rush to Buy the Dip", false],
+    ["MCD", "Portillo’s 2Q Revenue Climbs, Teases New Long-Term Growth Strategy", false],
+    ["MSFT", "Billionaire Bill Ackman Built a $2.1 Billion Stake in Microsoft After the Stock Slid. Is It Still a Buy?", true],
+    ["NVDA", "Billionaire Bill Ackman Built a $2.1 Billion Stake in Microsoft After the Stock Slid. Is It Still a Buy?", false],
+    ["NVDA", "Axon Just Delivered a Huge Beat-and-Raise. So Why Is the Stock Down?", false],
+    ["SBUX", "Shake Shack Sizzles After Starboard Reveals a Stake", false],
+    ["SBUX", "Chipotle Stock Carries A Premium Built On New Restaurants", false],
+    ["V", "Visa Puts Stablecoins Into Its Cross-Border Payout Rail Across 18 Billion Endpoints", true],
+  ];
+  const wrongCall = LIVE_NEWS.filter(([sym, title, want]) => aboutSymbol({ title }, sym, co[sym]) !== want);
+  check("every headline the live pass misfiled is rejected, and every correct one survives",
+    wrongCall.length === 0, wrongCall.map(([s, t]) => `${s}:${t.slice(0, 40)}`).join(" | "));
+
+  // The curly apostrophe is not cosmetic: the universe writes McDonald's with a
+  // straight quote and the wire sent a curly one, which on its own dropped the
+  // single genuine McDonald's headline in the payload.
+  check("a curly apostrophe in the wire's title still matches the universe's straight one",
+    aboutSymbol({ title: "McDonald’s journey to 50,000 restaurants will take a bit longer" }, "MCD", co.MCD));
+
+  // relatedTickers is Yahoo's own tagging, and it is the ONLY thing that can
+  // reject the right name on the wrong company.
+  check("a tagged story about a different listed company is rejected on the name alone",
+    aboutSymbol({ title: "Coca-Cola Consolidated: Q2 Earnings Snapshot", relatedTickers: ["COKE"] }, "KO", co.KO) === false);
+  check("a tag that names the symbol is accepted whatever the title says",
+    aboutSymbol({ title: "Anything at all", relatedTickers: ["KO", "PEP"] }, "KO", co.KO) === true);
+  check("the tag outranks a title that happens to mention the company",
+    aboutSymbol({ title: "Boeing supplier something", relatedTickers: ["SPR"] }, "BA", co.BA) === false);
+  check("an empty or absent tag falls through to the title rather than rejecting everything",
+    aboutSymbol({ title: "Boeing wins an order", relatedTickers: [] }, "BA", co.BA) === true
+    && aboutSymbol({ title: "Boeing wins an order" }, "BA", co.BA) === true);
+  check("a headline with no title is never about anything", aboutSymbol({}, "BA", co.BA) === false);
+  check("an unknown symbol with no company name still matches on its own ticker",
+    aboutSymbol({ title: "ZZZZ pops on earnings" }, "ZZZZ", undefined) === true
+    && aboutSymbol({ title: "something unrelated" }, "ZZZZ", undefined) === false);
+  // A substring of a longer word is not a mention. "BAC" must not match
+  // "backdrop", and this is exactly what whole-token normalisation buys.
+  check("a ticker buried inside a longer word is not a mention",
+    aboutSymbol({ title: "A difficult backdrop for banks" }, "BAC", "Bank of America") === false);
+
+  check("the fetch passes company names through, so the title rule has something to match",
+    /fetchNews\(shortList,\s*companyOf,\s*now\)/.test(engineSrc) && /companyOf\[e\.symbol\]\s*=\s*e\.company/.test(engineSrc));
+  check("...and asks for more headlines than it keeps, since most get filtered",
+    /newsCount=(\d+)/.test(engineSrc) && Number(engineSrc.match(/newsCount=(\d+)/)[1]) >= 8);
+
   check("the squeeze rank refuses a series too short to rank against itself",
     squeezeRank(Array.from({ length: 40 }, () => bar(100, 101, 99, 100))).pctile === null);
   check("a contracting range ranks near the bottom of its own history",

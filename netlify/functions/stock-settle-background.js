@@ -1028,14 +1028,69 @@ function squeezeRank(bars, lookback = 60) {
  * line in the UI. The data-derived catalysts above are what the card actually
  * relies on to explain itself.
  */
+// newsCount is deliberately larger than the two we keep: aboutSymbol below
+// throws most of these away, and asking for four left rows with nothing after
+// the filter. More items per request, same number of requests.
 const NEWS_URL = (sym) =>
-  `https://query1.finance.yahoo.com/v1/finance/search?q=${encodeURIComponent(sym)}&quotesCount=0&newsCount=4&enableFuzzyQuery=false`;
+  `https://query1.finance.yahoo.com/v1/finance/search?q=${encodeURIComponent(sym)}&quotesCount=0&newsCount=10&enableFuzzyQuery=false`;
 const NEWS_MAX_SYMBOLS = 16;
 const NEWS_MAX_AGE_MS = 4 * DAY;
 
-async function fetchNews(symbols, now) {
+// Lowercase, apostrophes dropped, every other run of punctuation folded to one
+// space, padded so a comparison can demand whole tokens. "McDonald's" and
+// "McDonald’s" have to be the same string — the universe writes a straight
+// quote and the wire sends a curly one, and that alone silently dropped the
+// one genuine McDonald's headline in the live payload.
+const normTitle = (s) => ` ${String(s || "").toLowerCase().replace(/[‘’']/g, "").replace(/[^a-z0-9]+/g, " ").trim()} `;
+
+/**
+ * Is this headline actually ABOUT this company?
+ *
+ * The endpoint searches a QUERY STRING, not a ticker, so it will hand back a
+ * Motley Fool piece on PayPal under "BA" and a Morningstar note on Comcast
+ * under "GE". On the first live pass 13 of 32 headlines — 40% — named a
+ * different company than the row they were filed under, and two of the three
+ * flagged names carried one. A wrong headline is worse here than no headline
+ * at all: the entire value of the getting-ready list is that the reason is
+ * attached to the name, so a plausible sentence about somebody else is the
+ * most expensive thing this function can return.
+ *
+ * relatedTickers is Yahoo's own tagging, and where it exists it is the answer:
+ * if the story is tagged and the tag does not include this symbol, it is about
+ * someone else, full stop. That is the only thing that rejects "Coca-Cola
+ * Consolidated" under KO — the right name, a different listed company — which
+ * no amount of string matching can catch.
+ *
+ * Where the tag is absent we fall back to the title: the ticker as a standalone
+ * token, or the company name as whole words. That fallback carries real weight
+ * rather than being a nicety, because this endpoint is still UNVERIFIED from
+ * the session that wrote it — if relatedTickers turns out not to be in the
+ * response at all, the title rule ALONE still drops eleven of the thirteen
+ * mismatches observed live, and keeps every headline that was correctly filed.
+ *
+ * It errs toward dropping. "BofA's Brian Moynihan Expects Fed To Hike" is
+ * genuinely about BAC and the title rule loses it, because the company is
+ * written as an abbreviation the universe does not carry. Losing a real
+ * headline costs a line of context; keeping a fake one costs the reader's
+ * trust in every other line on the card.
+ */
+function aboutSymbol(item, sym, company) {
+  const rel = Array.isArray(item && item.relatedTickers)
+    ? item.relatedTickers.filter((t) => typeof t === "string" && t.trim())
+    : [];
+  if (rel.length) return rel.some((t) => t.trim().toUpperCase() === String(sym).toUpperCase());
+
+  const title = normTitle(item && item.title);
+  if (title.trim() === "") return false;
+  if (title.includes(normTitle(sym))) return true;
+  const co = normTitle(company);
+  return co.trim() !== "" && title.includes(co);
+}
+
+async function fetchNews(symbols, companies, now) {
   const out = {};
   const list = (symbols || []).slice(0, NEWS_MAX_SYMBOLS);
+  const nameOf = companies || {};
   let blocked = false;
   for (const sym of list) {
     if (blocked) break;
@@ -1059,6 +1114,7 @@ async function fetchNews(symbols, now) {
         // Old news is not news. Anything past four days is context the chart
         // has already absorbed.
         if (at != null && now - at * 1000 > NEWS_MAX_AGE_MS) continue;
+        if (!aboutSymbol(it, sym, nameOf[sym])) continue;
         kept.push({ title: t.slice(0, 140), publisher: str(it.publisher) || null, at: at != null ? new Date(at * 1000).toISOString() : null });
         if (kept.length >= 2) break;
       }
@@ -1541,7 +1597,10 @@ async function settle(db, prev, spy, now, decision) {
       shortList.push(r.symbol);
     }
   }
-  const news = await fetchNews(shortList, now);
+  // The company name is half the relevance test, so it travels with the list.
+  const companyOf = {};
+  for (const e of EQUITIES) companyOf[e.symbol] = e.company;
+  const news = await fetchNews(shortList, companyOf, now);
   counts.news = Object.keys(news).length;
 
   const spanOf = (n) => {
@@ -1747,3 +1806,5 @@ exports.etParts = etParts;
 exports.sessionDateOf = sessionDateOf;
 exports.PHASE_GATE = PHASE_GATE;
 exports.ENGINE_VERSION = ENGINE_VERSION;
+exports.aboutSymbol = aboutSymbol;
+exports.EQUITIES = EQUITIES;
