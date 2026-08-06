@@ -755,6 +755,69 @@ try {
   check("the read passes the rejected attempt through so the tab can say so",
     /lastPass: p\.lastPass \|\| null/.test(scanSrc2));
 
+  // ─── batch 3: the lifecycle's remaining silent failures ──────────────────
+  // THE FADE CLOSE was the THIRD place in this file to write a terminal status
+  // over an earned rung, after the settle's invalidation branch and the tick's.
+  check("a fade cannot be written over a rung that was reached",
+    /if \(\(STATUS_RANK\[status\] \?\? 0\) === 0\) patch\.status = "faded";/.test(settleSrc),
+    "fade still overwrites the earned status");
+  // Per line, because the guard sits inline ahead of the write — an unanchored
+  // match counts the guarded ones too and the assertion never passes.
+  const unguardedClose = codeOnly(settleSrc).split("\n")
+    .filter((l) => /patch\.status = "(invalidated|faded)";/.test(l) && !/STATUS_RANK/.test(l));
+  check("no branch anywhere writes a terminal status over an earned rung",
+    unguardedClose.length === 0, unguardedClose.map((l) => l.trim()).join(" | "));
+
+  // AN UNSCREENED FLAG IS NOT IMMORTAL. Every close lived inside the branch
+  // that requires a screened row, so a name that left the screened set could
+  // never be graded and never closed — and held a gate slot forever, where the
+  // cap is between two and ten.
+  check("a flag with no screened row still ages out",
+    /if \(flagAgeSessions\(row, session\) >= STALE_SESSIONS\)/.test(settleSrc));
+  check("...and says that is why it closed", /closedBy: "unscreened"/.test(settleSrc));
+
+  // THE GATE COUNTED FLAGS IT HAD JUST CLOSED. On the evening a shakeout stops
+  // three out, room read as full and nothing replaced them.
+  check("room is measured against what is still open, not what the pass started with",
+    /openIds\.size - closedThisPass/.test(settleSrc));
+  check("...while a name closed this pass is still barred from re-flagging immediately",
+    /if \(openIds\.has\(id\)\) continue;/.test(settleSrc));
+
+  // A FORCED SETTLE MUST GRADE A FINISHED SESSION. Inside market hours the
+  // newest bar is today's and still moving; grading it scores every name off a
+  // partial volume day AND stamps settledSession with today, so the real close
+  // is never graded at all.
+  const { dropFormingBar } = C;
+  const barsOn = (dates) => ({ bars: dates.map((d) => ({ date: d, open: 1, high: 1, low: 1, close: 1 })) });
+  const midSession = { date: "2026-08-06", minutes: 11 * 60 };
+  const afterClose = { date: "2026-08-06", minutes: 16 * 60 + 30 };
+  check("mid-session, today's still-forming bar is dropped",
+    dropFormingBar(barsOn(["2026-08-04", "2026-08-05", "2026-08-06"]), midSession).bars.length === 2);
+  check("...leaving the newest FINISHED session as the one that gets graded",
+    dropFormingBar(barsOn(["2026-08-04", "2026-08-05", "2026-08-06"]), midSession).bars.slice(-1)[0].date === "2026-08-05");
+  check("after the close the same bar is finished and kept",
+    dropFormingBar(barsOn(["2026-08-05", "2026-08-06"]), afterClose).bars.length === 2);
+  check("a series that does not reach today is untouched",
+    dropFormingBar(barsOn(["2026-08-04", "2026-08-05"]), midSession).bars.length === 2);
+  check("an empty or malformed series does not throw",
+    dropFormingBar({ bars: [] }, midSession).bars.length === 0 && dropFormingBar(null, midSession) === null);
+  check("the forced path actually applies it, and re-derives the calendar from the trim",
+    /if \(forceSettle\) \{[\s\S]{0,260}dropFormingBar\(spy, et\)[\s\S]{0,200}spyDates = spy\.bars/.test(settleSrc));
+  check("...and every other symbol gets the same trim, not just the benchmark",
+    /const trim = \(parsed\) => \(decision\.trimForming \? dropFormingBar\(parsed, decision\.et\) : parsed\)/.test(settleSrc));
+
+  // THE WEEKEND SHORTCUT used to sit in front of force, so Run now was a silent
+  // no-op all weekend — the exact moment you sit down to plan Monday.
+  check("a weekend pass still runs when forced or when the engine version moved",
+    /const wantsWork = !!opts\.force \|\| !prev \|\| prev\.engine !== ENGINE_VERSION;/.test(settleSrc)
+    && /if \(et\.isWeekend && settled && !wantsWork\)/.test(settleSrc));
+
+  // THE TICK COULD NEVER REPORT THE MARKET OPEN, because it asked about the
+  // last SETTLED session — yesterday, for the whole of today.
+  check("the tick reads the newest PRINTED session, not the last settled one",
+    /function newestPrinted/.test(settleSrc)
+    && !/sessionState\(now, prev\.settledSession\)/.test(codeOnly(settleSrc)));
+
   const catalysts = ["accumulation", "squeeze", "gap", "volume"];
   check("every catalyst the cron can emit has a label in the panel",
     catalysts.every((c) => panel.includes(`${c}:`)), catalysts.filter((c) => !panel.includes(`${c}:`)).join(","));

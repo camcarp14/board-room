@@ -25,6 +25,7 @@ import { Sheet, Button, Delta } from "../../ui/kit.jsx";
 import { NumTween, Sparkline } from "../../ui/primitives.jsx";
 import ScoreCard from "./ScoreCard.jsx";
 import { T } from "../../theme.js";
+import { calendarDaysBetween } from "../../lib/dates.js";
 
 /* ── tone vocabulary — lives in this leaf so StocksPanel can import it without
       making the module graph circular ────────────────────────────────────── */
@@ -165,7 +166,7 @@ export default function StockSheet({ sel, row, episode, session, onClose, onChar
   // shipped) must read as a close, because claiming live is the failure.
   const priceLive = row?.price != null ? row.priceLive === true : episode?.priceLive === true;
 
-  const days = episode?.firstFlaggedAt ? Math.max(0, Math.floor((Date.now() - Date.parse(episode.firstFlaggedAt)) / 86400000)) : null;
+  const days = episode?.firstFlaggedAt ? Math.max(0, calendarDaysBetween(episode.firstFlaggedAt) ?? 0) : null;
   const flaggedWord = days == null ? null : days === 0 ? "today" : days === 1 ? "yesterday" : `${days} days ago`;
   const tier = episode ? (TIER_META[episode.tier] || TIER_META.building) : null;
 

@@ -290,6 +290,51 @@ function decidePass(now, spyDates, settled) {
   return { pass: "idle", et, newest };
 }
 
+/**
+ * Drop a trailing bar that has not finished forming.
+ *
+ * A SETTLE MEANS "GRADE A FINISHED SESSION", and every number it computes
+ * assumes that: RVOL divides the day's volume by a full-day median, the session
+ * high and low are the day's extremes, structure20's newest bar is a completed
+ * close, and the targets frozen onto a flag are drawn off all of it.
+ *
+ * The scheduled path only ever settles after the close, so this never mattered.
+ * `force` broke that assumption — the Run now button hands `spyDates[last]`
+ * straight to settle, and inside market hours that is TODAY, still moving. At
+ * 10:15 every name scores ~0 of its 15 volume points because two thirds of the
+ * day's volume has not printed; flags open at a price that is still travelling
+ * with an invalidation drawn off a partial low; and `settledSession` is stamped
+ * with today, so the real close comes round and decidePass says "already
+ * settled" and the session is never graded again. One tap and the whole day's
+ * judgment is wrong AND permanent.
+ *
+ * Trimming is the honest reading: inside the session the newest FINISHED
+ * session is yesterday, so that is the one a forced pass grades — and today
+ * still settles normally tonight.
+ */
+function dropFormingBar(parsed, et) {
+  if (!parsed || !Array.isArray(parsed.bars) || !parsed.bars.length) return parsed;
+  const last = parsed.bars[parsed.bars.length - 1];
+  if (!last || last.date !== et.date || et.minutes >= CLOSE_ET_MIN) return parsed;
+  return { ...parsed, bars: parsed.bars.slice(0, -1) };
+}
+
+/**
+ * The newest session Yahoo has actually PRINTED a bar for.
+ *
+ * Not the same thing as the newest session we have SETTLED, and the tick used
+ * to hand sessionState the latter. settledSession is yesterday for the whole
+ * of today, so `newestDate === et.date` was never true and the payload
+ * reported "closed" through every minute of every trading day. Downstream the
+ * Stocks tab read `session.state === "open"` as permanently false: it headed
+ * its list "Take at the open" while the tape was printing, never turned its
+ * poll on, and captioned live quotes as a previous close.
+ */
+function newestPrinted(spy) {
+  const bars = spy && Array.isArray(spy.bars) ? spy.bars : [];
+  return bars.length ? bars[bars.length - 1].date : null;
+}
+
 /** Is the tape printing right now, as far as we can tell. */
 function sessionState(now, newestDate) {
   const et = etParts(now);
@@ -1309,8 +1354,30 @@ function transitionFlags(openRows, screenedById, session, gate = DEFAULT_GATE, f
     const patch = { id: row.id, last_seen_at: asOf };
 
     if (!s) {
-      // No screened row this session. Not graded, not closed — a name can miss
-      // a pass. The delisted/identity guards close it deliberately elsewhere.
+      // No screened row this session. Missing a pass is not a verdict, so it is
+      // not graded, not hit and not faded — a name can drop out for a session
+      // because one fetch timed out.
+      //
+      // BUT IT STILL AGES. This used to `continue` outright, on the strength of
+      // a comment promising that "the delisted/identity guards close it
+      // elsewhere" — and there are no such guards: every close in this file
+      // lives below this line, inside the branch that requires a screened row.
+      // So a flag whose symbol left the screened set — delisted, renamed, or
+      // simply failing its fetch every pass — could never be graded and could
+      // never be closed. It sat in the Flags card forever reading "off the
+      // board — no current read", with its price frozen at whatever printed
+      // last, and it held one of the gate's slots permanently. The gate allows
+      // between two and ten open flags depending on the phase, so a handful of
+      // immortal ones starve the screener of the ability to flag anything at
+      // all — silently, and worse in exactly the risk-off tape where the cap is
+      // tightest.
+      //
+      // The stale close is purely time-based and needs no screened row, which
+      // is precisely the case for applying it here.
+      if (flagAgeSessions(row, session) >= STALE_SESSIONS) {
+        patch.resolved_at = asOf;
+        patch.notes = { ...(row.notes || {}), closedBy: "unscreened" };
+      }
       updates.push(patch);
       continue;
     }
@@ -1357,8 +1424,16 @@ function transitionFlags(openRows, screenedById, session, gate = DEFAULT_GATE, f
     if (status === "hit_t3") patch.resolved_at = asOf;
 
     const age = flagAgeSessions(row, session);
+    // FADED MEANS "IT NEVER GOT THERE", so it cannot be written over a rung
+    // that was reached — the third place in this file that made that mistake,
+    // after the settle's invalidation branch and the tick's. A flag that tagged
+    // T1 and then decayed below the fade score was filed grey under "Faded",
+    // dropped out of hitT1, and dragged the hit rate down with it. The crypto
+    // engine has always guarded this with `status === "active"`; this is the
+    // same guard, spelled with the rank the ladder already tracks. The close
+    // still happens — the setup really did die — only the grade survives.
     if (!patch.resolved_at && age >= FADE_MIN_SESSIONS && Number.isFinite(s.score) && s.score < FADE_SCORE) {
-      patch.status = "faded";
+      if ((STATUS_RANK[status] ?? 0) === 0) patch.status = "faded";
       patch.resolved_at = asOf;
       patch.notes = { ...(row.notes || {}), closedBy: "faded" };
     }
@@ -1370,7 +1445,20 @@ function transitionFlags(openRows, screenedById, session, gate = DEFAULT_GATE, f
   }
 
   // Room left under the cap, filled by SCORE and not by arrival order.
-  const room = Math.max(0, (gate.max ?? DEFAULT_GATE.max) - openIds.size);
+  //
+  // A FLAG CLOSED ON THIS PASS IS NOT OPEN, and used to be counted as if it
+  // were: openIds collects every row the pass STARTED with, and room was
+  // measured against that. So on the evening a shakeout stops three positions
+  // out — the evening you most want to know what replaces them — the cap read
+  // as full, no candidates were considered, and the Flags card came back
+  // shorter with nothing new in it, directly under a regime line explaining
+  // that conditions had changed.
+  //
+  // The set itself still excludes them from becoming candidates: a name that
+  // just lost its level does not get re-flagged in the same breath. Only the
+  // COUNT changes, which is the only thing that was wrong.
+  const closedThisPass = updates.filter((u) => u.resolved_at).length;
+  const room = Math.max(0, (gate.max ?? DEFAULT_GATE.max) - (openIds.size - closedThisPass));
   if (room > 0) {
     const candidates = [];
     for (const [id, s] of screenedById) {
@@ -1469,10 +1557,20 @@ async function runPass(now = Date.now(), opts = {}) {
   }
 
   // One request to learn the calendar. On a weekend with a settled book we do
-  // not even spend that.
+  // not even spend that — UNLESS somebody asked, or the stored verdict was
+  // written by an older brain.
+  //
+  // This shortcut used to sit in front of both. A weekend "Run now" idled
+  // instantly, so the button spun for its full five-minute timeout and then
+  // reverted with nothing to show — on Saturday morning, which is exactly when
+  // you sit down to plan Monday, and precisely the dead end the button exists
+  // to remove. It also pinned the ENGINE_VERSION re-settle: ship a scoring
+  // change on Friday night and the tab keeps serving the old verdict, under
+  // the old gate, until Monday's cron.
   const et = etParts(now);
   const settled = prev ? prev.settledSession || null : null;
-  if (et.isWeekend && settled) {
+  const wantsWork = !!opts.force || !prev || prev.engine !== ENGINE_VERSION;
+  if (et.isWeekend && settled && !wantsWork) {
     counts.pass = "idle";
     return { counts, errors };
   }
@@ -1493,7 +1591,7 @@ async function runPass(now = Date.now(), opts = {}) {
     return { counts, errors: ["SPY returned no bars — cannot establish the session calendar"] };
   }
 
-  const spyDates = spy.bars.map((b) => b.date);
+  let spyDates = spy.bars.map((b) => b.date);
   // FORCE means re-settle the newest finished session even though it already
   // has a board. "Run now" has to mean run now — after a calibration change
   // the stored board is the OLD verdict, and a button that answers "already
@@ -1505,8 +1603,23 @@ async function runPass(now = Date.now(), opts = {}) {
   // board, it is a stale opinion — re-settle it without waiting for a close.
   const engineStale = !prev || prev.engine !== ENGINE_VERSION;
   const forceSettle = opts.force || (engineStale && spyDates.length > 0);
+
+  // A FORCED PASS GRADES THE NEWEST FINISHED SESSION, not the newest bar. See
+  // dropFormingBar: inside market hours those are different, and settling the
+  // one that is still moving poisons the board and locks today out of ever
+  // being settled properly. Trimming here also re-derives spyDates, so the
+  // session date, the flag calendar and the sweep below all agree.
+  if (forceSettle) {
+    const trimmed = dropFormingBar(spy, et);
+    if (trimmed !== spy) {
+      spy = trimmed;
+      spyDates = spy.bars.map((b) => b.date);
+      counts.trimmedForming = true;
+    }
+  }
+
   const decision = forceSettle && spyDates.length
-    ? { pass: "settle", et, newest: spyDates[spyDates.length - 1] }
+    ? { pass: "settle", et, newest: spyDates[spyDates.length - 1], trimForming: !!counts.trimmedForming }
     : decidePass(now, spyDates, settled);
   counts.pass = decision.pass;
   if (opts.force) counts.forced = true;
@@ -1541,7 +1654,10 @@ async function settle(db, prev, spy, now, decision) {
 
   const fetched = new Map();
   const symbols = [...EQUITIES.map((e) => e.symbol), ...INSTRUMENTS.filter((i) => i.symbol !== BENCHMARK).map((i) => i.symbol)];
-  const state = await sweep(symbols, "1y", (sym, parsed) => fetched.set(sym, parsed));
+  // Every series gets the same trim SPY got, or the board mixes a finished
+  // benchmark with fifty still-forming names — which is worse than either.
+  const trim = (parsed) => (decision.trimForming ? dropFormingBar(parsed, decision.et) : parsed);
+  const state = await sweep(symbols, "1y", (sym, parsed) => fetched.set(sym, trim(parsed)));
   counts.requests += state.done + state.failed.length;
   if (state.blocked) {
     await db.from("stock_state").upsert({
@@ -1789,7 +1905,7 @@ async function tick(db, prev, spy, now) {
     // request that just succeeded.
     const payload = {
       ...prev, asOf: nowIso, feed: { blocked: false },
-      session: { ...(prev.session || {}), state: sessionState(now, prev.settledSession) },
+      session: { ...(prev.session || {}), state: newestPrinted(spy) ? sessionState(now, newestPrinted(spy)) : "closed" },
     };
     await db.from("stock_state").upsert({ id: "latest", updated_at: nowIso, payload });
     counts.stateWritten = true;
@@ -1859,7 +1975,7 @@ async function tick(db, prev, spy, now) {
     const payload = {
       ...prev,
       asOf: nowIso,
-      session: { ...(prev.session || {}), state: sessionState(now, prev.settledSession), verdictLive: false },
+      session: { ...(prev.session || {}), state: newestPrinted(spy) ? sessionState(now, newestPrinted(spy)) : "closed", verdictLive: false },
       live: { asOf: nowIso, prices, dayHigh: dayHighs },
       feed: { blocked: false },
     };
@@ -1930,3 +2046,4 @@ exports.ENGINE_VERSION = ENGINE_VERSION;
 exports.aboutSymbol = aboutSymbol;
 exports.EQUITIES = EQUITIES;
 exports.flagAgeSessions = flagAgeSessions;
+exports.dropFormingBar = dropFormingBar;

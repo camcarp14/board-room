@@ -19,6 +19,7 @@
 // screener does not replace a glance at a price.
 import { lazy, Suspense, useEffect, useState } from "react";
 import { T } from "../../theme.js";
+import { calendarDaysBetween } from "../../lib/dates.js";
 import { Card, CollapsibleCard, CellGroup, Cell, StatTile, Button, PillRow, EmptyState, Dot, Delta } from "../../ui/kit.jsx";
 import { IcChevronDown } from "../../ui/icons.jsx";
 import { StatusTag, CARD_STATES } from "../../ui/shared.jsx";
@@ -166,9 +167,10 @@ function NumberCell({ move, entry, tone }) {
 
 /** How many SESSIONS ago the flag fired — never "3 days", which counts weekends. */
 function ageWord(iso) {
-  const t = Date.parse(iso);
-  if (!Number.isFinite(t)) return null;
-  const d = Math.floor((Date.now() - t) / 86400000);
+  // CALENDAR days, not elapsed 24-hour blocks — see calendarDaysBetween. A flag
+  // fired after Thursday's close read "today" all Friday morning.
+  const d = calendarDaysBetween(iso);
+  if (d == null) return null;
   return d <= 0 ? "today" : `${d}d`;
 }
 

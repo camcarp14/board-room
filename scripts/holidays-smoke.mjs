@@ -199,5 +199,42 @@ try {
   rmSync(OUT_DIR, { recursive: true, force: true });
 }
 
+
+// ─── calendar days, not elapsed 24-hour blocks ───────────────────────────────
+// The Markets tabs printed a flag's age with Math.floor(ms / 86400000), which
+// answers a different question: a flag that fired at 4:05pm Thursday, read at
+// 8am Friday, is sixteen hours old, so it read "Flagged today" — on the line
+// whose only job is telling you how fresh the plan is, on the morning you act.
+{
+  const { calendarDaysBetween } = await import("../src/lib/dates.js");
+  const at = (y, m, d, h = 12, min = 0) => new Date(y, m - 1, d, h, min);
+  check("same day is zero, whatever the hours",
+    calendarDaysBetween(at(2026, 8, 6, 1), at(2026, 8, 6, 23)) === 0);
+  check("a flag from after Thursday's close is ONE day old on Friday morning",
+    calendarDaysBetween(at(2026, 8, 6, 16, 5), at(2026, 8, 7, 8, 0)) === 1,
+    String(calendarDaysBetween(at(2026, 8, 6, 16, 5), at(2026, 8, 7, 8, 0))));
+  check("...which the millisecond version got wrong",
+    Math.floor((at(2026, 8, 7, 8, 0) - at(2026, 8, 6, 16, 5)) / 86400000) === 0);
+  check("two minutes either side of midnight is still a day",
+    calendarDaysBetween(at(2026, 8, 6, 23, 59), at(2026, 8, 7, 0, 1)) === 1);
+  check("a week is seven", calendarDaysBetween(at(2026, 8, 1), at(2026, 8, 8)) === 7);
+  // DST: 8 Mar 2026 is the US spring-forward. The quotient is 0.958 of a day
+  // across it, which floors to 0 and rounds to 1 — one is the right answer.
+  check("a spring-forward night is one day, not zero",
+    calendarDaysBetween(at(2026, 3, 7, 12), at(2026, 3, 8, 12)) === 1);
+  check("an autumn fall-back night is one day, not two",
+    calendarDaysBetween(at(2026, 11, 1, 12), at(2026, 11, 2, 12)) === 1);
+  check("a malformed stamp yields null rather than NaN",
+    calendarDaysBetween("not a date") === null && calendarDaysBetween(null) === null);
+  check("the future reads negative rather than wrapping",
+    calendarDaysBetween(at(2026, 8, 8), at(2026, 8, 6)) === -2);
+
+  const { readFileSync } = await import("node:fs");
+  for (const f of ["StocksPanel", "AltSeasonPanel", "StockSheet", "AltCoinSheet"]) {
+    check(`${f} no longer divides milliseconds to get a day`,
+      !readFileSync(`src/pages/markets/${f}.jsx`, "utf8").includes("86400000"));
+  }
+}
+
 console.log(failed ? `\nHOLIDAYS SMOKE FAILED (${failed})` : "\nHOLIDAYS SMOKE PASS");
 process.exit(failed ? 1 : 0);
