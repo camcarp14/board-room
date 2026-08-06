@@ -25,6 +25,12 @@ export const TIER_META = {
   igniting: { label: "Igniting", tone: T.green },
   building: { label: "Building", tone: T.amber },
 };
+// The entry verdict — alt-scan's entryRead names the state, this names it in
+// the two words the sheet leads with. Kept beside the other tone vocabulary so
+// the panel and the sheet cannot drift into two different colour schemes for
+// the same word.
+export const ENTRY_TONE = { entry: T.green, watch: T.amber, late: T.faint };
+export const ENTRY_LABEL = { entry: "Entry", watch: "Watch", late: "Late" };
 // Text, not emoji — the check is part of the type, not a sticker on it.
 export const HIT_LABEL = { hit_t1: "T1 ✓", hit_t2: "T2 ✓", hit_t3: "T3 ✓" };
 
@@ -78,6 +84,11 @@ export default function AltCoinSheet({ sel, row, episode, onClose, onChart }) {
   const spark = Array.isArray(row?.spark) && row.spark.length > 1 ? row.spark : null;
   const reached = STATUS_RANK[episode?.status] || 0;
 
+  // The verdict, same source as the panel's sections. Episode first: a flag's
+  // read is judged against the levels it was flagged on, which is the trade
+  // you'd actually be taking.
+  const entry = episode?.entry || row?.entry || null;
+
   const days = episode?.firstFlaggedAt ? Math.max(0, Math.floor((Date.now() - Date.parse(episode.firstFlaggedAt)) / 86400000)) : null;
   const flaggedWord = days == null ? null : days === 0 ? "today" : days === 1 ? "yesterday" : `${days} days ago`;
   const tier = episode ? (TIER_META[episode.tier] || TIER_META.building) : null;
@@ -125,8 +136,44 @@ export default function AltCoinSheet({ sel, row, episode, onClose, onChart }) {
           <span className="t-title1 t-num">{price != null ? <NumTween v={price} f={px} /> : "—"}</span>
           {row && <Delta pct={row.chg24h} digits={1} />}
         </span>
-        {tier && <TonePill tone={tier.tone} style={{ marginLeft: "auto" }}>{tier.label}</TonePill>}
+        {/* The tier pill used to sit here, and on CYS it rendered a green
+            "Igniting" one line above a verdict of LATE — the flag's expected
+            pace arguing with the read of the same coin. Pace only matters
+            while the move can still happen, so it moved down to the flag
+            line, where it reads as part of the episode's history. */}
       </div>
+
+      {/* THE VERDICT, ABOVE EVERYTHING IT IS DERIVED FROM. CYS opened on a
+          68/100 score, three targets 5–9% away and a level rail — all of which
+          read like a trade — with "PARABOLIC: +160.4% in 7d, this is a chase"
+          as the last line of the sheet, under the fold. The judgment goes
+          first now, and the numbers under it are its evidence. */}
+      {entry && (
+        <div style={{
+          background: `color-mix(in srgb, ${ENTRY_TONE[entry.state] || T.faint} 10%, transparent)`,
+          borderRadius: 12, padding: "9px 12px", marginBottom: 12,
+        }}>
+          <div style={{ display: "flex", alignItems: "baseline", gap: 8, minWidth: 0 }}>
+            {/* 'late' is deliberately the quiet tone in a list — one grey
+                heading over rows you're meant to skip. As the headline of a
+                sheet it has to be READ, and faint-on-faint-tint is not a
+                readable word, so the banner promotes it to body ink. */}
+            <span className="t-label" style={{ color: entry.state === "late" ? "var(--sub)" : (ENTRY_TONE[entry.state] || T.faint), letterSpacing: "0.04em" }}>
+              {ENTRY_LABEL[entry.state] || "—"}
+            </span>
+            <span className="t-foot" style={{ color: "var(--sub)", minWidth: 0, lineHeight: 1.45 }}>{entry.why}</span>
+          </div>
+          {/* how far it goes, what being wrong costs, and the ratio between
+              them — the three numbers that decide size, on one line */}
+          {(Number.isFinite(entry.roomPct) || Number.isFinite(entry.riskPct)) && (
+            <div className="t-cap t-num" style={{ color: "var(--faint)", marginTop: 4 }}>
+              {Number.isFinite(entry.roomPct) && <>room to T3 <span style={{ color: entry.roomPct >= 0 ? T.green : "var(--faint)" }}>{signedPct(entry.roomPct)}</span></>}
+              {Number.isFinite(entry.riskPct) && <> · risk <span style={{ color: T.red }}>{signedPct(entry.riskPct)}</span></>}
+              {entry.rr != null && <> · pays {entry.rr}×</>}
+            </div>
+          )}
+        </div>
+      )}
 
       {/* the week, at a glance — the same series the board row draws */}
       {spark && (
@@ -232,7 +279,7 @@ export default function AltCoinSheet({ sel, row, episode, onClose, onChart }) {
 
       {episode && (
         <div className="t-foot" style={{ color: "var(--sub)", marginBottom: 10, lineHeight: 1.5 }}>
-          Flagged {flaggedWord} at {px(episode.flagPrice)}
+          {tier && <>{tier.label} · </>}Flagged {flaggedWord} at {px(episode.flagPrice)}
           {episode.peakPct != null && <> · peak <span className="t-num" style={{ color: episode.peakPct >= 0 ? T.green : T.red }}>{signedPct(episode.peakPct)}</span></>}
         </div>
       )}

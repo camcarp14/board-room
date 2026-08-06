@@ -13,11 +13,12 @@
 import { lazy, Suspense, useEffect, useState } from "react";
 import { T } from "../../theme.js";
 import { Card, CollapsibleCard, CellGroup, Cell, Button, PillRow, EmptyState, Dot, Delta } from "../../ui/kit.jsx";
+import { IcChevronDown } from "../../ui/icons.jsx";
 import { StancePill, StatusTag, CARD_STATES } from "../../ui/shared.jsx";
 import { NumTween, Sparkline } from "../../ui/primitives.jsx";
 import { callFnFull } from "../../lib/functions.js";
 import { useAltScan } from "../../data/altseason.js";
-import AltCoinSheet, { TonePill, BAND_TONE, TIER_META, HIT_LABEL } from "./AltCoinSheet.jsx";
+import AltCoinSheet, { TonePill, TIER_META, HIT_LABEL } from "./AltCoinSheet.jsx";
 
 // Lazy — lightweight-charts stays in its own chunk until a chart is opened.
 const BtcChartModal = lazy(() => import("../../BtcChartModal.jsx"));
@@ -51,14 +52,75 @@ const rel = (stamp, now) => {
 };
 
 const MOVER_WINDOWS = ["1h", "4h", "12h", "24h", "7d", "30d"];
-// How many flags the radar shows before it asks. Eight is about a phone
-// screen's worth, and the screener's own regime cap tops out at fourteen, so
-// in normal operation this only folds a tail rather than hiding the tool.
-const FLAG_PREVIEW = 8;
+// Rows an open section shows before it asks. Ten is about a phone screen and a
+// half; past that a section is a database dump, not a list.
+const SECTION_PREVIEW = 10;
 
 // StancePill tone by regime phase. majors_rotating rides with green — it's the
 // "get ready" reading, not a warning; mixed is the genuine coin-flip.
 const PHASE_TONE = { alt_season: T.green, majors_rotating: T.green, mixed: T.amber, btc_only: T.red, risk_off: T.red };
+
+// What the regime means for what you do, in one sentence. The score and the
+// breadth count are the evidence; this is the read, and it goes first — a
+// number out of a hundred is not an instruction, and "39/100, Bitcoin only"
+// left the entire "so what" to the reader every single time.
+const PHASE_READ = {
+  alt_season: "Alts are getting paid. Setups here work more often than they don't.",
+  majors_rotating: "Money is moving, but into the majors first. Alt setups are early rather than wrong.",
+  mixed: "No rotation in either direction. Only the cleanest setups are worth the risk.",
+  btc_only: "Bitcoin is taking the flow. Most alt setups will chop here — be picky, and be small.",
+  risk_off: "Nothing is being bid. The best trade in this tape is usually no trade.",
+};
+
+/* ── the entry read, as the page's spine ──────────────────────────────────────
+   THE FLAGS CARD IS NOW SORTED BY WHETHER IT IS TIME, not by tier and score.
+   Tier says how fast a move is expected; score says how good the setup graded.
+   Neither answers the only question you have while scrolling — do I buy this
+   one now — and the old card made you open every row to find out, which with
+   fifty-two open flags means you open none of them.
+
+   So the categories ARE the verdict: a coin's section is its answer, and the
+   row only has to carry how far it goes and what it costs to be wrong. The
+   sections state their own rule in a line, so the categorization explains
+   itself instead of being a colour you have to learn. alt-scan computes the
+   state (see entryRead there for the ordering and why it lives server-side). */
+const ENTRY_META = {
+  entry: {
+    label: "Entry", tone: T.green, head: "Worth an entry now", open: true,
+    rule: "The first target is still ahead, the invalidation is close enough to define the risk, and the full move pays at least 1.5× what the stop costs.",
+  },
+  watch: {
+    label: "Watch", tone: T.amber, head: "Setting up — not yet", open: false,
+    rule: "A real structure with nothing lifting it yet, or a payoff too thin from here to be worth the stop.",
+  },
+  late: {
+    label: "Late", tone: T.faint, head: "Already ran", open: false,
+    rule: "Past its own first target, parabolic, or too thin to exit. Starting here is buying somebody else's exit.",
+  },
+};
+const ENTRY_ORDER = ["entry", "watch", "late"];
+// An episode from a payload written before the entry read shipped has no
+// verdict on it. It is not an entry until something says it is.
+const stateOf = (x) => (x && x.entry && ENTRY_META[x.entry.state] ? x.entry.state : "watch");
+
+/* How much it has left, as the one number the row leads with. Distance to T3 —
+   the measured move — not to T1, because T1 is a checkpoint and the question
+   is how far this goes. Past T3 the honest answer is that the plan is spent. */
+function RoomCell({ entry, tone }) {
+  const room = entry ? entry.roomPct : null;
+  const has = Number.isFinite(room);
+  const spent = has && room <= 0;
+  return (
+    <span style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 1, minWidth: 50, flex: "none" }}>
+      <span className="t-num" style={{ fontSize: 13.5, fontWeight: 600, color: has && !spent ? tone : "var(--faint)" }}>
+        {!has ? "—" : spent ? "done" : `+${Math.round(room)}%`}
+      </span>
+      {/* No label under an em-dash — "— room" reads as a measurement of
+          nothing rather than the absence of one. */}
+      {has && <span className="t-cap" style={{ color: "var(--faint)", fontSize: 10 }}>{spent ? "past T3" : "room"}</span>}
+    </span>
+  );
+}
 
 // Terminal outcome tags for the record. A 14-day timeout keeps the ladder
 // status it earned, so a closed row can still read 'active' — that's the
@@ -130,7 +192,15 @@ export default function AltSeasonPanel({ isMobile }) {
   });
   const [whyOpen, setWhyOpen] = useState(false);
   const [win, setWin] = useState("24h");
-  const [showAllFlags, setShowAllFlags] = useState(false);
+  // Which entry sections are open, and which have been asked to show their
+  // whole tail. "Worth an entry now" opens itself; the other two are counts
+  // until you want them.
+  const [openSec, setOpenSec] = useState(() => {
+    const defaults = { entry: true, watch: false, late: false };
+    try { return { ...defaults, ...JSON.parse(localStorage.getItem("br_alt_sections") || "{}") }; }
+    catch { return defaults; }
+  });
+  const [showAll, setShowAll] = useState({});
   const [sel, setSel] = useState(null);     // {id, symbol, name} → coin sheet
   const [chart, setChart] = useState(null); // {id, symbol} → candles modal
 
@@ -151,6 +221,11 @@ export default function AltSeasonPanel({ isMobile }) {
       return next;
     }),
   });
+  const toggleSec = (key) => setOpenSec((prev) => {
+    const next = { ...prev, [key]: !prev[key] };
+    try { localStorage.setItem("br_alt_sections", JSON.stringify(next)); } catch { /* storage full — the section just won't remember */ }
+    return next;
+  });
 
   if (data == null) {
     if (!q.isError) return <PanelSkeleton />;
@@ -166,9 +241,13 @@ export default function AltSeasonPanel({ isMobile }) {
   const board = Array.isArray(data.board) ? data.board : [];
   const movers = data.movers || null;
   // Igniting first, then score — the server sorts this way too, but the order
-  // is a promise the radar makes, so it's kept here rather than assumed.
+  // is a promise the radar makes, so it's kept here rather than assumed. The
+  // entry sections below preserve it inside each bucket, so the best setup in
+  // "Worth an entry now" is still the top row.
   const active = [...(data.flags?.active || [])].sort((a, b) =>
     (a.tier === b.tier ? (b.score || 0) - (a.score || 0) : a.tier === "igniting" ? -1 : 1));
+  const grouped = { entry: [], watch: [], late: [] };
+  for (const f of active) grouped[stateOf(f)].push(f);
   const recent = data.flags?.recent || [];
   const stats = data.flags?.stats || null;
   const staleTag = data.stale ? { state: "live", stale: true, at: data.asOf } : null;
@@ -223,8 +302,20 @@ export default function AltSeasonPanel({ isMobile }) {
                 {whyOpen ? "Hide" : "Why"}
               </Button>
             </div>
+            {/* the read, then the evidence for it, then what it costs you —
+                in that order, because the instruction is the part you came
+                for and the breadth count is what backs it up */}
+            {PHASE_READ[season.phase] && (
+              <div className="t-foot" style={{ color: "var(--ink)", marginTop: 5, lineHeight: 1.5 }}>{PHASE_READ[season.phase]}</div>
+            )}
             {season.facts?.[0] && (
-              <div className="t-foot" style={{ color: "var(--sub)", marginTop: 4, lineHeight: 1.5 }}>{season.facts[0]}</div>
+              <div className="t-cap" style={{ color: "var(--faint)", marginTop: 4, lineHeight: 1.5 }}>{season.facts[0]}</div>
+            )}
+            {season.gate && (
+              <div className="t-cap" style={{ color: "var(--faint)", marginTop: 2, lineHeight: 1.5 }}>
+                In this tape the screener carries at most <span className="t-num">{season.gate.max}</span> flags,
+                and only setups over <span className="t-num">{season.gate.floor}</span>/100.
+              </div>
             )}
             {whyOpen && (
               <div style={{ marginTop: 8 }}>
@@ -246,56 +337,106 @@ export default function AltSeasonPanel({ isMobile }) {
         )}
       </CollapsibleCard>
 
-      {/* ── RADAR — the open flags, igniting first ─────────────────────────── */}
-      {/* THE CARD IS A SHORTLIST, NOT A LEDGER. The screener's regime gate now
+      {/* ── FLAGS — sorted by whether it is time, not by tier ──────────────── */}
+      {/* THE CARD IS A SHORTLIST, NOT A LEDGER. The screener's regime gate
           caps how many episodes can be open at once, but a log written under
           the old flat bar can still hold dozens, and those age out over days
-          rather than vanishing. Fifty-two rows is not something anyone reads —
-          so the card shows the best few and says plainly how many it is
-          holding back, and the count in the header stays honest. */}
+          rather than vanishing. The categories are what make fifty-two rows
+          readable: the answer is the heading you find a coin under, and only
+          the section that means "yes" opens itself. */}
       <CollapsibleCard {...coll("flags")} title="Flags"
-        trailing={active.length > 0 ? <span className="t-cap t-num" style={{ color: "var(--faint)" }}>{active.length} open</span> : null}
+        trailing={active.length > 0 ? (
+          <span className="t-cap t-num" style={{ color: "var(--faint)" }}>
+            <span style={{ color: grouped.entry.length ? T.green : "var(--faint)", fontWeight: 600 }}>{grouped.entry.length} to enter</span>
+            {" · "}{active.length} tracked
+          </span>
+        ) : null}
       >
         {active.length ? (
-          <CellGroup style={inCardGroup}>
-            {(showAllFlags ? active : active.slice(0, FLAG_PREVIEW)).map((f) => {
-              const tier = TIER_META[f.tier] || TIER_META.building;
-              const hit = HIT_LABEL[f.status];
+          <div style={{ display: "flex", flexDirection: "column" }}>
+            {ENTRY_ORDER.map((state) => {
+              const rows = grouped[state];
+              if (!rows.length) return null;
+              const meta = ENTRY_META[state];
+              const open = !!openSec[state];
+              const all = !!showAll[state];
+              const shown = open ? (all ? rows : rows.slice(0, SECTION_PREVIEW)) : [];
               return (
-                <Cell key={f.id}
-                  onClick={() => openCoin(f)}
-                  title={<span className="t-label" style={{ color: "var(--ink)", letterSpacing: "0.04em" }}>{f.symbol}</span>}
-                  sub={`flagged ${fmtDay(f.firstFlaggedAt)} · ${px(f.flagPrice)}`}
-                  trailing={
-                    <span style={{ display: "inline-flex", alignItems: "center", gap: 10, flex: "none" }}>
-                      <span style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 2 }}>
-                        <span className="t-num" style={{ fontSize: 13.5, color: "var(--ink)" }}>{px(f.lastPrice)}</span>
-                        <Delta pct={f.sinceFlagPct} digits={1} />
-                      </span>
-                      <span style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 3, minWidth: 62 }}>
-                        <TonePill tone={tier.tone}>{tier.label}</TonePill>
-                        {hit && <span className="t-cap t-num" style={{ color: T.green, fontWeight: 600 }}>{hit}</span>}
-                      </span>
-                    </span>
-                  }
-                />
+                <div key={state}>
+                  <button type="button" onClick={() => toggleSec(state)} aria-expanded={open}
+                    style={{
+                      display: "flex", alignItems: "center", gap: 8, width: "100%", minHeight: 44,
+                      background: "none", border: "none", padding: "6px 0", font: "inherit", color: "inherit",
+                      textAlign: "left", cursor: "pointer",
+                    }}>
+                    <Dot tone={meta.tone} size={7} />
+                    <span className="t-label" style={{ color: "var(--ink)", minWidth: 0 }}>{meta.head}</span>
+                    <span className="t-cap t-num" style={{ color: "var(--faint)" }}>{rows.length}</span>
+                    <IcChevronDown size={12} style={{ marginLeft: "auto", flex: "none", color: "var(--faint)", transform: open ? "none" : "rotate(-90deg)", transition: "transform var(--dur-2) var(--ease-out)" }} />
+                  </button>
+                  {open && (
+                    <>
+                      {/* the rule, in the section — a category nobody can
+                          state the test for is just a colour to memorise */}
+                      <div className="t-cap" style={{ color: "var(--faint)", lineHeight: 1.5, paddingBottom: 6 }}>{meta.rule}</div>
+                      <CellGroup style={inCardGroup}>
+                        {shown.map((f) => {
+                          const tier = TIER_META[f.tier] || TIER_META.building;
+                          const hit = HIT_LABEL[f.status];
+                          const risk = f.entry && Number.isFinite(f.entry.riskPct) ? `${signedPct(f.entry.riskPct)} risk` : null;
+                          return (
+                            <Cell key={f.id}
+                              onClick={() => openCoin(f)}
+                              title={
+                                <span style={{ display: "inline-flex", alignItems: "baseline", gap: 7, minWidth: 0 }}>
+                                  <span className="t-label" style={{ color: "var(--ink)", letterSpacing: "0.04em" }}>{f.symbol}</span>
+                                  {hit && <span className="t-cap t-num" style={{ color: T.green, fontWeight: 600 }}>{hit}</span>}
+                                </span>
+                              }
+                              // Tier is the move's expected PACE, which is only
+                              // information while the move can still happen —
+                              // "Igniting" over a coin filed under Already ran
+                              // is the same mixed signal this card exists to
+                              // kill. Dropped there, kept everywhere else.
+                              sub={[state === "late" ? null : tier.label, risk, fmtDay(f.firstFlaggedAt)].filter(Boolean).join(" · ")}
+                              trailing={
+                                <span style={{ display: "inline-flex", alignItems: "center", gap: 12, flex: "none" }}>
+                                  <RoomCell entry={f.entry} tone={meta.tone} />
+                                  <span style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 2, minWidth: 62 }}>
+                                    <span className="t-num" style={{ fontSize: 13.5, color: "var(--ink)" }}>{px(f.lastPrice)}</span>
+                                    <Delta pct={f.sinceFlagPct} digits={1} />
+                                  </span>
+                                </span>
+                              }
+                            />
+                          );
+                        })}
+                      </CellGroup>
+                      {rows.length > SECTION_PREVIEW && (
+                        <Button kind="plain" size="sm" style={{ height: 44 }}
+                          onClick={() => setShowAll((p) => ({ ...p, [state]: !p[state] }))}>
+                          {all ? `Show top ${SECTION_PREVIEW}` : `Show all ${rows.length}`}
+                        </Button>
+                      )}
+                    </>
+                  )}
+                </div>
               );
             })}
-          </CellGroup>
+          </div>
         ) : (
           <EmptyState title="Nothing on the radar" sub="The screener runs hourly — flags land here the pass they fire." />
-        )}
-        {active.length > FLAG_PREVIEW && (
-          <Button kind="plain" size="sm" style={{ height: 44, marginTop: 2 }}
-            onClick={() => setShowAllFlags((v) => !v)}>
-            {showAllFlags ? "Show top " + FLAG_PREVIEW : `Show all ${active.length}`}
-          </Button>
         )}
       </CollapsibleCard>
 
       {/* ── MOVERS — what's already going, by window ───────────────────────── */}
       <Card pad="md">
-        <span className="t-head" style={{ display: "block", marginBottom: 6 }}>Movers</span>
+        <span className="t-head" style={{ display: "block", marginBottom: 3 }}>Movers</span>
+        {/* Says what this list is FOR, because it is the one card here that is
+            not a recommendation and reads exactly like one. */}
+        <div className="t-cap" style={{ color: "var(--faint)", marginBottom: 6, lineHeight: 1.5 }}>
+          Biggest gainers in the window — where the tape is hot, not a list of entries.
+        </div>
         <PillRow options={MOVER_WINDOWS} value={win} onChange={setWin} style={{ margin: "0 -16px 2px" }} />
         {list == null ? (
           // 4h/12h come from our own hourly snapshots, not CoinGecko — a fresh
@@ -337,24 +478,30 @@ export default function AltSeasonPanel({ isMobile }) {
       {/* ── BOARD — the full ranking, folded ───────────────────────────────── */}
       <CollapsibleCard {...coll("board")} title="Board" tight>
         <div className="t-foot" style={{ color: "var(--sub)", marginBottom: 4, lineHeight: 1.5 }}>
-          Ranked by how likely a move is starting — not by how much it already moved.
+          Every screened coin, ranked by how likely a move is starting — not by how much it already moved.
+          A high score is a good <em>setup</em>, which is not the same as a good <em>entry</em>: the tag says which.
         </div>
         {board.length ? (
           <CellGroup style={inCardGroup}>
-            {board.slice(0, 15).map((r) => (
-              <Cell key={r.id}
-                onClick={() => openCoin(r)}
-                title={r.symbol} titleStyle={{ fontSize: 14, fontWeight: 600 }}
-                sub={r.name}
-                trailing={
-                  <span style={{ display: "inline-flex", alignItems: "center", gap: 10, flex: "none" }}>
-                    <span className="t-num" style={{ fontSize: 14, fontWeight: 600, color: "var(--ink)" }}>{r.score}</span>
-                    <TonePill tone={BAND_TONE[r.band] || T.faint} style={{ minWidth: 62, justifyContent: "center", display: "inline-flex" }}>{r.band}</TonePill>
-                    <Delta pct={r.chg24h} digits={1} />
-                  </span>
-                }
-              />
-            ))}
+            {board.slice(0, 15).map((r) => {
+              // The tag is the entry verdict, not the band — a 68/100 'late'
+              // coin reads as a strong row until something says "chase".
+              const em = ENTRY_META[stateOf(r)];
+              return (
+                <Cell key={r.id}
+                  onClick={() => openCoin(r)}
+                  title={r.symbol} titleStyle={{ fontSize: 14, fontWeight: 600 }}
+                  sub={r.band ? `${r.name} · ${r.band}` : r.name}
+                  trailing={
+                    <span style={{ display: "inline-flex", alignItems: "center", gap: 10, flex: "none" }}>
+                      <span className="t-num" style={{ fontSize: 14, fontWeight: 600, color: "var(--ink)" }}>{r.score}</span>
+                      <TonePill tone={em.tone} style={{ minWidth: 52, justifyContent: "center", display: "inline-flex" }}>{em.label}</TonePill>
+                      <Delta pct={r.chg24h} digits={1} />
+                    </span>
+                  }
+                />
+              );
+            })}
           </CellGroup>
         ) : (
           <EmptyState title="No board yet" sub="The hourly screener hasn't completed a pass." />

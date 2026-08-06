@@ -1205,6 +1205,10 @@ function boardRow(r) {
     price: r.price, mcap: r.mcap, vol24h: r.vol24h,
     chg1h: r.chg1h, chg24h: r.chg24h, chg7d: r.chg7d, chg30d: r.chg30d,
     score: r.score, band: r.band, parts: r.parts, facts: r.facts,
+    // The exclusion flags ride along so the client's entry read can name WHY a
+    // coin isn't an entry ("parabolic", "too thin") instead of inferring it
+    // back out of the band, which collapses both into 'late'.
+    flags: r.flags,
     turnover: r.turnover, rsVsBtc7d: r.rsVsBtc7d,
     drawdownFromAthPct: r.drawdownFromAthPct,
     range7d: {
@@ -1455,7 +1459,11 @@ async function runPass() {
     counts.sparkRef4h = Object.keys(sparkRef["4h"]).length;
     const payload = {
       asOf: nowIso,
-      season,
+      // The gate rides with the season because it IS the season's consequence:
+      // the page can then say out loud how short the shortlist is allowed to
+      // be right now and how good a setup has to be to make it, instead of
+      // leaving "why is this list empty / why is it long" to be guessed at.
+      season: { ...season, gate: gateFor(season) },
       global: global
         ? { totalMcapUsd: global.totalMcapUsd, mcapChange24hPct: global.mcapChange24hPct, btcDominance: global.btcDominance }
         : null,

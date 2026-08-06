@@ -149,12 +149,34 @@ export function Pill({ active, onClick, children, style, ...rest }) {
 
 export function PillRow({ options, value, onChange, fmt = (o) => o.label ?? String(o), keyOf = (o) => o.key ?? String(o), style }) {
   const rowRef = useRef(null);
-  // keep the active pill in view when it changes (thumb-driven navigation)
+  const mounted = useRef(false);
+  // Keep the active pill centred in ITS OWN STRIP when the selection changes.
+  //
+  // This used to be one scrollIntoView({ inline: "center" }) call, and that
+  // was the bug behind "the Alt Season tab opens halfway down the page".
+  // scrollIntoView scrolls *every scrollable ancestor* to reveal the element,
+  // so a pill row that mounts below the fold — Movers, four cards down —
+  // dragged the whole page down to itself the moment the panel rendered, and
+  // did it with behavior:"smooth" so it landed AFTER the page's own
+  // scroll-to-top had already run and finished. Nothing about centring a pill
+  // inside a 44px strip needs the page to move.
+  //
+  // scrollBy on the row itself cannot touch an ancestor, which makes the fix
+  // structural rather than a guard someone can forget. The mount pass stays
+  // (a restored selection should start centred) but goes instant — a strip
+  // animating itself on arrival is noise.
   useEffect(() => {
     const row = rowRef.current;
     if (!row) return;
     const el = row.querySelector(".pill.active");
-    if (el) el.scrollIntoView({ block: "nearest", inline: "center", behavior: "smooth" });
+    const first = !mounted.current;
+    mounted.current = true;
+    if (!el) return;
+    const rowBox = row.getBoundingClientRect();
+    const pillBox = el.getBoundingClientRect();
+    const delta = (pillBox.left + pillBox.width / 2) - (rowBox.left + rowBox.width / 2);
+    if (Math.abs(delta) < 1) return;
+    row.scrollBy({ left: delta, behavior: first ? "auto" : "smooth" });
   }, [value]);
   return (
     <div className="pillrow" ref={rowRef} style={style} role="tablist">

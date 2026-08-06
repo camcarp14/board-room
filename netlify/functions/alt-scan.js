@@ -100,6 +100,95 @@ function episodeView(row, livePrice) {
   return view;
 }
 
+/* ═══ the entry read ═════════════════════════════════════════════════════════
+ *
+ * The board answers "is a move starting here". It never answered the question
+ * you actually have with a thumb on the screen: is THIS a place to put money
+ * right now, and if it works, how far does it go?
+ *
+ * Everything needed was already published — the band, the score, four levels,
+ * the parabolic penalty — but only per coin, one sheet at a time, with the
+ * arithmetic left to you. CYS shipped a 68/100 score, three targets 5–9% away,
+ * and "PARABOLIC: +160.4% in 7d — this is a chase, not an entry" as the last
+ * line of its sheet. Every one of those is true. Glanced at together they say
+ * the opposite of each other, and across fifty open flags nobody is reading
+ * any of them.
+ *
+ * So it collapses to one of three words, and the words are ACTIONS, not
+ * states — 'late' where the screener says 'late', but also where price has
+ * simply walked through its own first target, which no band knows about.
+ *
+ *   entry — the first target is still ahead, the invalidation is close enough
+ *           to define the risk, and T3 pays at least RR_MIN times the stop
+ *   watch — a real structure that hasn't earned an entry: nothing lifting it
+ *           yet, no levels worth trading, or a payoff too thin to bother
+ *   late  — the move already happened. Parabolic, banded 'late', or past T1:
+ *           the entry was lower, and taking it here is buying somebody's exit.
+ *
+ * WHY THIS LIVES IN THE MOUTH AND NOT THE BRAIN. Everything else on this tab
+ * is the cron's and is copied through untouched, deliberately. This one is
+ * different in kind: it is a question about the CURRENT price. The levels stay
+ * frozen — that is what makes the log gradeable — but "how far above the level
+ * are you" changes by the minute, and a verdict recomputed hourly would call a
+ * coin an entry forty minutes after it stopped being one. Band, flags, score
+ * and the target PRICES are consumed verbatim; the only thing derived here is
+ * the distance from a live price to a fixed number, which is exactly what this
+ * function already does for chg4h and for every episode's target %s.
+ */
+const RR_MIN = 1.5;
+
+// `ctx` is the screened board row for the coin (band + flags), or null when the
+// coin has dropped off the 60-row board — in which case the levels still carry
+// the read and the band checks simply never fire.
+function entryRead(ctx, targets, price) {
+  const flags = (ctx && ctx.flags) || {};
+  const band = ctx && ctx.band;
+  const p = num(price);
+  const t = targets || null;
+
+  // roomPct is the answer to "how much has it got to run" — distance to the
+  // last target, not to the first, because T1 is a checkpoint and T3 is the
+  // measured move. riskPct is negative while the structure is intact.
+  const roomPct = t ? pctOff(t.t3, p) : null;
+  const nextPct = t ? pctOff(t.t1, p) : null;
+  const riskPct = t ? pctOff(t.invalidation, p) : null;
+  const rr = Number.isFinite(roomPct) && Number.isFinite(riskPct) && riskPct < 0
+    ? Math.round((roomPct / -riskPct) * 10) / 10
+    : null;
+
+  const out = (state, why) => ({ state, why, roomPct, nextPct, riskPct, rr });
+
+  // Ordered the way a trade actually fails: can't get out, already went, no
+  // plan, plan already broken, plan already spent, payoff not worth it — and
+  // only then the question of whether anything is lifting it.
+  if (flags.thinLiquidity) return out("late", "too thin to get back out of");
+  if (flags.parabolic) return out("late", "parabolic — this is the chase");
+  if (band === "late") return out("late", "the move already happened");
+  if (!t) return out("watch", "no level worth trading against");
+  if (!Number.isFinite(riskPct) || riskPct >= 0) return out("watch", "structure already lost");
+  if (Number.isFinite(nextPct) && nextPct <= 0) return out("late", "already through T1 — the entry was lower");
+  if (rr != null && rr < RR_MIN) return out("watch", `pays ${rr}× the risk — too thin`);
+  if (band === "starting") return out("entry", "breaking its level with the stop close");
+  if (band === "underway") return out("entry", "trend intact and T1 still ahead");
+  if (band === "warming") return out("watch", "lifting, hasn't taken its level yet");
+  if (!band) return out("watch", "off the board — no current read");
+  return out("watch", "nothing lifting it yet");
+}
+
+// Target PRICES are the cron's and never move; the % distances are against the
+// live price, so "6% away" means six percent away now rather than at :00.
+function liveTargets(t, price) {
+  // NOT num(price) — Number(null) is 0, which is finite, and a zero base would
+  // send every % through pctOff's divide-by-zero guard and null the whole set
+  // instead of leaving the stored ones alone.
+  if (!t || !Number.isFinite(price) || !(price > 0)) return t || null;
+  return {
+    ...t,
+    t1Pct: pctOff(t.t1, price), t2Pct: pctOff(t.t2, price),
+    t3Pct: pctOff(t.t3, price), invPct: pctOff(t.invalidation, price),
+  };
+}
+
 // Base rates over the WHOLE log, open episodes included — an open flag that
 // already tagged T2 counts. "Hit T1" is cumulative: reaching T3 implies T1.
 function flagStats(rows) {
@@ -217,7 +306,9 @@ exports.handler = async (event) => {
       }
       const chg4h = chgVsBaseline("4h", row.id, price);
       const chg12h = chgVsBaseline("12h", row.id, price);
-      if (!live) return { ...row, flag, chg4h, chg12h };
+      const targets = liveTargets(row.targets, price);
+      const entry = entryRead(row, targets, price);
+      if (!live) return { ...row, flag, chg4h, chg12h, targets, entry };
       return {
         ...row,
         price,
@@ -227,6 +318,8 @@ exports.handler = async (event) => {
         chg24h: live.chg24h ?? row.chg24h,
         chg7d: live.chg7d ?? row.chg7d,
         chg30d: live.chg30d ?? row.chg30d,
+        targets,
+        entry,
         flag,
       };
     });
@@ -279,8 +372,19 @@ exports.handler = async (event) => {
       },
     };
 
+    // An episode's entry read is judged against the levels it was FLAGGED on,
+    // not against a fresher redraw of the same structure — those frozen levels
+    // are the trade you would be taking. The band and the exclusion flags come
+    // from the coin's current board row, because whether a move is still
+    // starting is a question about today. A coin that has fallen off the board
+    // gets no band at all, and entryRead says so rather than guessing.
+    const ctxById = new Map(board.map((r) => [r.id, r]));
     const active = (openQ.data || [])
-      .map((row) => episodeView(row, liveById.get(row.coin_id)?.price))
+      .map((row) => {
+        const v = episodeView(row, liveById.get(row.coin_id)?.price);
+        v.entry = entryRead(ctxById.get(row.coin_id) || null, v.targets, v.lastPrice);
+        return v;
+      })
       .sort((a, b) => (a.tier === b.tier ? (b.score || 0) - (a.score || 0) : a.tier === "igniting" ? -1 : 1));
     const recent = (closedQ.data || []).map((row) => episodeView(row));
 
@@ -313,3 +417,9 @@ exports.handler = async (event) => {
     return json(502, { success: false, error: e.message });
   }
 };
+
+// Pure helpers, exported for scripts/altseason-smoke.mjs (Netlify only reads
+// `handler`). The entry read is the one piece of judgment this function owns,
+// so it is the one piece that has to be pinned by fixtures.
+exports.entryRead = entryRead;
+exports.liveTargets = liveTargets;

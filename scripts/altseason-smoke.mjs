@@ -454,6 +454,72 @@ try {
     priceAgo([...FULL.slice(0, 100), NaN, null, ...FULL.slice(100)].filter((x) => x !== undefined), 4) != null);
   check("a zero or negative price is refused (it would divide the board by zero)",
     priceAgo(Array.from({ length: 169 }, () => 0), 4) === null);
+
+  // ─── 10. the entry read (alt-scan) ─────────────────────────────────────────
+  // This one verdict decides which of three sections a coin appears under, and
+  // a section heading is read as an instruction in a way a 68/100 never was.
+  // Getting it wrong is therefore worse than the ambiguity it replaced, so the
+  // ordering of its tests — which failure wins when several apply — is pinned.
+  const { entryRead, liveTargets } = mods["alt-scan"];
+  // price 100, invalidation 90 (−10%), T1 105, T3 130 ⇒ room +30, risk −10,
+  // pays 3.0×. Every case below perturbs exactly one thing off this baseline.
+  const TGT = { t1: 105, t2: 115, t3: 130, invalidation: 90 };
+  const live = (p) => liveTargets(TGT, p);
+
+  const cleanEntry = entryRead({ band: "starting", flags: {} }, live(100), 100);
+  check("a clean 'starting' setup is an entry", cleanEntry.state === "entry", JSON.stringify(cleanEntry));
+  check("room is measured to T3, not T1", cleanEntry.roomPct === 30, String(cleanEntry.roomPct));
+  check("risk is the invalidation, signed negative", cleanEntry.riskPct === -10, String(cleanEntry.riskPct));
+  check("rr is room over the stop", cleanEntry.rr === 3, String(cleanEntry.rr));
+  check("'underway' with T1 ahead is still an entry",
+    entryRead({ band: "underway", flags: {} }, live(100), 100).state === "entry");
+  check("'warming' is a watch — nothing has taken the level yet",
+    entryRead({ band: "warming", flags: {} }, live(100), 100).state === "watch");
+  check("'quiet' and 'cold' are watches, not entries",
+    entryRead({ band: "quiet", flags: {} }, live(100), 100).state === "watch" &&
+    entryRead({ band: "cold", flags: {} }, live(100), 100).state === "watch");
+
+  // Price walking through T1 is the case NO band knows about: the screener
+  // still reads 'starting' for hours after the entry stopped existing.
+  const through = entryRead({ band: "starting", flags: {} }, live(106), 106);
+  check("past T1 is late even while the band still says 'starting'",
+    through.state === "late", JSON.stringify(through));
+  check("...and it still reports the room it has left", through.roomPct != null && through.roomPct > 0);
+  check("price above T3 reports non-positive room (the UI prints 'done')",
+    entryRead({ band: "underway", flags: {} }, live(140), 140).roomPct <= 0);
+
+  // Exclusions outrank everything, in the order a trade actually fails.
+  check("parabolic beats a 'starting' band",
+    entryRead({ band: "starting", flags: { parabolic: true } }, live(100), 100).state === "late");
+  check("thin liquidity beats parabolic (you cannot exit either way)",
+    entryRead({ band: "starting", flags: { thinLiquidity: true, parabolic: true } }, live(100), 100).why.includes("thin"));
+  check("band 'late' is late even with clean levels",
+    entryRead({ band: "late", flags: {} }, live(100), 100).state === "late");
+
+  // Payoff and structure gates.
+  check("a payoff under 1.5x the stop is a watch, not an entry",
+    // invalidation 90 (−10%), T3 112 (+12%) ⇒ 1.2x
+    entryRead({ band: "starting", flags: {} }, liveTargets({ ...TGT, t3: 112 }, 100), 100).state === "watch");
+  check("exactly 1.5x still clears",
+    entryRead({ band: "starting", flags: {} }, liveTargets({ ...TGT, t3: 115 }, 100), 100).state === "entry");
+  check("an invalidation already above price is a lost structure, not an entry",
+    entryRead({ band: "starting", flags: {} }, liveTargets({ ...TGT, invalidation: 101 }, 100), 100).state === "watch");
+  check("no targets at all is a watch with every number null",
+    (() => {
+      const r = entryRead({ band: "starting", flags: {} }, null, 100);
+      return r.state === "watch" && r.roomPct === null && r.riskPct === null && r.rr === null;
+    })());
+  check("a coin off the board (no band) is never promoted to an entry",
+    entryRead(null, live(100), 100).state === "watch");
+
+  // liveTargets: PRICES frozen, PERCENTAGES live. The whole point of the split.
+  const moved = liveTargets(TGT, 120);
+  check("liveTargets never moves a target price",
+    moved.t1 === 105 && moved.t3 === 130 && moved.invalidation === 90);
+  check("liveTargets recomputes every % against the live price",
+    moved.t1Pct === -12.5 && moved.invPct === -25, JSON.stringify(moved));
+  check("liveTargets passes a null price through untouched",
+    liveTargets(TGT, null) === TGT && liveTargets(null, 100) === null);
 } catch (e) {
   failed++;
   console.error(`FAIL: smoke crashed — ${(e && e.stack) || e}`);

@@ -33,6 +33,16 @@ export function MarketsPage({ isMobile, btc, jump, settings, updateSetting }) { 
 
   // Land at the top — on arrival AND on every sub switch.
   //
+  // THE REAL CULPRIT WAS NOT HERE, and this effect could not have caught it:
+  // PillRow used to call scrollIntoView on mount, which scrolls every
+  // scrollable ancestor, so the Movers pill strip — four cards down the Alt
+  // Season panel — dragged #page-scroll to itself the moment the lazy panel
+  // rendered, ~160px past the top, smoothly, and long after both resets below
+  // had already run. Fixed at the source in ui/kit.jsx. What follows still
+  // earns its place for the reasons written under it, but if this tab ever
+  // opens mid-page again, look for something that scrolls ITSELF into view
+  // before touching this.
+  //
   // The tab opened mid-page: App's own nav handler scrolls the shell back up,
   // but it does that with `behavior: "smooth"` against a page whose panels are
   // lazy. The animation starts over a 220px Suspense skeleton and is still
