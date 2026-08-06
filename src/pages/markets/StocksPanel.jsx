@@ -361,6 +361,13 @@ export function StocksPanel({ isMobile }) {
           </span>
         ) : null}
       >
+        {/* THE WHOLE CARD IS A PLAN FOR THE NEXT OPEN, and it should say so
+            rather than leaving it to be inferred from a heading. */}
+        {!open && session?.lastSessionLabel && (
+          <div className="t-cap" style={{ color: "var(--sub)", lineHeight: 1.5, paddingBottom: 4 }}>
+            Settled after {session.lastSessionLabel}'s close — this is the plan for the next open.
+          </div>
+        )}
         {regime?.gate && (
           <div className="t-cap" style={{ color: "var(--faint)", lineHeight: 1.5, paddingBottom: 4 }}>
             <span className="t-num">{regime.gate.effectiveFloor ?? regime.gate.floor}</span>/100 to flag in this tape,
@@ -449,8 +456,10 @@ export function StocksPanel({ isMobile }) {
             })}
           </div>
         ) : (
-          <EmptyState title="Nothing on the radar"
-            sub={data.qualifiers ? `${data.qualifiers} names cleared the screen but not the bar for this tape.` : "The screener settles after each close — flags land here that evening."} />
+          <EmptyState title="Nothing to take at the open"
+            sub={data.qualifiers
+              ? `${data.qualifiers} names cleared the screen but not the bar this tape sets. Nothing is a position.`
+              : "Nothing cleared the bar off the last session. The screener re-settles after every close."} />
         )}
       </CollapsibleCard>
 

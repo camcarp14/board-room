@@ -255,7 +255,13 @@ exports.handler = async (event) => {
     // generic "hasn't run yet" is what hid a real bug behind a message that
     // looked like ordinary first-deploy timing on the crypto side.
     if (!stateQ.data) {
-      throw new Error("The screener has never completed a pass — it settles after the close, so check back after 4:45pm ET on a trading day.");
+      // THE OLD WORDING PROMISED A FIFTEEN-HOUR WAIT AND MEANT AN HOUR. It
+      // said "check back after 4:45pm ET on a trading day", which describes
+      // the settle WINDOW rather than what actually happens: any finished
+      // session with no board gets picked up at the very next hourly fire,
+      // whatever time that is. Deployed at midnight, the plan for the next
+      // open exists by 1am — which is the entire point of the tool.
+      throw new Error("No session settled yet. The screener picks up the last finished session at the top of the next hour, so this fills in within the hour — with the plan for the next open.");
     }
     if (!stateQ.data.payload) {
       throw new Error(`The screener's last write (${stateQ.data.updated_at || "unknown time"}) has no usable data — that's a bug, not a timing issue.`);
