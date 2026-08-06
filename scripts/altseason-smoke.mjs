@@ -69,7 +69,7 @@ try {
   const cron = mods["alt-cron-background"];
   if (!cron) throw new Error("alt-cron-background did not load — the fixture suite cannot run");
   const {
-    parseMarketsRow, priceAgo, isStablecoin, isWrapper, structure7d,
+    parseMarketsRow, priceAgo, isStablecoin, isWrapper, structure7d, PHASE_GATE,
     screenCoin, screenUniverse, seasonRead, targetsFor, flagTier, transitionFlags,
   } = cron;
 
@@ -208,16 +208,32 @@ try {
     rsVsBtc7d: 12, targets: T_OK,
     ...o,
   });
-  check("starting + score 55 ignites", flagTier(fRow({ score: 55 })) === "igniting");
-  check("starting + score 54 does not", flagTier(fRow({ score: 54 })) === null);
-  check("underway ignites on real acceleration", flagTier(fRow({ band: "underway", score: 60, chg24h: 20, accel: { d24VsWeek: 4 } })) === "igniting");
-  check("underway up 21% on the day is a chase, not a flag", flagTier(fRow({ band: "underway", score: 60, chg24h: 21, accel: { d24VsWeek: 4 } })) === null);
-  check("underway without the acceleration is not igniting", flagTier(fRow({ band: "underway", score: 60, chg24h: 20, accel: { d24VsWeek: 3.9 } })) === null);
-  check("warming + score 50 builds", flagTier(fRow({ band: "warming", score: 50 })) === "building");
-  check("warming + score 49 does not", flagTier(fRow({ band: "warming", score: 49 })) === null);
-  check("quiet builds only high in range with RS", flagTier(fRow({ band: "quiet", score: 45, range7d: { pos: 0.55 }, rsVsBtc7d: 0.1 })) === "building");
-  check("quiet without RS over BTC does not", flagTier(fRow({ band: "quiet", score: 45, range7d: { pos: 0.55 }, rsVsBtc7d: 0 })) === null);
-  check("quiet low in its range does not", flagTier(fRow({ band: "quiet", score: 45, range7d: { pos: 0.54 }, rsVsBtc7d: 0.1 })) === null);
+  // The floor is the REGIME's now, not a constant — see PHASE_GATE. These use
+  // the default gate (floor 70) unless they pass one explicitly.
+  const GATE_ALT = PHASE_GATE.alt_season;      // loosest: max 14 / floor 62
+  const GATE_BTC = PHASE_GATE.btc_only;        // tightest real tape: 5 / 74
+
+  check("starting clears the alt-season floor and ignites", flagTier(fRow({ score: 62 }), GATE_ALT) === "igniting");
+  check("one point under that floor does not", flagTier(fRow({ score: 61 }), GATE_ALT) === null);
+  // The same 62-score chart in a Bitcoin-only tape: identical setup, no flag.
+  // This is the whole point of the gate — 52 open flags in a btc_only market
+  // is what it exists to prevent.
+  check("the SAME setup is refused in a btc_only regime", flagTier(fRow({ score: 62 }), GATE_BTC) === null);
+  check("...and clears it once it is genuinely exceptional", flagTier(fRow({ score: 74 }), GATE_BTC) === "igniting");
+  check("no gate passed falls back to the default floor, not to free rein",
+    flagTier(fRow({ score: 69 })) === null && flagTier(fRow({ score: 70 })) === "igniting");
+
+  check("underway ignites on real acceleration", flagTier(fRow({ band: "underway", score: 70, chg24h: 20, accel: { d24VsWeek: 4 } })) === "igniting");
+  check("underway up 21% on the day is a chase, not a flag", flagTier(fRow({ band: "underway", score: 70, chg24h: 21, accel: { d24VsWeek: 4 } })) === null);
+  check("underway without the acceleration is not igniting", flagTier(fRow({ band: "underway", score: 70, chg24h: 20, accel: { d24VsWeek: 3.9 } })) === null);
+  check("warming over the floor builds", flagTier(fRow({ band: "warming", score: 70 })) === "building");
+  check("warming under it does not", flagTier(fRow({ band: "warming", score: 69 })) === null);
+  // 'quiet' was the rung that supplied most of the fifty-two. It is gone: a
+  // base with nothing lifting it is a watchlist entry, and the board lists it.
+  check("quiet never flags now, however high it scores",
+    flagTier(fRow({ band: "quiet", score: 95, range7d: { pos: 0.9 }, rsVsBtc7d: 5 })) === null);
+  check("losing to BTC disqualifies an alt setup outright",
+    flagTier(fRow({ score: 90, rsVsBtc7d: 0 })) === null && flagTier(fRow({ score: 90, rsVsBtc7d: -1 })) === null);
   check("BTC is never flagged", flagTier(fRow({ symbol: "BTC", score: 90 })) === null);
   check("thin liquidity is never flagged", flagTier(fRow({ flags: { thinLiquidity: true } })) === null);
   check("under $1M of volume is never flagged", flagTier(fRow({ vol24h: 9e5 })) === null);
@@ -308,6 +324,31 @@ try {
   check("a closed episode re-flagging starts a NEW episode with a NEW id",
     reflag.inserts.length === 1 && reflag.inserts[0].id === "altcoin:20260805" && reflag.updates.length === 0,
     JSON.stringify({ inserts: reflag.inserts.map((i) => i.id), updates: reflag.updates.length }));
+
+  // ─── 7b. the regime's flag budget — the fifty-two-flag fix ─────────────────
+  // Twelve identical-quality candidates, scored 90 down to 79, into a
+  // `btc_only` tape whose budget is five. The cap has to bite, and it has to
+  // spend the five on the BEST five rather than on whichever the iteration
+  // order reached first (that order is market-cap rank, i.e. unrelated to the
+  // setup).
+  const many = {};
+  for (let i = 0; i < 12; i++) {
+    const id = `c${String(i).padStart(2, "0")}`;
+    many[id] = { ...screened, id, symbol: `C${i}`, name: `Coin ${i}`, score: 90 - i };
+  }
+  const capped = transitionFlags([], many, NOW, PHASE_GATE.btc_only);
+  check("the regime cap bites — 12 qualifiers, 5 opened",
+    capped.inserts.length === 5, String(capped.inserts.length));
+  check("...and it spends the budget on the highest scores",
+    capped.inserts.map((r) => r.symbol).sort().join(",") === "C0,C1,C2,C3,C4",
+    capped.inserts.map((r) => `${r.symbol}:${r.score}`).join(" "));
+  check("a looser regime opens more of the same list",
+    transitionFlags([], many, NOW, PHASE_GATE.alt_season).inserts.length === 12);
+  // Rows already open consume the budget — the cap is on OPEN episodes, not on
+  // inserts per pass, or every hour would top the list back up to five.
+  const openAlready = capped.inserts.map((r) => ({ ...r, notes: {} }));
+  check("existing open flags spend the budget too",
+    transitionFlags(openAlready, many, NOW, PHASE_GATE.btc_only).inserts.length === 0);
 
   // ─── 8. seasonRead — renormalisation, and the phase ladder's edges ─────────
   // 100 eligible alts (BTC is the bar, passed separately), exact beat counts so

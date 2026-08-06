@@ -172,5 +172,16 @@ export function useTween(target, dur = 700) {
     raf = requestAnimationFrame(step);
     return () => cancelAnimationFrame(raf);
   }, [target, dur]);
-  return target == null ? null : Math.round(v);
+  // ROUND TO THE VALUE'S OWN SCALE, not to whole numbers. This was a flat
+  // Math.round, which is right for a BTC price or a rep count and destroys an
+  // altcoin: PUMP at $0.002399 tweened through Math.round() to 0, so the coin
+  // sheet printed its headline price as "$0". Everything at or above 1 still
+  // rounds exactly as before (every caller formats its own decimals anyway);
+  // below 1 we keep four significant figures, which is the precision px()
+  // renders at.
+  if (target == null) return null;
+  const a = Math.abs(target);
+  if (!(a > 0) || a >= 1) return Math.round(v);
+  const p = Math.pow(10, Math.min(12, Math.ceil(-Math.log10(a)) + 3));
+  return Math.round(v * p) / p;
 }

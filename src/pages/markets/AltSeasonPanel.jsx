@@ -51,6 +51,10 @@ const rel = (stamp, now) => {
 };
 
 const MOVER_WINDOWS = ["1h", "4h", "12h", "24h", "7d", "30d"];
+// How many flags the radar shows before it asks. Eight is about a phone
+// screen's worth, and the screener's own regime cap tops out at fourteen, so
+// in normal operation this only folds a tail rather than hiding the tool.
+const FLAG_PREVIEW = 8;
 
 // StancePill tone by regime phase. majors_rotating rides with green — it's the
 // "get ready" reading, not a warning; mixed is the genuine coin-flip.
@@ -126,6 +130,7 @@ export default function AltSeasonPanel({ isMobile }) {
   });
   const [whyOpen, setWhyOpen] = useState(false);
   const [win, setWin] = useState("24h");
+  const [showAllFlags, setShowAllFlags] = useState(false);
   const [sel, setSel] = useState(null);     // {id, symbol, name} → coin sheet
   const [chart, setChart] = useState(null); // {id, symbol} → candles modal
 
@@ -242,12 +247,18 @@ export default function AltSeasonPanel({ isMobile }) {
       </CollapsibleCard>
 
       {/* ── RADAR — the open flags, igniting first ─────────────────────────── */}
+      {/* THE CARD IS A SHORTLIST, NOT A LEDGER. The screener's regime gate now
+          caps how many episodes can be open at once, but a log written under
+          the old flat bar can still hold dozens, and those age out over days
+          rather than vanishing. Fifty-two rows is not something anyone reads —
+          so the card shows the best few and says plainly how many it is
+          holding back, and the count in the header stays honest. */}
       <CollapsibleCard {...coll("flags")} title="Flags"
         trailing={active.length > 0 ? <span className="t-cap t-num" style={{ color: "var(--faint)" }}>{active.length} open</span> : null}
       >
         {active.length ? (
           <CellGroup style={inCardGroup}>
-            {active.map((f) => {
+            {(showAllFlags ? active : active.slice(0, FLAG_PREVIEW)).map((f) => {
               const tier = TIER_META[f.tier] || TIER_META.building;
               const hit = HIT_LABEL[f.status];
               return (
@@ -273,6 +284,12 @@ export default function AltSeasonPanel({ isMobile }) {
           </CellGroup>
         ) : (
           <EmptyState title="Nothing on the radar" sub="The screener runs hourly — flags land here the pass they fire." />
+        )}
+        {active.length > FLAG_PREVIEW && (
+          <Button kind="plain" size="sm" style={{ height: 44, marginTop: 2 }}
+            onClick={() => setShowAllFlags((v) => !v)}>
+            {showAllFlags ? "Show top " + FLAG_PREVIEW : `Show all ${active.length}`}
+          </Button>
         )}
       </CollapsibleCard>
 

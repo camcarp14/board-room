@@ -202,9 +202,15 @@ export default function AltCoinSheet({ sel, row, episode, onClose, onChart }) {
                   <span className="t-num" style={{ fontSize: 14, color: on ? T.green : "var(--ink)", flex: 1, minWidth: 0 }}>{px(t.p)}</span>
                   {/* A target price sits BELOW the live price gave "−6.1% away",
                       which is arithmetically true and reads like a loss. */}
+                  {/* "✓ +6.4% away" was true and unreadable — the tick said
+                      the log counted it, the number said price is below it,
+                      and nothing said those were two different statements.
+                      Spell the round-trip out instead. */}
                   <span className="t-cap t-num" style={{ color: on ? T.green : "var(--sub)", flex: "none" }}>
-                    {t.hit && "✓ "}
-                    {t.cleared ? "cleared" : t.pct == null ? "—" : `${signedPct(t.pct)} away`}
+                    {t.cleared ? (t.hit ? "✓ cleared" : "cleared")
+                      : t.pct == null ? "—"
+                      : t.hit ? `hit · back ${signedPct(-t.pct)}`
+                      : `${signedPct(t.pct)} away`}
                   </span>
                 </div>
               );

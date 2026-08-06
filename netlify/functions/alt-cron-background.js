@@ -872,9 +872,13 @@ function targetsFor(row) {
     else if (t3 >= ath) t3 = ath;
   }
 
+  // ≥2% between rungs, not merely ascending. `t2 <= t1` only guaranteed a
+  // strict order, so when the T1 clamp above pushed T1 up to price×1.05 it
+  // could land a hair under an unmoved T2 and pass: PUMP shipped T1 $0.002553
+  // and T2 $0.002555, 0.08% apart, which is one target wearing two labels.
   if (t1 < price * 1.04) t1 = price * 1.05;
-  if (t2 <= t1) t2 = t1 * 1.02;
-  if (t3 <= t2) t3 = t2 * 1.02;
+  if (t2 < t1 * 1.02) t2 = t1 * 1.02;
+  if (t3 < t2 * 1.02) t3 = t2 * 1.02;
   if (!(invalidation < price * 0.99)) return null;
 
   const pctVs = (t) => Math.round((t / price - 1) * 1000) / 10;
@@ -903,7 +907,39 @@ function igniteCond(row) {
     Number.isFinite(row.chg24h) && row.chg24h <= 20 && row.score >= 60;
 }
 
-function flagTier(row) {
+/**
+ * How many open flags a regime is allowed to carry, and how good a setup has
+ * to be to earn one.
+ *
+ * THE TOOL SHOULD BE QUIET WHEN THE MARKET IS. The first build used one flat
+ * bar and produced FIFTY-TWO open flags in a 35/100 "Bitcoin only" tape —
+ * most of them already below their own flag price. A list that long is not a
+ * signal, it is the absence of one wearing a signal's clothes, and it is
+ * exactly the overload this thing exists to prevent.
+ *
+ * Both dials move with the regime because the regime is what decides whether
+ * an alt setup gets paid: the same chart that runs in `alt_season` bleeds in
+ * `risk_off`. So a hostile tape does not just score lower, it gets a smaller
+ * budget AND a higher bar, and the two compound into a genuinely short list.
+ *
+ * The cap is enforced by SCORE, not by arrival order — see transitionFlags.
+ */
+const PHASE_GATE = {
+  alt_season: { max: 14, floor: 62 },
+  majors_rotating: { max: 10, floor: 66 },
+  mixed: { max: 8, floor: 70 },
+  btc_only: { max: 5, floor: 74 },
+  risk_off: { max: 3, floor: 78 },
+};
+// No published regime (breadth unmeasured) is not permission to flag freely.
+const DEFAULT_GATE = { max: 8, floor: 70 };
+
+function gateFor(season) {
+  const phase = season && season.phase;
+  return (phase && PHASE_GATE[phase]) || DEFAULT_GATE;
+}
+
+function flagTier(row, gate = DEFAULT_GATE) {
   if (!row || !Number.isFinite(row.score)) return null;
   if (isExcluded(row)) return null;
   if (String(row.symbol ?? "").toUpperCase() === "BTC") return null;
@@ -911,12 +947,18 @@ function flagTier(row) {
   if (row.flags && row.flags.thinLiquidity) return null;
   const t = row.targets;
   if (!t || !Number.isFinite(t.t1Pct) || t.t1Pct < 5) return null;
+  // Losing to BTC disqualifies an ALT setup whatever the chart looks like:
+  // relative strength is the entire premise of the board, and a coin the
+  // majors are beating is a worse version of the trade you already have.
+  if (!Number.isFinite(row.rsVsBtc7d) || row.rsVsBtc7d <= 0) return null;
+  if (row.score < (gate.floor ?? DEFAULT_GATE.floor)) return null;
 
   if (igniteCond(row)) return "igniting";
-  if (row.band === "warming" && row.score >= 50) return "building";
-  const pos = row.range7d && Number.isFinite(row.range7d.pos) ? row.range7d.pos : null;
-  if (row.band === "quiet" && row.score >= 45 && pos != null && pos >= 0.55 &&
-      Number.isFinite(row.rsVsBtc7d) && row.rsVsBtc7d > 0) return "building";
+  // 'quiet' no longer earns a flag at all. It was the loosest rung — a coin
+  // going nowhere, on the argument that it was coiled — and it supplied most
+  // of the fifty-two. A base with nothing lifting it is a watchlist entry,
+  // and the board already lists it.
+  if (row.band === "warming" || row.band === "starting") return "building";
   return null;
 }
 
@@ -941,7 +983,7 @@ const STALE_MS = 14 * DAY;
  * @param asOf          ms epoch
  * @returns { inserts: [row…], updates: [{ id, …changed columns }…] }
  */
-function transitionFlags(openRows, screenedById, asOf) {
+function transitionFlags(openRows, screenedById, asOf, gate = DEFAULT_GATE) {
   const now = Number.isFinite(asOf) ? asOf : Date.now();
   const nowIso = new Date(now).toISOString();
   const isMap = screenedById instanceof Map;
@@ -1039,10 +1081,24 @@ function transitionFlags(openRows, screenedById, asOf) {
   // gets a NEW episode with a NEW id. (Closed-and-reflagged inside one UTC day
   // collides with the closed row's id; the pass inserts with duplicates
   // ignored, so that same-day echo is dropped rather than resurrected.)
+  //
+  // THE REGIME'S BUDGET IS SPENT ON THE BEST SETUPS, NOT THE FIRST ONES. The
+  // candidates are ranked by score and only the top `room` are opened, so a
+  // pass that finds thirty qualifiers in a `btc_only` tape opens the five it
+  // rates highest rather than whichever five `screenedRows` happened to reach
+  // first (which is market-cap order — i.e. nothing to do with the setup).
+  const cap = Number.isFinite(gate && gate.max) ? gate.max : DEFAULT_GATE.max;
+  const room = Math.max(0, cap - openCoins.size);
+  const candidates = [];
   for (const s of screenedRows) {
     if (!s || !s.id || openCoins.has(s.id)) continue;
-    const tier = flagTier(s);
-    if (!tier) continue;
+    const tier = flagTier(s, gate);
+    if (!tier || !s.targets) continue;
+    candidates.push({ s, tier });
+  }
+  candidates.sort((a, b) => (b.s.score ?? 0) - (a.s.score ?? 0) || String(a.s.symbol).localeCompare(String(b.s.symbol)));
+
+  for (const { s, tier } of candidates.slice(0, room)) {
     const t = s.targets;
     inserts.push({
       id: `${s.id}:${new Date(now).toISOString().slice(0, 10).replace(/-/g, "")}`, // UTC day, deliberately
@@ -1286,7 +1342,10 @@ async function runPass() {
     if (error) errors.push(`flags read: ${error.message}`);
     else {
       const byId = new Map(eligible.map((r) => [r.id, r]));
-      const { inserts, updates } = transitionFlags(openRows || [], byId, now);
+      // The regime sets both the bar and the budget — see PHASE_GATE.
+      const gate = gateFor(season);
+      counts.gate = `${season && season.phase ? season.phase : "unrated"} max${gate.max}/floor${gate.floor}`;
+      const { inserts, updates } = transitionFlags(openRows || [], byId, now, gate);
 
       if (inserts.length) {
         // ignoreDuplicates: a coin closed and re-flagged inside one UTC day
@@ -1415,7 +1474,7 @@ async function runPass() {
 
   console.log(
     `[alt-cron-background] universe=${counts.universe} eligible=${counts.eligible} board=${counts.board} ` +
-    `sparkRef4h=${counts.sparkRef4h} ` +
+    `sparkRef4h=${counts.sparkRef4h} gate=${counts.gate || "n/a"} ` +
     `flags +${counts.flagsInserted} ~${counts.flagsUpdated} closed=${counts.flagsClosed} ` +
     `snapshot=${counts.snapshotWritten} state=${counts.stateWritten} ` +
     `season=${season && season.score != null ? `${season.score}/${season.phase}` : "none"}` +
@@ -1465,3 +1524,5 @@ exports.seasonRead = seasonRead;
 exports.targetsFor = targetsFor;
 exports.flagTier = flagTier;
 exports.transitionFlags = transitionFlags;
+exports.gateFor = gateFor;
+exports.PHASE_GATE = PHASE_GATE;
