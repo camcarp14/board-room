@@ -39,8 +39,8 @@ const EXTERNALS = ["tweetnacl"];
 const OWNER_ONLY = [
   "audit", "auto-fix", "calendar-events", "claude", "clarify-pipeline",
   "db-admin", "deploy", "econ-resolve-background", "fetch-page", "gsc",
-  "mini-worker", "plaid", "shopify", "site-status", "upstream-run-background",
-  "workout-import", "zts-pipeline",
+  "mini-worker", "note-capture", "plaid", "shopify", "site-status",
+  "upstream-run-background", "workout-import", "zts-pipeline",
 ];
 
 // ─── extra assertions on pure helpers a function exports for testing ─────────

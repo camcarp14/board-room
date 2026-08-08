@@ -4,7 +4,7 @@
 // re-upserts the cached rows). Works on the pre-upgrade schema too: pins/seals
 // hide behind a one-line SQL banner until the columns are added.
 
-import { useState, useEffect, useMemo, useRef } from "react";
+import { useState, useEffect, useMemo, useRef, lazy, Suspense } from "react";
 import { db } from "../../data/db.js";
 import { SortableList } from "../../ui/SortableList.jsx";
 import { applyNotesOrder, orderOf } from "../../lib/notes-order.js";
@@ -13,6 +13,11 @@ import { useNotes } from "../../data/notes.js";
 import { NOTE_SEALS, sealColor, NoteCardPreview, continueListOnEnter, toggleBulletAtCaret } from "../../ui/shared.jsx";
 import { Card, SectionHeader, Button, Cell, Sheet, useConfirm, EmptyState, Dot } from "../../ui/kit.jsx";
 import { IcPin, IcTrash, IcCheck, IcNote, IcChevronLeft, IcSend, IcSeal, IcPlus } from "../../ui/icons.jsx";
+
+// The watch/Siri setup sheet is read once and then never again, and NotesPanel
+// deliberately rides in the first-paint chunk (see PersonalPage's import
+// comment) — so it splits out rather than riding along.
+const CaptureSheet = lazy(() => import("./CaptureSheet.jsx"));
 
 // Copy-pasted by the user into Supabase → SQL Editor — exact text matters.
 export const NOTES_UPGRADE_SQL = `-- Notes upgrade — pins + color seals (safe to re-run)
@@ -58,6 +63,7 @@ export function NotesPanel({ isMobile, openSignal, settings, updateSetting }) {
   const [oops, setOops] = useState(null); // transient error toast (replaces alert())
   const [copied, setCopied] = useState(false);
   const [sqlCopied, setSqlCopied] = useState(false);
+  const [captureOpen, setCaptureOpen] = useState(false);
   const [confirmEl, confirm] = useConfirm();
   const saveTimer = useRef(null);
   const undoTimer = useRef(null);
@@ -392,10 +398,21 @@ export function NotesPanel({ isMobile, openSignal, settings, updateSetting }) {
                 {selectMode ? "Done" : "Select"}
               </button>
             )}
+            <button className="sec-link" style={{ padding: "10px 8px", margin: "-10px -2px" }} onClick={() => setCaptureOpen(true)}>Watch</button>
             <button className="sec-link" style={{ padding: "10px 8px", margin: "-10px -4px" }} onClick={newNote}>New note</button>
           </span>
         }
       />
+
+      {captureOpen && (
+        <Suspense fallback={null}>
+          <CaptureSheet
+            token={settings?.notes_capture?.captureToken || ""}
+            onToken={(t) => updateSetting?.("notes_capture", { ...(settings?.notes_capture || {}), captureToken: t })}
+            onClose={() => setCaptureOpen(false)}
+          />
+        </Suspense>
+      )}
 
       {legacy && notes !== null && (
         <Card pad="sm" style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>

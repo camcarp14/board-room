@@ -87,6 +87,7 @@ const USAGE_META = {
   claude: { label: "Claude proxy" },
   trmnl: { label: "TRMNL e-ink render" },
   "workout-import": { label: "Workout import" },
+  "note-capture": { label: "Note dictated from the watch" },
   // Doesn't bill anything — no model behind it — but every function gets a name
   // so that if it ever DOES log, the Usage table reads as English on the first
   // row rather than after someone notices a wire identifier.
