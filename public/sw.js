@@ -38,7 +38,11 @@
 // number instead of an em-dash, and the coin sheet was rebuilt. Every one of
 // those is checked by LOOKING at the tab, which is exactly the case the v6
 // note says must bump this file.
-const VERSION = "br-v32";
+// v33: the Watch link in the Notes header. The v6 note again, and this one was
+// caught by the owner opening Notes and finding nothing there — a new link in a
+// section header is checked by LOOKING at it, so a stale shell reads exactly
+// like the feature was never built.
+const VERSION = "br-v33";
 const ASSET_CACHE = `${VERSION}-assets`;
 const PAGE_CACHE = `${VERSION}-pages`;
 
