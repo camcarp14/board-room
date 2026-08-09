@@ -59,6 +59,12 @@ dropped from the JSON entirely.
 | `into` | `append`, `list` | Append to the note with this exact title instead of making a new one. |
 | `stamp` | — | Prefix the line with the time. Defaults **on** for `into`, **off** otherwise. |
 
+**Field names are case-insensitive**, and that is not politeness — the Shortcuts
+JSON body editor auto-capitalizes the key field, so typing `token` gets you
+`Token`, and a case-sensitive read would 401 with `unknown token` while the
+shortcut looked perfectly correct on screen. `Token`, `TOKEN` and `token` are
+all the same field. An exactly-lowercase key wins if both are somehow present.
+
 If the body isn't valid JSON at all, the whole raw body is taken as the note
 text — so a Shortcut with Request Body = **Text** and the token in the
 `X-Capture-Token` header works too. That's fewer taps to build and no quoting
@@ -126,7 +132,7 @@ fields, rename.
 
 | Status | Body | Fix |
 |---|---|---|
-| 401 | `unknown token` | Token missing, mistyped, or regenerated in the app. |
+| 401 | `unknown token` | Token missing, mistyped, or regenerated in the app. (Key capitalization is *not* a cause — `Token` works.) |
 | 400 | `text is empty — nothing to capture` | Dictation was cancelled or produced nothing. |
 | 400 | `seal must be one of …` | Typo in the seal name. |
 | 403 | `this account is not allowed…` | The token belongs to a non-owner account. |

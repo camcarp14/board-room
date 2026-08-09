@@ -116,13 +116,34 @@ export function resolveTitle(template, now = Date.now(), tz = TZ) {
 }
 
 /**
+ * Field names arrive in whatever case iOS felt like.
+ *
+ * The key field in Shortcuts' JSON body editor AUTO-CAPITALIZES, so typing
+ * `token` into it produces `Token` — and JSON keys are case-sensitive, so the
+ * request 401s with "unknown token" while the shortcut looks perfectly correct
+ * on screen. There is no way to know from the error that the only problem is a
+ * capital letter you didn't type. Every field is read case-insensitively for
+ * that reason; an exactly-lowercase key still wins if both are present.
+ */
+export function lowerKeys(obj) {
+  if (!obj || typeof obj !== "object" || Array.isArray(obj)) return obj;
+  const out = {};
+  for (const [k, v] of Object.entries(obj)) {
+    const lk = k.trim().toLowerCase();
+    if (!(lk in out) || k === lk) out[lk] = v;
+  }
+  return out;
+}
+
+/**
  * Reject loudly, never coerce. A Shortcut that sends an empty magic variable
  * (the dictation was cancelled, the clipboard was empty) must get a 400 it can
  * show in a notification — not a silent empty note that looks like the capture
  * worked and quietly loses the thought.
  */
-export function normalizeCapture(input, now = Date.now(), tz = TZ) {
-  if (!input || typeof input !== "object") return { error: "body must be a JSON object" };
+export function normalizeCapture(rawInput, now = Date.now(), tz = TZ) {
+  if (!rawInput || typeof rawInput !== "object") return { error: "body must be a JSON object" };
+  const input = lowerKeys(rawInput); // idempotent — the handler has usually done it already
 
   const raw = input.text ?? input.note ?? input.body ?? input.content ?? input.dictation;
   if (typeof raw !== "string") return { error: "text is required (a string)" };
@@ -206,8 +227,9 @@ export default async (req) => {
   const url = new URL(req.url);
   if (typeof parsed === "string") parsed = { text: parsed };
   else if (parsed == null || typeof parsed !== "object") parsed = { text: raw };
+  parsed = lowerKeys(parsed); // "Token" is what the Shortcuts editor types for you
 
-  if (parsed.ping === true) {
+  if (bool(parsed.ping) === true) {
     return json(200, {
       success: true, service: "note-capture",
       configured: !!(c.url && c.service && c.owner),

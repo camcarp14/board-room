@@ -10,7 +10,7 @@
 // asserted here against fixed clocks. Run by `npm run verify`.
 
 import {
-  normalizeCapture, resolveTitle, appendEntry, isDuplicate, bool,
+  normalizeCapture, resolveTitle, appendEntry, isDuplicate, bool, lowerKeys,
   chicagoDate, chicagoTime, MAX_BODY, MAX_TITLE, DEDUPE_MS, SEALS,
 } from "../netlify/functions/note-capture.js";
 
@@ -60,6 +60,23 @@ for (const key of ["text", "note", "body", "content", "dictation"]) {
 check("the body is trimmed", normalizeCapture({ text: "  spaced  " }).body === "spaced");
 check("a title is optional and defaults empty", normalizeCapture({ text: "x" }).title === "");
 check("an over-long title is rejected", !!normalizeCapture({ text: "x", title: "t".repeat(MAX_TITLE + 1) }).error);
+
+// ─── 3b. THE CAPITAL LETTER YOU DIDN'T TYPE ──────────────────────────────────
+// Shortcuts' JSON body editor auto-capitalizes the KEY field, so typing `token`
+// yields `Token`, and a case-sensitive read 401s with "unknown token" while the
+// shortcut looks correct on screen. Nothing about the error points at the one
+// capital letter. Every field is read case-insensitively.
+check("Token (as the Shortcuts editor types it) is the token field", lowerKeys({ Token: "abc" }).token === "abc");
+check("Text reads as the body", normalizeCapture({ Text: "call the roofer" }).body === "call the roofer");
+check("SEAL in caps still resolves", normalizeCapture({ text: "x", SEAL: "blue" }).color === "blue");
+check("Into in caps still appends", normalizeCapture({ text: "x", Into: "Errands" }).into === "Errands");
+check("Title in caps still titles", normalizeCapture({ text: "x", Title: "Idea" }).title === "Idea");
+check("Pin in caps still pins", normalizeCapture({ text: "x", Pin: "1" }).pinned === true);
+check("an exactly-lowercase key wins over a case variant", lowerKeys({ Token: "wrong", token: "right" }).token === "right");
+check("…in either declaration order", lowerKeys({ token: "right", Token: "wrong" }).token === "right");
+check("a padded key still lands", lowerKeys({ " token ": "abc" }).token === "abc");
+check("lowerKeys leaves non-objects alone", lowerKeys(null) === null && lowerKeys("x") === "x");
+check("lowerKeys does not flatten arrays", Array.isArray(lowerKeys(["a"])));
 
 // ─── 4. seals — a typo must not silently drop the color ──────────────────────
 for (const seal of SEALS) check(`seal "${seal}" is accepted`, normalizeCapture({ text: "x", seal }).color === seal);

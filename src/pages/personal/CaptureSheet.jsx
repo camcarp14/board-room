@@ -78,7 +78,9 @@ export default function CaptureSheet({ token, onToken, onClose }) {
           <Button kind="quiet" size="md" onClick={() => copy("url", endpoint)} style={{ marginLeft: 6, padding: "0 10px", height: 30, minHeight: 30 }}>{copied === "url" ? "Copied" : "Copy"}</Button>
         </li>
         <li>Method <b>POST</b> · Request Body <b>JSON</b>. <code className="t-num" style={{ fontSize: 11 }}>&lt;Dictated Text&gt;</code> is
-          the magic variable from step 2 — pick it, don't type it:
+          the magic variable from step 2 — pick it from the strip above the keyboard, don't type it.
+          Field names are read case-insensitively, so the editor auto-capitalizing{" "}
+          <code className="t-num" style={{ fontSize: 11 }}>Token</code> for you is harmless:
           <div style={{ display: "flex", gap: 6, flexWrap: "wrap", margin: "10px 0 8px" }}>
             {RECIPES.map(r => (
               <button key={r.key} className={`pill${recipe === r.key ? " active" : ""}`} onClick={() => setRecipe(r.key)}>{r.name}</button>
