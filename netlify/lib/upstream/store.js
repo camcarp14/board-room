@@ -1,5 +1,5 @@
 // Supabase persistence adapter for the UPSTREAM engine — server-side ONLY.
-// Uses the service-role key (bypasses RLS) exactly like board-work-background;
+// Uses the service-role key, which bypasses RLS —
 // every row is stamped with the verified caller's user_id so client RLS reads work.
 
 function cfg() {

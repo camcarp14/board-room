@@ -5,7 +5,8 @@
 //   Haiku    → consensus prior sampling, JSON repair.
 import Anthropic from '@anthropic-ai/sdk';
 
-// Netlify function env: ANTHROPIC_API_KEY (same var board-work-background uses).
+// Netlify function env: ANTHROPIC_API_KEY (the same var every server-side
+// Anthropic caller here reads — mini-worker, audit, auto-fix).
 function requireApiKey() {
   const key = process.env.ANTHROPIC_API_KEY || process.env.VITE_ANTHROPIC_API_KEY;
   if (!key) {

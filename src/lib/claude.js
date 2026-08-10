@@ -7,13 +7,15 @@ import { buildSkillsBlock } from "../LearnPanel.jsx";
 // ─── Model registry — every layer starts on the cheapest model ───────────────
 // Keep these FIVE places in lockstep or Opus/Sonnet break in confusing ways
 // (this comment said THREE and listed three; the last two were already drifting
-// on dated snapshots when the spend audit found them):
+// on dated snapshots when the spend audit found them). It says five and lists
+// five — board-work-background.js used to share the fifth line with auto-fix and
+// left with the Discord path:
 //   1. here
 //   2. netlify/functions/claude.js ALLOWED_MODELS — the proxy rejects anything
 //      not on its list with "unsupported model"
 //   3. netlify/functions/mini-worker.js MODEL_IDS
 //   4. netlify/functions/audit.js  (hardcoded haiku at the call site)
-//   5. netlify/functions/auto-fix.js + board-work-background.js (same)
+//   5. netlify/functions/auto-fix.js  (same)
 // scripts/spend-smoke.mjs now asserts every id resolves through the allowlist
 // and that no file pins a dated snapshot, so drift fails the build.
 // History worth not repeating: `opus` sat on claude-opus-4-1 until it was 12

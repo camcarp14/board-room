@@ -59,6 +59,10 @@ const check = (label, cond, detail = "") => {
 };
 
 const systems = readFileSync("src/pages/systems/SystemsPage.jsx", "utf8");
+// Hoisted: two sections below assert what the CODE does, and this repo
+// explains itself in prose at length, so both need code read as code.
+const uncomment = (s) => s.replace(/\/\*[\s\S]*?\*\//g, "").replace(/(^|[^:\w])\/\/[^\n]*/g, "$1");
+
 // CONN_GROUPS/CONN_META moved next door with the hook — see the bundle note.
 const conns = readFileSync("src/pages/systems/connections.js", "utf8");
 
@@ -188,12 +192,21 @@ for (const f of readdirSync("netlify/functions")) {
 const UNLABELLED_OK = new Set([
   "conn_check",              // labelled — listed here only if the map is trimmed
 ]);
-const missing = [...written].filter(f => !labelled.has(f) && !UNLABELLED_OK.has(f) && !/^discord_/.test(f)).sort();
+const missing = [...written].filter(f => !labelled.has(f) && !UNLABELLED_OK.has(f)).sort();
 check("every fn the code can log has a label", missing.length === 0, missing.join(", "));
 
-// Discord writes fn as `discord_<stage>` — a family, not a key, so it needs the
-// prefix fallback rather than an entry per stage.
-check("the discord_ family falls back by prefix", /\/\^discord_\/\.test/.test(systems));
+// The `discord_<stage>` family used to need a prefix fallback here, being a
+// family rather than a fixed key. Both the exemption above and the branch it
+// pointed at are gone with the Discord path, and this asserts the removal is
+// COMPLETE — a stray prefix branch left behind would be dead code claiming to
+// serve rows that no writer can produce.
+//
+// COMMENT-STRIPPED, and the first cut of this check was not: it read the raw file
+// and failed on the paragraph explaining the retirement. That is the same trap
+// spend-smoke and dreams-smoke both document — this repo explains itself in prose
+// at length, so any assertion about what the CODE does has to read code as code.
+check("no discord label branch survives the retirement",
+  !/discord/i.test(uncomment(systems)), "SystemsPage still has discord in its code");
 check("an unknown fn falls back to its raw id, never to blank",
   /USAGE_META\[fn\]\?\.label\s*\n?\s*\|\|/.test(systems));
 
@@ -469,7 +482,6 @@ check("unhandled rejections are handled, in the same place",
 // says in words that `window.onerror =` is the wrong spelling — so a check that
 // reads prose as code fails on the very file that documents it. Same trap
 // migrations-smoke.mjs strips comments to avoid, same fix.
-const uncomment = (s) => s.replace(/\/\*[\s\S]*?\*\//g, "").replace(/(^|[^:\w])\/\/[^\n]*/g, "$1");
 const mainCode = uncomment(mainJsx), systemsCode = uncomment(systems);
 check("neither handler is installed by assignment",
   !/window\.onerror\s*=/.test(mainCode) && !/window\.onunhandledrejection\s*=/.test(mainCode));

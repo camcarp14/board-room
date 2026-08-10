@@ -67,9 +67,12 @@ const FN_DIR = "netlify/functions";
 const OUT_DIR = ".fn-smoke";
 const require_ = createRequire(import.meta.url);
 
-// tweetnacl is a real dependency of discord-board; keep it external so this
-// check doesn't depend on bundling third-party trees.
-const EXTERNALS = ["tweetnacl"];
+// Nothing under netlify/functions/ carries a third-party import that has to stay
+// out of the bundle any more. tweetnacl lived here for discord-board's Ed25519
+// check and left with it. Kept as an empty list rather than deleted: the next
+// function that needs a native or otherwise unbundleable dependency wants this
+// hook, and the shape of it is the documentation for how.
+const EXTERNALS = [];
 
 // ─── the front-door inventory ────────────────────────────────────────────────
 // This used to be one list and one test: does the string "BOARD_USER_ID" appear
@@ -77,13 +80,17 @@ const EXTERNALS = ["tweetnacl"];
 // exactly why, because the same shortcut is available every time this file is
 // edited.
 //
-//   · It could not tell a gate from a mention. board-work-background.js carries
-//     the string at line 72 — inside sbConfig(), where BOARD_USER_ID is the
-//     user_id it WRITES ROWS AS, not a caller it checks — and it spent its entire
-//     life accepting anonymous POSTs that read every seat note and the last eight
-//     chat messages through the service-role key, spent Anthropic budget
-//     synthesising an answer out of them, and PATCHed the answer to whatever
-//     Discord webhook the caller named.
+//   · It could not tell a gate from a mention. The function that proved it is no
+//     longer in this directory — board-work-background.js, the Discord board
+//     worker, deleted when that feature was retired — but the shape is worth
+//     keeping because the shortcut is available again every time this file is
+//     edited. It carried the string BOARD_USER_ID inside its Supabase config,
+//     where that id was the user_id it WROTE ROWS AS rather than a caller it
+//     checked, and on the strength of that substring it counted as gated while
+//     spending its entire life accepting anonymous POSTs that read every seat
+//     note and the last eight chat messages through the service-role key, spent
+//     Anthropic budget synthesising an answer out of them, and PATCHed the answer
+//     to whatever Discord webhook the caller named.
 //   · It only looked at files that were already on the list, so a new function
 //     was un-checked by default. The default has to be the other way round.
 //   · It said nothing about the two other kinds of door this app actually has: a
@@ -129,8 +136,6 @@ const OWNER_GATED = {
 // including a wrong one of exactly the right length, which is what tells a real
 // comparison apart from a presence test or a length test.
 const SHARED_SECRET = {
-  "board-work-background": "INTERNAL_WORKER_SECRET on the internal hop from discord-board",
-  "discord-board": "DISCORD_PUBLIC_KEY — every interaction is Ed25519-signed by Discord",
   "export-data": "BACKUP_SECRET — one correct guess returns the entire database",
   trmnl: "TRMNL_TOKEN — the device fetches the URL server-side, so a URL token is the model",
 };
@@ -160,9 +165,8 @@ const DELIBERATELY_PUBLIC = {
 
 // A privileged fake for every variable a function reads, so the gate under test
 // is the AUTHORIZATION check and not the "not configured yet" branch in front of
-// it. Fail-closed-when-unset already has a home (board-work-background's own
-// comment); what has never been tested is the far more dangerous state, which is
-// a fully configured deployment answering a caller who presented nothing. The
+// it. What has never been tested is the far more dangerous state, which is a
+// fully configured deployment answering a caller who presented nothing. The
 // values are shaped like the real thing and are all unusable.
 const FAKE_ENV = {
   SUPABASE_URL: "https://smoke.invalid",
@@ -488,8 +492,7 @@ console.log(`\n${pass}/${fns.length} functions export a callable handler`);
   // different one is still covered on the day it changes.
   //
   // 60 characters of url-safe wrong, and the length is load-bearing rather than
-  // arbitrary: board-work-background insists an interaction token is 50-120 of
-  // [\w-] and the two Shortcut seams insist their token is 16-80 characters. A
+  // arbitrary: the two Shortcut seams insist their token is 16-80 characters. A
   // shorter value gets a 400 for its SHAPE from in front of the gate, which is a
   // refusal that proves nothing about the door — the knock has to be a credential
   // that is well-formed and simply not the right one.
@@ -498,9 +501,15 @@ console.log(`\n${pass}/${fns.length} functions export a callable handler`);
   // compares lengths, or compares a prefix, refuses knock 2 and waves this one
   // through — which is the whole reason secretOk() exists rather than `===`.
   const sameLengthButWrong = (real) => [...String(real)].map((c) => (c === "z" ? "y" : "z")).join("");
-  // 64 bytes of hex: the right SIZE, the wrong bytes. nacl.sign.detached.verify
-  // THROWS on a wrong-size signature rather than returning false, and a gate that
-  // throws is a 502 — so a malformed signature would test the wrong thing.
+  // 64 bytes of hex: the right SIZE, the wrong bytes. Nothing in this directory
+  // verifies a signature today — discord-board was the only one, and it left with
+  // the Discord feature — so this slot currently proves nothing. It stays because
+  // the knock's whole design is to fill EVERY slot rather than maintain a map of
+  // which function reads which header, and because the sizing rule is the part
+  // that is easy to get wrong later: a signature check is typically a library
+  // call that THROWS on a wrong-size input rather than returning false, and a
+  // gate that throws answers 502, which would test the error handler instead of
+  // the door.
   const WRONG_SIGNATURE = "ab".repeat(64);
   const credsFor = (equalLength) => {
     const secret = (real) => (equalLength ? sameLengthButWrong(real) : WRONG);

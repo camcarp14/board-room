@@ -2069,7 +2069,7 @@ async function tick(db, prev, spy, now) {
  * check available.
  *
  * THE FAIL-OPEN WHEN THE SECRET IS UNSET is kept, and only for the unforced
- * path. The asymmetry with board-work-background is deliberate. There, failing
+ * path. The asymmetry with the retired Discord worker was deliberate. There, failing
  * closed costs you a legible error in a Discord reply. Here it would cost you
  * the hourly pass — the flag ledger's "first flagged" date is only honest if the
  * scan runs on time, so a silenced cron is a tab that is empty in the morning
@@ -2087,7 +2087,7 @@ async function tick(db, prev, spy, now) {
 // buffers of unequal length instead of returning false, so the lengths are
 // compared first and separately — that comparison is not constant time and does
 // not need to be, since the length of a secret the caller already failed to guess
-// is not the secret. Same shape as secretOk() in board-work-background.js and
+// is not the secret. Same shape as the compare in
 // export-data.js. Both header spellings are read because nothing in the contract
 // promises a lowercased map to a hand-rolled or locally-invoked caller.
 const hopPresented = (event) => {

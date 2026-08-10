@@ -52,12 +52,14 @@ const BUILD = typeof __BUILD__ !== "undefined" ? __BUILD__ : "dev";
 // Usage — durable, cross-device log of every Anthropic call and every
 // Netlify function hit, read from usage_log.
 //
-// Writers, all six of them: callClaude + callFn client-side, and server-side
-// mini-worker, audit, auto-fix, board-work-background (the Discord path, which
-// attributes to BOARD_USER_ID since Discord carries no session) and the
-// Upstream ledger. The last three used to write nothing — audit and auto-fix
-// showed as kind:"call" rows at $0, and Discord left no row at all — so the
-// cost boxes below, which filter kind === "anthropic", understated real spend.
+// Writers, all five of them: callClaude + callFn client-side, and server-side
+// mini-worker, audit, auto-fix and the Upstream ledger. Three of those used to
+// write nothing — audit and auto-fix showed as kind:"call" rows at $0, and the
+// Discord board worker left no row at all — so the cost boxes below, which
+// filter kind === "anthropic", understated real spend. There were six writers
+// until Discord was retired; that path never logged a single row in production
+// (usage_log holds zero fn like 'discord%'), which is why its labels went with
+// it rather than being kept for history.
 // The schema and the usage_summary aggregate live in supabase-usage-fix.sql.
 const USAGE_WINDOWS = [["24h", 1], ["7d", 7], ["30d", 30], ["All", 3650]];
 const LOG_STEP = 40; // in-page log cap — "Show more" extends it, no nested scroller
@@ -107,8 +109,6 @@ const USAGE_META = {
   // row rather than after someone notices a wire identifier.
   plaid: { label: "Bank sync (Plaid)" },
   "fetch-page": { label: "Page fetched for Learn" },
-  "discord-board": { label: "Discord command" },
-  "board-work-background": { label: "Discord board work" },
   "upstream-run-background": { label: "UPSTREAM run" },
   // Model calls (kind = 'anthropic')
   chief: { label: "Chief · chat reply" },
@@ -140,9 +140,14 @@ const humanize = (fn) => String(fn || "").split("/")
   .map(part => part.replace(/_/g, " ").replace(/^./, c => c.toUpperCase()))
   .join(" · ");
 
-// Discord writes fn as `discord_<stage>`, so the stage is data, not a fixed key.
-const usageLabel = (fn) => USAGE_META[fn]?.label
-  || (/^discord_/.test(fn || "") ? `Discord · ${String(fn).slice(8).replace(/_/g, " ")}` : humanize(fn));
+// humanize() is the fallback, not blank: an fn nobody labelled reads as its own
+// words rather than vanishing. That mattered for the retired Discord path, which
+// wrote `discord_<stage>` — a family rather than a fixed key — and had a prefix
+// branch here. Both are gone, and nothing is lost by their going: that path never
+// wrote a row in production, so there is no history to keep legible. Should any
+// `discord_*` row ever turn up from a database restore, humanize() renders it as
+// "Discord chief" rather than swallowing it.
+const usageLabel = (fn) => USAGE_META[fn]?.label || humanize(fn);
 
 // The raw id rides under every row so a line here is greppable against the code
 // that wrote it — but only when it says something the label didn't. Printing

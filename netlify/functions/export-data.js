@@ -137,7 +137,7 @@ function noteFailure(ip, now) {
 // so the lengths are compared first. That comparison is not constant time and does
 // not need to be: the length of the secret is not the secret, and an attacker who
 // learns it still has to guess its bytes. Same shape as secretOk() in
-// board-work-background.js and hopSecretOk() in stock-settle-background.js.
+// hopSecretOk() in stock-settle-background.js.
 function secretOk(presented, expected) {
   const a = Buffer.from(String(presented == null ? "" : presented), "utf8");
   const b = Buffer.from(String(expected), "utf8");

@@ -12,9 +12,11 @@
 //
 //  1. A SPENDER THAT DOESN'T LOG. Three functions billed the Anthropic key and
 //     wrote nothing: audit and auto-fix appeared as kind:"call" rows at $0, and
-//     board-work-background (the Discord path) left no row at all. Adding a
-//     fourth is a one-line fetch; forgetting the usage_log write beside it is
-//     just as easy, and nothing downstream would complain.
+//     the Discord board worker left no row at all — that third one is gone from
+//     the repo now, retired with the feature, but it is the reason this check
+//     discovers its callers instead of trusting a list. Adding a spender is a
+//     one-line fetch; forgetting the usage_log write beside it is just as easy,
+//     and nothing downstream would complain.
 //  2. PRICING DRIFT. The rate table is duplicated FOUR times and cannot be
 //     shared: under this repo's "type":"module" + esbuild bundling, a required
 //     helper's module.exports clobbers a function bundle's exports and it
@@ -47,7 +49,6 @@ const CALLERS = [
   "netlify/functions/claude.js",
   "netlify/functions/audit.js",
   "netlify/functions/auto-fix.js",
-  "netlify/functions/board-work-background.js",
   "netlify/functions/mini-worker.js",
   "netlify/lib/upstream/llm.js",
 ];
@@ -97,7 +98,6 @@ const LAYER_TABLES = [
   "netlify/functions/mini-worker.js",
   "netlify/functions/audit.js",
   "netlify/functions/auto-fix.js",
-  "netlify/functions/board-work-background.js",
 ];
 /** Pull `haiku: { in: 1, out: 5, ... }` rows out of a PRICING literal. */
 function layerRates(src) {
