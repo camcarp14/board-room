@@ -232,7 +232,14 @@ begin
       'strategy',   v_strategy,
       'applied',    false,
       'stale',      true,
-      'reason',     'changed on another device',
+      -- NOT "changed on another device". This function knows the row's revision
+      -- moved after the writer read it; it does not know WHO moved it, and it
+      -- cannot — the writer's own earlier write moves it too. Naming a device
+      -- here is a claim nothing verified, and a client that built an error
+      -- message out of this string would put that claim in front of the user.
+      -- (db.js deliberately ignores this field for exactly that reason; it is
+      -- kept for the function log, where a wrong actor is merely unhelpful.)
+      'reason',     'the stored revision moved after this writer read it',
       'value',      v_cur,
       'updated_at', v_cur_at
     );

@@ -148,6 +148,30 @@ button:active:not(:disabled) { transform: scale(0.97); }
    ever added to that cluster, this number moves with it. */
 .cbar-mirror { flex: none; width: 82px; }
 .cbar > .nav-actions { flex: none; }
+/* ── the other half of that hand-off ─────────────────────────────────────────
+   The controls above are the SAME NODE the large title renders (MobileShell), and
+   .cbar's visibility rule only made one of the two copies honest. The large
+   title's copy is merely scrolled out of the scrollport, which hides nothing from
+   the tab order or from VoiceOver — so for as long as the bar was up, every page
+   carried two Settings and two Refresh, VoiceOver read both, and tabbing to the
+   offscreen pair scrolled the page back to the top. It gets hidden the same way
+   now, for exactly as long as the bar is the one in charge.
+
+   NO TRANSITION, AND THE OVERLAP THAT LEAVES IS THE DELIBERATE HALF. Both copies
+   sit in the same 48px band at the top of the scrollport, and .cbar crosses that
+   band by fading — so hiding this copy on the bar's clock instead of on compactOn's
+   (a 0s change delayed by --dur-2 is the way to do it) means that on the way back
+   the icons fade to nothing and then snap in: a blink of the two most-used controls
+   in the app, every time you scroll to the top. Handing over instantly costs the
+   other thing instead: while the bar spends --dur-2 fading OUT, both copies are
+   briefly in the tab order — the same two buttons, in the same place, showing the
+   same thing, mid-crossfade. That is the trade, and it is the right way round.
+   Nothing pops on the way IN: the controls' box ends 0.8px above the large title's
+   own baseline box, so they have already left the scrollport by the time the
+   sentinel says so (see MobileShell's observer note). */
+.lt-actions { display: inline-flex; align-items: center; }
+.lt-actions.handed-off { visibility: hidden; }
+
 .cbar-title {
   flex: 1; min-width: 0; text-align: center;
   font-size: 16px; font-weight: 600; letter-spacing: -0.01em; color: var(--ink);
@@ -755,6 +779,9 @@ kbd {
      the property, not just the duration, so `visibility` flips cleanly in both
      directions instead of riding out a 0.01ms discrete transition. */
   .cbar { transition: none; }
+  /* .lt-actions needs nothing here on purpose: it carries no transition at all, so
+     the hand-off is already instant in both directions and there is no fade left
+     for the other copy to be out of step with. */
   /* Pull-to-refresh keeps the gesture, the gauge and the honest progress; what
      it loses is the rubber band. MobileShell reads this same query before it
      writes .ptr-wrap's transform, so the page never travels at all — and these

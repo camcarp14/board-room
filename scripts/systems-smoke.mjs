@@ -37,10 +37,20 @@
 // refuses outright or a write that quietly goes back to overwriting the whole
 // value. Neither is visible from the app.
 //
-// Text-based (the sources are JSX; there is no bundler here), like
-// brief-order-smoke.mjs.
+// Sections 1–7 are text-based (the sources are JSX; there is no bundler here),
+// like brief-order-smoke.mjs. SECTION 8 IS NOT, and the reason is written at the
+// top of it: four data-loss paths in the settings write/retry machinery all read
+// fine and all fail the moment responses arrive in an inconvenient order, so db.js
+// is bundled with esbuild against a stubbed client and the reproductions are
+// replayed — the same trick ambient-smoke.mjs uses for the sheet gesture.
+//
+// Run by `npm run verify`.
 
 import { readFileSync, readdirSync, existsSync } from "node:fs";
+import { rm as rmFile } from "node:fs/promises";
+import { pathToFileURL } from "node:url";
+import path from "node:path";
+import { build } from "esbuild";
 
 let failed = 0;
 const check = (label, cond, detail = "") => {
@@ -320,20 +330,43 @@ check("it calls the rpc, once", (mergeBody.match(/supabase\.rpc\(/g) || []).leng
 // compare-and-set into a coin toss the writer always loses.
 check("it claims the revision it last saw", /at: base\?\.at \?\? null/.test(mergeBody) && /p_expected_updated_at: sent\.at/.test(mergeBody));
 check("…and holds that revision as the string Postgres sent it",
-  /lastSeen\.set\(key, \{ value: data\.value, at: data\.updated_at \}\)/.test(mergeBody) && !/new Date\(/.test(mergeBody));
+  /lastSeen\.set\(key, \{ value: data\.value, at: data\.updated_at \}\)/.test(dataDb) && !/new Date\(data\./.test(dataDb));
+// THE BASELINE HAS ONE MOVER IN THE WRITE PATH. This is the structural half of the
+// fix for the retry that advanced lastSeen and told nobody: adopted() assigns the
+// map and announces in the same function, so there is no way to reach one without
+// the other. loadSettings is the only other setter allowed, and it needs no
+// announcement because the row it is seeding from IS its return value — the caller
+// cannot receive the baseline without receiving the settings it belongs to. A third
+// one anywhere is that bug's door propped back open.
+const setters = [...dataDb.matchAll(/^.*lastSeen\.set\(.*$/gm)].map((m) => m[0].trim());
+check("the baseline moves in exactly two places", setters.length === 2, setters.join(" | "));
+check("…and the one that is not the full read is adopted()",
+  setters.filter((s) => /r\.setting_key/.test(s)).length === 1 &&
+  setters.filter((s) => /data\.updated_at/.test(s)).length === 1, setters.join(" | "));
+check("…and it announces in the same function",
+  /function adopted\(key, data\) \{\s*\n\s*lastSeen\.set\(key, \{ value: data\.value, at: data\.updated_at \}\);[\s\S]*?tell\(\{ kind: "adopt"/.test(dataDb));
 // A retry has to re-send the SAME claim. Recomputing it would quietly turn "save
 // mine again" into "save mine over whatever is there now", which is the bug.
 check("a retry re-claims the revision the first attempt was built for",
   /let sent = null;/.test(mergeBody) && /if \(!sent\) \{/.test(mergeBody) && /p_patch: sent\.patch/.test(mergeBody));
 // The write that was already queued behind a refusal was built on the value that
 // got replaced. It must refuse itself rather than land.
-check("an array write built on a version another device replaced is never sent",
-  /strategy === "replace" && !sent && \(foreignMoves\.get\(key\) \|\| 0\) !== gen/.test(mergeBody) &&
-  /foreignMoves\.set\(key, \(foreignMoves\.get\(key\) \|\| 0\) \+ 1\)/.test(mergeBody));
+check("an array write built on a revision that has since been replaced is never sent",
+  /strategy === "replace" && !sent && movesOf\(key\) !== gen/.test(mergeBody) &&
+  /countMove\(key, data\.updated_at\)/.test(mergeBody));
+// The move counter is keyed by the REVISION that beat us, so this device's own
+// Retry — which re-sends the same claim and is refused by the same revision — is
+// one move met twice rather than two moves. Counting it twice armed the guard
+// above against the next legitimate edit, which was then dropped unsent.
+check("a move is counted once per revision, not once per refusal",
+  /const countMove = \(key, at\) => \{[\s\S]*?if \(seen && seen\.at === at\) return;/.test(dataDb));
 // Adopting on a refusal too: the value that beat us is the one the screen should
 // show, and leaving the refused edit up would be a list the database does not have.
+// It leaves through settingsNews rather than the return value — see section 8.
 check("what comes back is adopted whenever the row had moved, refused or not",
-  /adopt: !!data\.stale/.test(mergeBody));
+  /if \(!data\.stale\) return false;\s*\n\s*tell\(\{ kind: "adopt", key, value: data\.value \}\);/.test(dataDb));
+check("mergeSetting hands back no second copy of the adopt to be used instead",
+  !/\badopt\s*:/.test(mergeBody), (mergeBody.match(/.*\badopt\s*:.*/g) || []).join(" | ").slice(0, 120));
 check("loadSettings reads updated_at, or there is no revision to claim",
   /select\("setting_key,setting_value,updated_at"\)/.test(dataDb));
 // One store for failed writes, one entry per setting. A refusal filed under a key
@@ -352,10 +385,25 @@ check("merges to the same key go out one at a time", /queued\(key,/.test(mergeBo
 
 // App routes only the allowlisted keys, and adopts what comes back.
 check("App routes the merging keys through mergeSetting",
-  /if \(MERGING_SETTINGS\[key\]\) \{\s*\n\s*const res = await db\.mergeSetting\(key, value\);/.test(app));
+  /if \(MERGING_SETTINGS\[key\]\) return await db\.mergeSetting\(key, value\);/.test(app));
 check("…and every other setting keeps the plain upsert", /return await db\.saveSetting\(key, value\);/.test(app));
-check("App adopts the merged value when the row had moved under it",
-  /if \(res\?\.adopt\) setSettings\(prev => \(\{ \.\.\.\(prev \|\| \{\}\), \[key\]: res\.value \}\)\)/.test(app));
+// ONE PLACE PAINTS THE ADOPT, and it is not the return value. Reading res.adopt
+// covered the write in front of you and missed the chip's Retry entirely, which is
+// how the baseline advanced while the screen stood still.
+check("App adopts over the news channel, so a retry repaints too",
+  /settingsNews\.subscribe\(/.test(app) &&
+  /news\.kind === "adopt"/.test(app) &&
+  /setSettings\(prev => \(prev \? \{ \.\.\.prev, \[news\.key\]: news\.value \} : prev\)\)/.test(app));
+check("…and nothing in App reads an adopt off mergeSetting's return", !/res\?\.adopt/.test(app));
+// The pre-migration fallback is visible or it is the old silent overwrite with
+// better paperwork. The write SAVED, so it must not be filed as a failure — a
+// notice is the only honest shape.
+check("the unprotected write says so on screen, naming the migration to run",
+  /news\.kind === "unprotected"/.test(app) && /unprotectedKey && \(/.test(app) &&
+  /0033_settings_merge_rpc\.sql/.test(app));
+check("…in the toast stack, with no hardcoded colour",
+  /className="toasts"/.test(app) && /var\(--amber\)/.test(app) &&
+  !/#[0-9a-fA-F]{3,8}\b/.test(app.match(/\{unprotectedKey && \([\s\S]*?\n      \)\}/)?.[0] || ""));
 check("signing out forgets which revision this device had seen",
   /db\.forgetSettings\(\)/.test(app) && /forgetSettings\(\) \{ lastSeen\.clear\(\); foreignMoves\.clear\(\); \}/.test(dataDb));
 
@@ -451,6 +499,255 @@ check("zero crashes reads as a sentence, not an empty row",
   /Nothing has thrown since this build went out\./.test(systems));
 check("the crash row sits in the card with the build stamp it describes",
   systemsCode.includes("<CrashRow />") && systemsCode.indexOf("<CrashRow />") < systemsCode.indexOf("Build {BUILD}"));
+
+/* ── 8. THE WRITE MACHINERY, EXECUTED ─────────────────────────────────────────
+   Everything above is text, and text was not enough. Four data-loss paths lived
+   in the code section 6 checks — all four of them reachable by reading the file
+   and concluding it was fine, all four of them obvious the moment the thing is
+   RUN with responses arriving in an inconvenient order:
+
+     1. The chip's Retry advanced this device's baseline and told nobody, so the
+        NEXT edit claimed a revision the screen had never seen. The compare-and-set
+        passed, the write landed, the chip cleared, and another device's work was
+        gone under a green "saved".
+     2. The guard against sending an array built on a replaced revision counted
+        this device's own Retry as somebody else's edit, then dropped the next
+        legitimate edit WITHOUT SENDING IT and blamed "another device" for it.
+     3. Failures coalesced on whichever attempt SETTLED last rather than the newest
+        one, so on a flaky link the Retry saved the value you dragged away from.
+     4. Both merging keys routed exclusively at an rpc that does not exist until
+        0033 is pasted in by hand, so they stopped saving at all in the window
+        before that — keys that upserted fine for a year.
+
+   A grep for a variable name catches none of these. So db.js is bundled with
+   esbuild (bare Node cannot resolve its Vite-style import.meta.env dependency),
+   lib/supabase.js is replaced with a stub whose responses this file decides, and
+   the reproductions are replayed — including a fake App that adopts exactly the
+   way src/App.jsx does, because two of the four are only visible from up there. */
+const dbMod = await (async () => {
+  const out = path.resolve(".systems-smoke-db.tmp.mjs");
+  // The stub is not a file on disk: a plugin answers for lib/supabase.js, which
+  // keeps the fake next to the assertions that depend on its shape. Everything it
+  // exposes is delegated to globalThis.__srv so each scenario can rewrite the
+  // server's behaviour between calls without re-importing the module under test —
+  // module state (the baseline, the move counter, the failure store) has to
+  // survive from one step of a reproduction to the next, exactly as it does in a
+  // browser tab.
+  const stub = `
+    export const ANTHROPIC_API_KEY = "";
+    export const supabase = {
+      auth: { getUser: async () => ({ data: { user: { id: "smoke-user" } } }) },
+      from: (t) => globalThis.__srv.from(t),
+      rpc: (n, a) => globalThis.__srv.rpc(n, a),
+    };
+  `;
+  await build({
+    entryPoints: ["src/data/db.js"], bundle: true, platform: "node", format: "esm",
+    outfile: out, logLevel: "error",
+    plugins: [{
+      name: "stub-supabase",
+      setup(b) {
+        b.onResolve({ filter: /lib\/supabase\.js$/ }, () => ({ path: "supabase-stub", namespace: "stub" }));
+        b.onLoad({ filter: /.*/, namespace: "stub" }, () => ({ contents: stub, loader: "js" }));
+      },
+    }],
+  });
+  try { return await import(pathToFileURL(out).href); }
+  finally { await rmFile(out, { force: true }); }
+})();
+const { db: DB, writeFailures: WF, settingsNews } = dbMod;
+check("db.js is importable with a stubbed client",
+  typeof DB?.mergeSetting === "function" && typeof WF?.retryAll === "function" && typeof settingsNews?.subscribe === "function");
+
+const srv = { upserts: [], rpcs: [], onSelect: null, onUpsert: null, onRpc: null };
+globalThis.__srv = {
+  from: () => ({
+    select: () => Promise.resolve(srv.onSelect ? srv.onSelect() : { data: [], error: null }),
+    upsert: (row) => Promise.resolve(srv.onUpsert ? srv.onUpsert(row) : { error: null }).then((r) => { srv.upserts.push(row); return r; }),
+  }),
+  rpc: (name, args) => { srv.rpcs.push(args); return Promise.resolve(srv.onRpc ? srv.onRpc(args) : { data: null, error: null }); },
+};
+
+// The fake App: it does what src/App.jsx does and nothing else — paint the
+// optimistic value, then paint whatever the news channel says was adopted.
+const screen = {};
+const notices = [];
+settingsNews.subscribe((n) => {
+  if (n.kind === "adopt") screen[n.key] = n.value;
+  else notices.push(n);
+});
+const edit = async (key, value) => { screen[key] = value; return DB.mergeSetting(key, value); };
+const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+const reset = () => {
+  WF.clearAll(); DB.forgetSettings();
+  srv.upserts = []; srv.rpcs = []; srv.onSelect = null; srv.onUpsert = null; srv.onRpc = null;
+  notices.length = 0;
+  for (const k of Object.keys(screen)) delete screen[k];
+};
+const seed = async (key, value, at) => {
+  srv.onSelect = () => ({ data: [{ setting_key: key, setting_value: value, updated_at: at }], error: null });
+  screen[key] = value;
+  return DB.loadSettings();
+};
+const applied = (value, at) => ({ data: { key: "k", applied: true, stale: false, value, updated_at: at }, error: null });
+const refused = (value, at) => ({ data: { key: "k", applied: false, stale: true, value, updated_at: at }, error: null });
+const entryFor = (key) => WF.list().find((f) => f.key === `setting:${key}`);
+
+// ── 8a. THE RETRY THAT MOVED THE BASELINE AND TOLD NOBODY ─────────────────────
+// iPad archives an item, the request dies on the wire, the chip says 1 unsaved.
+// The phone parks a thought. Retry is refused — correctly — and everything now
+// depends on the refusal reaching the screen, because it carries the row that beat
+// it AND it is what the next edit will be diffed against.
+reset();
+await seed("ponder_items", ["a", "b"], "R1");
+srv.onRpc = () => ({ data: null, error: { message: "Failed to fetch", code: "" } });
+let r = await edit("ponder_items", ["b"]);
+check("a merge that dies on the wire is reported and filed", r.ok === false && !!entryFor("ponder_items"));
+srv.onRpc = () => refused(["c", "a", "b"], "R2");
+await WF.retryAll();
+check("THE RETRY'S REFUSAL REACHES THE SCREEN", same(screen.ponder_items, ["c", "a", "b"]), JSON.stringify(screen.ponder_items));
+check("…and the refused retry is still on the chip", !!entryFor("ponder_items"));
+// The next real edit, built on what was adopted. This is the assertion the old code
+// failed: it sent ["d","b"], claimed R2, and passed the compare-and-set.
+srv.rpcs = [];
+srv.onRpc = (args) => applied(args.p_patch, "R3");
+r = await edit("ponder_items", ["d", ...screen.ponder_items]);
+check("the next edit claims the revision that was adopted", srv.rpcs[0]?.p_expected_updated_at === "R2", String(srv.rpcs[0]?.p_expected_updated_at));
+check("…and carries the thought the other device parked",
+  same(srv.rpcs[0]?.p_patch, ["d", "c", "a", "b"]), JSON.stringify(srv.rpcs[0]?.p_patch));
+check("…and lands, clearing the chip", r.applied === true && !entryFor("ponder_items"));
+
+// finance_rules is the worse half: the retry SUCCEEDS, so without the adopt nothing
+// ever appears on screen and the following edit patches Delta out with a null.
+reset();
+await seed("finance_rules", { Kroger: "grocery" }, "R1");
+srv.onRpc = () => ({ data: null, error: { message: "Failed to fetch", code: "" } });
+await edit("finance_rules", { Kroger: "grocery", Shell: "gas" });
+srv.onRpc = () => ({ data: { applied: true, stale: true, value: { Kroger: "grocery", Delta: "travel", Shell: "gas" }, updated_at: "R2" }, error: null });
+await WF.retryAll();
+check("a retry that SUCCEEDS with a merged value repaints too",
+  same(screen.finance_rules, { Kroger: "grocery", Delta: "travel", Shell: "gas" }), JSON.stringify(screen.finance_rules));
+srv.rpcs = [];
+srv.onRpc = (args) => applied(args.p_patch, "R3");
+await edit("finance_rules", { ...screen.finance_rules, Kroger: "dining" });
+check("…so the next patch changes one rule and deletes none",
+  same(srv.rpcs[0]?.p_patch, { Kroger: "dining" }), JSON.stringify(srv.rpcs[0]?.p_patch));
+
+// ── 8b. THE GUARD MUST NOT FIRE ON THIS DEVICE'S OWN RETRY ────────────────────
+// A refused write sits in the chip. Retry, then archive something 5ms later while
+// the retry is still in flight — the exact sequence that used to drop the archive
+// without sending it and blame a device that had done nothing.
+reset();
+await seed("ponder_items", ["a", "b"], "R1");
+srv.onRpc = () => refused(["c", "a", "b"], "R2");
+await edit("ponder_items", ["b"]);
+check("the first refusal is adopted and filed", same(screen.ponder_items, ["c", "a", "b"]) && !!entryFor("ponder_items"));
+// The retry re-sends the SAME claim, so it is refused again by the SAME revision —
+// one move, met twice. Anything else the server sees here is a write built on what
+// was adopted, and there is nothing stale about it: R2 is still the row.
+srv.onRpc = async (args) => {
+  await sleep(30);
+  return same(args.p_patch, ["b"]) ? refused(["c", "a", "b"], "R2") : applied(args.p_patch, "R3");
+};
+const retrying = WF.retryAll();
+await sleep(5);
+srv.rpcs = [];
+const archive = edit("ponder_items", screen.ponder_items.slice(1));
+await Promise.all([retrying, archive]);
+const arch = await archive;
+check("AN EDIT MADE DURING A RETRY IS ACTUALLY SENT", srv.rpcs.length === 1, `${srv.rpcs.length} rpc call(s)`);
+check("…claiming the revision the retry re-confirmed", srv.rpcs[0]?.p_expected_updated_at === "R2", String(srv.rpcs[0]?.p_expected_updated_at));
+check("…and it is not reported as a failure", arch.ok === true, JSON.stringify(arch.error?.message || ""));
+
+// The guard still exists for the case it was written for: a write queued behind one
+// that comes back refused was built on a revision that has since been replaced.
+reset();
+await seed("ponder_items", ["a", "b"], "R1");
+let hold = null;
+srv.onRpc = () => new Promise((res) => { hold = () => res(refused(["c", "a", "b"], "R2")); });
+const first = DB.mergeSetting("ponder_items", ["b"]);
+await sleep(5);
+srv.rpcs = [];
+const second = DB.mergeSetting("ponder_items", ["a"]);
+await sleep(5);
+hold();
+const [r1, r2] = [await first, await second];
+check("a write queued behind a refusal refuses itself", r1.ok === false && r2.ok === false);
+check("…without sending anything", srv.rpcs.length === 0, `${srv.rpcs.length} rpc call(s)`);
+check("…and says so without naming a cause it never checked",
+  /wasn't saved/.test(r2.error?.message || "") && !/another device/i.test(r2.error?.message || ""), r2.error?.message || "");
+check("a plain refusal names no cause either",
+  !/another device/i.test(r1.error?.message || ""), r1.error?.message || "");
+// Belt and braces on the message: the strings in db.js may not blame a device.
+// Comments are stripped, because this file explains the bug in prose at length and
+// prose about a lie is not a lie.
+const dbCode = dataDb.replace(/\/\*[\s\S]*?\*\//g, "").replace(/(^|[^:\w])\/\/[^\n]*/g, "$1");
+check("no message in db.js blames another device", !/another device/i.test(dbCode),
+  (dbCode.match(/.*another device.*/i) || []).join(" ").slice(0, 120));
+
+// ── 8c. COALESCING IS ON THE NEWEST ATTEMPT, NOT THE NEWEST FAILURE ───────────
+// Two tab-bar drops in a burst, both failing, the FIRST one's response arriving
+// LAST. saveSetting has no per-key queue, so this is genuinely concurrent.
+reset();
+const settled = [];
+srv.onUpsert = async (row) => {
+  await sleep(row.setting_value === "dragged-away-from" ? 40 : 5);
+  settled.push(row.setting_value);
+  return { error: { message: "offline", code: "" } };
+};
+const a = DB.saveSetting("navigation", "dragged-away-from");
+await sleep(1);
+const b = DB.saveSetting("navigation", "what-you-meant");
+await Promise.all([a, b]);
+check("the older attempt really did settle last", same(settled, ["what-you-meant", "dragged-away-from"]), settled.join(","));
+check("one failure entry for the key, not two", WF.list().filter((f) => f.key === "setting:navigation").length === 1);
+srv.upserts = [];
+srv.onUpsert = null; // the link comes back
+await entryFor("navigation").retry();
+check("THE RETRY SENDS WHAT YOU LAST MEANT", srv.upserts[0]?.setting_value === "what-you-meant", String(srv.upserts[0]?.setting_value));
+check("…and the chip clears once it lands", !entryFor("navigation"));
+
+// The mirror image: a superseded attempt that eventually SUCCEEDS must not clear a
+// newer attempt's chip, or the one sign that the value on screen never saved goes
+// away.
+reset();
+srv.onUpsert = async (row) => {
+  await sleep(row.setting_value === "old" ? 40 : 5);
+  return row.setting_value === "old" ? { error: null } : { error: { message: "offline", code: "" } };
+};
+await Promise.all([DB.saveSetting("navigation", "old"), (await sleep(1), DB.saveSetting("navigation", "new"))]);
+check("a late success does not clear a newer failure", !!entryFor("navigation"));
+
+// ── 8d. IT STILL SAVES BEFORE 0033 IS PASTED IN ───────────────────────────────
+// PostgREST answers PGRST202 for an rpc it has never heard of. Both keys upserted
+// fine before this branch; a fix that stops them saving is not a fix.
+reset();
+await seed("finance_rules", { Kroger: "grocery" }, "R1");
+srv.onRpc = () => ({ data: null, error: { code: "PGRST202", message: "Could not find the function boardroom.settings_merge(p_expected_updated_at, p_key, p_patch) in the schema cache" } });
+r = await edit("finance_rules", { Kroger: "grocery", Shell: "gas" });
+check("a missing settings_merge falls back to the old upsert", r.ok === true && srv.upserts.length === 1);
+check("…sending the WHOLE value, not the patch the rpc wanted",
+  same(srv.upserts[0]?.setting_value, { Kroger: "grocery", Shell: "gas" }), JSON.stringify(srv.upserts[0]?.setting_value));
+check("…filing no failure for a write that saved", !entryFor("finance_rules"));
+check("…and SAYING the protection is not active yet",
+  notices.some((n) => n.kind === "unprotected" && n.key === "finance_rules" && /0033/.test(n.migration || "")), JSON.stringify(notices));
+check("…which the caller can also see on the result", r.unprotected === true);
+// THE HALF THAT MATTERS MORE. A stale-write refusal must never reach the fallback:
+// upserting the whole value there is precisely the overwrite 0033 exists to refuse.
+reset();
+await seed("ponder_items", ["a", "b"], "R1");
+srv.onRpc = () => refused(["c", "a", "b"], "R2");
+r = await edit("ponder_items", ["b"]);
+check("A REFUSAL NEVER FALLS BACK TO THE BLIND UPSERT", srv.upserts.length === 0, `${srv.upserts.length} upsert(s)`);
+check("…it is reported as the failure it is", r.ok === false && r.applied === false && !!entryFor("ponder_items"));
+check("…and no unprotected notice is invented for it", notices.length === 0, JSON.stringify(notices));
+// Any other rpc error is still a failure, not an excuse to overwrite the row.
+reset();
+await seed("ponder_items", ["a", "b"], "R1");
+srv.onRpc = () => ({ data: null, error: { code: "42501", message: "new row violates row-level security policy" } });
+r = await edit("ponder_items", ["b"]);
+check("an RLS refusal does not fall back either", r.ok === false && srv.upserts.length === 0);
 
 console.log(failed ? `\n${failed} systems check(s) failed` : "\nsystems: all checks passed");
 process.exit(failed ? 1 : 0);

@@ -194,6 +194,45 @@ async function harness() {
   }).catch(() => {});
   const draw = (qc, el) => renderToString(React.createElement(QueryClientProvider, { client: qc }, el));
 
+  // ── staging a state that only a tap can otherwise reach ────────────────────
+  // Some of what a panel says lives behind a control. CryptoPanel's explanation
+  // of the pending 4h/12h windows renders only while the board is SORTED by one
+  // of them, and `sort` is a useState inside the component — there is no prop for
+  // it, and renderToString dispatches no events, so from the outside that
+  // sentence is unreachable. That is exactly how its check came to be written as
+  // a disjunction that asserted nothing: the state it was about was never staged.
+  //
+  // What makes it reachable: React resolves every hook through
+  // ReactCurrentDispatcher, and the server renderer writes that slot on each
+  // render. So for exactly one render, a useState whose initial value is `from`
+  // is answered with `to`. This is the component's OWN state hook, seeded — not a
+  // fabricated result object, which is the same distinction the note above
+  // `stage` draws about query state.
+  //
+  // THE SEED IS COUNTED AND EVERY CALLER ASSERTS THE COUNT. A seeder that
+  // silently stopped matching would turn its check back into a check of the
+  // DEFAULT state, quietly, which is the failure this whole file is being edited
+  // for. The dispatcher is COPIED rather than mutated: react-dom hands the same
+  // object to every render in the process, so writing onto it would leak this
+  // seed into every check below it.
+  const drawSeeded = (qc, el, from, to) => {
+    const slot = React.__SECRET_INTERNALS_DO_NOT_USE_OR_YOU_WILL_BE_FIRED?.ReactCurrentDispatcher;
+    if (!slot) return { html: "", seeded: 0 };
+    const original = Object.getOwnPropertyDescriptor(slot, "current");
+    let live = slot.current, seeded = 0;
+    Object.defineProperty(slot, "current", {
+      configurable: true,
+      get: () => live,
+      set: (d) => {
+        live = d && typeof d.useState === "function"
+          ? { ...d, useState: (init) => (init === from ? (seeded++, d.useState(to)) : d.useState(init)) }
+          : d;
+      },
+    });
+    try { return { html: draw(qc, el), seeded }; }
+    finally { Object.defineProperty(slot, "current", original); }
+  };
+
   // ── reading the html ───────────────────────────────────────────────────────
   // THE HOUSE HAS ONE VOICE FOR NUMBERS: .t-num, plus the StatTile's own value
   // and delta spans. Testing for that rather than "does a digit appear anywhere"
@@ -521,9 +560,32 @@ async function harness() {
 
     // THE ONE THAT SHIPPED BROKEN: data wins over isError, so a failed refresh
     // used to leave four confident prices on screen saying nothing.
-    const staleQuotes = await stocks({ seed: [[QUOTES, quotes]], broken: [[SCAN, "HTTP 502"]] });
-    check("Stocks · quotes on screen with the screener down still says the screener failed",
-      staleQuotes.includes("Refresh failed") || staleQuotes.includes("Retry"));
+    //
+    // AND THEN THE CHECK SHIPPED BROKEN TOO. It read
+    // `includes("Refresh failed") || includes("Retry")`, and in this fixture the
+    // screener card always renders a FallbackRow, which always renders a Retry
+    // button — so the second half was unconditionally true and the whole
+    // assertion was satisfied by the existence of a button. Proven by replacing
+    // the panel's detail with the literal "Running the screener — a full pass
+    // takes a couple of minutes.", the fabricated progress message the comment
+    // two lines above it forbids: the check named "still says the screener
+    // failed" reported ok while the card claimed a pass was in flight.
+    //
+    // So the failure is seeded with a sentence nothing else in this panel can
+    // produce, and read back off the screen. `text()` rather than the raw html,
+    // because the detail arrives inside a template with the message interpolated.
+    const SCAN_DOWN = "stock-scan answered 502 and the pass never landed";
+    const staleQuotes = await stocks({ seed: [[QUOTES, quotes]], broken: [[SCAN, SCAN_DOWN]] });
+    const staleQuotesText = text(staleQuotes);
+    check("Stocks · quotes on screen with the screener down says what the screener actually did",
+      staleQuotesText.includes(SCAN_DOWN), `got ${JSON.stringify(staleQuotesText.slice(0, 300))}`);
+    // The other half of the same rule: nothing may invent a friendlier state than
+    // the one the query is in. Neither a run in progress nor a run that timed out
+    // is true here — the read simply failed.
+    check("Stocks · …and never dresses that failure as a run in progress",
+      !/Running the screener|takes a couple of minutes|didn't finish inside/.test(staleQuotesText),
+      `got ${JSON.stringify(staleQuotesText.slice(0, 300))}`);
+    check("Stocks · …and still offers a retry", staleQuotes.includes("Retry"));
     check("Stocks · the last good prices are kept, not blanked", staleQuotes.includes("$184.22"));
 
     // The same key holding data AND an error — the exact shape of a refresh that
@@ -551,7 +613,10 @@ async function harness() {
     // has no room for a fallback row.
     const noRead = await stocks({ seed: [[QUOTES, quotes], [SCAN, { ...settled, regime: { phase: null, label: null, score: null } }]] });
     const noReadStrip = card(noRead, "No read", "Flags");
-    check("Stocks · a regime with no score prints no score", !numbersIn(noReadStrip),
+    // The `!== ""` belongs in the same condition as the negative it guards: it was
+    // asserted one check later, which left this one able to pass because the strip
+    // had vanished.
+    check("Stocks · a regime with no score prints no score", noReadStrip !== "" && !numbersIn(noReadStrip),
       `number voice rendered: ${JSON.stringify((noReadStrip.match(NUMBER_VOICE) || [])[0])}`);
     check("Stocks · a regime with no score says why, and does not offer a Why",
       text(noRead).includes("The score publishes once the screener has breadth to measure") && noReadStrip !== "" && !noReadStrip.includes(">Why<"),
@@ -619,8 +684,13 @@ async function harness() {
     const pulse = card(down, "Market pulse", "Alt season read lives in the Alt Season tab");
     check("Crypto · the market-pulse card prints no number while its scan is down",
       pulse !== "" && !numbersIn(pulse), `number voice rendered: ${JSON.stringify((pulse.match(NUMBER_VOICE) || [])[0])}`);
+    // `card()` returns "" for a heading it cannot find, and "" contains no number
+    // — so every negative assertion about one card has to say that it FOUND the
+    // card first. The same shape as the disjunctions further down: an assertion
+    // satisfied by its own subject going missing.
+    const boardDown = card(down, "Board", "Market pulse");
     check("Crypto · the board card prints no number while its scan is down",
-      !numbersIn(card(down, "Board", "Market pulse")));
+      boardDown !== "" && !numbersIn(boardDown), `number voice rendered: ${JSON.stringify((boardDown.match(NUMBER_VOICE) || [])[0])}`);
     check("Crypto · a down scan does not take the BTC hero with it", down.includes("118,420"));
     check("Crypto · a down scan offers a retry", down.includes("Retry"));
     // This row used to read "showing the last good scan" whenever the query
@@ -637,7 +707,9 @@ async function harness() {
       SKELETON.test(card(loading, "Board", "Market pulse")) && SKELETON.test(card(loading, "Market pulse", "Alt season read lives")));
     check("Crypto · a loading BTC hero shows an ellipsis, never a zero",
       text(loading).includes("…") && !/\$0\b/.test(text(loading)));
-    check("Crypto · loading prints no stat tile", !card(loading, "Market pulse", "Alt season read lives").includes("stattile-value"));
+    const pulseLoading = card(loading, "Market pulse", "Alt season read lives");
+    check("Crypto · loading prints no stat tile",
+      pulseLoading !== "" && !pulseLoading.includes("stattile-value"));
 
     const empty = await crypto({ seed: [[SCAN, scan]] });
     check("Crypto · an empty board says so in words, not blank space",
@@ -646,8 +718,46 @@ async function harness() {
       text(empty).includes("57.4%") && text(empty).includes("$3.42T"));
     // Our own derived windows are absent until the snapshot series is old
     // enough, and the panel says so rather than drawing zeros.
-    check("Crypto · pending 4h/12h windows are explained, not zeroed",
-      text(empty).includes("measured once the series is old enough") || !text(empty).includes("+0.0%"));
+    //
+    // THIS CHECK ASSERTED NOTHING AT ALL. It was
+    // `includes("measured once the series is old enough") || !includes("+0.0%")`
+    // against the empty-board fixture above — where the explanation cannot render
+    // (it is behind sort 4h/12h) and there is no row to print a +0.0% in, so the
+    // first half was false, the second was trivially true, and deleting the whole
+    // explanatory block left it green. Both halves are staged now: a board with
+    // rows whose 4h and 12h are genuinely null, and the sort those windows live
+    // under.
+    const pendingBoard = {
+      ...scan,
+      board: [
+        { id: "ethereum", symbol: "ETH", name: "Ethereum", price: 3120, mcap: 3.7e11, chg4h: null, chg12h: null, chg24h: 1.4, chg7d: -3.2, chg30d: 8.1 },
+        { id: "solana", symbol: "SOL", name: "Solana", price: 184.22, mcap: 8.6e10, chg4h: null, chg12h: null, chg24h: -0.6, chg7d: 2.7, chg30d: 15.4 },
+      ],
+      movers: { "4h": null },   // what "the series isn't old enough yet" looks like
+    };
+    const pending = drawSeeded(
+      await stage({ seed: [[SCAN, pendingBoard]] }),
+      React.createElement(CryptoPanel, { isMobile: true, btc }), "chg24h", "chg4h");
+    const pendingText = text(pending.html);
+    // FIRST, THAT THE STATE IS THE ONE UNDER TEST. Without this the seeder could
+    // stop matching and the two checks below would quietly go back to describing
+    // the default sort — which is how the disjunction above got away with it.
+    check("Crypto · the board is genuinely sorted by 4h for this check",
+      pending.seeded === 1 && /class="pill active"[^>]*>4h</.test(pending.html),
+      `seeded ${pending.seeded} hook(s), active pill ${JSON.stringify((/class="pill active"[^>]*>([^<]*)</.exec(pending.html) || [])[1])}`);
+    check("Crypto · pending 4h/12h windows are explained in words",
+      pendingText.includes("4h/12h come from our own hourly snapshots — measured once the series is old enough"),
+      `got ${JSON.stringify(pendingText.slice(0, 400))}`);
+    // …and not drawn as a flat zero, which is a measurement. Counted rather than
+    // searched: two rows, five windows each, and exactly the four unmeasured cells
+    // may be em-dashes — a board that started printing +0.0% would still contain
+    // an em-dash somewhere, so "an em-dash appears" is not the assertion.
+    const pendingCard = card(pending.html, "Board", "Market pulse");
+    const absentCells = (pendingCard.match(/>—<\/div>/g) || []).length;
+    check("Crypto · …and drawn as absent, never as a flat zero",
+      pendingCard !== "" && absentCells === 4 && !/[+-]0\.0%/.test(pendingText)
+      && pendingText.includes("+1.4%") && pendingText.includes("-0.6%"),
+      `${absentCells} absent cell(s) in ${JSON.stringify(text(pendingCard).slice(0, 220))}`);
   }
 
   // ══ 8. ScoreCard — "not measured is not zero", drawn ═══════════════════════

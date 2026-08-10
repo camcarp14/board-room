@@ -11,6 +11,11 @@
 //   list     GET  /sites/:id/deploys?per_page=15     the recent ones, trimmed
 //   restore  POST /sites/:id/deploys/:deploy/restore republish one of them
 //
+// The slug must resolve to a site of that EXACT name or the call 404s — see the
+// note at the resolve step for why guessing was worse than failing. Every
+// success response carries the resolved `site` back so a caller can assert it
+// matches the label it just showed the user.
+//
 // `list` returns only deploys in state "ready". Netlify hands back the failed
 // and building ones too, and neither has an artifact to republish — restoring
 // one fails at the API, and the only place that shows up is a UI reporting
@@ -56,11 +61,46 @@ exports.handler = async (event) => {
 
   const headers = { Authorization: `Bearer ${token}`, "Content-Type": "application/json" };
   try {
-    // Resolve slug/name → site_id
+    // Resolve slug/name → site_id, EXACTLY, or refuse.
+    //
+    // This used to end in `|| sites[0]`, and that fallback was a loaded gun. The
+    // `?name=` query is a filter, not a lookup — Netlify happily returns near
+    // matches — so a slug that stopped resolving (renamed in Netlify, moved to
+    // another team, a typo in properties.js) did not fail. It silently became
+    // whichever site the token listed first. `list` then returned another site's
+    // deploys, and `restore` republished one of them: the confirm dialog promises
+    // a rollback of the site named by the LOCAL label, so the one screen that
+    // could have caught it is the screen doing the lying. Four real slugs are
+    // wired up and any of them can stop resolving without a line of code
+    // changing here.
+    //
+    // `build` REFUSES ON THE SAME LINE, and that is a deliberate choice rather
+    // than an oversight. The argument for letting build guess is that it is
+    // cheap: the blast radius is one wasted build of a site you did own, and a
+    // hard 404 turns a working button into a broken one the day a slug drifts.
+    // The argument that wins is that a build is not harmless either — it deploys
+    // whatever is on that site's production branch right now, which is a publish
+    // of an unrelated site nobody asked for — and that a button reporting "build
+    // triggered for board-room" while building something else is the app lying
+    // about what it just did. A 404 naming the slug is a bug report; a
+    // successful build of the wrong site is a mystery. Same rule for all three
+    // actions: name the site or do nothing.
     const sitesRes = await fetch(`${API}/sites?name=${encodeURIComponent(body.site)}`, { signal: AbortSignal.timeout(15000), headers });
     const sites = await sitesRes.json();
-    const site = (Array.isArray(sites) ? sites : []).find(s => s.name === body.site) || sites[0];
-    if (!site?.id) return json(404, { error: `site '${body.site}' not found for this token` });
+    // A REJECTED LOOKUP IS NOT A MISSING SITE, and the old code could not tell
+    // them apart. When Netlify answered 401 for a revoked or under-scoped token
+    // the body was an object, not an array, so the find fell through to
+    // `sites[0]` → undefined → "site 'board-room' not found for this token". That
+    // sentence names a cause nothing verified: the site was there the whole time
+    // and the token was the problem, which is a different fix. Netlify's own
+    // status and message travel out instead, labelled with where they came from.
+    if (!sitesRes.ok) {
+      return json(sitesRes.status, { error: `Netlify refused the site lookup (HTTP ${sitesRes.status})${sites?.message ? `: ${sites.message}` : ""} — check NETLIFY_API_TOKEN.` });
+    }
+    const site = (Array.isArray(sites) ? sites : []).find(s => s.name === body.site);
+    if (!site?.id) {
+      return json(404, { error: `no site named '${body.site}' on this Netlify token — nothing was ${action === "list" ? "read" : "changed"}. Check the slug in properties.js against the site name in Netlify.` });
+    }
 
     if (action === "list") {
       const listRes = await fetch(`${API}/sites/${site.id}/deploys?per_page=15`, { signal: AbortSignal.timeout(15000), headers });

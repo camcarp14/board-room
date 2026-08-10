@@ -35,7 +35,10 @@
 // Text-based (the sources are JSX and the migrations are SQL; there is no
 // bundler here), like systems-smoke.mjs.
 
-import { readFileSync, readdirSync } from "node:fs";
+import esbuild from "esbuild";
+import { readFileSync, readdirSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { createRequire } from "node:module";
+import { resolve } from "node:path";
 
 let failed = 0;
 const check = (label, cond, detail = "") => {
@@ -231,28 +234,215 @@ const skipped = [...(exportSrc.match(/const SKIP = \{([\s\S]*?)\n\};/)?.[1] || "
 for (const [t, why] of skipped) {
   check(`${t} is skipped from the export with a stated reason`, exportList.includes(t) && why.length > 20, why);
 }
-check("a skipped table is reported in the response, not silently dropped",
-  /skipped/.test(exportSrc) && /SKIP\b/.test(exportSrc));
 
-// ── 5. the failure the backup used to have ───────────────────────────────────
-// It embedded { error } per table inside a 200. A backup that reports success
-// while missing a table is worse than no backup: you find out when you need it.
-check("a table that errors fails the whole export with a 500",
-  /json\(500,/.test(exportSrc) && /failed\b/.test(exportSrc));
-check("the secret is compared in constant time, length guarded first",
-  /timingSafeEqual/.test(exportSrc) && /\.length === /.test(exportSrc));
-check("guessing the secret is rate limited", /rateLimited|tooMany|RATE_/.test(exportSrc));
-// The Status tab pings this function with { ping: true } and expects a 200. If
-// the limiter sat in front of that, a healthy row would go red under load. The
-// comparison is inside the handler on purpose — the helper's DECLARATION sits
-// above everything, so comparing whole-file offsets would measure nothing.
-{
-  // lastIndexOf, not indexOf: the file's header comment mentions exports.handler
-  // while explaining the bundling trap, and slicing from there would put the
-  // helper declarations inside the "handler".
-  const handler = exportSrc.slice(exportSrc.lastIndexOf("exports.handler = async"));
-  const ping = handler.indexOf("body.ping"), limit = handler.indexOf("rateLimited(");
-  check("the ping path stays ahead of the rate limiter", ping >= 0 && limit > ping, `ping@${ping} limit@${limit}`);
+// ── 5. the export, RUN RATHER THAN READ ──────────────────────────────────────
+// EVERY CHECK IN THIS SECTION USED TO BE A GREP OVER THE SOURCE, and every one of
+// them survived having the behaviour it named deleted. That was demonstrated, not
+// guessed:
+//
+//   · "a table that errors fails the whole export with a 500" tested
+//     /json\(500,/ && /failed\b/. Delete the entire per-table aggregation, go back
+//     to embedding { error } inside a 200, and it still passes: the generic catch
+//     at the bottom contains json(500, and the word "failed" appears in the prose
+//     above.
+//   · "a skipped table is reported in the response" tested /skipped/ && /SKIP\b/,
+//     both of which appear in comments — so deleting `skipped: SKIP` from the
+//     payload, the one line that makes an omission visible, passed.
+//   · "guessing the secret is rate limited" tested for the WORD rateLimited.
+//     Reduce the call to `rateLimited(ip, now);` with the result thrown away and
+//     delete noteFailure entirely, and it passes with no limiter at all.
+//   · the ping-ordering check compared two string offsets inside the handler,
+//     which says nothing about what either branch does.
+//
+// export-data.js is a plain handler over one dependency, so none of that needs to
+// be inferred: it bundles against a createClient that answers from a fixture this
+// file writes, and the assertions read real statuses out of real responses. What
+// remains textual is called out where it sits, with the reason.
+const EXPORT_DIR = ".export-smoke";
+const requireCjs = createRequire(import.meta.url);
+let exportHandler = null;
+try {
+  rmSync(EXPORT_DIR, { recursive: true, force: true });
+  mkdirSync(EXPORT_DIR, { recursive: true });
+  // .cjs ON PURPOSE. package.json says "type":"module", so a .js stub here would
+  // be ESM and its `exports.createClient` would be the exact bundling trap the
+  // header of scripts/functions-smoke.mjs is about — the alias would resolve, the
+  // bundle would build, and createClient would be undefined at call time.
+  writeFileSync(`${EXPORT_DIR}/supabase-stub.cjs`, `
+// The one dependency export-data.js has, replaced by a fixture. Only the two
+// calls readTable() makes are implemented: .from(t).select("*", {count})
+// .range(from, to). A table with no entry in the plan comes back as an ERROR
+// rather than as an empty read, so a table the export starts reading without the
+// fixture knowing about it is loud instead of silently zero.
+exports.createClient = () => ({
+  from: (table) => ({
+    select: (_cols, opts) => ({
+      range: async (from, to) => {
+        const plan = (globalThis.__EXPORT_SMOKE_PLAN__ || {})[table];
+        if (!plan) return { data: null, error: { message: "no fixture for " + table }, count: null };
+        if (plan.error) return { data: null, error: { message: plan.error }, count: null };
+        const rows = plan.rows || [];
+        // A plan may claim a count LARGER than the rows it hands back: that is how
+        // PostgREST reports a read the project's max-rows ceiling truncated, and
+        // it is the case readTable's count check exists for.
+        const count = opts && opts.count === "exact" ? (plan.count == null ? rows.length : plan.count) : null;
+        return { data: rows.slice(from, to + 1), error: null, count };
+      },
+    }),
+  }),
+});
+`);
+  esbuild.buildSync({
+    entryPoints: ["netlify/functions/export-data.js"],
+    bundle: true, platform: "node", format: "cjs",
+    outfile: `${EXPORT_DIR}/export-data.cjs`,
+    alias: { "@supabase/supabase-js": resolve(`${EXPORT_DIR}/supabase-stub.cjs`) },
+    logLevel: "silent",
+  });
+  exportHandler = requireCjs(resolve(`${EXPORT_DIR}/export-data.cjs`)).handler;
+} catch (e) {
+  check("export-data.js bundles for execution", false, (e.message || String(e)).split("\n")[0]);
+}
+check("export-data.js exports a callable handler", typeof exportHandler === "function", typeof exportHandler);
+
+// try/finally, so a scenario that throws still takes the bundle directory with it
+// rather than leaving one in the repo root for the next reader to wonder about.
+try {
+ if (typeof exportHandler === "function") {
+  const SECRET = "smoke-backup-secret-not-real";
+  process.env.BACKUP_SECRET = SECRET;
+  process.env.SUPABASE_URL = "https://smoke.invalid";
+  process.env.SUPABASE_SERVICE_ROLE_KEY = "smoke-service-role-key-not-real";
+
+  const skippedNames = skipped.map(([t]) => t);
+  const allRead = () => Object.fromEntries(exportList.map((t) => [t, { rows: [] }]));
+  const plan = (spec) => { globalThis.__EXPORT_SMOKE_PLAN__ = spec; };
+  // The event Netlify builds, with the one header the limiter is allowed to trust.
+  // Each scenario below uses its own source address so the limiter's window from
+  // one cannot decide the answer to another.
+  // A THROW IS AN OUTCOME, NOT AN ACCIDENT. timingSafeEqual raises on buffers of
+  // unequal length, so a gate written without the length guard does not answer at
+  // all — and an uncaught throw here would end this file in a stack trace with
+  // every check after it unrun. Caught and reported as what it is: the endpoint
+  // did not answer.
+  const call = async ({ secret = SECRET, ip = "203.0.113.1", ...rest }) => {
+    let res;
+    try {
+      res = await exportHandler({
+        httpMethod: "POST", headers: { "content-type": "application/json", "x-nf-client-connection-ip": ip },
+        body: JSON.stringify({ ...(secret === null ? {} : { secret }), ...rest }), isBase64Encoded: false,
+      });
+    } catch (e) {
+      const why = `threw instead of answering: ${e.message || String(e)}`;
+      return { code: why, body: null, raw: why };
+    }
+    let body = null;
+    try { body = JSON.parse(res.body); } catch {}
+    return { code: res.statusCode, body, raw: String(res.body) };
+  };
+
+  // ── a good export ─────────────────────────────────────────────────────────
+  plan({ ...allRead(), app_settings: { rows: [{ id: 1 }, { id: 2 }] } });
+  const good = await call({ ip: "203.0.113.10" });
+  check("a correct secret gets the export", good.code === 200 && good.body?.success === true, `${good.code} ${good.raw.slice(0, 120)}`);
+  const returned = Object.keys(good.body?.tables || {});
+  check("the export returns every table it declares and nothing else",
+    returned.length === exportList.length - skippedNames.length && returned.every((t) => exportList.includes(t)),
+    `${returned.length} tables for ${exportList.length} declared minus ${skippedNames.length} skipped`);
+  check("the export counts the rows it actually returned", good.body?.rowCounts?.app_settings === 2, String(good.body?.rowCounts?.app_settings));
+  // A table left out of the payload has to be left out LOUDLY, with a reason, IN
+  // THE RESPONSE — a backup that quietly omits something is the failure this whole
+  // check exists to prevent, and "we skipped your bank tokens" is a sentence the
+  // caller is entitled to read. Asserted against the payload the caller receives,
+  // because the word "skipped" appearing in the source proves nothing.
+  for (const [t, why] of skipped) {
+    check(`${t} is named as skipped in the response, with its reason`,
+      String(good.body?.skipped?.[t] || "") === why && why.length > 20, JSON.stringify(good.body?.skipped?.[t]));
+    check(`${t} is genuinely absent from the payload`, !(t in (good.body?.tables || {})));
+  }
+
+  // ── a table that errors ───────────────────────────────────────────────────
+  // It embedded { error } per table inside a 200. A backup that reports success
+  // while missing a table is worse than no backup: you find out when you need it.
+  plan({ ...allRead(), seat_notes: { error: "permission denied for table seat_notes" } });
+  const broke = await call({ ip: "203.0.113.11" });
+  check("a table that errors fails the whole export with a 500", broke.code === 500, `${broke.code} ${broke.raw.slice(0, 160)}`);
+  check("…and the response names the table that broke",
+    /seat_notes/.test(String(broke.body?.error || "") + JSON.stringify(broke.body?.failed || {})), broke.raw.slice(0, 200));
+  check("…and hands back no partial payload to write to disk as a backup",
+    !("tables" in (broke.body || {})) && !("rowCounts" in (broke.body || {})) && broke.body?.success === false,
+    Object.keys(broke.body || {}).join(", "));
+
+  // A read that came back SHORT of its own count is the silent version of the
+  // same failure: a 200 with fewer rows than exist, which is what an unpaged
+  // select or a low max-rows ceiling produces.
+  plan({ ...allRead(), usage_log: { rows: [{ id: 1 }, { id: 2 }, { id: 3 }], count: 5 } });
+  const short = await call({ ip: "203.0.113.12" });
+  check("a table that comes back short of its own count fails the export too",
+    short.code === 500 && /usage_log/.test(JSON.stringify(short.body?.failed || {})) && /3 of 5/.test(JSON.stringify(short.body?.failed || {})),
+    `${short.code} ${short.raw.slice(0, 200)}`);
+
+  // ── the secret ────────────────────────────────────────────────────────────
+  plan(allRead());
+  const noSecret = await call({ secret: null, ip: "203.0.113.20" });
+  check("an absent secret is refused", noSecret.code === 401, String(noSecret.code));
+  const wrongShort = await call({ secret: "x", ip: "203.0.113.21" });
+  // NOT JUST "IT REFUSES". timingSafeEqual THROWS on buffers of unequal length,
+  // so a comparison written without the length guard in front of it does not
+  // refuse a short secret — it crashes into a 500, and the length guard is the
+  // half of "constant time, length guarded first" that IS observable from here.
+  check("a wrong secret of a different length is refused, not crashed into a 500",
+    wrongShort.code === 401, `${wrongShort.code} ${wrongShort.raw.slice(0, 120)}`);
+  const sameLength = SECRET.replace(/[\s\S]/g, "z");
+  check("the equal-length fixture is genuinely equal-length and genuinely wrong",
+    sameLength.length === SECRET.length && sameLength !== SECRET, `${sameLength.length} vs ${SECRET.length}`);
+  const wrongSame = await call({ secret: sameLength, ip: "203.0.113.22" });
+  check("a wrong secret of exactly the right length is refused", wrongSame.code === 401, `${wrongSame.code} ${wrongSame.raw.slice(0, 120)}`);
+  check("no refusal says which kind of wrong it was", noSecret.raw === wrongShort.raw && wrongShort.raw === wrongSame.raw,
+    `${noSecret.raw} / ${wrongShort.raw} / ${wrongSame.raw}`);
+
+  // THE ONE THAT STAYS TEXTUAL, AND WHY. Constant time is a property of how long
+  // the comparison takes, and nothing this file can execute measures that
+  // honestly — a wall-clock assertion on a millisecond of Buffer comparison would
+  // be a flake generator, and the adversary's mutation (secretOk replaced by
+  // `!==`) refuses every wrong secret above exactly as it should. So the grep is
+  // aimed at the one thing that mutation DOES change: which comparison the gate
+  // performs. lastIndexOf, not indexOf — the file's header comment mentions
+  // exports.handler while explaining the bundling trap.
+  const gate = exportSrc.slice(exportSrc.lastIndexOf("exports.handler = async"));
+  check("the gate compares the secret through secretOk, not with an operator",
+    /secretOk\(\s*body\.secret\s*,\s*process\.env\.BACKUP_SECRET\s*\)/.test(gate)
+    && !/BACKUP_SECRET\s*(?:={2,3}|!={1,2})/.test(gate)
+    && !/(?:={2,3}|!={1,2})\s*process\.env\.BACKUP_SECRET/.test(gate),
+    gate.slice(gate.indexOf("BACKUP_SECRET") - 40, gate.indexOf("BACKUP_SECRET") + 60));
+  check("…and secretOk is a length guard in front of timingSafeEqual",
+    /function secretOk[\s\S]{0,400}?a\.length === b\.length && timingSafeEqual\(a, b\)/.test(exportSrc));
+
+  // ── the rate limit ────────────────────────────────────────────────────────
+  // Five wrong answers per ten minutes per source address. Executed, because the
+  // word "rateLimited" appearing in the file was true of a version that called it
+  // and discarded the answer.
+  const guesser = "198.51.100.7";
+  const codes = [];
+  for (let i = 0; i < 6; i++) codes.push((await call({ secret: "wrong-guess", ip: guesser })).code);
+  check("the first five wrong guesses from one source are each refused", codes.slice(0, 5).every((c) => c === 401), codes.join(","));
+  check("the sixth wrong guess from the same source is rate limited", codes[5] === 429, codes.join(","));
+  check("a different source address still gets its own attempts",
+    (await call({ secret: "wrong-guess", ip: "198.51.100.8" })).code === 401);
+  // The Status tab pings this function with { ping: true } and expects a 200. If
+  // the limiter sat in front of that, a healthy row would go red under load — so
+  // the ping is asked FROM THE SOURCE THAT IS CURRENTLY LIMITED, which is the only
+  // arrangement that can tell the two orderings apart.
+  const pingWhileLimited = await call({ secret: "wrong-guess", ping: true, ip: guesser });
+  check("the health ping is answered even from a source the limiter has shut out",
+    pingWhileLimited.code === 200 && pingWhileLimited.body?.success === true, `${pingWhileLimited.code} ${pingWhileLimited.raw.slice(0, 120)}`);
+  check("…and the ping reveals only whether the variables are set",
+    pingWhileLimited.body?.configured === true && !new RegExp(SECRET).test(pingWhileLimited.raw), pingWhileLimited.raw.slice(0, 200));
+
+  delete globalThis.__EXPORT_SMOKE_PLAN__;
+ }
+} finally {
+  rmSync(EXPORT_DIR, { recursive: true, force: true });
 }
 
 // ── 6. the in-app setup cards, which are NOT fixed by this directory ─────────

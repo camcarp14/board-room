@@ -153,21 +153,67 @@ export function useBitcoinPrice() {
   return { ...state, refresh: () => setNonce(n => n + 1) };
 }
 
+// ─── the tween's bookkeeping ──────────────────────────────────────────────────
+// A TWEEN STARTS FROM WHERE THE PIXELS ARE, NOT FROM THE LAST TARGET IT REACHED.
+//
+// This used to keep its origin in a ref that only advanced when a flight ran to
+// COMPLETION, and a target that changes mid-flight cancels the frame loop — so
+// the next flight interpolated from the reading two updates ago and the figure
+// counted BACKWARDS through numbers nobody measured, for as long as updates kept
+// arriving faster than the duration. Settings → Systems → Status → Run all checks
+// is the reproduction: connections.js seeds every row to "checking", turns two
+// green in the same tick and a third about 200ms later, and the "Live" tile
+// dropped from 2 back to 0 and re-counted to 3 — printing "0 live" as a fact with
+// two checks already green. Before every stat tile in the app went through
+// useTween that reached seventeen hand-wrapped call sites; now it reaches all of
+// them, which is what turned a wobble into a lie.
+//
+// Lifted out of the hook as a plain object, and that is deliberate: this fails in
+// complete silence — nothing throws, the number still animates, it just animates
+// from a reading that has been superseded — so scripts/ambient-smoke.mjs drives an
+// interrupted retarget through this directly instead of grepping for the line.
+export function createTween(at = 0) {
+  let from = at, target = at, t0 = 0, shown = at;
+  return {
+    // Aim at a new reading, from whatever is currently painted. Returns false
+    // when there is nothing to animate — the figure is already sitting there.
+    retarget(next, now) {
+      from = shown;
+      target = next;
+      t0 = now;
+      return from !== target;
+    },
+    // The frame at `now`, and whether it is the last one. The last frame lands
+    // exactly on the target rather than a rounding away from it, so a completed
+    // flight cannot leave a fraction behind for the next one to start from.
+    frame(now, dur) {
+      const p = dur > 0 ? Math.min(1, (now - t0) / dur) : 1;
+      shown = p >= 1 ? target : from + (target - from) * (1 - Math.pow(1 - p, 3));
+      return { value: shown, done: p >= 1 };
+    },
+    // The frame last handed out, before the hook's display rounding — which is to
+    // say what is on screen, to within the precision it is printed at. An
+    // interrupted flight resumes here.
+    painted() { return shown; },
+  };
+}
+
 // Numbers behave like instruments: big metrics count to their value.
 export function useTween(target, dur = 700) {
   const [v, setV] = useState(target ?? 0);
-  const fromRef = useRef(target ?? 0);
+  const twRef = useRef(null);
+  if (!twRef.current) twRef.current = createTween(target ?? 0);
   useEffect(() => {
     if (target == null) return;
-    const from = fromRef.current ?? 0;
-    if (from === target) { setV(target); return; }
+    const tw = twRef.current;
+    // Nothing painted between two target changes means `painted()` is still the
+    // last frame anyone saw, which is exactly the origin this wants.
+    if (!tw.retarget(target, performance.now())) { setV(target); return; }
     let raf;
-    const t0 = performance.now();
     const step = (now) => {
-      const p = Math.min(1, (now - t0) / dur);
-      setV(from + (target - from) * (1 - Math.pow(1 - p, 3)));
-      if (p < 1) raf = requestAnimationFrame(step);
-      else fromRef.current = target;
+      const { value, done } = tw.frame(now, dur);
+      setV(value);
+      if (!done) raf = requestAnimationFrame(step);
     };
     raf = requestAnimationFrame(step);
     return () => cancelAnimationFrame(raf);

@@ -22,16 +22,39 @@
 //
 // ─── the file's second job: who is allowed to call these ─────────────────────
 // Once every handler is bundled and loaded, the bundles are still sitting there
-// — so the same pass CALLS each gated one with no credential of any kind and
-// insists it refuses. That replaced a substring test (does "BOARD_USER_ID"
-// appear in the file) which was worse than nothing: see the inventory comment
-// below for how it let a wide-open endpoint pass for its entire life. Every file
-// in the directory now has to be named as owner-gated, shared-secret or
-// deliberately-public, and an unnamed one fails the build.
+// — so the same pass CALLS each gated one and insists it refuses. That replaced a
+// substring test (does "BOARD_USER_ID" appear in the file) which was worse than
+// nothing: see the inventory comment below for how it let a wide-open endpoint
+// pass for its entire life. Every file in the directory now has to be named as
+// owner-gated, shared-secret or deliberately-public, and an unnamed one fails the
+// build.
+//
+// IT KNOCKS THREE TIMES, AND THE SECOND AND THIRD ARE THE ONES THAT WERE MISSING.
+// For most of this file's life the only knock was with NO credential at all, and
+// that is the weakest possible question to ask a door. A gate that degrades from
+// "the correct secret" to "any secret" — `if (!process.env.BACKUP_SECRET ||
+// !body.secret)` instead of a comparison, or `if (!req.headers.get(SECRET_HEADER))`
+// instead of secretOk() — still refuses an anonymous caller, so the old single
+// knock printed "ok: 401 to an anonymous caller" while `{"secret":"x"}` returned
+// all 32 tables and any POST with `x-internal-worker-secret: x` read every seat
+// note through the service-role key. Both mutations were applied by hand and the
+// whole suite stayed green. So:
+//
+//   1. absent      — no Authorization header, no secret header, no token.
+//   2. wrong       — every credential slot filled with a WRONG value, and the
+//                    identity check answers "that token is not a session".
+//   3. not yours   — the shared secrets replaced by wrong values OF EXACTLY THE
+//                    RIGHT LENGTH (a length compare is not a compare), and the
+//                    identity check answers with a VALID session belonging to
+//                    somebody else. An owner gate that degrades to "any signed-in
+//                    account" is invisible to knocks 1 and 2 and is the whole
+//                    reason BOARD_USER_ID exists.
 //
 // The invocation is safe by construction, not by care: global fetch is replaced
-// with a stub that throws and counts, and "no upstream was touched" is one of
-// the assertions. A gated function that reaches the network before deciding
+// with a stub that throws and counts. Knock 1 asserts NOTHING was reached at all;
+// knocks 2 and 3 assert nothing but the caller-identity check was reached, since
+// an owner gate cannot refuse a wrong bearer token without asking Supabase whose
+// token it is. A gated function that reaches any other upstream before deciding
 // whether the caller is allowed has already done work for a stranger, and this
 // suite must never be the thing that spends money on a build.
 
@@ -102,7 +125,9 @@ const OWNER_GATED = {
 
 // A shared secret, because the caller cannot hold a Supabase session: a watchOS
 // Shortcut, a TRMNL device, a Discord interaction, a scheduled backup. The secret
-// IS the identity, so the only thing that matters is that an absent one refuses.
+// IS the identity, so an absent one has to refuse AND a wrong one has to refuse —
+// including a wrong one of exactly the right length, which is what tells a real
+// comparison apart from a presence test or a length test.
 const SHARED_SECRET = {
   "board-work-background": "INTERNAL_WORKER_SECRET on the internal hop from discord-board",
   "discord-board": "DISCORD_PUBLIC_KEY — every interaction is Ed25519-signed by Discord",
@@ -184,9 +209,44 @@ for (const [k, v] of Object.entries(FAKE_ENV)) process.env[k] = v;
 // after every auth-failure invocation is itself an assertion below: a function
 // that reaches an upstream before deciding whether the caller is allowed has
 // already done work for a stranger.
+//
+// ONE DOOR OPENS, AS NARROWLY AS IT CAN BE WRITTEN. Knocks 2 and 3 present a
+// wrong credential, and an owner gate cannot refuse a wrong bearer token without
+// asking Supabase whose token it is — that call IS the gate working, so refusing
+// to answer it would only test the catch block around it (plaid.js and shopify.js
+// turn a thrown verify into a 503, which would have made every one of those knocks
+// pass for the wrong reason). So when `identity` is set, and only then, exactly two
+// URL shapes answer: the auth endpoint that resolves a bearer token to a user, and
+// the app_settings row that resolves a Shortcut capture/import token to one.
+// Everything else still throws, and every knock asserts that nothing but those two
+// was reached.
+// Calls are recorded as { url, presented } rather than as strings: `presented` is
+// the bearer token the function put on the call, and a gate that verifies the
+// SERVICE key instead of the caller's token would otherwise look identical here.
 const fetchCalls = [];
+let identity = null;
+const AUTH_URL = `${FAKE_ENV.SUPABASE_URL}/auth/v1/user`;
+const TOKEN_LOOKUP = `${FAKE_ENV.SUPABASE_URL}/rest/v1/app_settings?setting_key=eq.`;
+// Deliberately not "anything under SUPABASE_URL": seat_notes and chat_messages
+// live under the same host, and reading one of those on the way to a 401 is
+// exactly the disclosure board-work-background's comment is about.
+const isIdentityCall = (u) => u.startsWith(AUTH_URL) || u.startsWith(TOKEN_LOOKUP);
 globalThis.fetch = (...args) => {
-  fetchCalls.push(String(args[0]));
+  const url = String(args[0]);
+  const h = args[1]?.headers || {};
+  fetchCalls.push({ url, presented: String(h.Authorization || h.authorization || "").replace(/^Bearer\s+/i, "") });
+  if (identity && isIdentityCall(url)) {
+    // A real Response, because every one of these gates reads .ok / .status and
+    // awaits .json(): a hand-rolled shape would be testing the stub.
+    const answer = (status, body) => Promise.resolve(new Response(JSON.stringify(body), {
+      status, headers: { "content-type": "application/json" },
+    }));
+    if (url.startsWith(AUTH_URL)) return answer(identity.status, identity.user ? { id: identity.user } : {});
+    // The token → user lookup answers 200 WITH NO ROW for a token nobody owns,
+    // because that is what PostgREST does. Answering 401 here would exercise
+    // note-capture's "settings lookup failed" branch — a 502 — instead of its gate.
+    return answer(200, identity.user ? [{ user_id: identity.user }] : []);
+  }
   throw new Error("functions-smoke: fetch is closed — nothing here may reach an upstream");
 };
 
@@ -408,27 +468,85 @@ console.log(`\n${pass}/${fns.length} functions export a callable handler`);
   else console.log(`ok:   no deliberately-public function can reach a model`);
 
   // ── the knock ─────────────────────────────────────────────────────────────
-  // No Authorization header, no secret header, no token in the body. A gated
-  // function has to refuse — and it has to refuse WITHOUT a network call, which
-  // deploy.js gets right (`if (!auth) return 401` sits above its first fetch) and
-  // is the shape every one of these should copy.
+  // A gated function has to refuse — and on knock 1 it has to refuse WITHOUT a
+  // network call, which deploy.js gets right (`if (!auth) return 401` sits above
+  // its first fetch) and is the shape every one of these should copy.
   //
   // 401 unauthenticated, 403 wrong account, 503 refusing because the server is
   // not in a state where it may answer. Anything else — a 200, a 400, a 500 from
-  // a crash — is a function that did something with an anonymous request.
+  // a crash — is a function that did something with a request it should have
+  // turned away.
   const REFUSALS = new Set([401, 403, 503]);
+
+  // ── what a wrong credential looks like ────────────────────────────────────
+  // EVERY SLOT AT ONCE, and that is what keeps this honest as the functions
+  // drift: a bearer token, the internal worker secret header, the TRMNL token in
+  // both the places it is read, the two Shortcut tokens, a Discord signature
+  // pair, and the body fields (secret / token / accessToken). Whatever a given
+  // gate reads, it reads something WRONG — so nobody has to maintain a map of
+  // which function checks which header, and a function that starts reading a
+  // different one is still covered on the day it changes.
+  //
+  // 60 characters of url-safe wrong, and the length is load-bearing rather than
+  // arbitrary: board-work-background insists an interaction token is 50-120 of
+  // [\w-] and the two Shortcut seams insist their token is 16-80 characters. A
+  // shorter value gets a 400 for its SHAPE from in front of the gate, which is a
+  // refusal that proves nothing about the door — the knock has to be a credential
+  // that is well-formed and simply not the right one.
+  const WRONG = `smoke-wrong-credential-${"0".repeat(37)}`;
+  // Same length as the real secret, different at every single byte. A gate that
+  // compares lengths, or compares a prefix, refuses knock 2 and waves this one
+  // through — which is the whole reason secretOk() exists rather than `===`.
+  const sameLengthButWrong = (real) => [...String(real)].map((c) => (c === "z" ? "y" : "z")).join("");
+  // 64 bytes of hex: the right SIZE, the wrong bytes. nacl.sign.detached.verify
+  // THROWS on a wrong-size signature rather than returning false, and a gate that
+  // throws is a 502 — so a malformed signature would test the wrong thing.
+  const WRONG_SIGNATURE = "ab".repeat(64);
+  const credsFor = (equalLength) => {
+    const secret = (real) => (equalLength ? sameLengthButWrong(real) : WRONG);
+    return {
+      bearer: WRONG,
+      worker: secret(FAKE_ENV.INTERNAL_WORKER_SECRET),
+      trmnl: secret(FAKE_ENV.TRMNL_TOKEN),
+      backup: secret(FAKE_ENV.BACKUP_SECRET),
+    };
+  };
+  const wrongHeaders = (c) => ({
+    "content-type": "application/json",
+    authorization: `Bearer ${c.bearer}`,
+    "x-internal-worker-secret": c.worker,
+    "x-board-token": c.trmnl,
+    "x-capture-token": c.bearer,
+    "x-import-token": c.bearer,
+    "x-signature-ed25519": WRONG_SIGNATURE,
+    "x-signature-timestamp": "1754838000",
+  });
+  // Enough of a payload to REACH the gate instead of a 400 in front of it:
+  // note-capture normalises the note before it looks the token up, and "400,
+  // your note was empty" would say nothing about the door. `ping` is deliberately
+  // absent — several of these answer a ping with a 200 by design.
+  const wrongBody = (c) => JSON.stringify({
+    secret: c.backup, token: c.bearer, accessToken: c.bearer,
+    text: "smoke knock", question: "smoke knock",
+    application_id: "000000000000000000", workouts: [],
+  });
+
   // Netlify's legacy event, as the runtime builds it. Headers arrive lowercased,
-  // and the authorization key is deliberately ABSENT rather than empty — that is
-  // the case a gate is most likely to get wrong, because `event.headers
+  // and on knock 1 the authorization key is deliberately ABSENT rather than empty
+  // — that is the case a gate is most likely to get wrong, because `event.headers
   // .authorization` is then undefined and a gate that reads it without the `|| ""`
   // guard crashes into a 502 instead of answering 401.
-  const legacyEvent = () => ({
-    httpMethod: "POST", path: "/.netlify/functions/x", rawUrl: "https://smoke.invalid/.netlify/functions/x",
-    headers: { "content-type": "application/json" }, queryStringParameters: {}, body: "{}", isBase64Encoded: false,
+  const legacyEvent = (creds) => ({
+    httpMethod: "POST", path: "/.netlify/functions/x",
+    rawUrl: `https://smoke.invalid/.netlify/functions/x${creds ? `?token=${creds.trmnl}` : ""}`,
+    headers: creds ? wrongHeaders(creds) : { "content-type": "application/json" },
+    queryStringParameters: creds ? { token: creds.trmnl } : {},
+    body: creds ? wrongBody(creds) : "{}", isBase64Encoded: false,
   });
-  const modernRequest = (name) => new Request(`https://smoke.invalid/.netlify/functions/${name}`, {
-    method: "POST", headers: { "content-type": "application/json" }, body: "{}",
-  });
+  const modernRequest = (name, creds) => new Request(
+    `https://smoke.invalid/.netlify/functions/${name}${creds ? `?token=${creds.trmnl}` : ""}`,
+    { method: "POST", headers: creds ? wrongHeaders(creds) : { "content-type": "application/json" }, body: creds ? wrongBody(creds) : "{}" },
+  );
 
   // BOTH SHAPES, READ FROM THE ANSWER RATHER THAN ASSUMED. A v2 handler answers
   // with a WHATWG Response, which carries `status` and NO `statusCode` — so a
@@ -448,21 +566,30 @@ console.log(`\n${pass}/${fns.length} functions export a callable handler`);
   const shapes = { Response: [], legacy: [] };
   const carriesAStatusCode = [];
   const gated = [...Object.keys(OWNER_GATED), ...Object.keys(SHARED_SECRET)].sort();
+
+  // One invocation, either handler convention, with the fetches it attempted
+  // recorded next to the answer it gave.
+  const invoke = async (name, mod, creds) => {
+    const before = fetchCalls.length;
+    let res = null, threw = null;
+    try {
+      res = typeof mod.default === "function"
+        ? await mod.default(modernRequest(name, creds))
+        : await mod.handler(legacyEvent(creds), {});
+    } catch (e) { threw = e; }
+    return { res, threw, spent: fetchCalls.slice(before) };
+  };
+
+  // ── knock 1: nothing at all ───────────────────────────────────────────────
+  identity = null; // the network stays shut: an absent credential needs no lookup
   for (const name of gated) {
     const mod = loaded.get(name);
     if (!mod) continue; // already reported above as un-bundleable / handler-less
-    const before = fetchCalls.length;
-    let res, threw = null;
-    try {
-      res = typeof mod.default === "function" ? await mod.default(modernRequest(name)) : await mod.handler(legacyEvent(), {});
-    } catch (e) {
-      threw = e;
-    }
-    const spent = fetchCalls.slice(before);
+    const { res, threw, spent } = await invoke(name, mod, null);
     if (threw) {
       failures.push([`${name} · refuses an anonymous caller`,
         `threw instead of answering: ${threw.message}`
-        + (spent.length ? ` — and it called fetch first (${spent[0]})` : "")]);
+        + (spent.length ? ` — and it called fetch first (${spent[0].url})` : "")]);
       continue;
     }
     const { code, shape, statusCodeField } = codeOf(res);
@@ -476,11 +603,122 @@ console.log(`\n${pass}/${fns.length} functions export a callable handler`);
     }
     if (spent.length) {
       failures.push([`${name} · refuses before spending anything`,
-        `refused with ${code}, but reached ${spent.length} upstream(s) getting there — first was ${spent[0]}. `
+        `refused with ${code}, but reached ${spent.length} upstream(s) getting there — first was ${spent[0].url}. `
         + `Decide whether the caller is allowed BEFORE the first fetch (netlify/functions/deploy.js is the pattern).`]);
       continue;
     }
     console.log(`ok:     ${name} · ${code} to an anonymous caller, no upstream touched (${shape})`);
+  }
+
+  // ── knocks 2 and 3: a credential that is wrong, and one that is somebody else's ─
+  // A gate that answers before it ever looks at the caller. There is one, it is
+  // deliberate, and naming it here is the only way this pass stays honest: a
+  // function listed below has its owner check UNEXERCISED, and the assertion after
+  // the loop is bidirectional, so the day PAUSED goes false this entry goes stale
+  // and fails rather than quietly excusing a live endpoint.
+  const UNREACHABLE_GATE = {
+    "upstream-run-background": "PAUSED = true answers 503 above the token read — the engines are off on purpose, "
+      + "so nothing downstream of the gate can run and nothing about the gate can be observed",
+  };
+  const STRANGER = "11111111-1111-4111-8111-111111111111"; // a valid session, not the owner's
+  const gateSeen = { wrong: new Set(), stranger: new Set() };
+  const PASSES = [
+    {
+      key: "wrong", label: "a wrong credential", equalLength: false,
+      // "not a session" — the answer Supabase gives for a token it does not know.
+      identity: { status: 401, user: null },
+      expect: null, // any refusal will do: 401 is the honest answer, 503 is allowed
+    },
+    {
+      key: "stranger", label: "a valid session that is not the owner's", equalLength: true,
+      identity: { status: 200, user: STRANGER },
+      // THE ONE THAT MATTERS. The caller proved who they are and it is not
+      // Cameron, so the only correct answer from a function that got as far as
+      // comparing is 403 — an owner gate that degrades to "any signed-in account"
+      // answers 200 here and is invisible to both other knocks.
+      expect: 403,
+    },
+  ];
+  for (const pass of PASSES) {
+    identity = pass.identity;
+    const creds = credsFor(pass.equalLength);
+    if (pass.equalLength) {
+      // The equal-length values have to BE equal-length and BE wrong, or knock 3
+      // is knock 2 wearing a different name.
+      for (const [k, real] of [["worker", FAKE_ENV.INTERNAL_WORKER_SECRET], ["trmnl", FAKE_ENV.TRMNL_TOKEN], ["backup", FAKE_ENV.BACKUP_SECRET]]) {
+        if (creds[k].length !== real.length || creds[k] === real) {
+          failures.push(["knock 3 fixture", `${k} is meant to be a wrong secret of the same length as the real one, and is not (${creds[k].length} vs ${real.length})`]);
+        }
+      }
+    }
+    for (const name of gated) {
+      const mod = loaded.get(name);
+      if (!mod) continue;
+      const { res, threw, spent } = await invoke(name, mod, creds);
+      const label = `${name} · refuses ${pass.label}`;
+      if (threw) {
+        failures.push([label, `threw instead of answering: ${threw.message}`]);
+        continue;
+      }
+      const { code } = codeOf(res);
+      const identityCalls = spent.filter((c) => isIdentityCall(c.url));
+      const stray = spent.filter((c) => !isIdentityCall(c.url));
+      if (identityCalls.length) gateSeen[pass.key].add(name);
+      if (!REFUSALS.has(code)) {
+        failures.push([label, `answered ${code === null ? "no status at all" : code} to ${pass.label}. `
+          + `Expected 401, 403 or 503 — this credential is not valid for this endpoint.`]);
+        continue;
+      }
+      if (stray.length) {
+        failures.push([`${name} · refuses ${pass.label} before spending anything`,
+          `refused with ${code}, but reached ${stray.length} upstream(s) that are not a caller-identity check — first was ${stray[0].url}.`]);
+        continue;
+      }
+      // The identity call has to be ABOUT US. A gate that hands the auth endpoint
+      // its own service-role key instead of the caller's token is asking who the
+      // server is, gets a 200, and lets the caller in.
+      const askedAboutUs = identityCalls.every((c) => c.presented === creds.bearer || c.url.includes(creds.bearer));
+      if (!askedAboutUs) {
+        failures.push([`${name} · verifies the credential the caller presented`,
+          `it called ${identityCalls[0].url} but presented ${JSON.stringify(identityCalls[0].presented.slice(0, 24))} rather than the caller's token — `
+          + `that asks who the SERVER is, and the answer is always yes.`]);
+        continue;
+      }
+      if (pass.expect && identityCalls.length && code !== pass.expect) {
+        failures.push([label, `answered ${code} after verifying that the session belongs to ${STRANGER}, not to BOARD_USER_ID. `
+          + `Expected ${pass.expect} — a session for a second account must never be sufficient.`]);
+        continue;
+      }
+      console.log(`ok:     ${name} · ${code} to ${pass.label}${identityCalls.length ? ", after verifying whose it was" : ""}`);
+    }
+  }
+  identity = null;
+
+  // Bidirectional, so neither direction can rot: every gated function either
+  // consulted the identity check when handed somebody else's valid session, or is
+  // a shared secret (compared locally, nothing to consult), or is named in
+  // UNREACHABLE_GATE with the reason. A name that stops needing its excuse fails
+  // here, which is the only thing that stops this list from becoming a place to
+  // hide an open endpoint.
+  {
+    const shared = new Set(Object.keys(SHARED_SECRET));
+    const silent = gated.filter((n) => loaded.has(n) && !gateSeen.stranger.has(n) && !shared.has(n));
+    const excused = Object.keys(UNREACHABLE_GATE).sort();
+    if (silent.sort().join(",") !== excused.join(",")) {
+      failures.push(["owner gates exercised",
+        `these owner-gated functions never checked whose session they were handed: ${silent.join(", ") || "(none)"} — `
+        + `expected exactly ${excused.join(", ")}. Either a gate has gone missing, or one of them can now be reached and `
+        + `UNREACHABLE_GATE in scripts/functions-smoke.mjs is out of date.`]);
+    } else {
+      console.log(`ok:   every owner gate verified the session it was handed, except ${excused.length} named as unreachable`);
+      for (const [n, why] of Object.entries(UNREACHABLE_GATE)) console.log(`note:   ${n}'s owner check is unexercised — ${why}`);
+    }
+    const sharedTalked = [...gateSeen.wrong, ...gateSeen.stranger].filter((n) => shared.has(n));
+    if (sharedTalked.length) {
+      failures.push(["shared secrets are compared locally",
+        `these called out to verify a shared secret: ${[...new Set(sharedTalked)].join(", ")} — the secret IS the identity, `
+        + `so there is nothing to look up and a network round trip is a new failure mode in front of the door.`]);
+    }
   }
 
   // Printed every run, because "which convention is this function on" is the
@@ -502,8 +740,14 @@ console.log(`\n${pass}/${fns.length} functions export a callable handler`);
       + `the note printed above is now wrong and codeOf() should prefer whichever field the runtime actually honours`]);
   }
 
-  if (!fetchCalls.length) console.log(`ok:   no auth-failure invocation touched the network`);
-  else failures.push(["outbound during auth failure", `${fetchCalls.length} fetch(es) attempted: ${[...new Set(fetchCalls)].join(", ")}`]);
+  // The whole-file version of the per-knock assertion above. It can no longer be
+  // "zero fetches", because knocks 2 and 3 make the owner gates verify a token and
+  // that verification is the gate doing its job — so it is "zero fetches that are
+  // not that", which is the strongest true statement available. The per-function
+  // checks already insist that knock 1 reached nothing whatsoever.
+  const strays = fetchCalls.filter((c) => !isIdentityCall(c.url));
+  if (!strays.length) console.log(`ok:   no refused invocation reached anything but a caller-identity check (${fetchCalls.length} of those)`);
+  else failures.push(["outbound during auth failure", `${strays.length} fetch(es) attempted that are not an identity check: ${[...new Set(strays.map((c) => c.url))].join(", ")}`]);
 }
 
 rmSync(OUT_DIR, { recursive: true, force: true });

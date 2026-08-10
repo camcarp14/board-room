@@ -356,8 +356,13 @@ check("a body drag starts only at the top of the scroll", /bodyRef\.current\?\.s
 check("a sideways gesture is never ours", /Math\.abs\(dx\) > Math\.abs\(dy\)/.test(kit));
 // The nearest gesture owner wins — SortableList's rule, and its selectors, reused
 // rather than reinvented, so a reorder list inside a sheet keeps its hold-drag.
-check("a nested sortable keeps its own gesture", /SHEET_NO_DRAG = [^\n]*\[data-sortable\]/.test(kit));
-check("…and the house's data-no-drag opt-out is honoured", /SHEET_NO_DRAG = [^\n]*\[data-no-drag\]/.test(kit));
+// That list is DRAG_OPT_OUT now, shared with the shell's pull-to-refresh (which had
+// its own, shorter idea of it — see §12) and executed there. What is pinned here is
+// that the sheet still COMPOSES from it instead of drifting back to its own copy.
+check("the sheet's no-drag list is built from the shared one",
+  /SHEET_NO_DRAG = `[^`]*\$\{DRAG_OPT_OUT\}`/.test(kit), kit.match(/SHEET_NO_DRAG = [^\n]*/)?.[0]);
+check("…and adds the tap targets and fields only a SHEET drag has to refuse",
+  /SHEET_NO_DRAG = `button, a, input, textarea, select, label, \[role="button"\], /.test(kit));
 check("a second finger is a pinch, not a dismiss", /!e\.isPrimary/.test(kit));
 check("the sheet is never left stuck mid-pull", /onPointerCancel=\{\(e\) => endDrag\(e, false\)\}/.test(kit));
 // Escape (or a footer button) mid-drag must not leave the finger and the exit
@@ -389,16 +394,21 @@ check("only medium and large get a class",
 // run rather than read: import kit.jsx through esbuild (bare Node cannot load
 // JSX), call the two pure functions, and assert the physics. Module scope in
 // kit.jsx touches no DOM, which is what makes this importable at all.
-const kitMod = await (async () => {
-  const out = path.resolve(".ambient-smoke-kit.tmp.mjs");
+// Bundle → import → delete. The temp module has to land in the REPO ROOT: react
+// stays external, so node resolves it from node_modules relative to the file, and
+// a bundle written anywhere else cannot find it. Shared with §15, which does the
+// same thing to src/hooks/index.js.
+const runnable = async (entry, tmp) => {
+  const out = path.resolve(tmp);
   await build({
-    entryPoints: ["src/ui/kit.jsx"], bundle: true, platform: "node", format: "esm",
+    entryPoints: [entry], bundle: true, platform: "node", format: "esm",
     outfile: out, loader: { ".jsx": "jsx" }, jsx: "automatic",
     external: ["react", "react-dom"], logLevel: "error",
   });
   try { return await import(pathToFileURL(out).href); }
   finally { await rmFile(out, { force: true }); }
-})();
+};
+const kitMod = await runnable("src/ui/kit.jsx", ".ambient-smoke-kit.tmp.mjs");
 const { sheetPull, sheetShouldDismiss, sheetPolicy, SHEET_DISMISS_PX, SHEET_FLICK_VY } = kitMod;
 check("the gesture's math is importable",
   [sheetPull, sheetShouldDismiss, sheetPolicy].every((f) => typeof f === "function"));
@@ -473,6 +483,183 @@ for (const [label, file] of [
   check(`${label} hands its sheet a closeRef`, /<Sheet closeRef=\{sheetClose\}/.test(src));
   check(`${label} closes through the exit, not a bare state flip`,
     /closeSheet\(sheetClose,/.test(src) && !/onSuccess: \(\) => \{ setSaving\(false\); set(Form|Tile)\(null\)/.test(src));
+}
+
+/* ═════════════════════════════════════════════════════════════════════════════
+   12. PULL TO REFRESH vs EVERY OTHER DRAG ON THE PAGE
+
+   Two gestures in this app now begin with a finger travelling downward, and for
+   one deploy only ONE of them declined the regions that already own a finger. A
+   hold-and-drag to reorder that started at scrollTop 0 — the Brief's card order,
+   the grocery list, both notes surfaces, every one of them a list whose first row
+   is exactly where scrollTop is 0 — armed the refresh as well as the reorder,
+   because the sheet guarded [data-sortable] and the shell's gauge checked three
+   tag names. There is one list now; this runs it.
+   ═════════════════════════════════════════════════════════════════════════════ */
+const shell = readFileSync("src/shell/MobileShell.jsx", "utf8");
+const { DRAG_OPT_OUT } = kitMod;
+check("the shared no-drag list is importable", typeof DRAG_OPT_OUT === "string" && DRAG_OPT_OUT.length > 10);
+for (const sel of ["[data-sortable]", "[data-no-drag]", "[contenteditable]", '[draggable="true"]']) {
+  check(`every drag declines ${sel}`, (DRAG_OPT_OUT || "").includes(sel), DRAG_OPT_OUT);
+}
+// The half that must NOT be shared. On a phone almost every row is a button or a
+// pressable card, so a pull-to-refresh that refused tap targets would have nowhere
+// left to start — which is why this is two constants and not one.
+check("the shared list refuses no tap target",
+  !/\bbutton\b/.test(DRAG_OPT_OUT || "") && !/role="button"/.test(DRAG_OPT_OUT || ""),
+  "a pull that declines buttons cannot start anywhere on a phone");
+check("the shell imports that list rather than restating it",
+  /import \{[^}]*\bDRAG_OPT_OUT\b[^}]*\} from "\.\.\/ui\/kit\.jsx"/.test(shell));
+check("pull-to-refresh consults it", /t\.target\?\.closest\?\.\(DRAG_OPT_OUT\)\) return;/.test(shell));
+// At touchstart, and BEFORE the candidate gesture is recorded — a guard that ran
+// after `start` was set would have armed the pull it was meant to refuse.
+const ptrStart = shell.slice(shell.indexOf("const onStart ="), shell.indexOf("const onMove ="));
+check("…at touchstart, not on the first move", ptrStart.includes("DRAG_OPT_OUT"));
+check("…before the gesture is armed",
+  ptrStart.indexOf("DRAG_OPT_OUT") < ptrStart.indexOf("start = { x:"));
+check("…and it still declines an inner scroller of its own",
+  /overflowY[\s\S]{0,80}"auto" \|\| oy === "scroll"\) return;/.test(ptrStart),
+  "the Wire and Watch This Week are 340–480px scrollers that fill the screen");
+// The fields, in the ancestor walk it performs anyway — which is why they are not
+// in the shared list. Both halves have to survive together or the pull starts
+// stealing a caret drag again.
+check("…and a field, by tag, in that same walk",
+  /tag === "INPUT" \|\| tag === "TEXTAREA" \|\| tag === "SELECT"/.test(ptrStart));
+
+/* ── 13. THE HAND-OFF IS AN EXCHANGE, NOT A COPY ───────────────────────────── */
+// One controls node, rendered in the large title and again in .cbar. .cbar's
+// visibility:hidden made the bar's copy honest; the title's copy was only ever
+// SCROLLED out of the scrollport, which hides nothing — so with the bar on, both
+// pairs were focusable and in the accessibility tree, VoiceOver read two Settings
+// and two Refresh per page, and tabbing to the offscreen pair scrolled the page
+// back to the top.
+const cbar = ruleOf(comp, ".cbar");
+check(".cbar leaves the tab order, not just the screen", /visibility:\s*hidden/.test(cbar || ""), cbar || "");
+check("the large title's copy can be hidden too",
+  /className=\{`lt-actions\$\{compactOn \? " handed-off" : ""\}`\}/.test(shell));
+const ltActions = ruleOf(comp, ".lt-actions");
+const handedOff = ruleOf(comp, ".lt-actions.handed-off");
+check(".lt-actions.handed-off hides the same way the bar does",
+  /visibility:\s*hidden/.test(handedOff || ""), handedOff || "");
+// The hand-off is instant in both directions, and that is the deliberate half of
+// the trade: both copies live in the same 48px band, so hiding this one on the
+// BAR's clock (a 0s change delayed by --dur-2 is how) would close the tab-order
+// overlap and make the icons fade to nothing and snap back on every scroll to the
+// top. A delay creeping in here is a visible flaw in the control row.
+check("the hand-off carries no delay of its own",
+  !/transition/.test(ltActions || "") && !/transition/.test(handedOff || ""),
+  `${ltActions || ""} | ${handedOff || ""}`);
+// And the comment in MobileShell has to keep saying so — an overlap that is a
+// choice must read as a choice, or the next person "fixes" it into the blink.
+check("the shell's comment states the overlap it chose",
+  /both copies are momentarily in the tab order/.test(shell));
+
+/* ═════════════════════════════════════════════════════════════════════════════
+   14. A CLOSE THE PARENT DECLINED
+
+   Sheet swallows the onClose it was handed and tells the parent --dur-2 later. A
+   parent is allowed to say no — SeatNotesModal's onClose is
+   `if (dirty && !(await confirm(…))) return;` — and that used to brick the whole
+   app: closingRef was set and never reset, the sheet was off the stack and wearing
+   .out (translateY(100%), pointer-events:none), and the scrim, whose .out rule
+   deliberately KEEPS its pointer-events, sat there transparent and inset:0 eating
+   every tap until a reload. Escape was dead too. The contract is safe now instead
+   of documented: still mounted a beat after the parent was told means the parent
+   declined, and the sheet comes back.
+   ═════════════════════════════════════════════════════════════════════════════ */
+const { sheetRevive } = kitMod;
+check("the revival's stack arithmetic is importable", typeof sheetRevive === "function");
+// THE ONE THAT MATTERS. An async decline has another sheet above us by the time we
+// return, so a revived sheet pushed onto the END of the stack would claim to be on
+// top and take Escape away from the confirm the user is answering.
+{
+  const us = { sheet: "seat notes" }, confirmSheet = { sheet: "discard changes?" };
+  const stack = [confirmSheet];
+  sheetRevive(stack, us, 0);
+  check("a revived sheet goes back UNDER the sheet that declined for it",
+    stack.length === 2 && stack[0] === us && stack[stack.length - 1] === confirmSheet,
+    JSON.stringify(stack));
+  const twice = [us]; sheetRevive(twice, us, 0);
+  check("…and never lands on the stack twice", twice.length === 1);
+  const shrunk = []; sheetRevive(shrunk, us, 7);
+  check("…and an index past the end is clamped, not thrown", shrunk.length === 1 && shrunk[0] === us);
+}
+const revive = kit.slice(kit.indexOf("const revive = (stackAt)"), kit.indexOf("// ── the close the call sites never see"));
+check("revive is findable", revive.length > 200);
+check("a declined close is recoverable at all", /closingRef\.current = false;/.test(revive),
+  "the flag that was set and never reset is the whole bug");
+check("…the sheet comes back on screen with it", /setClosing\(false\);/.test(revive));
+check("…and back onto the stack, so Escape works again", /sheetRevive\(sheetStack, idRef\.current, stackAt\)/.test(revive));
+// A thrown sheet was left at translateY(100%) by JS, and inline transform beats the
+// stylesheet: dropping .out would change nothing on screen without this.
+check("…and a thrown sheet's inline transform is cleared",
+  /el\.style\.transform = "";/.test(revive) && /classList\.remove\("grabbed"\)/.test(revive));
+// Reviving an id whose component is gone would take Escape away from every sheet
+// under it — the same bug wearing a different face.
+check("an unmounted sheet is never resurrected into the stack",
+  /if \(!dialogRef\.current \|\| !closingRef\.current\) return;/.test(revive));
+// Wired from inside deliver, so there is no route that tells the parent without
+// also checking whether the parent did anything about it.
+const deliver = kit.slice(kit.indexOf("const deliver = () => {"), kit.indexOf("// Reduced motion gets no window"));
+check("every close checks back", /onClose\?\.\(\);[\s\S]*revive\(/.test(deliver), deliver.trim());
+check("…on a delay long enough for React to have committed the unmount",
+  /const SHEET_REVIVE_MS = (\d+);/.test(kit) && Number(kit.match(/const SHEET_REVIVE_MS = (\d+);/)[1]) > 0);
+// The scrim's asymmetry is the reason the bug was fatal rather than cosmetic, so
+// the rule it depends on is asserted in 9A — and stays asserted: a scrim that
+// dropped pointer-events on the way out would hide this class of bug, not fix it.
+
+/* ═════════════════════════════════════════════════════════════════════════════
+   15. THE NUMBER THAT COUNTED BACKWARDS
+
+   useTween kept its origin in a ref that only advanced when a flight ran to
+   COMPLETION, and a target changing mid-flight cancels the frame loop — so the
+   next flight interpolated from the reading two updates ago. Settings → Systems →
+   Status → Run all checks is the reproduction: two checks go green in one tick and
+   a third ~200ms later, and the "Live" tile dropped back to 0 and re-counted to 3
+   while two rows were already green. It printed "0 live" as a fact.
+
+   Nothing throws when this is wrong and no final number is wrong, which is why the
+   bookkeeping is a plain object in hooks/index.js and why this drives it rather
+   than reading it: an interrupted tween must continue from the pixels.
+   ═════════════════════════════════════════════════════════════════════════════ */
+const hooksMod = await runnable("src/hooks/index.js", ".ambient-smoke-hooks.tmp.mjs");
+const { createTween } = hooksMod;
+check("the tween's bookkeeping is importable", typeof createTween === "function");
+{
+  const tw = createTween(0);
+  const seen = [];
+  const dur = 700;
+  check("a mount is already at rest (nothing counts up on page open)", createTween(12).retarget(12, 0) === false);
+  check("a real change animates", tw.retarget(2, 0) === true);
+  for (const t of [0, 100, 200]) seen.push(tw.frame(t, dur).value);
+  // The interruption: a third check lands while the first flight is still running.
+  const atInterrupt = tw.painted();
+  check("the origin of the next flight is what is painted", tw.retarget(3, 200) === true && atInterrupt > 0 && atInterrupt < 2);
+  for (const t of [200, 300, 500, 900]) seen.push(tw.frame(t, dur).value);
+  check("no frame ever goes backwards", seen.every((v, i) => i === 0 || v >= seen[i - 1]), seen.map(v => v.toFixed(2)).join(" "));
+  check("…and none of them re-prints a superseded reading",
+    seen.slice(3).every((v) => v >= atInterrupt), `interrupted at ${atInterrupt.toFixed(2)}: ${seen.map(v => v.toFixed(2)).join(" ")}`);
+  check("the flight still lands exactly on the target", seen[seen.length - 1] === 3 && tw.painted() === 3);
+  check("…and says so, so the frame loop stops", tw.frame(2000, dur).done === true);
+}
+// Three interruptions in a row is the shape that made this a lie rather than a
+// wobble: every stat tile in the app goes through this now, and Run all checks
+// updates the same tile four times inside one 700ms duration.
+{
+  const tw = createTween(0);
+  let low = 0, ok = true;
+  for (const [target, at] of [[2, 0], [3, 120], [5, 260], [4, 410]]) {
+    tw.retarget(target, at);
+    for (const t of [at + 16, at + 60]) {
+      const v = tw.frame(t, 700).value;
+      // Only the last retarget is downward, and a figure that is genuinely falling
+      // is allowed to fall — what must never happen is a rise that starts BELOW
+      // where the last frame left it.
+      if (target > low && v < low - 1e-9) ok = false;
+      low = v;
+    }
+  }
+  check("four readings inside one duration never re-count from behind", ok, String(low));
 }
 
 console.log(failed ? `\n${failed} motion check(s) failed` : "\nmotion (the wash + the sheets): all checks passed");

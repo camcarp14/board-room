@@ -52,6 +52,21 @@ async function write(query, what) {
 // the newest attempt replaces the older one so a retry sends what you last
 // meant. A later write to the same key that SUCCEEDS clears the entry, which is
 // what lets the chip disappear on its own instead of needing to be dismissed.
+//
+// "THE NEWEST ATTEMPT" USED TO MEAN "THE ATTEMPT WHOSE RESPONSE CAME BACK LAST",
+// which is not the same sentence and cost an edit. failures.set() runs in the
+// catch, so the store was written in response order; saveSetting has no per-key
+// queue (only mergeSetting does), so two tab-bar drops in a burst on a flaky link
+// are genuinely in flight together. Both fail, the FIRST one's response arrives
+// LAST, and the entry left in the store carries the superseded layout — so the
+// Retry saved the order you dragged away from and then cleared the chip. The
+// screen and the database disagreed with nothing on screen to say so, which is
+// the exact failure the store was built to end.
+//
+// So an attempt takes its number BEFORE it leaves, and only the newest attempt
+// for a key may touch that key's entry. Nothing else needs the number, which is
+// why it lives beside the failures rather than being threaded through callers.
+const attempts = new Map();
 const failures = new Map();
 const failureListeners = new Set();
 const announce = () => { for (const fn of failureListeners) fn(); };
@@ -70,6 +85,14 @@ export const writeFailures = {
    * clears its own entry on success and refreshes it on failure — a partial
    * recovery leaves exactly what is still broken on screen and nothing else.
    * Never rejects: the retry button behind this has no catch.
+   *
+   * IT RETURNS NOTHING A CALLER HAS TO ACT ON, and that is a property worth
+   * keeping. A retry can learn that a settings row has moved, and the screen has to
+   * be repainted when it does — but routing that discovery back through this
+   * function's return value would make the repaint something a caller could forget,
+   * and the version that forgot it destroyed a thought parked on the phone. It
+   * travels out of db.mergeSetting's adopted() over settingsNews instead, so a
+   * retry repaints exactly like a direct write. See the note above lastSeen.
    */
   async retryAll() {
     for (const f of [...failures.values()]) await f.retry();
@@ -88,18 +111,39 @@ export const writeFailures = {
  * from is not an improvement on one that lied about saving.
  */
 async function reported(key, label, run, { strict = false } = {}) {
+  // Claimed here, before the write leaves the browser: the order attempts START
+  // in is the order the user meant them in, and the order they SETTLE in is
+  // whatever the network felt like. See the note on coalescing above.
+  const seq = (attempts.get(key) || 0) + 1;
+  attempts.set(key, seq);
+  // Answers "is this still the newest attempt at this key", and retires the
+  // number when it is — so the map only ever holds keys with a write in flight. A
+  // signed-in day files hundreds of `chat:<n>` keys and none of them is ever
+  // asked about again.
+  const isNewest = () => {
+    if (attempts.get(key) !== seq) return false;
+    attempts.delete(key);
+    return true;
+  };
   if (strict) {
     await run(); // throws on failure — the caller asked for that
-    writeFailures.clear(key);
+    if (isNewest()) writeFailures.clear(key);
     return { ok: true };
   }
   try {
     await run();
-    writeFailures.clear(key);
+    // A SUPERSEDED ATTEMPT THAT LANDS MUST NOT CLEAR A NEWER ONE'S CHIP. What is
+    // on screen is the newer value, and it is the one that did not save; clearing
+    // here would take the only sign of that away.
+    if (isNewest()) writeFailures.clear(key);
     return { ok: true };
   } catch (error) {
-    failures.set(key, { key, label, error, at: Date.now(), retry: () => reported(key, label, run) });
-    announce();
+    // …and by the same token a superseded attempt that fails must not file itself
+    // over a newer attempt's entry, or the Retry sends the older value.
+    if (isNewest()) {
+      failures.set(key, { key, label, error, at: Date.now(), retry: () => reported(key, label, run) });
+      announce();
+    }
     return { ok: false, error };
   }
 }
@@ -229,17 +273,91 @@ export const MERGING_SETTINGS = { finance_rules: "merge", ponder_items: "replace
 // The value half is the base the object diff is computed against, which makes it
 // a contract with the caller: whatever App is showing has to be what was last
 // adopted from here, or a key it never adopted will read as a deletion on the
-// next write. That is why mergeSetting reports adopt.
+// next write. That is why every move of this map is announced.
 const lastSeen = new Map();
 
-// How many times a write to this key has been REFUSED because the row had moved —
-// that is, how many times another device got there first. mergeSetting captures it
-// when it is called and checks it again before sending, which is the only way to
-// tell "the row changed because of my own previous write" (fine, and the queue
-// below arranges exactly that) from "the row changed because of the phone" (not
-// fine: everything still queued behind that discovery was built on what the row
-// used to hold).
-const foreignMoves = new Map();
+// ─── the baseline cannot move without the screen being told ──────────────────
+// THE CONTRACT ABOVE WAS BREAKABLE, AND THE CHIP'S RETRY BROKE IT. A failure
+// record's retry re-enters reported() with the same runner, so a retry got its own
+// response from the merge, moved lastSeen to whatever the server now holds — and
+// then returned into retryAll, which throws the value away. mergeSetting's frame
+// had returned long before, so its `outcome` was never updated either. Nothing
+// reached App, so the baseline advanced while the screen did not, and the NEXT
+// edit sent the screen's old array while claiming the revision it had never seen:
+// the compare-and-set PASSED, the write landed, the chip cleared, and the other
+// device's work was gone behind a clean "saved". finance_rules was worse, because
+// there the retry itself succeeds — two green successes, no chip, one rule deleted
+// on the following edit.
+//
+// THE FIX IS THAT THERE IS NOWHERE ELSE TO PUT IT. adopted() below is the only
+// thing on the WRITE path that assigns lastSeen, and it announces in the same
+// breath — one function, and no way to reach half of it. A retry (or any write path
+// written after this one) cannot forget to deliver the adopt, because delivering it
+// is not a step you remember; it is what moving the baseline IS. The alternative
+// considered was returning the outcome out of retryAll for App to apply, which is a
+// second thing to wire up and therefore a second thing to forget — and the state it
+// would allow is the silent overwrite above.
+//
+// loadSettings is the one other place the baseline moves, and it needs no
+// announcement for a reason that is not an exception to this: the row it seeds from
+// IS its return value, so a caller cannot receive the new baseline without also
+// receiving the settings it describes. The systems smoke pins both of them.
+const newsListeners = new Set();
+export const settingsNews = {
+  subscribe(fn) { newsListeners.add(fn); return () => { newsListeners.delete(fn); }; },
+};
+// A listener that throws is a repaint that failed. It must not also turn the write
+// it was announcing into a rejected one, because the caller would file that as
+// "didn't save" for a write that saved — but it is not swallowed either: the screen
+// and the row have just gone out of step, which is the whole thing this channel
+// exists to prevent, and the console is the only place left to say so.
+const tell = (news) => {
+  for (const fn of newsListeners) {
+    try { fn(news); }
+    catch (e) { console.warn(`[settings] a ${news.kind} listener threw for ${news.key}; the screen may be behind the row`, e); }
+  }
+};
+
+/**
+ * Move this device's baseline for `key` to what the server just said it holds, and
+ * tell whoever can repaint, in one act. Answers whether there was anything to
+ * adopt.
+ *
+ * `stale` false means nothing moved: the value coming back is the one we just
+ * sent, and repainting it would only fight a newer local edit.
+ */
+function adopted(key, data) {
+  lastSeen.set(key, { value: data.value, at: data.updated_at });
+  if (!data.stale) return false;
+  tell({ kind: "adopt", key, value: data.value });
+  return true;
+}
+
+// The moves of a key this device has been REFUSED by: how many distinct ones, and
+// the revision of the most recent. Both halves are load-bearing.
+//
+// "foreign" is as much as is known and no more — some writer that is not the write
+// immediately ahead of this one in the queue. It may be the phone, and it may be one
+// of the four Netlify functions that write app_settings with the service-role key.
+// Nothing here can tell, which is why nothing here says.
+//
+// The count is what a queued write compares against. mergeSetting captures it when
+// it is called and checks it again before sending, so a write built on a revision
+// that has since been replaced refuses itself instead of landing.
+//
+// THE REVISION IS WHAT KEEPS THIS DEVICE'S OWN RETRY OUT OF THE COUNT. A refused
+// write re-sends the same claim, so it is refused again — by the SAME revision.
+// One move, discovered twice. Counting it twice armed the guard against the next
+// perfectly good edit, which was then dropped WITHOUT BEING SENT, with an error
+// blaming a device that had done nothing. A refusal carrying a revision already
+// recorded here is news this device already has.
+const foreignMoves = new Map(); // key -> { n, at }
+const movesOf = (key) => foreignMoves.get(key)?.n || 0;
+const countMove = (key, at) => {
+  const seen = foreignMoves.get(key);
+  if (seen && seen.at === at) return; // the same move, met a second time
+  foreignMoves.set(key, { n: (seen?.n || 0) + 1, at });
+};
 
 const isPlainObject = (v) => !!v && typeof v === "object" && !Array.isArray(v);
 
@@ -271,7 +389,11 @@ const objectPatch = (next, before) => {
 // second one reads its expected updated_at before the first one's response has
 // landed, and would be refused as stale by this device's own previous write.
 // Serialising per key means each attempt reads the stamp its predecessor just
-// established, so a rejection can only ever mean another DEVICE moved the row.
+// established, so a rejection is never caused by the write immediately in front of
+// it. It does NOT prove a second device: the same account's own retry re-sends a
+// claim the row has already moved past, and four Netlify functions write
+// app_settings with the service-role key. That is why nothing thrown from the
+// merge below names who moved the row — see the messages there.
 const chains = new Map();
 const shrug = () => {};
 const queued = (key, run) => {
@@ -282,6 +404,24 @@ const queued = (key, run) => {
   chains.set(key, mine.then(shrug, shrug));
   return mine;
 };
+
+// ─── the window in which the FUNCTION does not exist yet ─────────────────────
+// The same shape of gap as the deleted_at note further up, one level down: a
+// function rather than a column. Postgres calls an unknown function 42883
+// ("function … does not exist"); PostgREST answers PGRST202 first, because it
+// resolves rpc names against its own schema cache and never gets as far as the
+// database — the function-shaped twin of the PGRST205 isMissingTable looks for.
+// Both are checked, because which one you get depends on whether the cache has
+// been reloaded since the function was dropped.
+//
+// The NAME is part of the test on the message-matching branch for the same reason
+// it is in isMissingTable: "does not exist" appears in errors about plenty of
+// things that are not this function, and a fallback that fires on the wrong error
+// is worse than no fallback at all.
+const isMissingFunction = (e, name) =>
+  /PGRST202|42883/.test(e?.code || "") ||
+  (/could not find the function|function .* does not exist/i.test(e?.message || "") &&
+    (e?.message || "").includes(name));
 
 // ─── db — Supabase-backed memory layer (unchanged contract) ──────────────────
 export const db = {
@@ -369,17 +509,17 @@ export const db = {
    * the whole-value upsert, so the other device's copy of the same key survives.
    *
    * Returns reported()'s { ok } plus what the server decided — applied, stale, the
-   * value the row now holds, and `adopt`.
+   * value the row now holds, and `unprotected` when it had to fall back (below).
    *
-   * ADOPT MEANS "the row was not where this device thought it was, so take this
-   * value". It is true whether the write landed or was refused, because in both
-   * cases what came back is news: a merge can carry keys added on the other
-   * device, and a refusal carries the version that beat us. Adopting is part of
-   * the contract rather than a nicety — the object diff above is computed against
-   * the last value adopted from here, so a key handed back and ignored would read
-   * as a deletion on the next write. When nothing moved there is nothing to adopt:
-   * the value coming back is the one we just sent, and repainting it would only
-   * fight a newer local edit.
+   * ADOPTION IS NOT IN THAT RETURN VALUE, AND THAT IS DELIBERATE. "The row was not
+   * where this device thought it was, so take this value" has to reach the screen
+   * whether the write came from a panel or from the chip's Retry, and the Retry
+   * returns to nobody — it is awaited by retryAll, which counts what is left. So
+   * the adopt travels out of adopted() through settingsNews, which is the same act
+   * as moving the baseline (the long version is above lastSeen). Handing a second
+   * copy back here would invite a reader to drop that subscription and take this
+   * field instead, and the retry would go quiet again — which is exactly the bug
+   * that cost a thought parked on the phone.
    *
    * A REFUSAL IS A FAILURE AND IS FILED AS ONE, under `setting:<key>` — the same
    * entry saveSetting uses, so one setting can only ever put one chip in the top
@@ -397,6 +537,18 @@ export const db = {
    * away whatever replaced it, and the app does not get to make that call quietly.
    * The way out is the next real edit, made against the value that was adopted,
    * which lands and clears the chip.
+   *
+   * AND IT STILL SAVES BEFORE 0033 IS PASTED IN. The function arrives by hand in
+   * the SQL editor and the code arrives on a deploy, so there is a window — of
+   * whatever length the owner takes — where these two keys route exclusively at an
+   * rpc PostgREST has never heard of. Both of them upserted perfectly well before
+   * this branch, and a change that stops ponder_items saving until somebody runs a
+   * migration is not a fix. On the errors that mean exactly "there is no such
+   * function" — PGRST202 from PostgREST, 42883 from Postgres itself, see
+   * isMissingFunction — and on nothing else, the write falls back to the old
+   * whole-value upsert, reports `unprotected: true`, and SAYS SO through
+   * settingsNews: the fallback is the unprotected write this whole mechanism exists
+   * to replace, and a silent one would be the old bug with better paperwork.
    */
   async mergeSetting(key, value, opts) {
     const strategy = MERGING_SETTINGS[key];
@@ -404,24 +556,33 @@ export const db = {
     // safety valve, and a caller reaching for a key that has never needed merging
     // should keep working exactly as every other setting does.
     if (!strategy) return db.saveSetting(key, value, opts);
-    // Which generation of this row the CALLER was looking at when it built this
+    const label = key.replace(/_/g, " ");
+    // How many moves of this row this device had watched when the CALLER built this
     // value. See the guard below.
-    const gen = foreignMoves.get(key) || 0;
+    const gen = movesOf(key);
     let outcome = null;
     let sent = null; // { patch, at } — frozen on the first attempt so a retry re-claims it
-    const res = await reported(`setting:${key}`, key.replace(/_/g, " "), () => queued(key, async () => {
+    const res = await reported(`setting:${key}`, label, () => queued(key, async () => {
       const user_id = await db.uid();
       if (!user_id) throw new Error("Not signed in");
-      // AN ARRAY BUILT ON A VERSION ANOTHER DEVICE HAS ALREADY REPLACED IS NOT
-      // SENT AT ALL. This fires for a write that was still in the queue when the
-      // one ahead of it came back refused: the revision has since been rebased, so
-      // the server would accept this array — and it carries content from before
-      // the other device's edit, which is exactly the overwrite all of this exists
-      // to prevent. An object patch is safe in the same situation and is allowed
-      // through: it only names keys the caller actually touched, and its deletions
-      // can only name keys the caller had already seen.
-      if (strategy === "replace" && !sent && (foreignMoves.get(key) || 0) !== gen) {
-        const e = new Error(`Your ${key.replace(/_/g, " ")} changed on another device, so this edit wasn't saved.`);
+      // AN ARRAY BUILT ON A REVISION SOMETHING HAS ALREADY REPLACED IS NOT SENT AT
+      // ALL. This fires for a write that was still in the queue when the one ahead
+      // of it came back refused: the revision has since been rebased, so the server
+      // would accept this array — and it carries content from before whatever
+      // replaced it, which is exactly the overwrite all of this exists to prevent.
+      // An object patch is safe in the same situation and is allowed through: it
+      // only names keys the caller actually touched, and its deletions can only
+      // name keys the caller had already seen.
+      //
+      // WHAT THE MESSAGE MAY SAY IS ONLY WHAT GOT US HERE: a write to this key came
+      // back refused while this edit waited, so the revision this array was built
+      // on is not the row any more, and nothing was sent. It used to read "changed
+      // on another device", which was a cause nothing here verified — and was
+      // simply false in the case that reached it most often, this device's own
+      // Retry bumping the counter (see foreignMoves). An error that names a cause
+      // it did not check is the worst kind, because it is acted on.
+      if (strategy === "replace" && !sent && movesOf(key) !== gen) {
+        const e = new Error(`This ${label} edit was built on a version that has since changed, so it wasn't saved — nothing was sent.`);
         e.what = `the ${key} setting`;
         e.stale = true;
         throw e;
@@ -439,11 +600,42 @@ export const db = {
         p_patch: sent.patch,
         p_expected_updated_at: sent.at,
       });
-      // write() is the helper for this and cannot be used here: it drops .data on
-      // purpose, and the merged value plus the new revision are the reason for the
-      // call. Same shape as its throw, so a caller cannot tell the two apart.
       if (error) {
-        const e = new Error(error.message || `Couldn't save ${key.replace(/_/g, " ")}.`);
+        // THE ONE ERROR THAT IS NOT A FAILED WRITE: the function is not there yet.
+        // 0033 is pasted into the SQL editor by hand, and until it is, PostgREST
+        // answers PGRST202 for this rpc — so without this branch the two keys that
+        // most need protecting would be the only two that cannot be saved at all.
+        //
+        // A STALE-WRITE REFUSAL CANNOT REACH THIS BRANCH, and that is structural
+        // rather than careful: a refusal is not an error. It comes back as a 200
+        // carrying applied:false, handled below, and `error` is null for it. So
+        // there is no path on which falling back here overwrites the row the
+        // compare-and-set just protected — which would restore the very bug 0033
+        // was written to fix. Every other error still throws, unchanged.
+        if (isMissingFunction(error, "settings_merge")) {
+          await write(supabase.from("app_settings").upsert(
+            { user_id, setting_key: key, setting_value: value, updated_at: new Date().toISOString() },
+            { onConflict: "user_id,setting_key" }), `the ${key} setting`);
+          // NOT SILENT. This is the blind whole-value upsert the merge exists to
+          // replace: it just wrote this device's copy of the value over whatever
+          // was there, and if a second device had touched the key, that work is
+          // gone. The write succeeded, so it must not be filed as a failure — a
+          // chip saying "unsaved" over a row that saved is a lie in the other
+          // direction — and it must not pass without a word either.
+          tell({ kind: "unprotected", key, migration: "supabase/migrations/0033_settings_merge_rpc.sql" });
+          // lastSeen is deliberately left where it is. Nothing came back to adopt,
+          // and the base this device holds is still the base the screen is showing,
+          // which is what the object diff needs. The revision is now behind the
+          // row, so the first merge after 0033 lands will be refused once and
+          // adopted — an honest one-time cost of the protection not being on yet.
+          outcome = { applied: true, stale: false, value, unprotected: true };
+          return;
+        }
+        // write() is the helper for this and cannot be used for the rpc: it drops
+        // .data on purpose, and the merged value plus the new revision are the
+        // reason for the call. Same shape as its throw, so a caller cannot tell the
+        // two apart.
+        const e = new Error(error.message || `Couldn't save ${label}.`);
         e.code = error.code || null;
         e.details = error.details || null;
         e.what = `the ${key} setting`;
@@ -451,23 +643,31 @@ export const db = {
       }
       // A 200 with nothing in it would otherwise become an adopted `undefined`,
       // which is how a settings row gets emptied by a success.
-      if (!data || typeof data !== "object") throw new Error(`The ${key.replace(/_/g, " ")} merge returned nothing.`);
+      if (!data || typeof data !== "object") throw new Error(`The ${label} merge returned nothing.`);
       // Whatever the verdict, the server just said what it holds. Taking that as
       // the base is the refetch: the refusal already carries the current row, so
-      // there is no second read to make and nothing to poll for.
-      lastSeen.set(key, { value: data.value, at: data.updated_at });
-      outcome = { applied: !!data.applied, stale: !!data.stale, adopt: !!data.stale, value: data.value };
+      // there is no second read to make and nothing to poll for. adopted() is the
+      // only way to say it, and it tells the screen in the same breath — which is
+      // what makes this correct on the retry path too.
+      adopted(key, data);
+      outcome = { applied: !!data.applied, stale: !!data.stale, value: data.value };
       if (data.applied) return;
       // The row moved under a queue that may still have writes in it, all of them
       // built on what it used to hold. Counting the move is what lets those refuse
-      // themselves at the guard above instead of landing.
-      foreignMoves.set(key, (foreignMoves.get(key) || 0) + 1);
-      const e = new Error(`Your ${key.replace(/_/g, " ")} changed on another device, so this edit wasn't saved.`);
+      // themselves at the guard above instead of landing — and it is counted BY
+      // REVISION, so this device's own Retry re-meeting the same move does not
+      // count it twice and arm the guard against an edit nobody has replaced.
+      countMove(key, data.updated_at);
+      // Refused. What is verified is that the row's revision was not the one this
+      // write claimed; WHO moved it is not known here (the four Netlify functions
+      // that write app_settings with the service-role key can move it too), so the
+      // message does not guess.
+      const e = new Error(`Your ${label} had changed since this device last read it, so this edit wasn't saved.`);
       e.what = `the ${key} setting`;
       e.stale = true;
       throw e;
     }), opts);
-    return { ...res, ...(outcome || { applied: false, stale: false, adopt: false }) };
+    return { ...res, ...(outcome || { applied: false, stale: false }) };
   },
   async loadFindings(limit = 40) {
     const { data, error } = await supabase.from("auditor_findings")

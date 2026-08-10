@@ -2,7 +2,7 @@ import { useState, useEffect, useRef, lazy, Suspense } from "react";
 import { supabase } from "./lib/supabase.js";
 import { isNetworkAuthFailure } from "./lib/authErrors.js";
 import { sm } from "./lib/storage.js";
-import { db, writeFailures, MERGING_SETTINGS } from "./data/db.js";
+import { db, writeFailures, settingsNews, MERGING_SETTINGS } from "./data/db.js";
 import { queryClient } from "./lib/queryClient.js";
 import { callClaude, convene, DEFAULT_MODELS } from "./lib/claude.js";
 import { parseLearnCommand, learnFromInput, makeSdb as makeSkillsDb } from "./LearnPanel.jsx";
@@ -132,8 +132,46 @@ export default function App() {
     setRetryingWrites(true);
     // finally, not a bare await: retryAll doesn't reject, but a chip left stuck
     // on "Retrying…" would be its own small lie about what the app is doing.
+    // Nothing is read from what retryAll returns on purpose — see the news
+    // subscription below, and the note above lastSeen in data/db.js.
     try { await writeFailures.retryAll(); } finally { setRetryingWrites(false); }
   };
+
+  // NEWS FROM THE SETTINGS ROW, AND THE ONE PLACE IT IS PAINTED.
+  // Two things happen inside data/db.js that this screen has to know about, and
+  // neither of them can be a return value, because the write they belong to can
+  // come from the chip's Retry — which returns to retryAll and nobody else.
+  //
+  //   adopt — the row was not where this device thought it was, so what came back
+  //           is news: a finance_rules merged with a rule the phone added while
+  //           this tab sat open, or the ponder list that beat a refused write.
+  //           Painting it is what keeps the screen and the database the same list.
+  //           It arrives AFTER updateSetting's optimistic paint below, which is the
+  //           order it has to be in — watching an archive undo itself while the
+  //           unsaved chip lights up is a strange half-second, and it is the truth.
+  //
+  //   unprotected — the merge function isn't installed yet (0033), so the write
+  //           went out as the old whole-value upsert. It saved; it just had none of
+  //           the two-device protection, so it is said out loud rather than filed
+  //           as a failure it wasn't.
+  //
+  // A LOST SUBSCRIPTION IS THE ONLY WAY TO LOSE EITHER, which is why there is one
+  // subscription for both and no second copy on mergeSetting's return value to
+  // tempt anyone into deleting it.
+  const [unprotectedKey, setUnprotectedKey] = useState(null);
+  useEffect(() => settingsNews.subscribe((news) => {
+    if (news.kind === "adopt") {
+      // Only into settings that are actually loaded. `null` means the load hasn't
+      // landed (or failed), and a settings object invented out of one key is the
+      // shape that makes Settings → Tabs write the DEFAULT tab bar over his own
+      // (the long version is above updateSetting). Nothing is lost by skipping:
+      // db.loadSettings clears every revision as it hands over the real row, so
+      // the next write starts from a baseline that matches the screen again.
+      setSettings(prev => (prev ? { ...prev, [news.key]: news.value } : prev));
+    } else if (news.kind === "unprotected") {
+      setUnprotectedKey(news.key.replace(/_/g, " "));
+    }
+  }), []);
 
   // Tick every 30s so the clock and freshness pill stay current.
   useEffect(() => {
@@ -361,23 +399,18 @@ export default function App() {
   // from and refused if that revision has moved. Everything else keeps the plain
   // upsert — the allowlist lives in data/db.js and is deliberately two keys long.
   //
-  // ADOPTING IS THE OTHER HALF, and it is what keeps the screen honest. res.adopt
-  // means the row was not where this device thought it was, so what came back is
-  // news: a merged finance_rules carrying a rule the phone added while this tab sat
-  // open, or — when the write was REFUSED — the ponder list that beat it. Both get
-  // painted over the optimistic value, so the list on screen is the list the
-  // database has, and the unsaved chip in the top bar says the edit that was
-  // refused did not save. Watching an archive undo itself while the chip lights up
-  // is a strange half-second, and it is the truth; the tap that follows it lands,
-  // because it is finally built on the real list. When nothing moved there is
-  // nothing to adopt: the value coming back is the one we just sent.
+  // ADOPTING IS THE OTHER HALF, and it does NOT happen here. It used to: this
+  // function read res.adopt off mergeSetting's return and painted it. That covered
+  // the write in front of you and nothing else — the chip's Retry re-runs the same
+  // write inside data/db.js and returns to retryAll, so its response moved this
+  // device's baseline while the screen kept showing the value that was refused.
+  // The next edit then claimed a revision the screen had never seen, the
+  // compare-and-set passed, and a thought parked on the phone was overwritten under
+  // a green "saved". So adoption travels over settingsNews, from the same act that
+  // moves the baseline, and is painted in one place: the subscription above.
   const updateSetting = async (key, value) => {
     setSettings(prev => ({ ...(prev || {}), [key]: value }));
-    if (MERGING_SETTINGS[key]) {
-      const res = await db.mergeSetting(key, value);
-      if (res?.adopt) setSettings(prev => ({ ...(prev || {}), [key]: res.value }));
-      return res;
-    }
+    if (MERGING_SETTINGS[key]) return await db.mergeSetting(key, value);
     return await db.saveSetting(key, value);
   };
 
@@ -770,6 +803,27 @@ export default function App() {
           settings={settings}
           updateSetting={updateSetting}
         />
+      )}
+      {/* THE MERGE PROTECTION IS NOT ON YET. A toast, in the .toasts stack every
+          panel already uses, because this is neither an error nor a failed write:
+          the value saved, through the old whole-value upsert, which is the write
+          that can silently drop another device's copy of the same key. Amber rather
+          than the green tick or the red .err dot, because both of those would be
+          wrong — it saved, and something worth knowing happened anyway. The wording
+          says "may have been lost" and not "was lost": this device cannot tell
+          whether anything else had touched the row, and inventing either answer
+          would be the kind of lie that gets acted on. It returns after being
+          dismissed if another unprotected write goes out, because that is another
+          write that went out unprotected. */}
+      {unprotectedKey && (
+        <div className="toasts">
+          <div className="toast">
+            <span className="tdot" style={{ background: "var(--amber)" }} />
+            <span>Saved your {unprotectedKey} without the two-device protection — another device's edits to it may have been lost. Run 0033_settings_merge_rpc.sql.</span>
+            <button onClick={() => setUnprotectedKey(null)} aria-label="Dismiss"
+              style={{ background: "none", border: "none", color: "var(--accent)", fontWeight: 600, fontSize: 13.5, cursor: "pointer", padding: "6px 4px", margin: "-6px 0" }}>OK</button>
+          </div>
+        </div>
       )}
       {editSeat && <SeatNotesModal seatKey={editSeat} initial={seatNotes[editSeat]} onSave={saveSeatNote} onClose={() => setEditSeat(null)} isMobile={isMobile} />}
       {migration && <MigrationModal counts={migration} onImport={runImport} onSkip={skipImport} importing={importing} />}

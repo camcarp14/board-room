@@ -51,9 +51,68 @@
 // byte-identical, no new worker installs, and the first launch paints the v33
 // shell: a sheet that still vanishes, a header that still isn't there, a pull that
 // still does nothing.
-const VERSION = "br-v34";
-const ASSET_CACHE = `${VERSION}-assets`;
+// v35: the vendor chunk actually surviving a deploy. vite.config.js splits
+// react/react-dom/@supabase/@tanstack into their own hashed chunk on the stated
+// grounds that the reload following every deploy then re-fetches only the app
+// chunk and reads 402 kB of vendor out of the cache-first store below "because its
+// filename genuinely did not change" — and the activate handler purged it anyway,
+// because the store was named `${VERSION}-assets` and the purge deletes every cache
+// that is not this VERSION's. The one deploy shape the split was written for was
+// exactly the shape that dropped it, on every single deploy, silently. So the asset
+// store is no longer version-keyed (see ASSET_CACHE) and this deploy is the last one
+// that pays for the old name.
+const VERSION = "br-v35";
+// DELIBERATELY NOT VERSION-KEYED, and the reason it is safe is the filename: Vite
+// content-hashes everything under /assets/, so a URL here can only ever mean one
+// body. A changed file IS a changed URL, which is what makes an entry from four
+// deploys ago as correct as one from this morning — the property cache-first was
+// already relying on WITHIN a version.
+//
+// Two things the version key was quietly also doing, and why each is covered:
+//   · Clearing a poisoned entry. The only poison this store has ever seen was the
+//     SPA fallback answering a purged chunk with index.html and a 200 ("Failed to
+//     load module script"), and the content-type guard in the fetch handler is what
+//     stops that at the door now. A VERSION bump was the recovery, never the fix.
+//   · Bounding the size. trimAssets() below replaces that, and has to, because
+//     nothing else would ever delete an old build's chunks.
+const ASSET_CACHE = "br-assets";
 const PAGE_CACHE = `${VERSION}-pages`;
+
+// THE BOUND THE PURGE USED TO PROVIDE FOR FREE. Every deploy adds a handful of new
+// hashed filenames; with the store outliving VERSION, nothing removes the old ones.
+// This runs on activate, which is the one moment we know a deploy just happened.
+//
+// Two properties make it safe to delete by AGE. Cache.keys() is in insertion order,
+// and a cache-first store only ever inserts on a MISS, so the front of that list is
+// the oldest build's chunks. And the shell precached on install NAMES this build's
+// eager assets — Vite writes the entry script, its stylesheet and every statically
+// imported chunk (vendor among them, which is the entire point) into index.html as a
+// <script> tag and modulepreload links — so the files that must survive are
+// recognised rather than guessed. Whatever is left to trim is a dead build's chunk
+// or a lazily-imported one, and being wrong about a lazy chunk costs one refetch of
+// a URL that still resolves. It cannot serve a wrong body; the filename is a hash.
+//
+// A build emits 27 files today and most are only fetched if you open that panel, so
+// this keeps roughly three deploys' worth of real traffic.
+const ASSET_KEEP = 80;
+// Nothing in here may throw into the activate chain. A rejection there skips
+// clients.claim(), the new worker never takes control of the open page, and the
+// deploy reads as never having shipped — the failure this whole file is about.
+async function trimAssets() {
+  try {
+    const cache = await caches.open(ASSET_CACHE);
+    const keys = await cache.keys();
+    if (keys.length <= ASSET_KEEP) return;
+    const shell = await caches.open(PAGE_CACHE).then((c) => c.match("/"));
+    const live = new Set((shell ? (await shell.text()).match(/\/assets\/[^"']+/g) : null) || []);
+    // A shell we cannot read means we cannot tell this build's assets from a dead
+    // build's, and deleting the wrong 400 kB is worse than a store that is one
+    // deploy too big. So that case trims nothing at all.
+    if (!live.size) return;
+    const doomed = keys.filter((k) => !live.has(new URL(k.url).pathname)).slice(0, keys.length - ASSET_KEEP);
+    await Promise.all(doomed.map((k) => cache.delete(k)));
+  } catch { /* a store that cannot be trimmed is not a reason to spoil a deploy */ }
+}
 
 self.addEventListener("install", (e) => {
   // Precache the app shell so the very first reopen after a deploy still paints
@@ -66,8 +125,14 @@ self.addEventListener("install", (e) => {
 self.addEventListener("activate", (e) => {
   e.waitUntil(
     caches.keys().then((keys) =>
-      Promise.all(keys.filter((k) => !k.startsWith(VERSION)).map((k) => caches.delete(k)))
-    ).then(() => self.clients.claim())
+      Promise.all(keys.filter((k) => !k.startsWith(VERSION))
+        // The asset store is exempt, and this second filter is how rather than a
+        // rewritten predicate because the rule above is the one every past bump
+        // relied on: old versions' pages AND their old `${VERSION}-assets` caches
+        // still go, exactly as before. Only the shared name survives.
+        .filter((k) => k !== ASSET_CACHE)
+        .map((k) => caches.delete(k)))
+    ).then(() => trimAssets()).then(() => self.clients.claim())
   );
 });
 

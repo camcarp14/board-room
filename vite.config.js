@@ -39,6 +39,16 @@ const commitSha = (() => {
 // and reads the vendor chunk straight out of the service worker's cache-first
 // /assets/ store (public/sw.js), because its filename genuinely did not change.
 //
+// THAT LAST SENTENCE WAS FALSE WHEN IT WAS FIRST WRITTEN, and the payoff above is
+// only real because sw.js was fixed to match it. The asset store used to be named
+// `${VERSION}-assets`, and sw.js's activate handler deletes every cache that isn't
+// the current VERSION's — while its own rule (the comment block at the top of that
+// file) requires bumping VERSION for any deploy you can SEE. So a visible deploy
+// purged the vendor chunk along with the shell, on exactly the reload this split
+// exists to make cheap, and the 402 kB came down again. The store is shared across
+// versions now; if it ever goes back to being version-keyed, delete this paragraph
+// and the split with it, because there is nothing left of the benefit.
+//
 // ONE chunk rather than three, on purpose. Three files would each pay a request
 // and a cache entry to isolate three hashes that in practice move together (a
 // dependency bump here is `npm update`, not surgery), and react-dom alone is

@@ -457,14 +457,28 @@ const SHEET_AXIS_PX = 8;               // slop before a gesture has an axis at a
 const SHEET_UP_GIVE = 64;              // asymptote when pulled where it can't go
 const SHEET_LOCKED_GIVE = 28;          // asymptote for a sheet that cannot leave
 const SHEET_STALE_VY_MS = 90;          // a pause before release is not a flick
-// Anything that answers a tap is off limits as a drag origin: the drag would
-// either eat the tap or steal the range slider's own gesture. The last two are
-// the house's existing convention, borrowed rather than reinvented —
-// SortableList marks its opt-outs `[data-no-drag]` and its containers
-// `[data-sortable]`, and its rule is the right one here too: whichever gesture
-// owner is nearest the thing you are actually pointing at wins, so a reorder list
-// inside a sheet keeps its own hold-and-drag.
-const SHEET_NO_DRAG = 'button, a, input, textarea, select, label, [role="button"], [contenteditable], [draggable="true"], [data-no-drag], [data-sortable]';
+// THE MARKS THAT MEAN "ANOTHER GESTURE ALREADY OWNS THIS FINGER", in one place,
+// because there is more than one drag in this app now: the sheet's pull-to-dismiss
+// and MobileShell's pull-to-refresh both begin with a finger travelling downward,
+// and a region that only ONE of them declined is exactly the bug this constant
+// exists to make impossible. A hold-and-drag to reorder starting at scrollTop 0
+// armed the refresh as well as the reorder — the Brief's card order, the grocery
+// list, both notes surfaces, every one of them a list whose first row is where
+// scrollTop is 0 — because the sheet guarded `[data-sortable]` and the shell's
+// gauge had never heard of it.
+//
+// SortableList's convention, borrowed rather than reinvented (it marks its
+// containers `[data-sortable]` and its opt-outs `[data-no-drag]`), and its rule
+// too: whichever gesture owner is nearest the thing you are actually pointing at
+// wins.
+export const DRAG_OPT_OUT = '[data-sortable], [data-no-drag], [contenteditable], [draggable="true"]';
+// The sheet's own list is that plus everything that answers a tap or holds a
+// caret, because a drag beginning on a button eats the tap and a slider's gesture
+// is its own. Pull-to-refresh deliberately does NOT inherit the tap half — on a
+// phone almost every row is a button or a pressable card, and a pull that declined
+// them would have nowhere left to start. It refuses the fields by tag instead, in
+// the ancestor walk it performs anyway (see MobileShell's onStart).
+const SHEET_NO_DRAG = `button, a, input, textarea, select, label, [role="button"], ${DRAG_OPT_OUT}`;
 
 // x·max/(x+max): 1:1 for small x, asymptotic to max, and no cap to hit. A cap
 // has a corner in it, and you can feel the corner.
@@ -526,6 +540,25 @@ export function sheetPolicy({ still, phone }) {
   return { animateExit: !still, drag: !still && !!phone };
 }
 const allow = () => sheetPolicy({ still: prefersStill(), phone: phoneSheet() });
+
+// Where a revived sheet goes back on the stack (see `revive` below), as
+// arithmetic rather than as a splice buried in a component, because the tempting
+// version is wrong in the direction that hurts. A parent that declines a close
+// ASYNCHRONOUSLY has put another sheet above us by the time we come back —
+// SeatNotesModal's onClose awaits a confirm — so pushing onto the end would claim
+// we are on top and hand Escape to the sheet the user cannot see. Going back where
+// we left from keeps the order that mounting created. Mutates in place: the stack
+// is module state that a live keydown listener is already reading.
+export function sheetRevive(stack, id, at) {
+  if (stack.indexOf(id) >= 0) return stack; // already there; never twice
+  stack.splice(Math.max(0, Math.min(at, stack.length)), 0, id);
+  return stack;
+}
+// How long after telling the parent we wait before concluding it declined. React
+// flushes a setState made from a timer in a later task, so this has to be more
+// than zero; two frames is several tasks and is invisible either way, because the
+// sheet is already off the bottom edge for the whole window.
+const SHEET_REVIVE_MS = 32;
 
 // A sheet's own controls — `footer` buttons especially — are created at the call
 // site but MOUNT inside the sheet, and context is resolved by tree position, so
@@ -620,6 +653,51 @@ export function Sheet({ onClose, title, headTrailing, footer, children, z = 300,
     if (s) { s.style.transition = "opacity var(--dur-2) ease"; s.style.opacity = "0"; }
   };
 
+  // ── the close a parent is allowed to REFUSE ────────────────────────────────
+  // Every sheet here is `{open && <Sheet/>}`, so "closed" means the parent
+  // unmounted us — and a parent may decline. SeatNotesModal's onClose is
+  // `if (dirty && !(await confirm(…))) return;`, and that shape used to brick the
+  // whole app: the sheet had already taken itself off the stack, put on .out
+  // (translateY(100%), pointer-events:none) and left the scrim up, whose .out rule
+  // deliberately KEEPS its pointer-events so a tap during the exit can't land on a
+  // card that isn't back yet. Nothing ever reset closingRef, so the sheet sat
+  // off-screen and inert, Escape was dead, and a transparent fixed inset:0 scrim
+  // ate every tap in the app until a reload.
+  //
+  // Making the contract safe beats documenting it. Two frames after the parent has
+  // been told, a sheet that is STILL MOUNTED was not closed — so it comes back:
+  // visible, dismissible again, on the stack at the index it left from, with the
+  // scrim guarding a sheet you can see. An async decline reads exactly right on the
+  // way through — the sheet stays open behind the question it asked, which is what
+  // iOS does with a discard prompt — and the worst case if we conclude "declined"
+  // a beat early is one frame of a sheet that then unmounts without its slide.
+  const revive = (stackAt) => {
+    // React nulls a ref on unmount, so the node IS the liveness test. It has to be
+    // asked: reviving a dead id into sheetStack would take Escape away from every
+    // sheet under it — the same bug wearing a different face.
+    if (!dialogRef.current || !closingRef.current) return;
+    closingRef.current = false;
+    setClosing(false);
+    sheetRevive(sheetStack, idRef.current, stackAt);
+    // A thrown sheet was left at translateY(100%) by JS, and an inline transform
+    // beats the stylesheet — so dropping .out and .grabbed changes nothing on
+    // screen until these go too. With .grabbed off, `sheetin` becomes the element's
+    // animation again and the sheet re-enters exactly the way it first arrived.
+    grabbedRef.current = false;
+    const el = dialogRef.current;
+    el.classList.remove("grabbed");
+    el.style.transition = "";
+    el.style.transform = "";
+    const s = scrimRef.current;
+    if (s) { s.classList.remove("grabbed"); s.style.transition = ""; s.style.opacity = ""; }
+    // requestClose blurred whatever was focused, so focus is on <body> and the trap
+    // has nothing to hold. Take it back only if we are the top sheet again: the
+    // thing that declined for us is usually a confirm sitting ON us with its own
+    // trap, and pulling focus out of the dialog the user is answering is worse than
+    // waiting for it to close.
+    if (sheetStack[sheetStack.length - 1] === idRef.current) el.focus();
+  };
+
   // ── the close the call sites never see ─────────────────────────────────────
   const requestClose = useCallback((after) => {
     if (closingRef.current) return;
@@ -640,7 +718,15 @@ export function Sheet({ onClose, title, headTrailing, footer, children, z = 300,
     // whenever an animation happens to finish.
     const i = sheetStack.indexOf(idRef.current);
     if (i >= 0) sheetStack.splice(i, 1);
-    const deliver = () => { after?.(); cbRef.current.onClose?.(); };
+    // …and back at that same index if the parent turns out to have declined — see
+    // `revive` above. Scheduled from inside deliver so the two can never drift
+    // apart: there is no route that tells the parent without also checking whether
+    // the parent did anything about it.
+    const deliver = () => {
+      after?.();
+      cbRef.current.onClose?.();
+      window.setTimeout(() => revive(Math.max(0, i)), SHEET_REVIVE_MS);
+    };
     // Reduced motion gets no window at all — see sheetPolicy. The check has to
     // come before the closing state, or these users pay 240ms for nothing.
     if (!allow().animateExit) { deliver(); return; }

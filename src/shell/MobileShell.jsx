@@ -10,7 +10,7 @@ import { NAV, HEADERS } from "./nav.js";
 import { TopStatus } from "./TopStatus.jsx";
 import { ViewportDiag } from "./ViewportDiag.jsx";
 import { NAV_ICONS, IcSettings, IcBoardRoom } from "../ui/icons.jsx";
-import { LargeTitle, Spinner } from "../ui/kit.jsx";
+import { LargeTitle, Spinner, DRAG_OPT_OUT } from "../ui/kit.jsx";
 import { IS_STANDALONE, useVisualViewport } from "../hooks/index.js";
 
 // ─── pull-to-refresh geometry ────────────────────────────────────────────────
@@ -80,10 +80,25 @@ export function MobileShell({ page, navDir, nav = NAV, onNavigate, onOpenSetting
   // ONE ELEMENT, RENDERED TWICE. The large title and the compact bar below get
   // literally the same node, because "the same two buttons" has to stay true as
   // this row changes: anything added here — a fourth control, another chip —
-  // arrives in both places or in neither. Only one of the two is ever visible
-  // (the compact bar is `visibility: hidden` until the title leaves), so the
-  // duplicate pair is never on screen, in the tab order, or in the
-  // accessibility tree at the same time.
+  // arrives in both places or in neither.
+  //
+  // ONLY ONE OF THE TWO IS LIVE, AND THAT TAKES BOTH HALVES. The bar's half was
+  // here from the start (.cbar is `visibility: hidden` until the title leaves,
+  // which takes it out of the tab order and the accessibility tree, not merely out
+  // of sight). The title's half was missing, and this comment used to claim it
+  // anyway: scrolling a control out of the scrollport hides nothing, so for as long
+  // as `compactOn` was true BOTH copies were focusable and exposed — VoiceOver read
+  // two Settings and two Refresh on every page, and tabbing to the offscreen pair
+  // scrolled the page back to the top. So the handed-over copy is now hidden the
+  // same way the bar is.
+  //
+  // The exception, stated because it is a choice and not an oversight: while .cbar
+  // spends --dur-2 fading OUT, both copies are momentarily in the tab order. Hiding
+  // this one on the bar's clock instead would close that window and make the icons
+  // blink on every scroll to the top — see .lt-actions in components.css for the
+  // arithmetic. Both copies are the same two buttons in the same place, so the
+  // overlap costs a duplicate announcement mid-crossfade; the alternative costs a
+  // visible flaw in the control row every time.
   const controls = (
     <div className="nav-actions">
       <button className="icon-btn" onClick={onOpenSettings} aria-label="Settings" title="Settings">
@@ -221,11 +236,20 @@ export function MobileShell({ page, navDir, nav = NAV, onNavigate, onOpenSetting
       if (e.touches.length !== 1) return;                 // pinch/two-finger — not ours
       if (root.scrollTop > 0) return;                     // only from the very top of the page
       const t = e.touches[0];
+      // WHOEVER OWNS THE FINGER ALREADY, KEEPS IT. kit.jsx's DRAG_OPT_OUT is the
+      // one list of marks that say so, shared with the sheet's pull-to-dismiss —
+      // and `[data-sortable]` is the entry this handler was missing. The sheet
+      // guarded it from the day it shipped; this one checked three tag names, so a
+      // hold-and-drag to reorder that began at scrollTop 0 armed the pull at the
+      // same time as the reorder. That is the Brief's card order, the grocery list
+      // and both notes surfaces — every one of them a list whose first row sits
+      // exactly where scrollTop is 0.
+      if (t.target?.closest?.(DRAG_OPT_OUT)) return;
       // The same shape of guard App.jsx's swipe uses, on the other axis: a drag
-      // that begins inside a text control or inside a scroller of its own
-      // belongs to that thing. The Wire and Watch This Week are 340–480px tall
-      // internal scrollers that fill most of a phone screen, and stealing their
-      // first 68px of travel would make them unscrollable from the top.
+      // that begins inside a text control or inside a scroller of its own belongs
+      // to that thing. The Wire and Watch This Week are 340–480px tall internal
+      // scrollers that fill most of a phone screen, and stealing their first 68px
+      // of travel would make them unscrollable from the top.
       let el = t.target;
       while (el && el !== root) {
         const tag = el.tagName;
@@ -414,7 +438,13 @@ export function MobileShell({ page, navDir, nav = NAV, onNavigate, onOpenSetting
                 desktop; phone has no rail, so this header is the only place the
                 app says whose room you're in. It tints itself off --accent* — see
                 IcBoardRoom — so it follows the palette without anything here. */}
-            <LargeTitle title={head.title} sub={sub} trailing={controls} leading={<IcBoardRoom size={26} />} onTitleTap={onBarTap} />
+            {/* Same `controls` node, in a wrapper whose only job is to be
+                hideable — the buttons themselves must not learn which of the two
+                places they are in. */}
+            <LargeTitle
+              title={head.title} sub={sub} leading={<IcBoardRoom size={26} />} onTitleTap={onBarTap}
+              trailing={<span className={`lt-actions${compactOn ? " handed-off" : ""}`}>{controls}</span>}
+            />
             {children}
           </div>
         </div>

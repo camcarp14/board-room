@@ -89,13 +89,32 @@ const FAIL_WINDOW_MS = 10 * 60 * 1000;
 const FAIL_MAX = 5;
 const failures = new Map();
 
+// THE BUCKET KEY, AND EXACTLY WHAT IT IS WORTH. This used to fall back to the
+// LEFTMOST entry of X-Forwarded-For, which is the one end of that header nobody
+// verifies: it is whatever the client typed. On any path where Netlify's own
+// x-nf-client-connection-ip was missing, a guesser got a fresh five-attempt
+// bucket per forged header value — unlimited attempts at BACKUP_SECRET for the
+// price of one header field, which is the same as no rate limit at all.
+//
+// So there is exactly one header trusted here, and it is the one the platform
+// writes rather than the caller: x-nf-client-connection-ip. Netlify sets it on
+// every invocation and lowercases the whole header map, so the lowercase spelling
+// is the only one read — reading a Titlecase variant too would mean honouring a
+// name a client could send, which is the hole being closed.
+//
+// WHEN IT IS ABSENT (local invocation, a smoke, some future platform) every such
+// caller shares ONE bucket. That is deliberate: a shared bucket cannot be escaped
+// by forging a header, and a per-forged-value bucket is not a rate limit. What it
+// cannot be trusted to mean is "one person" — the shared bucket is filled by
+// anyone on that path, so a determined caller can spend the window and make the
+// legitimate backup wait ten minutes. That is the same trade the previous
+// `|| "unknown"` fallback already made, and it is the right side of it: a delayed
+// backup is recoverable, an unmetered secret guess is not. The real defence
+// remains the length and randomness of BACKUP_SECRET.
 function clientIp(event) {
   const h = event.headers || {};
-  return String(
-    h["x-nf-client-connection-ip"] ||
-    (h["x-forwarded-for"] || "").split(",")[0] ||
-    h["client-ip"] || "unknown",
-  ).trim() || "unknown";
+  const platform = String(h["x-nf-client-connection-ip"] || "").trim();
+  return platform || "unverified-source";
 }
 
 function rateLimited(ip, now) {
@@ -118,7 +137,7 @@ function noteFailure(ip, now) {
 // so the lengths are compared first. That comparison is not constant time and does
 // not need to be: the length of the secret is not the secret, and an attacker who
 // learns it still has to guess its bytes. Same shape as secretOk() in
-// board-work-background.js and hopDenied() in stock-settle-background.js.
+// board-work-background.js and hopSecretOk() in stock-settle-background.js.
 function secretOk(presented, expected) {
   const a = Buffer.from(String(presented == null ? "" : presented), "utf8");
   const b = Buffer.from(String(expected), "utf8");
