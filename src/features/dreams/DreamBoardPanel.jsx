@@ -1,9 +1,9 @@
-import { useState, useMemo } from "react";
+import { useState, useMemo, useRef } from "react";
 import { isMissingTable } from "../../data/db.js";
 import {
   useDreamItems, useSaveDreamItem, useDeleteDreamItem, useRenameDreamBoard, useDeleteDreamBoard,
 } from "../../data/dreams.js";
-import { Card, Button, Field, TextArea, Sheet, EmptyState, PillRow, Pill, useConfirm, IcCheck } from "../../ui/kit.jsx";
+import { Card, Button, Field, TextArea, Sheet, EmptyState, PillRow, Pill, useConfirm, IcCheck, closeSheet } from "../../ui/kit.jsx";
 import { IcClose, IcChevronDown } from "../../ui/icons.jsx";
 import {
   DEFAULT_BOARD, SETUP_SQL, DREAM_STARTERS,
@@ -100,6 +100,10 @@ export function DreamBoardPanel({ isMobile, settings, updateSetting }) {
   const [saving, setSaving] = useState(false);
   const [saveErr, setSaveErr] = useState(null);
   const [confirmEl, confirm] = useConfirm();
+  // Populated by the tile Sheet while it is mounted. Both closes below fire from a
+  // mutation callback in THIS scope, so setTile(null) would unmount the sheet that
+  // frame and it would vanish with a cut. See closeSheet in ui/kit.jsx.
+  const sheetClose = useRef(null);
 
   const all = rows || [];
   const savedBoards = settings?.dream_boards;
@@ -169,7 +173,7 @@ export function DreamBoardPanel({ isMobile, settings, updateSetting }) {
     if (!tile.title.trim() && !tile.image_url.trim()) { setSaveErr("Give it a picture or a line — ideally both."); return; }
     setSaving(true); setSaveErr(null);
     saveMut.mutate({ ...tile, title: tile.title.trim(), image_url: tile.image_url.trim() || null, note: tile.note.trim() || null }, {
-      onSuccess: () => { setSaving(false); setTile(null); },
+      onSuccess: () => { setSaving(false); closeSheet(sheetClose, () => setTile(null)); },
       onError: (e) => { setSaving(false); setSaveErr(e.message || "Couldn't save."); },
     });
   };
@@ -178,7 +182,7 @@ export function DreamBoardPanel({ isMobile, settings, updateSetting }) {
     if (!(await confirm({ title: "Remove this tile?", message: "It comes off the board. Recoverable for 30 days.", confirmLabel: "Remove", destructive: true }))) return;
     setSaving(true);
     delMut.mutate(tile.id, {
-      onSuccess: () => { setSaving(false); setTile(null); },
+      onSuccess: () => { setSaving(false); closeSheet(sheetClose, () => setTile(null)); },
       onError: (e) => { setSaving(false); setSaveErr(e.message || "Couldn't remove."); },
     });
   };
@@ -293,7 +297,7 @@ export function DreamBoardPanel({ isMobile, settings, updateSetting }) {
 
       {/* ── the tile editor ── */}
       {tile && (
-        <Sheet onClose={() => setTile(null)} title={tile.isNew ? `Add to ${tile.board}` : "Edit tile"}
+        <Sheet closeRef={sheetClose} onClose={() => setTile(null)} title={tile.isNew ? `Add to ${tile.board}` : "Edit tile"}
           footer={
             <>
               {!tile.isNew && <Button kind="danger" size="lg" disabled={saving} onClick={removeTile}>Remove</Button>}

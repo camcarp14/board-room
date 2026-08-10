@@ -11,10 +11,18 @@
 // and the eighteen ink-alpha steps follow for free. That design is what makes 20
 // themes a data table instead of a rewrite.
 //
-// Semantic colours (green/red/amber/blue/purple/pink/btc) and the shadow set are
-// NOT per-palette. They're validated data-viz hues that mean something fixed
-// (good / bad / warning), and re-tinting them per theme would break that
-// contract for decoration. They stay on the day/night definitions in tokens.css.
+// SEVENTEEN NOW, BECAUSE THE SEMANTIC COLOURS WERE NEVER ACTUALLY VALIDATED HERE.
+// green/red/amber/blue/purple/pink/btc used to be the exception to all of the
+// above: authored once in tokens.css, never overridden, on the grounds that they
+// mean something fixed (good / bad / warning) and re-tinting them per theme would
+// spend meaning on decoration. That argument holds for HUE and only for hue. It
+// was quietly also holding lightness fixed, against two surfaces those colours
+// never meet in nineteen of twenty palettes — see the survey above
+// deriveSemantic() for what that measured. So each one is now solved per palette:
+// same hue, same or greater chroma, lightness moved as little as the palette's own
+// surfaces allow. Porcelain and Graphite are pinned to the authored values, since
+// those two ARE the designed rooms and must not shift by a digit. Shadows stay
+// mode-level in tokens.css; they are opacity over the ground, not colour.
 //
 // Every generated value is contrast-checked against WCAG AA before it's written.
 // Run: node scripts/gen-themes.mjs   (verify asserts the output is in sync)
@@ -45,6 +53,24 @@ export const contrast = (a, b) => {
   const [x, y] = [lum(a), lum(b)].sort((p, q) => q - p);
   return (x + 0.05) / (y + 0.05);
 };
+
+// The inverse of hsl(), needed because the semantic colours are authored as hex
+// in tokens.css (where DESIGN.md §3 documents them) and have to be taken apart
+// before they can be re-solved. Standard HSL extraction; s is undefined for a
+// grey and reported as 0, which is what the chroma maths below wants anyway.
+function hexToHsl(x) {
+  const [r, g, b] = [1, 3, 5].map(i => parseInt(x.slice(i, i + 2), 16) / 255);
+  const max = Math.max(r, g, b), min = Math.min(r, g, b), d = max - min;
+  const l = (max + min) / 2;
+  const s = d === 0 ? 0 : d / (1 - Math.abs(2 * l - 1));
+  let h = 0;
+  if (d !== 0) {
+    if (max === r) h = 60 * (((g - b) / d) % 6);
+    else if (max === g) h = 60 * ((b - r) / d + 2);
+    else h = 60 * ((r - g) / d + 4);
+  }
+  return { h: (h + 360) % 360, s: s * 100, l: l * 100 };
+}
 
 /** Walk lightness from `start` in `dir` until `color(L)` clears `target` against
  *  `against`. Returns the first passing value — the closest to the intended tone
@@ -97,6 +123,123 @@ const THEMES = [
 // read comfortably; `faint` is captions and timestamps — the app leans on it more
 // than a typical "disabled" grey, so it gets a real floor rather than 1.5:1.
 const FLOOR = { ink: 8, sub: 4.6, faint: 3.05, accent: 4.6, onAccent: 4.6 };
+
+// ─── the seven semantic colours, solved per palette ──────────────────────────
+// WHAT THIS FIXES, MEASURED FIRST. The seven were authored once against #FFFFFF
+// and #1C1C1E — the Porcelain card and the Graphite card — and then inherited
+// unchanged by twenty palettes whose own surfaces run from #EBE9E8 (oxide, day)
+// to #4D4435 (sand night's well). Measured across all 280 palette×colour pairs
+// before a line of this was written:
+//
+//     against --surface-2 : 220 pairs under 4.5:1, 52 under 3:1
+//     against --surface   : 147 under 4.5:1, 24 under 3:1
+//     against --bg        : 131 under 4.5:1
+//
+// The worst of them were arctic/night and rose/night --red at 2.94:1 on their own
+// card, which is the Docket's "Overdue" tag at 11.5px, and every light palette's
+// --btc at 1.7–2.3:1, which is the ₿ disc on the Brief.
+//
+// THE FLOORS ARE TWO REAL WCAG NUMBERS, NOT ONE COMFORTABLE ONE.
+// 4.5:1 is AA for normal text, and the six status/series colours are worn by text
+// on the page and on cards — Status labels and Docket tags at 11.5px, destructive
+// cell titles at 15.5px — so --bg and --surface get 4.5. --surface-2 is the well
+// and the inner stat tile, where these colours dress .stattile-value at 19px/600
+// — AA large text, which is 3:1 — so that ground gets 3.0. That split is not a
+// convenience but arithmetic: contrast is luminance only, and on sand's well (#4D4435)
+// a FULLY saturated #FF0000 measures 2.39:1. No red of any chroma clears 4.5:1
+// there. The colours that do are the ones with green and blue mixed back in —
+// #FF9E9E gets 4.85:1 — and a red that pale is a pink, which is the one thing the
+// chroma clamp below exists to prevent. Taste is not what sets this boundary.
+// The one 11.5px item that lands in a well is .stattile-delta, and it stays below
+// AA — as it does today in both designed rooms (Graphite --red measures 3.25:1 on
+// --surface-2). This change does not introduce that; it stops it getting worse.
+//
+// --btc IS A BRAND FILL, NOT A STATUS. It means "Bitcoin", not good or bad, and it
+// is never text: both call sites (BriefPage, SidebarShell) are a filled 16–20px
+// disc carrying its own dark glyph. A filled shape is a non-text object, so it is
+// held to 1.4.11's 3:1 and no more — which keeps it recognisably Bitcoin orange
+// instead of solving it into a brown that happens to pass a text floor.
+const SEM_TEXT = { bg: 4.5, surface: 4.5, "surface-2": 3.0 };
+const SEM_MARK = { bg: 3.0, surface: 3.0, "surface-2": 3.0 };
+// Deliberately not exported. theme-smoke.mjs keeps its own copy of this list and
+// of the floors below, for the reason spelled out where PALETTES is built: a test
+// that imports the thing it is checking only proves self-consistency, and this
+// module's exports are the door that mistake came through last time.
+const SEMANTIC = ["green", "red", "amber", "blue", "purple", "pink", "btc"];
+const SEM_FLOOR = Object.fromEntries(SEMANTIC.map(k => [k, k === "btc" ? SEM_MARK : SEM_TEXT]));
+
+// PORCELAIN AND GRAPHITE ARE PINNED. They are the two designed rooms — DESIGN.md
+// §3 prints their hexes — and Cameron reads one of them every day. A generator
+// that "improved" the default palette's red would restyle the app out from under
+// the only user it has. So those two keep the authored values verbatim, which also
+// means the pins are the one place the floors above are not met (Porcelain's
+// --green measures 3.92:1 on its own ground, --btc 2.07:1). That is a design
+// decision to make deliberately, in tokens.css, not a number for this file to
+// quietly move.
+const PINNED = new Set(["porcelain", "graphite"]);
+
+// tokens.css stays the source of truth for what each colour MEANS: it is where
+// DESIGN.md documents them, where the day/night fallbacks live for a document with
+// no [data-palette] yet, and where the alpha ladders (--red-a32, --green-a06 …)
+// color-mix off them. Parsed rather than duplicated here — two lists of fourteen
+// hexes would drift, and a drifted --red is a Docket tag that changes colour when
+// you switch palettes for an unrelated reason.
+const TOKENS_CSS = readFileSync(new URL("../src/design/tokens.css", import.meta.url), "utf8");
+function authoredSemantics(selector) {
+  const at = TOKENS_CSS.indexOf(selector);
+  if (at < 0) throw new Error(`gen-themes: tokens.css has no "${selector}" block to read the semantic colours from`);
+  const body = TOKENS_CSS.slice(at, TOKENS_CSS.indexOf("\n}", at));
+  const out = {};
+  for (const m of body.matchAll(/--([a-z0-9-]+):\s*(#[0-9A-Fa-f]{6})/g)) out[m[1]] = m[2].toUpperCase();
+  const missing = SEMANTIC.filter(k => !out[k]);
+  if (missing.length) throw new Error(`gen-themes: tokens.css ${selector} is missing --${missing.join(", --")}`);
+  return Object.fromEntries(SEMANTIC.map(k => [k, out[k]]));
+}
+const AUTHORED = {
+  day: authoredSemantics(':root, [data-theme="day"] {'),
+  night: authoredSemantics('[data-theme="night"] {'),
+};
+
+// HSL chroma — the (1-|2L-1|)·S term hslToRgb multiplies out. Holding it is the
+// whole reason a lightened red stays a red: pink is not a hue, it is a light red
+// with the chroma taken out of it, and naïvely raising L does exactly that (at
+// L=50 a saturation of 71 carries full chroma; at L=72 the same 71 carries little
+// over half of it). So as lightness moves, saturation is solved to hold the
+// authored chroma — CLAMPED so this can only ever hold or raise chroma, never
+// drop it, and capped a bounded distance above the authored saturation so nothing
+// solves its way into neon.
+const S_HEADROOM = 30;
+const chromaOf = (s, l) => (1 - Math.abs(2 * (l / 100) - 1)) * s;
+function satAt(chroma, l, s0) {
+  const k = 1 - Math.abs(2 * (l / 100) - 1);
+  return k <= 0.001 ? 100 : clamp(chroma / k, Math.min(s0, 100), Math.min(100, s0 + S_HEADROOM));
+}
+
+/** Solve one semantic colour against one palette's three surfaces.
+ *  Hue is held exactly; chroma is held or raised; only lightness searches, and it
+ *  searches in ONE direction — darker on a light ground, lighter on a dark one —
+ *  which is what makes a single walk able to satisfy all three surfaces at once:
+ *  contrast against every one of them moves the same way as L leaves the middle.
+ *  The walk starts at the authored lightness and stops at the first passing step,
+ *  so a colour moves as little as its palette demands, and one that already clears
+ *  its floors is returned as the authored hex itself — not a round-trip through
+ *  HSL that could shift it a digit for nothing. */
+function deriveSemantic(name, mode, grounds, pinned) {
+  const authored = AUTHORED[mode][name];
+  if (pinned) return authored;
+  const floor = SEM_FLOOR[name];
+  const clears = (c) => Object.keys(floor).every(g => contrast(c, grounds[g]) >= floor[g]);
+  if (clears(authored)) return authored;
+  const { h, s: s0, l: l0 } = hexToHsl(authored);
+  const chroma = chromaOf(s0, l0);
+  const dir = mode === "night" ? +1 : -1;
+  let best = authored;
+  for (let L = l0; L >= 0 && L <= 100; L += dir * 0.5) {
+    best = hsl(h, satAt(chroma, L, s0), L);
+    if (clears(best)) return best;
+  }
+  return best; // ran out of range — the validator below will flag it
+}
 
 function build(t, mode) {
   const dark = mode === "night";
@@ -151,7 +294,12 @@ function build(t, mode) {
     contrast(accent, "#FFFFFF") >= FLOOR.onAccent ? 99 : 10,
     contrast(accent, "#FFFFFF") >= FLOOR.onAccent ? -1 : +1,
   );
-  return { bg, surface, "surface-2": surface2, ink, sub, faint, accent, "accent-hi": accentHi, "accent-deep": accentDeep, "on-accent": onAccent };
+  // The semantic seven, against this palette's own three surfaces rather than
+  // against the two they were authored on.
+  const grounds = { bg, surface, "surface-2": surface2 };
+  const pinned = PINNED.has(t.key);
+  const semantic = Object.fromEntries(SEMANTIC.map(k => [k, deriveSemantic(k, mode, grounds, pinned)]));
+  return { bg, surface, "surface-2": surface2, ink, sub, faint, accent, "accent-hi": accentHi, "accent-deep": accentDeep, "on-accent": onAccent, ...semantic };
 }
 // Recover the lightness we landed on, so hi/deep step from the tuned value.
 function accentLightness(target, h, s) {
@@ -193,6 +341,23 @@ if (isMain) {
       // surfaces must actually be distinguishable, or cards vanish into the page
       if (contrast(v.surface, v.bg) < 1.04) problems.push(`${p.key}/${mode}: surface is indistinguishable from bg`);
       if (contrast(v["surface-2"], v.surface) < 1.03) problems.push(`${p.key}/${mode}: surface-2 is indistinguishable from surface`);
+      // The semantic seven, on all three grounds. The pinned palettes are checked
+      // for IDENTITY instead of contrast: their floors are knowingly unmet (see
+      // PINNED), and asserting a number nobody intends to meet only teaches the
+      // next person to loosen it.
+      for (const s of SEMANTIC) {
+        if (PINNED.has(p.key)) {
+          if (v[s] !== AUTHORED[mode][s]) problems.push(`${p.key}/${mode}: --${s} is ${v[s]}, but the pin says ${AUTHORED[mode][s]}`);
+          continue;
+        }
+        for (const g of ["bg", "surface", "surface-2"]) chk(`${s}-on-${g}`, v[s], v[g], SEM_FLOOR[s][g]);
+        // Holding the hue is the promise that keeps these colours MEANING what
+        // they mean; a solver allowed to rotate red toward orange would clear
+        // every contrast floor above and quietly turn "overdue" into "warning".
+        // 0.5° is round-trip slop through 8-bit RGB, nothing more.
+        const drift = Math.abs(hexToHsl(v[s]).h - hexToHsl(AUTHORED[mode][s]).h);
+        if (Math.min(drift, 360 - drift) > 0.5) problems.push(`${p.key}/${mode}: --${s} drifted ${drift.toFixed(1)}° off its authored hue`);
+      }
     }
   }
   if (problems.length) {
@@ -202,16 +367,22 @@ if (isMain) {
   }
 
   // ─── emit ────────────────────────────────────────────────────────────────────
-  const ORDER = ["bg", "surface", "surface-2", "ink", "sub", "faint", "accent", "accent-hi", "accent-deep", "on-accent"];
+  const ORDER = ["bg", "surface", "surface-2", "ink", "sub", "faint", "accent", "accent-hi", "accent-deep", "on-accent", ...SEMANTIC];
   const banner = `/* GENERATED by scripts/gen-themes.mjs — do not edit by hand.
      Run \`node scripts/gen-themes.mjs\` after changing the table in that file;
      \`npm run verify\` fails if this file and palettes.js drift out of sync.
 
-     ${PALETTES.length} palettes × light/dark. Each authors only the ten tokens the
+     ${PALETTES.length} palettes × light/dark. Each authors only the ${ORDER.length} tokens the
      rest of the system derives from — the --ink-a* / --accent-a* ladders, --line,
-     --glass and --focus-ring in tokens.css are all color-mix over these, so they
-     follow automatically. Semantic data colours and shadows stay in tokens.css:
-     they encode meaning (good/bad/warning), not taste. */\n`;
+     --glass, --focus-ring and the --red-a* / --amber-a* / --green-a* steps in
+     tokens.css are all color-mix over these, so they follow automatically.
+
+     The last seven are the semantic colours, solved against THIS palette's own
+     --bg / --surface / --surface-2: same hue and no less chroma than the values
+     tokens.css authors, lightness moved only as far as the palette's surfaces
+     demand. Porcelain and Graphite carry the authored values exactly — they are
+     the two designed rooms. Shadows stay in tokens.css; they are opacity over the
+     ground rather than colour. */\n`;
 
   let css = banner + `
   /* Derived from the ten authored tokens, so every palette gets these free. Sits

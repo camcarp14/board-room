@@ -2,11 +2,17 @@
      Run `node scripts/gen-themes.mjs` after changing the table in that file;
      `npm run verify` fails if this file and palettes.js drift out of sync.
 
-     20 palettes × light/dark. Each authors only the ten tokens the
+     20 palettes × light/dark. Each authors only the 17 tokens the
      rest of the system derives from — the --ink-a* / --accent-a* ladders, --line,
-     --glass and --focus-ring in tokens.css are all color-mix over these, so they
-     follow automatically. Semantic data colours and shadows stay in tokens.css:
-     they encode meaning (good/bad/warning), not taste. */
+     --glass, --focus-ring and the --red-a* / --amber-a* / --green-a* steps in
+     tokens.css are all color-mix over these, so they follow automatically.
+
+     The last seven are the semantic colours, solved against THIS palette's own
+     --bg / --surface / --surface-2: same hue and no less chroma than the values
+     tokens.css authors, lightness moved only as far as the palette's surfaces
+     demand. Porcelain and Graphite carry the authored values exactly — they are
+     the two designed rooms. Shadows stay in tokens.css; they are opacity over the
+     ground rather than colour. */
 
   /* Derived from the ten authored tokens, so every palette gets these free. Sits
      after tokens.css (styles.css import order) and matches its specificity, so it
@@ -41,6 +47,13 @@
   --accent-hi: #A88124;
   --accent-deep: #614A15;
   --on-accent: #FDFDFC;
+  --green: #278A4C;
+  --red: #C93B32;
+  --amber: #B36514;
+  --blue: #3568D4;
+  --purple: #6B41C4;
+  --pink: #C7447E;
+  --btc: #F7931A;
 }
 
 /* Porcelain · dark — Warm paper and bronze — the house default */
@@ -55,6 +68,13 @@
   --accent-hi: #E0BD6C;
   --accent-deep: #AD8425;
   --on-accent: #221D11;
+  --green: #34A56E;
+  --red: #E05548;
+  --amber: #BC7F24;
+  --blue: #4C82E8;
+  --purple: #9673E6;
+  --pink: #D95C93;
+  --btc: #F7931A;
 }
 
 /* Graphite · light — Neutral grey under cool steel */
@@ -69,6 +89,13 @@
   --accent-hi: #54729C;
   --accent-deep: #364963;
   --on-accent: #FCFCFD;
+  --green: #278A4C;
+  --red: #C93B32;
+  --amber: #B36514;
+  --blue: #3568D4;
+  --purple: #6B41C4;
+  --pink: #C7447E;
+  --btc: #F7931A;
 }
 
 /* Graphite · dark — Neutral grey under cool steel */
@@ -83,6 +110,13 @@
   --accent-hi: #ACBCD2;
   --accent-deep: #5D7CA8;
   --on-accent: #121821;
+  --green: #34A56E;
+  --red: #E05548;
+  --amber: #BC7F24;
+  --blue: #4C82E8;
+  --purple: #9673E6;
+  --pink: #D95C93;
+  --btc: #F7931A;
 }
 
 /* Lapis · light — Deep imperial blue under roman gold */
@@ -97,6 +131,13 @@
   --accent-hi: #A17E26;
   --accent-deep: #5B4715;
   --on-accent: #FDFDFC;
+  --green: #16793B;
+  --red: #C4362D;
+  --amber: #A45605;
+  --blue: #2F63D3;
+  --purple: #6B41C4;
+  --pink: #BA3771;
+  --btc: #CA6E00;
 }
 
 /* Lapis · dark — Deep imperial blue under roman gold */
@@ -111,6 +152,13 @@
   --accent-hi: #DCBC6A;
   --accent-deep: #A58127;
   --on-accent: #221D11;
+  --green: #34A56E;
+  --red: #E05548;
+  --amber: #BC7F24;
+  --blue: #4C82E8;
+  --purple: #9673E6;
+  --pink: #D95C93;
+  --btc: #F7931A;
 }
 
 /* Slate · light — Cool grey and steel */
@@ -125,6 +173,13 @@
   --accent-hi: #2F78C6;
   --accent-deep: #1E4D80;
   --on-accent: #FCFCFD;
+  --green: #1D8042;
+  --red: #C93B32;
+  --amber: #AA5C0B;
+  --blue: #3568D4;
+  --purple: #6B41C4;
+  --pink: #C43B77;
+  --btc: #D47400;
 }
 
 /* Slate · dark — Cool grey and steel */
@@ -139,6 +194,13 @@
   --accent-hi: #B1CEED;
   --accent-deep: #4D8FD5;
   --on-accent: #111922;
+  --green: #37AF74;
+  --red: #FB7063;
+  --amber: #D18D28;
+  --blue: #6399FF;
+  --purple: #AA87FA;
+  --pink: #EF72A9;
+  --btc: #F7931A;
 }
 
 /* Forest · light — Deep green, sage highlight */
@@ -153,6 +215,13 @@
   --accent-hi: #359763;
   --accent-deep: #1E5739;
   --on-accent: #FCFDFC;
+  --green: #1A7D3F;
+  --red: #C83A31;
+  --amber: #A65807;
+  --blue: #3568D4;
+  --purple: #6B41C4;
+  --pink: #C03975;
+  --btc: #D17300;
 }
 
 /* Forest · dark — Deep green, sage highlight */
@@ -167,6 +236,13 @@
   --accent-hi: #7FD2A6;
   --accent-deep: #389F68;
   --on-accent: #112219;
+  --green: #34A56E;
+  --red: #E85D50;
+  --amber: #BC7F24;
+  --blue: #5288EE;
+  --purple: #9976E9;
+  --pink: #DC5F96;
+  --btc: #F7931A;
 }
 
 /* Claret · light — Oxblood and old rose */
@@ -181,6 +257,13 @@
   --accent-hi: #AA3149;
   --accent-deep: #671E2C;
   --on-accent: #FDFCFC;
+  --green: #147739;
+  --red: #C03229;
+  --amber: #A05201;
+  --blue: #2C61D0;
+  --purple: #6B41C4;
+  --pink: #B6336D;
+  --btc: #C56C00;
 }
 
 /* Claret · dark — Oxblood and old rose */
@@ -195,6 +278,13 @@
   --accent-hi: #E8B0BB;
   --accent-deep: #CD516A;
   --on-accent: #221114;
+  --green: #34A56E;
+  --red: #EB6053;
+  --amber: #BE8024;
+  --blue: #558BF1;
+  --purple: #9C79EC;
+  --pink: #DF6299;
+  --btc: #F7931A;
 }
 
 /* Ink · light — Near-black paper, cold cyan */
@@ -209,6 +299,13 @@
   --accent-hi: #1F98AD;
   --accent-deep: #125764;
   --on-accent: #FCFDFD;
+  --green: #1F8244;
+  --red: #C93B32;
+  --amber: #AB5D0C;
+  --blue: #3568D4;
+  --purple: #6B41C4;
+  --pink: #C53E7A;
+  --btc: #D67500;
 }
 
 /* Ink · dark — Near-black paper, cold cyan */
@@ -223,6 +320,13 @@
   --accent-hi: #5FCFE3;
   --accent-deep: #1E94A9;
   --on-accent: #112022;
+  --green: #34A56E;
+  --red: #E05548;
+  --amber: #BC7F24;
+  --blue: #4C82E8;
+  --purple: #9673E6;
+  --pink: #D95C93;
+  --btc: #F7931A;
 }
 
 /* Navy · light — Naval blue with brass fittings */
@@ -237,6 +341,13 @@
   --accent-hi: #B86B1E;
   --accent-deep: #6E4012;
   --on-accent: #FDFCFC;
+  --green: #16793B;
+  --red: #C1332A;
+  --amber: #A25403;
+  --blue: #2D62D2;
+  --purple: #6B41C4;
+  --pink: #B93670;
+  --btc: #CA6E00;
 }
 
 /* Navy · dark — Naval blue with brass fittings */
@@ -251,6 +362,13 @@
   --accent-hi: #E6A665;
   --accent-deep: #B4691D;
   --on-accent: #221A11;
+  --green: #34A56E;
+  --red: #E05548;
+  --amber: #BC7F24;
+  --blue: #4C82E8;
+  --purple: #9673E6;
+  --pink: #D95C93;
+  --btc: #F7931A;
 }
 
 /* Plum · light — Aubergine and lilac */
@@ -265,6 +383,13 @@
   --accent-hi: #8737AE;
   --accent-deep: #54226D;
   --on-accent: #FDFCFD;
+  --green: #16793B;
+  --red: #C4362D;
+  --amber: #A45605;
+  --blue: #3165D3;
+  --purple: #6B41C4;
+  --pink: #BA3771;
+  --btc: #CC7000;
 }
 
 /* Plum · dark — Aubergine and lilac */
@@ -279,6 +404,13 @@
   --accent-hi: #D7B5E8;
   --accent-deep: #A458CA;
   --on-accent: #1C1122;
+  --green: #34A56E;
+  --red: #EE6356;
+  --amber: #C28325;
+  --blue: #598FF5;
+  --purple: #9E7BEE;
+  --pink: #E2659C;
+  --btc: #F7931A;
 }
 
 /* Moss · light — Olive and cream, field-notes green */
@@ -293,6 +425,13 @@
   --accent-hi: #54922A;
   --accent-deep: #2D4F17;
   --on-accent: #FCFDFC;
+  --green: #16793B;
+  --red: #C1332A;
+  --amber: #A25403;
+  --blue: #2D62D2;
+  --purple: #6B41C4;
+  --pink: #B93670;
+  --btc: #CA6E00;
 }
 
 /* Moss · dark — Olive and cream, field-notes green */
@@ -307,6 +446,13 @@
   --accent-hi: #A2D97D;
   --accent-deep: #62AA31;
   --on-accent: #182211;
+  --green: #34A56E;
+  --red: #EB6053;
+  --amber: #BE8024;
+  --blue: #558BF1;
+  --purple: #9C79EC;
+  --pink: #DF6299;
+  --btc: #F7931A;
 }
 
 /* Copper · light — Oxidised metal, warm and worked */
@@ -321,6 +467,13 @@
   --accent-hi: #A95728;
   --accent-deep: #633317;
   --on-accent: #FDFCFC;
+  --green: #117436;
+  --red: #BE3027;
+  --amber: #9E5100;
+  --blue: #2B5FCC;
+  --purple: #6B41C4;
+  --pink: #B5326C;
+  --btc: #C26A00;
 }
 
 /* Copper · dark — Oxidised metal, warm and worked */
@@ -335,6 +488,13 @@
   --accent-hi: #E5AF8F;
   --accent-deep: #CA682F;
   --on-accent: #221711;
+  --green: #34A56E;
+  --red: #ED6255;
+  --amber: #C08225;
+  --blue: #568CF2;
+  --purple: #9E7BEE;
+  --pink: #E1649B;
+  --btc: #F7931A;
 }
 
 /* Teal · light — Deep teal cut with coral */
@@ -349,6 +509,13 @@
   --accent-hi: #C24B2E;
   --accent-deep: #7C301D;
   --on-accent: #FDFCFC;
+  --green: #1C7F41;
+  --red: #C93B32;
+  --amber: #A95B0A;
+  --blue: #3568D4;
+  --purple: #6B41C4;
+  --pink: #C23A76;
+  --btc: #D47400;
 }
 
 /* Teal · dark — Deep teal cut with coral */
@@ -363,6 +530,13 @@
   --accent-hi: #EFC7BD;
   --accent-deep: #D8735A;
   --on-accent: #221411;
+  --green: #38B176;
+  --red: #FB7063;
+  --amber: #D48F29;
+  --blue: #659BFF;
+  --purple: #AC89FC;
+  --pink: #EF72A9;
+  --btc: #F7931A;
 }
 
 /* Iris · light — Indigo and periwinkle */
@@ -377,6 +551,13 @@
   --accent-hi: #4C31B9;
   --accent-deep: #301F75;
   --on-accent: #FCFCFD;
+  --green: #187B3D;
+  --red: #C5372E;
+  --amber: #A55706;
+  --blue: #3165D3;
+  --purple: #6B41C4;
+  --pink: #BC3872;
+  --btc: #CC7000;
 }
 
 /* Iris · dark — Indigo and periwinkle */
@@ -391,6 +572,13 @@
   --accent-hi: #BAAEEA;
   --accent-deep: #684ED0;
   --on-accent: #141122;
+  --green: #34A56E;
+  --red: #E05548;
+  --amber: #BC7F24;
+  --blue: #4C82E8;
+  --purple: #9673E6;
+  --pink: #D95C93;
+  --btc: #F7931A;
 }
 
 /* Arctic · light — Ice white over deep polar blue */
@@ -405,6 +593,13 @@
   --accent-hi: #288BD2;
   --accent-deep: #1A5B89;
   --on-accent: #FCFDFD;
+  --green: #1F8244;
+  --red: #C93B32;
+  --amber: #AB5D0C;
+  --blue: #3568D4;
+  --purple: #6B41C4;
+  --pink: #C53E7A;
+  --btc: #D67500;
 }
 
 /* Arctic · dark — Ice white over deep polar blue */
@@ -419,6 +614,13 @@
   --accent-hi: #B6D9F1;
   --accent-deep: #4FA2DE;
   --on-accent: #111B22;
+  --green: #3BBC7E;
+  --red: #FF7F73;
+  --amber: #D9993A;
+  --blue: #75A5FF;
+  --purple: #B595FF;
+  --pink: #F97CB3;
+  --btc: #F7931A;
 }
 
 /* Ember · light — Charcoal with a live coal in it */
@@ -433,6 +635,13 @@
   --accent-hi: #AF3F1D;
   --accent-deep: #652410;
   --on-accent: #FDFCFC;
+  --green: #0F7234;
+  --red: #BB2D24;
+  --amber: #994E00;
+  --blue: #2A5DC9;
+  --purple: #6B41C4;
+  --pink: #B12E68;
+  --btc: #BF6900;
 }
 
 /* Ember · dark — Charcoal with a live coal in it */
@@ -447,6 +656,13 @@
   --accent-hi: #EA957B;
   --accent-deep: #CA4821;
   --on-accent: #221511;
+  --green: #34A56E;
+  --red: #E05548;
+  --amber: #BC7F24;
+  --blue: #4C82E8;
+  --purple: #9673E6;
+  --pink: #D95C93;
+  --btc: #F7931A;
 }
 
 /* Mono · light — Pure greyscale — the accent is the ink */
@@ -461,6 +677,13 @@
   --accent-hi: #7A7A7A;
   --accent-deep: #4F4F4F;
   --on-accent: #FCFCFC;
+  --green: #1E8143;
+  --red: #C93B32;
+  --amber: #AA5C0B;
+  --blue: #3568D4;
+  --purple: #6B41C4;
+  --pink: #C43B77;
+  --btc: #D67500;
 }
 
 /* Mono · dark — Pure greyscale — the accent is the ink */
@@ -475,6 +698,13 @@
   --accent-hi: #ABABAB;
   --accent-deep: #6E6E6E;
   --on-accent: #1A1A1A;
+  --green: #34A56E;
+  --red: #E05548;
+  --amber: #BC7F24;
+  --blue: #4C82E8;
+  --purple: #9673E6;
+  --pink: #D95C93;
+  --btc: #F7931A;
 }
 
 /* Sand · light — Desert paper, dusty blue accent */
@@ -489,6 +719,13 @@
   --accent-hi: #40719C;
   --accent-deep: #26445E;
   --on-accent: #FCFDFD;
+  --green: #16793B;
+  --red: #C1332A;
+  --amber: #A25403;
+  --blue: #2F63D3;
+  --purple: #6B41C4;
+  --pink: #B93670;
+  --btc: #CA6E00;
 }
 
 /* Sand · dark — Desert paper, dusty blue accent */
@@ -503,6 +740,13 @@
   --accent-hi: #BED2E4;
   --accent-deep: #6797C1;
   --on-accent: #111A22;
+  --green: #38B377;
+  --red: #FF7467;
+  --amber: #D69029;
+  --blue: #6B9EFF;
+  --purple: #AD8AFD;
+  --pink: #F174AB;
+  --btc: #F7931A;
 }
 
 /* Rose · light — Grey with dusty pink */
@@ -517,6 +761,13 @@
   --accent-hi: #AE3D5F;
   --accent-deep: #6D263C;
   --on-accent: #FDFCFC;
+  --green: #197C3E;
+  --red: #C6382F;
+  --amber: #A65807;
+  --blue: #3366D4;
+  --purple: #6B41C4;
+  --pink: #BE3974;
+  --btc: #CF7100;
 }
 
 /* Rose · dark — Grey with dusty pink */
@@ -531,6 +782,13 @@
   --accent-hi: #F0D5DE;
   --accent-deep: #D17B95;
   --on-accent: #221116;
+  --green: #3BBC7E;
+  --red: #FF7F73;
+  --amber: #D9993A;
+  --blue: #75A5FF;
+  --purple: #B595FF;
+  --pink: #F97CB3;
+  --btc: #F7931A;
 }
 
 /* Pine · light — Black-green and pale gold */
@@ -545,6 +803,13 @@
   --accent-hi: #93891A;
   --accent-deep: #4A450D;
   --on-accent: #FDFDFC;
+  --green: #15783A;
+  --red: #C1332A;
+  --amber: #A25403;
+  --blue: #2D62D2;
+  --purple: #6B41C4;
+  --pink: #B93670;
+  --btc: #C76D00;
 }
 
 /* Pine · dark — Black-green and pale gold */
@@ -559,6 +824,13 @@
   --accent-hi: #E3D963;
   --accent-deep: #ADA21F;
   --on-accent: #222111;
+  --green: #34A56E;
+  --red: #E3584B;
+  --amber: #BC7F24;
+  --blue: #4D83E9;
+  --purple: #9673E6;
+  --pink: #D95C93;
+  --btc: #F7931A;
 }
 
 /* Oxide · light — Iron grey and rust */
@@ -573,6 +845,13 @@
   --accent-hi: #9D4C2A;
   --accent-deep: #592B18;
   --on-accent: #FDFCFC;
+  --green: #0E7133;
+  --red: #B82A21;
+  --amber: #994E00;
+  --blue: #285BC7;
+  --purple: #6B41C4;
+  --pink: #B02D67;
+  --btc: #BD6700;
 }
 
 /* Oxide · dark — Iron grey and rust */
@@ -587,4 +866,11 @@
   --accent-hi: #ECC6B6;
   --accent-deep: #D27B56;
   --on-accent: #221611;
+  --green: #38B377;
+  --red: #FF7467;
+  --amber: #D69029;
+  --blue: #6B9EFF;
+  --purple: #AD8AFD;
+  --pink: #F174AB;
+  --btc: #F7931A;
 }

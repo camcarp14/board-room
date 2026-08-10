@@ -91,9 +91,6 @@ button:active:not(:disabled) { transform: scale(0.97); }
 
 /* ═══ CHROME — phone ═════════════════════════════════════════════════════════ */
 
-/* The .nav-bar rules lived here for a pinned header MobileShell no longer
-   renders — the large title and its controls scroll inside #page-scroll now. */
-
 .nav-actions { display: flex; align-items: center; gap: 6px; }
 .icon-btn {
   width: 38px; height: 38px; display: inline-flex; align-items: center; justify-content: center;
@@ -106,6 +103,91 @@ button:active:not(:disabled) { transform: scale(0.97); }
 /* Had a hover wash but no pressed one, so on touch — where hover never fires —
    the only feedback was the global 0.97 scale. Now the well fills too. */
 .icon-btn:active { background: var(--ink-a10); }
+
+/* ── the compact scrolled header ─────────────────────────────────────────────
+   DESIGN.md §7's nav bar, finally built. A note used to sit here saying
+   MobileShell rendered no pinned header; it renders this one, and the difference
+   from the bar that note was written about is that this one is a STICKY CHILD OF
+   THE PAGE SCROLLER rather than a fixed overlay. Everything this shell knows
+   about vertical space — the vvh-pinned height, the statuscap, the in-flow tab
+   bar, the keyboard collapse — was won by getting things OUT of the fixed
+   coordinate systems iOS standalone misreports. A fixed bar here would have to
+   be told where the safe areas and the keyboard are all over again, and would be
+   wrong the first time one of them moved. The scroller already knows.
+
+   THE PERCH IS ZERO PIXELS TALL and the bar inside it overflows downward. That
+   is what keeps every page's layout byte-for-byte what it was before this
+   existed: the bar floats over the content it covers and never occupies a row.
+   A bar that took 48px of flow would push every page down by a bar's worth of
+   nothing for the whole time it is invisible, which is most of the time. */
+.cbar-perch { position: sticky; top: 0; height: 0; flex: none; z-index: 20; }
+.cbar {
+  display: flex; align-items: center; height: 48px; padding: 0 16px;
+  background: var(--glass);
+  -webkit-backdrop-filter: blur(20px) saturate(1.8); backdrop-filter: blur(20px) saturate(1.8);
+  /* the one hairline glass chrome gets, on the content side — same as .dock */
+  border-bottom: 0.5px solid var(--line);
+  /* VISIBILITY, NOT JUST OPACITY. An invisible bar still holding a second
+     Settings and a second Refresh button in the tab order and the accessibility
+     tree is a phantom control row — VoiceOver would read every page as having
+     two of each. visibility takes them out of both, and it is one of the few
+     discrete properties CSS transitions handle usefully: it flips to visible
+     immediately on the way in and waits for the fade to finish on the way out. */
+  opacity: 0; visibility: hidden; pointer-events: none;
+  transition: opacity var(--dur-2) var(--ease-out), visibility var(--dur-2) linear;
+}
+.cbar.on { opacity: 1; visibility: visible; pointer-events: auto; }
+/* 38 + 6 + 38 — the two .icon-btn boxes and the .nav-actions gap opposite. An
+   empty cell of exactly that width is what centres the title, and absolute
+   centring was the alternative until the arithmetic came out: with the unsaved
+   chip showing, the right cluster reaches past the middle of a 360px phone, so a
+   truly centred title would sit underneath it. This way the title is dead centre
+   in the ordinary case and slides left by half the chip when there is a failed
+   write to report — which is what UIKit does with a wide bar-button item, and
+   only ever happens in a state where something is already wrong. If a control is
+   ever added to that cluster, this number moves with it. */
+.cbar-mirror { flex: none; width: 82px; }
+.cbar > .nav-actions { flex: none; }
+.cbar-title {
+  flex: 1; min-width: 0; text-align: center;
+  font-size: 16px; font-weight: 600; letter-spacing: -0.01em; color: var(--ink);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+
+/* ── pull to refresh ─────────────────────────────────────────────────────────
+   Two halves. A zero-height perch holds a gap the gauge is centred in — JS
+   writes the gap's height, and that height IS the pull — and .ptr-wrap holds the
+   page, travelling the same distance. Clipping the gap is what makes the gauge
+   read as dragged out from under the top edge instead of faded in on top of it,
+   and it is why the gauge is invisible at rest without needing an opacity of its
+   own. Same shape as the header above: nothing here is fixed, nothing here
+   changes the page's layout when the pull is at zero. */
+.ptr-perch { position: sticky; top: 0; height: 0; flex: none; z-index: 15; }
+.ptr-gap { height: 0; overflow: hidden; display: flex; align-items: center; justify-content: center; }
+.ptr-wrap { flex: 1; display: flex; flex-direction: column; }
+/* Glass and a shadow in BOTH modes, deliberately. Normally it emerges into an
+   empty gap where a plain surface would do — but under prefers-reduced-motion
+   the page does not travel, so the gauge has to stay legible sitting over the
+   large title. One recipe that works in both beats two that each work in one. */
+.ptr-gauge {
+  flex: none; width: 30px; height: 30px; border-radius: 999px;
+  display: inline-flex; align-items: center; justify-content: center;
+  background: var(--glass-raised);
+  -webkit-backdrop-filter: blur(20px) saturate(1.8); backdrop-filter: blur(20px) saturate(1.8);
+  box-shadow: var(--shadow-card);
+}
+.ptr-ring { display: block; }
+/* display, not a conditional render: the arc keeps its ref through the whole
+   refresh, so the frame the spinner leaves has a real dash offset to go back to
+   rather than whatever the JSX attribute last said. */
+.ptr-gauge.running .ptr-ring { display: none; }
+.ptr-track { stroke: var(--ink-a10); }
+/* Quiet while you are still deciding, gold the moment letting go would actually
+   refresh: the accent doing exactly what the accent is for (an armed, selected
+   state), and the same gold as the spinner it becomes. It is never gold for
+   "done" — the gauge does not have an opinion about whether data landed. */
+.ptr-arc { stroke: var(--faint); }
+.ptr-gauge.armed .ptr-arc { stroke: var(--accent); }
 
 /* Large-title block — the first thing on every page. Used only by MobileShell,
    so these numbers are a phone's numbers.
@@ -457,11 +539,71 @@ button:active:not(:disabled) { transform: scale(0.97); }
   overscroll-behavior: contain;
 }
 @keyframes sheetin { from { opacity: 0.5; transform: translateY(56px); } to { opacity: 1; transform: none; } }
-.sheet-grab { flex: none; display: flex; justify-content: center; padding: 9px 0 3px; }
+/* The grabber's hit area is bigger than the grabber. The bar is 5px of ink in a
+   17px box, which is a fine target for a mouse and a poor one for a thumb, so an
+   invisible band extends the reach without moving a single pixel of layout: up
+   into the sheet's rounded lip, down only as far as .sheet-body's own 4px top
+   padding — never over content, and never over the head row's close button
+   (which starts 6px lower). touch-action: none is what makes the drag reliable
+   on iOS: without it Safari decides the gesture is a scroll before the first
+   pointermove arrives and cancels ours. */
+.sheet-grab { position: relative; flex: none; display: flex; justify-content: center; padding: 9px 0 3px; touch-action: none; }
+.sheet-grab::before { content: ''; position: absolute; inset: -6px 0 -4px; }
 .sheet-grab::after { content: ''; width: 36px; height: 5px; border-radius: 999px; background: var(--ink-a12); }
 .sheet-head { flex: none; display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 6px 18px 10px; }
-.sheet-body { flex: 1; min-height: 0; overflow-y: auto; padding: 4px 18px 16px; }
+/* overscroll-behavior belongs on the SCROLLER, and the scroller is this element —
+   the declaration on .sheet (not a scroll container) never did anything. Two
+   things it buys: the page behind a sheet stops scrolling when the sheet's list
+   hits its end, and, because `none` also removes the elastic bounce at the top,
+   a downward drag from scrollTop 0 has no native gesture to lose to, which is
+   the only reason the pull-to-dismiss can start inside the body at all. */
+.sheet-body { flex: 1; min-height: 0; overflow-y: auto; overscroll-behavior-y: none; padding: 4px 18px 16px; }
 .sheet-foot { flex: none; padding: 10px 18px calc(14px + env(safe-area-inset-bottom)); display: flex; gap: 10px; }
+
+/* THE EXIT. Every sheet in this app is conditionally rendered by its parent
+   ({open && <Sheet/>}), so an exit animation used to be impossible rather than
+   merely missing: the frame the parent's flag flipped, the node was gone. Sheet
+   now swallows its own onClose and wears .out for exactly --dur-2 before letting
+   the parent know (kit.jsx). `.toast.out` has done this correctly since the
+   toasts shipped — the grammar was understood, sheets just never asked for it.
+   translateY(100%) is the sheet's own height, so short confirms and full-height
+   forms both leave exactly through the bottom edge and no further; opacity stays
+   put, because a sheet you can see the scrim through on the way out reads as
+   cheap. The sheet goes inert with it — for 240ms this thing looks gone, and a
+   button on a sheet that looks gone must not still fire — but the SCRIM keeps its
+   pointer-events on purpose: it is the modal barrier, and it holds until the
+   sheet is actually unmounted. Dropping it early would let a second tap reach a
+   card or a tab bar the user cannot see yet. It swallows those taps in silence
+   because the click handler comes off the moment the exit starts. */
+.sheet.out { animation: sheetout var(--dur-2) var(--ease-out) both; pointer-events: none; }
+.sheet-scrim.out { animation: scrimout var(--dur-2) ease both; }
+@keyframes sheetout { to { transform: translateY(100%); } }
+@keyframes scrimout { to { opacity: 0; } }
+
+/* THE PULL. While a finger owns the sheet, kit.jsx writes transform inline every
+   frame — and inline transform LOSES to a filled animation, so the entrance's
+   `both` has to be revoked for the duration. It is never reinstated: re-adding
+   an animation-name after the drag would re-fire the entrance, and a sheet that
+   re-enters every time you nudge it and let go is worse than one that never
+   moved. Once grabbed, the transform belongs to JS for the rest of this sheet's
+   life — including its exit, which is why this rule sits AFTER .sheet.out and
+   overrides it. Nothing here is a border, a colour, or a geometry change. */
+.sheet.grabbed { animation: none; will-change: transform; }
+.sheet-scrim.grabbed { animation: none; }
+
+/* DETENTS — the `detent` prop DESIGN.md §6 has always documented, deliberately
+   the smaller of the two things that word can mean. On iOS a detent is a resting
+   height a sheet can be dragged BETWEEN; nothing in this app wants two resting
+   positions, and a drag-between would have to re-decide the scroll behaviour of
+   all two dozen sheets. What sheets here actually want is a presentation height
+   that does not resize as content filters — the exercise picker and the workout
+   finder ask for it by hand today, with bodyStyle minHeight. So: one resting
+   height, chosen when the sheet opens. `auto` is the default and the current
+   behaviour of every call site, content-sized. Both named heights are expressed
+   against the SAME envelope as max-height above, so the safe-area geometry stays
+   in exactly one place and a detent can never exceed it. */
+.sheet.detent-medium { height: calc((100% - env(safe-area-inset-top) - 24px) * 0.56); }
+.sheet.detent-large { height: calc(100% - env(safe-area-inset-top) - 24px); }
 @media (min-width: 761px) {
   .sheet {
     left: 50%; right: auto; bottom: auto; top: 50%;
@@ -471,6 +613,14 @@ button:active:not(:disabled) { transform: scale(0.97); }
     animation: modalin var(--dur-3) var(--ease-spring) both;
   }
   @keyframes modalin { from { opacity: 0; transform: translate(-50%, -50%) scale(0.96); } to { opacity: 1; transform: translate(-50%, -50%) scale(1); } }
+  /* A centred modal has no bottom edge to leave by, and its transform is
+     load-bearing — sheetout's translateY would knock it off centre before it
+     faded. It mirrors its own entrance instead, and the gesture is refused up
+     here for the same reason (see phoneSheet() in kit.jsx). */
+  .sheet.out { animation: modalout var(--dur-2) var(--ease-out) both; }
+  @keyframes modalout { to { opacity: 0; transform: translate(-50%, -50%) scale(0.97); } }
+  /* A modal is sized by its content; a detent is a bottom-sheet idea. */
+  .sheet.detent-medium, .sheet.detent-large { height: auto; }
   .sheet-grab { display: none; }
   .sheet-head { padding: 18px 22px 10px; }
   .sheet-body { padding: 4px 22px 18px; }
@@ -592,7 +742,25 @@ kbd {
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation-duration: 0.01ms !important; animation-delay: 0s !important; transition-duration: 0.01ms !important; }
   .pagefade, .pageslide-l, .pageslide-r, .stagger > *, .toast, .sheet { animation: none !important; }
+  /* Sheets arrive and leave instantly. kit.jsx never reaches for .out under this
+     preference — it calls the parent's onClose on the spot — but these stay as
+     the belt to that braces: a 240ms wait with a frozen sheet on screen would be
+     the slide's cost without the slide, and a future path that forgets the check
+     must still not animate. The drag is refused at pointerdown for the same
+     reason: dragging a sheet around is animation performed by hand. */
+  .sheet-scrim, .sheet.out, .sheet-scrim.out { animation: none !important; }
   .expand, .seg-thumb, .switch-knob { transition: none; }
+  /* The compact header still arrives the instant the large title leaves and
+     still carries both controls — it simply doesn't fade to get there. Killing
+     the property, not just the duration, so `visibility` flips cleanly in both
+     directions instead of riding out a 0.01ms discrete transition. */
+  .cbar { transition: none; }
+  /* Pull-to-refresh keeps the gesture, the gauge and the honest progress; what
+     it loses is the rubber band. MobileShell reads this same query before it
+     writes .ptr-wrap's transform, so the page never travels at all — and these
+     need !important because the transitions they are cancelling are written
+     inline, frame by frame, by the code that tracks the finger. */
+  .ptr-gap, .ptr-wrap, .ptr-arc { transition: none !important; }
   .sk::after { animation: none; }
   /* The tab icon still fills accent — it just doesn't spring to get there. */
   .dock-tab.active .dock-icon { animation: none !important; }

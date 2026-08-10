@@ -25,7 +25,12 @@ import { nextBirthdayOccurrence, localDayKey } from "../../lib/dates.js";
 import { NotesTile } from "./NotesTile.jsx";
 import { eventId, takeKey, hasPassed, isSettled, watchRowState, POLL_EVERY_MS, POLL_MAX, CLAIM_STALE_MS } from "./watchState.js";
 import { useEconResults, useResolveEconEvents } from "../../data/econ.js";
-import { EVENT_CATEGORIES } from "../personal/CalendarPanel.jsx"; // canonical category → color map (mini-calendar pills)
+// The canonical category → colour map (mini-calendar pills). Taken from the leaf
+// module, NOT from CalendarPanel, which also exports it: importing it from the
+// panel pulled the panel — and recurrence, overlays, layout, holidays — into this
+// page's first-paint chunk for the sake of a four-entry array. 42 kB of calendar
+// on the landing tab, bought by one import line. See lib/eventCategories.js.
+import { EVENT_CATEGORIES } from "../../lib/eventCategories.js";
 
 const GSC_EMPTY = { impressions: "—", impressionsD: "", clicks: "—", clicksD: "", pos: "—", posD: "", series: Array(14).fill(0), daily: [], note: "" };
 const STOCKS_EMPTY = { gold: { value: "—", price: "—", up: true }, nvda: { value: "—", price: "—", up: true }, mstr: { value: "—", price: "—", up: true }, strc: { value: "—", price: "—", up: true } };

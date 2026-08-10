@@ -150,6 +150,8 @@ async function harness() {
     ["StocksPanel", () => import("../src/pages/markets/StocksPanel.jsx")],
     ["AltSeasonPanel", () => import("../src/pages/markets/AltSeasonPanel.jsx")],
     ["ScoreCard", () => import("../src/pages/markets/ScoreCard.jsx")],
+    ["kit", () => import("../src/ui/kit.jsx")],
+    ["primitives", () => import("../src/ui/primitives.jsx")],
   ]) {
     try { M[name] = await load(); }
     catch (e) { failed++; console.error(`FAIL: ${name} did not even import\n      ${e.message}`); }
@@ -681,6 +683,65 @@ async function harness() {
       scored.includes("-25") && scored.includes("earned 12 of 40 · docked 25"), `got ${JSON.stringify(scored)}`);
     check("ScoreCard · a null score renders nothing rather than a bar at zero",
       draw(await stage(), React.createElement(ScoreCard, { row: {}, parts, score: null, blocks })) === "");
+  }
+
+  // ══ 9. the kit's number instrument — StatTile, Delta, NumTween ═════════════
+  // Every number in the app tweens now, and the detection that decides whether a
+  // value CAN be tweened moved into one place — kit.jsx's `instrument` — instead of
+  // living at the seventy-nine call sites that print one. That is the right trade
+  // and a dangerous one: a parser that guesses wrong prints a figure nobody
+  // measured, in the voice this app reserves for measurements, on every screen at
+  // once. These render the resting frame, which is the frame that ships: no effect
+  // runs under renderToString, so what comes out is exactly the first paint.
+  if (M.kit && M.primitives) {
+    const { StatTile, Delta } = M.kit;
+    const { NumTween } = M.primitives;
+    const kit = async (el) => draw(await stage(), el);
+    // The value slot on its own. A tween wraps the figure in an element of its own,
+    // so the span's contents are what has to be read back — and read through text(),
+    // for the same reason everything else here is (see the note above it).
+    const statValue = (html) => text((/<span class="stattile-value"[^>]*>([\s\S]*?)<\/span>/.exec(html) || [, ""])[1]);
+
+    // THE CRITICAL ONE. A null reading has to pass through untouched end to end: a
+    // tween that painted a 0 on its way to an absent value would be the app
+    // inventing a number, in the number voice, on the one tile whose entire message
+    // is that it does not have one.
+    const absent = await kit(React.createElement(StatTile, { value: null, label: "net worth" }));
+    check("StatTile · a null value renders no digit at all",
+      statValue(absent) === "" && !/\d/.test(text(absent)), `got ${JSON.stringify(text(absent))}`);
+
+    // RULE 2 FROM THE KIT'S OWN NOTE: the first paint is the final value. useTween
+    // seeds its state from its target, so a mount is already at rest — nothing
+    // counts up from zero when a page opens, and no intermediate frame exists to be
+    // caught here.
+    const flat = await kit(React.createElement(StatTile, { value: 1240, label: "sessions" }));
+    check("StatTile · a number's first paint is the number, not a count from zero",
+      statValue(flat) === "1240", `got ${JSON.stringify(statValue(flat))}`);
+
+    // AND THE PARSER DECLINES WHAT IT CANNOT REBUILD. "3/5" carries two numbers, so
+    // there is no single figure to interpolate and no scaffolding to reprint it in
+    // — tweening it would animate one of the two and leave the other standing.
+    const ratio = await kit(React.createElement(StatTile, { value: "3/5", label: "targets hit" }));
+    check("StatTile · a non-numeric shape declines the tween and prints unchanged",
+      statValue(ratio) === "3/5", `got ${JSON.stringify(statValue(ratio))}`);
+
+    // The delta's glyph and tone come from the target, never from a frame in flight,
+    // and the string it hands to `instrument` is its own formatted output — so the
+    // resting frame is character for character what this component always printed.
+    const delta = await kit(React.createElement(Delta, { pct: 1.234 }));
+    check("Delta · a positive delta prints its arrow and two decimals",
+      text(delta) === "▲ 1.23%", `got ${JSON.stringify(text(delta))}`);
+
+    // THE REGRESSION GUARD FOR A BUG THIS SHIPPED. useTween rounds to the value's
+    // own scale, so NumTween printed f(Math.round(v)) at rest — and the sheets hand
+    // it a formatter that prints two decimals between $1 and $1000. A stock at
+    // 174.32 counted up and then simply stayed at "$174.00", cents silently zeroed,
+    // on the one screen you open to read the price. The formatter here is
+    // StockSheet's own two-decimal branch.
+    const px = (x) => `$${(Math.round(x * 100) / 100).toFixed(2)}`;
+    const quote = await kit(React.createElement(NumTween, { v: 174.32, f: px }));
+    check("NumTween · the resting frame is the real quote, cents and all",
+      text(quote) === "$174.32", `got ${JSON.stringify(text(quote))}`);
   }
 
   // ══ what this harness cannot reach ════════════════════════════════════════

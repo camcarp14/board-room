@@ -1,11 +1,26 @@
 /* ═══════════════════════════════════════════════════════════════════════════
    SESSION — design tokens. Two rooms, one architecture:
    Porcelain (warm paper, daylight) and Graphite (true-black, after hours).
-   Every color in the app resolves through these variables. Legacy names
-   (--brass*, ladders, washes) are kept as aliases so any surface not yet
-   migrated still renders coherently on the new palette.
-   Data palette validated (six-checks, adjacency order green→blue→red→purple→
-   amber→pink) against #FFFFFF and #1C1C1E on 2026-07-15.
+   Every color in the app resolves through these variables. The legacy --brass*
+   aliases and the retired --white-edge / --white-inset / --glow-brass /
+   --canvas-wash no-ops are gone (see the note further down) — every surface is
+   migrated, so the palette has exactly one name per colour again. The --ink-a* /
+   --accent-a* ladders below are current API, not legacy: use the ladder, never
+   ad-hoc rgba.
+   Data palette: adjacency order green→blue→red→purple→amber→pink, six-checks
+   validated against #FFFFFF and #1C1C1E on 2026-07-15. That validation is now
+   about these two rooms and nothing else. The seven semantic colours below are
+   read out of this file by scripts/gen-themes.mjs, pinned byte-exact for
+   Porcelain and Graphite, and re-solved for the other eighteen palettes against
+   each one's OWN --bg / --surface / --surface-2 — because #FFFFFF and #1C1C1E are
+   surfaces those eighteen never show, and a lightness authored against them was
+   the only thing never being checked. The pins are exempt from the floors the
+   solved palettes meet, and Porcelain genuinely misses some of them (--green
+   3.85:1 on --bg, --btc 2.03:1 against a 3:1 mark floor). That is a decision, not
+   an oversight: it is the room Cameron reads every day and shifting it by a digit
+   restyles the app out from under him. DESIGN.md §3 records the whole caveat. If
+   a number is ever to be met, it gets a new authored hex HERE, deliberately —
+   never a loosened floor in the generator.
    ═══════════════════════════════════════════════════════════════════════════ */
 
 /* Inter — the house typeface. A tidy, professional grotesque; self-hosted

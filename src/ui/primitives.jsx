@@ -1,15 +1,34 @@
 import { T } from "../theme.js";
-import { useTween } from "../hooks/index.js";
 import { MODEL_META } from "../lib/claude.js";
-import { Switch, Segmented as KitSegmented, StatTile, Pill } from "./kit.jsx";
+import { Switch, Segmented as KitSegmented, StatTile, Pill, useNumberTween } from "./kit.jsx";
 
 // ─── Legacy primitives, re-voiced ─────────────────────────────────────────────
 // Same export surface as before the redesign (call sites untouched); each now
 // renders through the SESSION kit or follows its mark specs. New code should
 // import from ui/kit.jsx directly.
 
+// The hand-rolled tween the kit now does for every number (see the long note in
+// kit.jsx). Kept, because a dozen call sites pass a formatter this component has
+// no other way to learn — a hero price prints through px(), not through a
+// scaffolding the parser could infer — but routed through the kit's reconciled
+// tween, which changes two things for the better.
+//
+// FIRST, IT NO LONGER LIES AT REST. useTween rounds to the value's own scale, so
+// for any target at or above 1 the value this printed once the animation had
+// finished was f(Math.round(target)) — and StockSheet and AltCoinSheet both hand
+// it px(), which prints two decimals for anything between $1 and $1000. A stock
+// at 174.32 counted up and then simply *stayed* at "$174.00", for as long as the
+// sheet was open: the cents silently zeroed on the one screen you opened to read
+// the price. The kit's hook hands back the exact target once the tween is within
+// its own rounding of it, so the resting frame is now f(v) — the truth.
+//
+// SECOND, reduced motion is honoured, and honoured without ever showing an
+// em-dash in place of a real reading. The old guard here was `shown == null ?
+// "—"`, and the cheap way to disable a tween is to feed it null — which would
+// have printed "—" over a perfectly good price. The hook returns the target
+// instead, so those users get the number immediately and never the placeholder.
 export function NumTween({ v, f = (x) => x.toLocaleString() }) {
-  const shown = useTween(typeof v === "number" ? v : null);
+  const [shown] = useNumberTween(typeof v === "number" ? v : null);
   return shown == null ? <>—</> : <>{f(shown)}</>;
 }
 

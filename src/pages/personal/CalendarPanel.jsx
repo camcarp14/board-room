@@ -13,6 +13,7 @@ import {
   expandEvents, describeRule, normalizeRule, WEEKDAY_LABELS,
   deleteOccurrence, deleteFuture, deleteSeries, editOccurrence, editFuture,
 } from "../../lib/recurrence.js";
+import { EVENT_CATEGORIES } from "../../lib/eventCategories.js";
 import { spanDayKeys, spanPosition, withOverlays } from "../../lib/calendar-overlays.js";
 import { weeksOfMonth, layoutWeek, segmentShowsTitle } from "../../lib/calendar-layout.js";
 import { useBirthdays } from "../../data/birthdays.js";
@@ -22,14 +23,16 @@ import { tint } from "../../ui/styles.js";
 import { Card, SectionHeader, Button, Cell, CellGroup, Sheet, useConfirm, EmptyState, Dot, Pill, Switch } from "../../ui/kit.jsx";
 import { IcChevronLeft, IcChevronRight, IcCalendar, IcClose, IcTrash } from "../../ui/icons.jsx";
 
-// Keys personal/work/health/bills are stored values in the events.category
-// column — do not rename. Colors ride the validated data palette.
-export const EVENT_CATEGORIES = [
-  { key: "personal", label: "Personal", color: T.blue },
-  { key: "work", label: "Work", color: T.amber },
-  { key: "health", label: "Health", color: T.green },
-  { key: "bills", label: "Bills / Finance", color: T.red },
-];
+// The four categories moved to lib/eventCategories.js — a leaf with no imports
+// but the token bridge. The Brief's mini-calendar needs the colours and used to
+// take them from here, which meant this whole panel (and recurrence, overlays,
+// layout, holidays, birthdays behind it) was evaluated in the landing page's
+// first-paint chunk for the sake of a four-entry array. See the note in that file.
+//
+// Re-exported rather than moved outright: this is where every caller has always
+// found them, and a named re-export costs nothing — it is the leaf's binding, so
+// there is still exactly one array and one place to edit it.
+export { EVENT_CATEGORIES } from "../../lib/eventCategories.js";
 
 // Bar geometry. A day column is a seventh of 390pt — about 50px — and at one
 // line "Standup" truncates to "Stan…". LANE_H 26 buys a second line, so short

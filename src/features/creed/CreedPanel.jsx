@@ -1,7 +1,7 @@
-import { useState, useMemo } from "react";
+import { useState, useMemo, useRef } from "react";
 import { isMissingTable } from "../../data/db.js";
 import { useAffirmations, useSaveAffirmation, useDeleteAffirmation } from "../../data/creed.js";
-import { Card, SectionHeader, CellGroup, Button, TextArea, PillRow, Pill, Sheet, EmptyState, useConfirm, IcCheck } from "../../ui/kit.jsx";
+import { Card, SectionHeader, CellGroup, Button, TextArea, PillRow, Pill, Sheet, EmptyState, useConfirm, IcCheck, closeSheet } from "../../ui/kit.jsx";
 import { KINDS, kindMeta, splitQuote, dailyIndex, dayKey, countsByKind, filterByKind, STARTERS } from "./creedLogic.js";
 
 // ─── Creed — the room where Cameron grounds himself ──────────────────────────
@@ -105,12 +105,19 @@ export function CreedPanel({ isMobile }) {
     setSaveErr(null);
     setForm({ id: crypto.randomUUID(), text: seedText || "", kind: seedKind || kind || "creed", isNew: true });
   };
+  // Populated by the Sheet below while it is mounted. See closeSheet in ui/kit.jsx.
+  const sheetClose = useRef(null);
   const openEdit = (a) => { setSaveErr(null); setForm({ id: a.id, text: a.text, kind: kindMeta(a.kind).key, isNew: false }); };
   const save = () => {
     if (!form.text.trim()) { setSaveErr("Say it first."); return; }
     setSaving(true); setSaveErr(null);
     saveMut.mutate({ id: form.id, text: form.text.trim(), kind: form.kind }, {
-      onSuccess: () => { setSaving(false); setForm(null); },
+      // closeSheet, not setForm(null): the write lands in the PARENT's scope, so
+      // flipping `form` here unmounts the sheet that frame and it vanishes with a
+      // cut, no matter what exit animation the kit owns. The handle plays the exit
+      // first and clears the form after it — and falls back to clearing directly if
+      // the sheet is somehow already gone, so Save can never read as dead.
+      onSuccess: () => { setSaving(false); closeSheet(sheetClose, () => setForm(null)); },
       onError: (e) => { setSaving(false); setSaveErr(e.message || "Couldn't save."); },
     });
   };
@@ -121,7 +128,7 @@ export function CreedPanel({ isMobile }) {
     if (!(await confirm({ title: "Delete this entry?", message: "It comes off the plate. Recoverable for 30 days.", confirmLabel: "Delete", destructive: true }))) return;
     setSaving(true);
     delMut.mutate(form.id, {
-      onSuccess: () => { setSaving(false); setForm(null); setTurned(0); },
+      onSuccess: () => { setSaving(false); closeSheet(sheetClose, () => { setForm(null); setTurned(0); }); },
       onError: (e) => { setSaving(false); setSaveErr(e.message || "Couldn't delete."); },
     });
   };
@@ -307,7 +314,7 @@ export function CreedPanel({ isMobile }) {
 
       {/* ── engrave / edit — a sheet, not an inline box ── */}
       {form && (
-        <Sheet onClose={() => setForm(null)} title={form.isNew ? "Engrave an entry" : "Edit entry"}
+        <Sheet closeRef={sheetClose} onClose={() => setForm(null)} title={form.isNew ? "Engrave an entry" : "Edit entry"}
           footer={
             <>
               {!form.isNew && <Button kind="danger" size="lg" disabled={saving} onClick={remove}>Delete</Button>}

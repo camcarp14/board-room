@@ -42,7 +42,16 @@
 // caught by the owner opening Notes and finding nothing there — a new link in a
 // section header is checked by LOOKING at it, so a stale shell reads exactly
 // like the feature was never built.
-const VERSION = "br-v33";
+// v34: sheets that animate on the way out, the compact scrolled header, pull to
+// refresh, tweened numbers everywhere they appear, and eighteen re-solved
+// palettes. That is the v6 note five times over in one deploy — every item is
+// verified by LOOKING at it, and four of the five turn up in the first minute of
+// ordinary use (open a sheet, scroll a page, pull the Brief, read a number).
+// Nothing outside src/ changed, so without this line the worker stays
+// byte-identical, no new worker installs, and the first launch paints the v33
+// shell: a sheet that still vanishes, a header that still isn't there, a pull that
+// still does nothing.
+const VERSION = "br-v34";
 const ASSET_CACHE = `${VERSION}-assets`;
 const PAGE_CACHE = `${VERSION}-pages`;
 

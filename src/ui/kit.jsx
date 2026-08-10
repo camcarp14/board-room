@@ -6,8 +6,9 @@
 // touch targets ≥44pt; text ≥10.5px; destructive flows use confirmSheet, never
 // window.confirm.
 
-import { useState, useRef, useEffect, useCallback, forwardRef } from "react";
+import { useState, useRef, useEffect, useLayoutEffect, useCallback, useContext, createContext, forwardRef } from "react";
 import { createPortal } from "react-dom";
+import { useTween } from "../hooks/index.js";
 import { IcChevronRight, IcChevronDown, IcClose, IcCheck } from "./icons.jsx";
 
 /* ── surfaces ──────────────────────────────────────────────────────────────── */
@@ -83,7 +84,11 @@ export function Cell({ leading, leadingTone, title, sub, value, trailing, chevro
         <span className="cell-title" style={titleStyle}>{title}</span>
         {sub != null && <span className="cell-sub">{sub}</span>}
       </span>
-      {value != null && <span className="cell-value">{value}</span>}
+      {/* A cell's value slot is the app's other number surface — weights, counts,
+          spends, percentages — so it goes through the same instrument as a stat
+          tile. Prose in a value slot ("On", "Every day", "Aug 10") is not a shape
+          the parser accepts and passes straight through. */}
+      {value != null && <span className="cell-value">{instrument(value)}</span>}
       {trailing}
       {chevron && <span className="cell-chevron"><IcChevronRight /></span>}
     </Tag>
@@ -91,13 +96,169 @@ export function Cell({ leading, leadingTone, title, sub, value, trailing, chevro
 }
 
 /* ── numbers ───────────────────────────────────────────────────────────────── */
+// EVERY NUMBER TWEENS NOW, AND NOT ONE OF THEM COUNTS UP FROM ZERO.
+//
+// DESIGN.md §1.5 says numbers are instruments: tabular, monospaced, tweened. Two
+// of those three came for free — .stattile-value and .cell-value already carry
+// --font-mono and tabular-nums — and the third was reaching almost nothing,
+// because `value` is an opaque node and a node cannot be interpolated. Of the
+// seventy-nine stat call sites, the seventeen that animated were the ones that
+// had wrapped their own figure in <NumTween> by hand. Workout volume, the finance
+// totals, the Systems spend, every ride stat: hard cuts. A hard cut reads as the
+// screen being replaced rather than as the figure changing, which is precisely
+// backwards — the screen is the instrument and the figure is the reading.
+//
+// So the detection moved here, where the number is printed, instead of staying at
+// seventy-nine call sites. A value that is a number, or a STRING that is one
+// number wearing a formatter's clothes ("$1,234.56", "12.4 km/h", "◆ 4", "−$40"),
+// is taken apart into the number and the scaffolding around it, tweened, and
+// reprinted inside that same scaffolding. Everything else falls through
+// untouched: "3/5", "Aug 10", "7:30", "—", "…", a React element, and every line
+// of settings prose that happens to sit in a value slot.
+//
+// FOUR RULES. Each one is a bug this would otherwise have shipped:
+//
+//   1. NULL PASSES THROUGH COMPLETELY UNTOUCHED. useTween returns null for a null
+//      target and that is preserved end to end: a tween that renders 0 on its way
+//      to null is the app inventing a number, which is the one thing it may never
+//      do. Nothing here can manufacture a digit out of an absent reading.
+//   2. THE FIRST PAINT IS THE FINAL VALUE. useTween seeds its state from its own
+//      target, so a mount is already at rest and nothing counts up on page open;
+//      only a CHANGE animates. Counting from zero every time a page opens is
+//      decoration, and DESIGN.md §1.6 is explicit that motion here is physics.
+//   3. THE SCAFFOLDING IS THE KEY, so a formatter that changes its mind cuts
+//      instead of lying. 990 → "1.2k" must not tween the old digits inside the new
+//      suffix ("990.0k" is not a number anyone measured), and "$40" → "−$320" must
+//      not print "−$40" on the way there, which is the new sign wrapped around a
+//      reading that was positive. A changed prefix, suffix, sign or decimal count
+//      remounts, and by rule 2 a mount paints the truth.
+//   4. THE RESTING FRAME IS THE CALL SITE'S OWN NODE, never our reconstruction.
+//      useTween rounds its output to the value's own scale, so the tween cannot be
+//      assumed ever to LAND on the reading — Math.round of 1234.56 is 1235, and a
+//      component that kept printing its own reconstruction would leave
+//      "$1,235.00" on screen for as long as the card was open. The moment the
+//      tween is within its own rounding of the target, the exact node we were
+//      handed goes back up. That is what the hook's second return value is for,
+//      and it is not hypothetical: it is a bug NumTween has been shipping for
+//      every price between $1 and $1000 (see the note in primitives.jsx).
+//
+// And the parser refuses to guess: a shape is only accepted if reprinting the
+// target through it reproduces the original string byte for byte. If we cannot
+// regenerate what the call site handed us, we have not understood its formatter,
+// and the number does not animate. That check is what makes this safe to apply
+// to every value slot in the app rather than to a list of blessed ones.
+
+// prefers-reduced-motion, held rather than re-queried: `.matches` on a kept
+// MediaQueryList is a property read, and these components re-render once per
+// frame while a tween runs. Held rather than *cached* for the same reason the
+// sheet re-reads it per gesture — the accessibility switch flips under a running
+// app, and a boolean captured at import time would ignore it until reload.
+let stillMql;
+function numbersStill() {
+  if (stillMql === undefined) {
+    try { stillMql = window.matchMedia("(prefers-reduced-motion: reduce)"); } catch { stillMql = null; }
+  }
+  return !!stillMql?.matches;
+}
+
+// The tween, reconciled with the truth. Returns [what to print this frame, is
+// that the real target]. A null target and reduced motion take the same path:
+// useTween's effect bails on null, so no rAF is ever scheduled for either — the
+// users who asked for no motion get no animation frames, not a cancelled one.
+export function useNumberTween(n) {
+  const target = typeof n === "number" && Number.isFinite(n) ? n : null;
+  const shown = useTween(numbersStill() ? null : target);
+  if (target == null) return [null, true];
+  // "Has it arrived" is a question about useTween's rounding, not about equality:
+  // it rounds to whole numbers at or above 1 and to four significant figures
+  // below, so 1235 is as close to 1234.56 as the tween will ever get. The bound
+  // is inclusive because Math.round(2.5) is 3, exactly 0.5 away.
+  const near = Math.abs(target) >= 1 ? 0.5 : Math.abs(target) * 1e-3;
+  return shown == null || Math.abs(shown - target) <= near ? [target, true] : [shown, false];
+}
+
+// One number, and scaffolding that carries no digits of its own. The leading run
+// may hold symbols and spaces but NOT letters — a word in front makes it prose,
+// which is how "Aug 10" and "Set 3" stay out of this — and the trailing run is
+// where units live. Grouping is commas only: a locale that groups with thin
+// spaces produces a string this cannot rebuild, so it correctly declines.
+const NUM_RE = /^([^0-9A-Za-z]*)(\d{1,3}(?:,\d{3})+|\d+)(?:\.(\d+))?([^0-9]*)$/;
+// useTween keeps at most 12 decimal places of its own; past that we are looking
+// at float noise ("0.30000000000000004"), not at a formatter's intent.
+const MAX_DEC = 12;
+// The house grouping idiom, lifted from money() so the two agree exactly. Locale
+// formatting is deliberately not used: toLocaleString would follow the device
+// while money() and every other formatter in the app builds its commas by hand,
+// and the two disagreeing is the round-trip check below failing on a German
+// phone rather than a number coming out wrong.
+function magnitude(v, dec, grouped) {
+  const s = Math.abs(v).toFixed(dec);
+  if (!grouped) return s;
+  const [i, f] = s.split(".");
+  return i.replace(/\B(?=(\d{3})+(?!\d))/g, ",") + (f ? "." + f : "");
+}
+const printShape = (s, v) => (v < 0 ? s.sign || "-" : s.sign) + s.pre + magnitude(v, s.dec, s.grouped) + s.suf;
+
+function numberShape(value) {
+  const text = typeof value === "number" ? (Number.isFinite(value) ? String(value) : null)
+    : typeof value === "string" ? value : null;
+  if (text == null) return null;
+  const m = NUM_RE.exec(text);
+  if (!m) return null;
+  const [, lead, int, frac, suf] = m;
+  const dec = frac ? frac.length : 0;
+  if (dec > MAX_DEC) return null;
+  // The sign is lifted out of the prefix so that it can go into the key: with the
+  // sign fixed for the life of a tween, the magnitude interpolates monotonically
+  // between two readings that share it, and a crossing of zero — the one case
+  // where reusing a prefix would print a value nobody measured — cuts instead.
+  const sign = /^[-+−]/.test(lead) ? lead[0] : "";
+  const shape = {
+    n: (sign === "-" || sign === "−" ? -1 : 1) * parseFloat(int.replace(/,/g, "") + (frac ? "." + frac : "")),
+    sign, pre: sign ? lead.slice(1) : lead, suf, dec, grouped: int.includes(","),
+    node: value,
+  };
+  // The refusal to guess. If the shape cannot reproduce the string it came from,
+  // the formatter is doing something we have not modelled (leading zeros, a
+  // locale's separators, a compression we would print as literal digits) and the
+  // number is left alone.
+  if (printShape(shape, shape.n) !== text) return null;
+  // Serialised rather than joined with a delimiter: prefix and suffix are
+  // arbitrary symbol runs, so any character picked as a separator is a character
+  // one of them may contain, and two different scaffoldings sharing one key is the
+  // exact failure this key exists to prevent.
+  shape.key = JSON.stringify([sign, shape.pre, suf, dec]);
+  return shape;
+}
+
+function Tweened({ shape }) {
+  // THE TWEEN RUNS ON THE VALUE'S LAST DIGIT, NOT ON ITS UNITS. useTween rounds
+  // its output to whole numbers at or above 1, so a money total handed over raw
+  // would count in dollars and leave the cents frozen at ".00" for the whole
+  // flight — the two digits the reader is watching would be the only two that
+  // never moved. Scaling by the formatter's own decimal count gives the
+  // interpolation exactly the resolution the call site is printing at, and hands
+  // the "have we arrived" bound the same scale for free: half a unit of a hundred
+  // is half a cent.
+  const pow = shape.dec ? Math.pow(10, shape.dec) : 1;
+  const [shown, atRest] = useNumberTween(shape.n * pow);
+  return atRest || shown == null ? shape.node : printShape(shape, shown / pow);
+}
+
+// The one call every number slot in the kit makes. Returns the value untouched,
+// or a tween wrapped around it — keyed by the scaffolding, for rule 3 above.
+function instrument(value) {
+  const shape = numberShape(value);
+  return shape ? <Tweened key={shape.key} shape={shape} /> : value;
+}
+
 export function StatTile({ value, label, delta, deltaTone = "var(--green)", valueTone, onClick, selected, onCanvas, style }) {
   const Tag = onClick ? "button" : "div";
   return (
     <Tag className={`stattile${onClick ? " tappable" : ""}${selected ? " selected" : ""}${onCanvas ? " on-canvas" : ""}`} onClick={onClick} style={style}>
-      <span className="stattile-value" style={valueTone ? { color: valueTone } : undefined}>{value}</span>
+      <span className="stattile-value" style={valueTone ? { color: valueTone } : undefined}>{instrument(value)}</span>
       <span className="stattile-label" style={selected ? { color: "var(--accent)" } : undefined}>{label}</span>
-      {delta != null && <span className="stattile-delta" style={{ color: deltaTone }}>{delta}</span>}
+      {delta != null && <span className="stattile-delta" style={{ color: deltaTone }}>{instrument(delta)}</span>}
     </Tag>
   );
 }
@@ -105,9 +266,15 @@ export function StatTile({ value, label, delta, deltaTone = "var(--green)", valu
 export function Delta({ pct, digits = 2, suffix = "%" }) {
   if (pct == null || isNaN(pct)) return null;
   const up = pct >= 0;
+  // The glyph and the tone come from the TARGET, never from the frame in flight.
+  // A delta crossing zero would otherwise flip its arrow and its colour mid-count
+  // — and DESIGN.md §5 forbids animating colour at all — so direction is decided
+  // once and only the magnitude moves. Formatting the value first and handing the
+  // string to `instrument` is deliberate: the resting frame is then this
+  // component's own output, character for character, as it has always been.
   return (
     <span className="t-num" style={{ color: up ? "var(--green)" : "var(--red)", fontSize: 12 }}>
-      {up ? "▲" : "▼"} {Math.abs(pct).toFixed(digits)}{suffix}
+      {up ? "▲" : "▼"} {instrument(Math.abs(pct).toFixed(digits) + suffix)}
     </span>
   );
 }
@@ -255,16 +422,320 @@ export function EmptyState({ icon, title, sub, action, style }) {
 // Open sheets, oldest→newest. Only the top-most handles Escape, so a confirm
 // layered over a form sheet doesn't dismiss both on one keypress.
 const sheetStack = [];
-// Phone: bottom sheet with grabber. ≥761px: centered modal. Scrim closes it.
-export function Sheet({ onClose, title, headTrailing, footer, children, z = 300, bodyStyle, dismissible = true }) {
+
+// THE EXIT, AND WHY IT HAD TO BECOME THE SHEET'S OWN BUSINESS.
+//
+// Every one of the two dozen sheets in this app is conditionally rendered by its
+// parent — `{open && <Sheet …/>}`, `{tile && <Sheet …/>}` — so for as long as
+// they have existed an exit animation was not merely missing, it was
+// structurally impossible: the frame the parent's flag flipped, the portal's DOM
+// node was already gone, and no CSS can animate an element that isn't there. The
+// only fix that doesn't touch twenty-four call sites is for the sheet to swallow
+// the onClose it was handed, spend --dur-2 leaving, and tell the parent
+// afterwards. (`.toast.out` has been doing exactly this since the toasts
+// shipped. The grammar was understood; sheets never asked for it.)
+//
+// The price of holding that frame is that the sheet briefly outlives the truth,
+// so the payload is FROZEN for the closing window. Title, header, footer, body
+// style and children are cached on every open render, and the closing renders
+// replay the cache. This is not belt-and-braces: most of these sheets read the
+// very state the close clears — `{catFor && <Sheet>{catFor.merchant}</Sheet>}` is
+// the common shape, and WorkoutPanel's "Finish workout" sheet, whose footer saves
+// and then clears the workout it is printing, is the crashing one. Because the
+// cached children are the *same element objects*, React's reference bailout means
+// the subtree isn't re-rendered with stale props — it isn't re-rendered at all.
+// The sheet that leaves is the sheet you were looking at.
+
+/* THE PULL — the numbers that are the feel.
+   Exported (with the two functions below) because they ARE the gesture: a smoke
+   that cannot run them can only grep for them, and a threshold that has silently
+   become 1200px still greps fine. See scripts/ambient-smoke.mjs. */
+export const SHEET_DISMISS_PX = 120;   // travel past which a release lets go
+export const SHEET_FLICK_VY = 0.55;    // px/ms — a throw beats the distance test
+const SHEET_FLICK_MIN_PX = 20;         // …but a throw from nowhere is just a tap
+const SHEET_AXIS_PX = 8;               // slop before a gesture has an axis at all
+const SHEET_UP_GIVE = 64;              // asymptote when pulled where it can't go
+const SHEET_LOCKED_GIVE = 28;          // asymptote for a sheet that cannot leave
+const SHEET_STALE_VY_MS = 90;          // a pause before release is not a flick
+// Anything that answers a tap is off limits as a drag origin: the drag would
+// either eat the tap or steal the range slider's own gesture. The last two are
+// the house's existing convention, borrowed rather than reinvented —
+// SortableList marks its opt-outs `[data-no-drag]` and its containers
+// `[data-sortable]`, and its rule is the right one here too: whichever gesture
+// owner is nearest the thing you are actually pointing at wins, so a reorder list
+// inside a sheet keeps its own hold-and-drag.
+const SHEET_NO_DRAG = 'button, a, input, textarea, select, label, [role="button"], [contenteditable], [draggable="true"], [data-no-drag], [data-sortable]';
+
+// x·max/(x+max): 1:1 for small x, asymptotic to max, and no cap to hit. A cap
+// has a corner in it, and you can feel the corner.
+const band = (x, max) => (x * max) / (x + max);
+
+// Resistance is spent only on directions the sheet refuses. Downward a
+// dismissible sheet tracks the finger exactly — it is leaving, and anything less
+// than 1:1 feels like the sheet is arguing with you. Upward there is nothing
+// above the top edge to reveal, and a locked sheet (dismissible={false}) has
+// nowhere to go at all: both get the band, so the honest answer to the pull is
+// "it moves, it does not leave" rather than a handle that ignores you.
+export function sheetPull(dy, dismissible = true) {
+  if (dy <= 0) return -band(-dy, SHEET_UP_GIVE);
+  return dismissible ? dy : band(dy, SHEET_LOCKED_GIVE);
+}
+
+// Distance OR speed, and a locked sheet answers neither.
+export function sheetShouldDismiss(offset, vy, dismissible = true) {
+  if (!dismissible || offset <= 0) return false;
+  if (vy >= SHEET_FLICK_VY && offset >= SHEET_FLICK_MIN_PX) return true;
+  return offset >= SHEET_DISMISS_PX;
+}
+
+// The closing window must be exactly as long as the CSS says the exit is, and the
+// only way to guarantee that is to ask the CSS instead of restating it here.
+// Cached after the first read: a getComputedStyle per sheet-open is a layout
+// flush nobody needs, and this token cannot change under us (a theme flip swaps
+// colours, never durations).
+let sheetExitCache = null;
+function sheetExitMs() {
+  if (sheetExitCache != null) return sheetExitCache;
+  let ms = 240; // --dur-2's authored value, for when there is no document to ask
+  try {
+    const raw = getComputedStyle(document.documentElement).getPropertyValue("--dur-2").trim();
+    const n = parseFloat(raw);
+    if (Number.isFinite(n) && n > 0) ms = /ms\s*$/.test(raw) ? n : n * 1000;
+  } catch { /* keep the authored default */ }
+  return (sheetExitCache = ms);
+}
+
+const mq = (q) => { try { return !!window.matchMedia?.(q).matches; } catch { return false; } };
+// Both of these are read at gesture/close time rather than cached: the
+// accessibility switch flips under a running app, and an iPad crosses the
+// breakpoint by rotating.
+const prefersStill = () => mq("(prefers-reduced-motion: reduce)");
+// The same query string useIsMobile() uses in hooks/index.js — the bottom
+// sheet's geometry and this gesture have to agree about what a phone is. Above
+// it the sheet is a centred modal: no bottom edge to leave by, and its
+// translate(-50%,-50%) is load-bearing, so a drag would fight the centring.
+const phoneSheet = () => mq("(max-width: 760px)");
+
+// What a sheet is ALLOWED to do, in one pure function of the two media queries,
+// so the rule lives in a single place and can be executed rather than trusted.
+// Reduced motion takes the exit window away entirely rather than shortening it: a
+// held frame is the slide's whole cost with none of its benefit, and dragging a
+// sheet around by hand is animation performed by hand. The drag additionally
+// needs the bottom-sheet geometry — see phoneSheet above.
+export function sheetPolicy({ still, phone }) {
+  return { animateExit: !still, drag: !still && !!phone };
+}
+const allow = () => sheetPolicy({ still: prefersStill(), phone: phoneSheet() });
+
+// A sheet's own controls — `footer` buttons especially — are created at the call
+// site but MOUNT inside the sheet, and context is resolved by tree position, so
+// they can reach this. It is how a "Done" button asks for the same exit the scrim
+// gets instead of yanking the node out. Returns null outside a sheet so a caller
+// can tell rather than silently no-op. A programmatic close ignores
+// `dismissible`: that flag guards the gestures (scrim, Escape, the X), not the
+// sheet's own logic. Pass a function to run once the sheet has finished leaving.
+const SheetCloseCtx = createContext(null);
+export function useSheetClose() { return useContext(SheetCloseCtx); }
+
+// THE HOOK ONLY REACHES HALF THE CLOSES, AND IT IS THE SMALLER HALF.
+// useSheetClose is useContext, and the provider is opened inside Sheet's own
+// return — so it resolves only for a component whose render happens BELOW that
+// provider. Authoring a <Button onClick={...}> at the call site does not qualify:
+// the element mounts inside the sheet, but the closure is written in the render
+// of the component ABOVE it, where the context is still null.
+//
+// That excludes essentially every real close in this app. Creed's Save and
+// Delete, Dreams' Save and Remove, Notes' five bulk actions, Workout's
+// addExercise, Finances' import onDone — all of them fire from a mutation
+// callback in the PARENT's scope, after the write lands. No amount of moving
+// buttons down the tree reaches a close that a promise upstairs initiates.
+//
+// So the parent gets a handle: pass `closeRef` to Sheet and it is populated with
+// the same requestClose the scrim and the X use. Call it through closeSheet()
+// below, which falls back to running the after-work directly when the ref is
+// empty — a sheet that is already gone must still let its state be cleared, or
+// the button reads as dead, which is a worse bug than a hard cut.
+export function closeSheet(ref, after) {
+  const close = ref && ref.current;
+  if (close) close(after);
+  else after?.();
+}
+
+// Phone: bottom sheet with grabber, drag to dismiss. ≥761px: centered modal.
+// Scrim closes it. `detent` sets the resting height — see components.css.
+export function Sheet({ onClose, title, headTrailing, footer, children, z = 300, bodyStyle, dismissible = true, detent = "auto", closeRef }) {
   const idRef = useRef(null);
   const dialogRef = useRef(null);
+  const scrimRef = useRef(null);
+  const bodyRef = useRef(null);
   const restoreFocusRef = useRef(null);
   if (!idRef.current) idRef.current = {};
+  const [closing, setClosing] = useState(false);
+  const closingRef = useRef(false);
+  // Set the frame a finger commits to a vertical drag, and never cleared (see
+  // .sheet.grabbed). It is READ DURING RENDER on purpose: the class is added
+  // imperatively so a gesture costs no re-render, and React's next className
+  // write — the one that adds `out` — would otherwise strip it, handing the
+  // transform back to the stylesheet in the middle of an exit.
+  const grabbedRef = useRef(false);
+  const dragRef = useRef(null);
   // Latest onClose/dismissible read through a ref so the keydown listener can be
   // registered once (stable stack order) without re-pushing on every rerender.
   const cbRef = useRef();
   cbRef.current = { onClose, dismissible };
+
+  // The frozen payload. Written on every open render; replayed while closing.
+  const lastRef = useRef(null);
+  if (!closing) lastRef.current = { title, headTrailing, footer, children, bodyStyle, dismissible };
+  const view = lastRef.current;
+
+  // ── the transform, while JS owns it ────────────────────────────────────────
+  const paint = (off) => {
+    const el = dialogRef.current;
+    if (el) el.style.transform = off ? `translateY(${off.toFixed(2)}px)` : "";
+    // The scrim dims with the pull — the only cue that tells you the gesture is
+    // going to work before you have committed to it. It never goes fully clear:
+    // the sheet is still modal until it is actually gone.
+    const s = scrimRef.current;
+    if (s) s.style.opacity = off > 0 ? String(Math.max(0.4, 1 - off / (SHEET_DISMISS_PX * 2.5))) : "";
+  };
+  // Handing the transform back: the sheet springs home and the scrim comes back.
+  // `transform: ""` transitions to whatever the stylesheet gives it, which on a
+  // phone is no transform at all — so this one line is also correct if the
+  // geometry ever changes.
+  const snapBack = () => {
+    const el = dialogRef.current;
+    if (el) { el.style.transition = "transform var(--dur-3) var(--ease-spring)"; el.style.transform = ""; }
+    const s = scrimRef.current;
+    if (s) { s.style.transition = "opacity var(--dur-2) var(--ease-out)"; s.style.opacity = ""; }
+  };
+  // Continuing the throw. The CSS exit starts from where the stylesheet left the
+  // sheet — the top of the screen — so using it on a dragged sheet would yank it
+  // back up before dropping it. A thrown sheet leaves from where the finger let
+  // go, in the same --dur-2 the class would have taken.
+  const flyOut = () => {
+    const el = dialogRef.current;
+    if (el) { el.style.transition = "transform var(--dur-2) var(--ease-out)"; el.style.transform = "translateY(100%)"; }
+    const s = scrimRef.current;
+    if (s) { s.style.transition = "opacity var(--dur-2) ease"; s.style.opacity = "0"; }
+  };
+
+  // ── the close the call sites never see ─────────────────────────────────────
+  const requestClose = useCallback((after) => {
+    if (closingRef.current) return;
+    closingRef.current = true;
+    // Any pointer still down loses the sheet here. Escape (or a footer button)
+    // during a drag would otherwise leave two things writing the same transform:
+    // the exit, and a finger that still thinks it owns the sheet. Dropping the
+    // gesture makes every later pointermove/up a no-op instead of a fight.
+    dragRef.current = null;
+    // Focus and the iOS keyboard leave WITH the sheet rather than after it: a
+    // caret still blinking in a sheet that is halfway off screen holds the
+    // keyboard up for the whole exit, and then the unmount fights it on the way
+    // down. The opener gets focus back from the unmount cleanup, as before.
+    const active = document.activeElement;
+    if (active instanceof HTMLElement && dialogRef.current?.contains(active)) active.blur();
+    // Off the stack immediately. For --dur-2 this sheet is scenery, and the one
+    // underneath should own Escape from the keypress that started this, not from
+    // whenever an animation happens to finish.
+    const i = sheetStack.indexOf(idRef.current);
+    if (i >= 0) sheetStack.splice(i, 1);
+    const deliver = () => { after?.(); cbRef.current.onClose?.(); };
+    // Reduced motion gets no window at all — see sheetPolicy. The check has to
+    // come before the closing state, or these users pay 240ms for nothing.
+    if (!allow().animateExit) { deliver(); return; }
+    setClosing(true);
+    if (grabbedRef.current) flyOut();
+    // Deliberately not cleared on unmount. If something else tears this sheet
+    // down mid-exit, the parent still has an `open` flag that has to come false;
+    // a setState into an unmounted tree is a no-op in React 18, but a flag left
+    // true is a screen that will not reopen. A 240ms timer nobody is waiting on
+    // is the cheaper of the two failures by a wide margin.
+    window.setTimeout(deliver, sheetExitMs());
+  }, []);
+
+  // Hand the parent the same close the scrim uses. A layout effect, so the ref is
+  // populated before any child effect or event handler could reach for it, and
+  // nulled on unmount so closeSheet() takes its direct-run fallback instead of
+  // calling into a sheet that is no longer on screen.
+  useLayoutEffect(() => {
+    if (!closeRef) return;
+    closeRef.current = requestClose;
+    return () => { closeRef.current = null; };
+  }, [closeRef, requestClose]);
+
+  // ── the gesture ───────────────────────────────────────────────────────────
+  const capture = (id) => { try { dialogRef.current?.setPointerCapture(id); } catch { /* capture is a nicety, not the mechanism */ } };
+  const release = (id) => { try { if (dialogRef.current?.hasPointerCapture?.(id)) dialogRef.current.releasePointerCapture(id); } catch { /* already gone */ } };
+
+  const beginDrag = (e, fromBody) => {
+    if (closingRef.current) return;
+    // Left button only, and first finger only — a second finger is a pinch or a
+    // two-finger scroll, and neither of those is a request to close anything.
+    if ((e.pointerType === "mouse" && e.button !== 0) || !e.isPrimary) return;
+    // A gesture that never committed to an axis also never took pointer capture,
+    // so it can be released off the sheet and never reach endDrag. Left in place
+    // it would wedge every future drag out of existence. Uncommitted, it is
+    // garbage; committed, this is a second finger and the first one keeps the
+    // sheet.
+    if (dragRef.current) { if (dragRef.current.axis) return; dragRef.current = null; }
+    if (!allow().drag) return;
+    if (fromBody) {
+      // A body drag is only ever the top of the scroll; anywhere else the
+      // gesture belongs to the scroller, and stealing it would make a long sheet
+      // unreadable.
+      if ((bodyRef.current?.scrollTop || 0) > 0) return;
+      if (e.target?.closest?.(SHEET_NO_DRAG)) return;
+    }
+    dragRef.current = { id: e.pointerId, x0: e.clientX, y0: e.clientY, y: e.clientY, t: performance.now(), vy: 0, off: 0, axis: false, slop: 0, fromBody };
+    // The handle is 17px tall and the finger is off it within a few pixels, so
+    // capture at once. A body drag waits for the axis instead: capturing a
+    // gesture the browser may still turn into a scroll is how you lose scrolling.
+    if (!fromBody) capture(e.pointerId);
+  };
+
+  const onMove = (e) => {
+    const d = dragRef.current;
+    if (!d || e.pointerId !== d.id) return;
+    const dx = e.clientX - d.x0, dy = e.clientY - d.y0;
+    if (!d.axis) {
+      if (Math.abs(dx) < SHEET_AXIS_PX && Math.abs(dy) < SHEET_AXIS_PX) return;
+      // Horizontal wins → this was a swipe, a carousel or a text selection, and
+      // never ours. Bail for good rather than waiting to see whether it turns
+      // vertical: a gesture that changes its mind mid-flight and takes the sheet
+      // with it is exactly how sheets earn a reputation for closing themselves.
+      if (Math.abs(dx) > Math.abs(dy)) { dragRef.current = null; return; }
+      // Upward from the top of a scroller is a scroll (and iOS may already have
+      // claimed it). Only the handle may be pulled up, and only to resist.
+      if (d.fromBody && dy < 0) { dragRef.current = null; return; }
+      d.axis = true;
+      d.slop = dy; // the sheet starts moving from HERE, so there is no 8px jump
+      if (d.fromBody) capture(e.pointerId);
+      grabbedRef.current = true;
+      dialogRef.current?.classList.add("grabbed");
+      scrimRef.current?.classList.add("grabbed");
+      if (dialogRef.current) dialogRef.current.style.transition = "none";
+      if (scrimRef.current) scrimRef.current.style.transition = "none";
+    }
+    const t = performance.now(), dt = t - d.t;
+    if (dt > 0) d.vy = dt <= SHEET_STALE_VY_MS ? (e.clientY - d.y) / dt : 0;
+    d.y = e.clientY; d.t = t;
+    d.off = sheetPull(dy - d.slop, cbRef.current.dismissible);
+    paint(d.off);
+  };
+
+  const endDrag = (e, released) => {
+    const d = dragRef.current;
+    if (!d || e.pointerId !== d.id) return;
+    dragRef.current = null;
+    release(e.pointerId);
+    if (!d.axis) return; // never committed; nothing moved, nothing to undo
+    // pointercancel lands here too, and lands on snapBack: whatever the browser
+    // decided, the sheet must never be left sitting mid-pull.
+    if (released && sheetShouldDismiss(d.off, d.vy, cbRef.current.dismissible)) requestClose();
+    else snapBack();
+  };
+
   useEffect(() => {
     const id = idRef.current;
     restoreFocusRef.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
@@ -280,10 +751,12 @@ export function Sheet({ onClose, title, headTrailing, footer, children, z = 300,
     };
     const focusTimer = window.setTimeout(focusInitial, 0);
     const onKey = (e) => {
-      const { onClose, dismissible } = cbRef.current;
+      const { dismissible } = cbRef.current;
+      // A closing sheet has already taken itself off the stack, so this reads
+      // false for it and the sheet underneath owns the keyboard again.
       if (sheetStack[sheetStack.length - 1] !== id) return;
       if (e.key === "Escape") {
-        if (dismissible) onClose?.();
+        if (dismissible) requestClose();
         return;
       }
       if (e.key !== "Tab") return;
@@ -309,26 +782,41 @@ export function Sheet({ onClose, title, headTrailing, footer, children, z = 300,
   // them the containing block for position:fixed — a sheet rendered in place
   // could sit above a live tab bar with a clipped scrim. At body level no
   // ancestor can interfere.
+  // Every handler below goes through requestClose() wrapped in an arrow, never
+  // passed by reference: requestClose takes an optional "run this after the exit"
+  // callback, and handing it straight to onClick would pass it the click event to
+  // call as a function.
+  const grabbed = grabbedRef.current ? " grabbed" : "";
+  const out = closing ? " out" : "";
+  const held = detent === "medium" || detent === "large" ? ` detent-${detent}` : "";
   return createPortal(
-    <>
-      <div className="sheet-scrim" style={{ zIndex: z }} onClick={dismissible ? onClose : undefined} />
-      <div className="sheet" ref={dialogRef} style={{ zIndex: z + 1 }} role="dialog" aria-modal="true" aria-label={typeof title === "string" ? title : undefined} tabIndex={-1}>
-        <div className="sheet-grab" />
-        {(title != null || headTrailing != null) && (
+    <SheetCloseCtx.Provider value={requestClose}>
+      <div ref={scrimRef} className={`sheet-scrim${grabbed}${out}`} style={{ zIndex: z }}
+        onClick={view.dismissible && !closing ? () => requestClose() : undefined} />
+      <div className={`sheet${held}${grabbed}${out}`} ref={dialogRef} style={{ zIndex: z + 1 }} role="dialog" aria-modal="true"
+        aria-label={typeof view.title === "string" ? view.title : undefined} tabIndex={-1}
+        onPointerMove={onMove} onPointerUp={(e) => endDrag(e, true)} onPointerCancel={(e) => endDrag(e, false)}
+        onLostPointerCapture={(e) => endDrag(e, false)}>
+        {/* The grabber is now the thing it always looked like. It draws a handle,
+            so it has to answer a drag — an affordance that does nothing is a lie
+            the whole app pays for, because it teaches the user not to trust the
+            other ones. */}
+        <div className="sheet-grab" onPointerDown={(e) => beginDrag(e, false)} />
+        {(view.title != null || view.headTrailing != null) && (
           <div className="sheet-head">
-            <span className="t-title2" style={{ minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{title}</span>
+            <span className="t-title2" style={{ minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{view.title}</span>
             <span style={{ display: "inline-flex", alignItems: "center", gap: 6, flex: "none" }}>
-              {headTrailing}
+              {view.headTrailing}
               {/* Gate the X on dismissible like the scrim/Escape, so a locked
                   sheet (e.g. mid-import) can't be closed out from under the work. */}
-              <button className="icon-btn" onClick={dismissible ? onClose : undefined} disabled={!dismissible} aria-label="Close"><IcClose size={19} /></button>
+              <button className="icon-btn" onClick={view.dismissible ? () => requestClose() : undefined} disabled={!view.dismissible} aria-label="Close"><IcClose size={19} /></button>
             </span>
           </div>
         )}
-        <div className="sheet-body" style={bodyStyle}>{children}</div>
-        {footer && <div className="sheet-foot">{footer}</div>}
+        <div className="sheet-body" ref={bodyRef} style={view.bodyStyle} onPointerDown={(e) => beginDrag(e, true)}>{view.children}</div>
+        {view.footer && <div className="sheet-foot">{view.footer}</div>}
       </div>
-    </>,
+    </SheetCloseCtx.Provider>,
     document.body
   );
 }
@@ -337,25 +825,53 @@ export function Sheet({ onClose, title, headTrailing, footer, children, z = 300,
 // const [confirmEl, confirm] = useConfirm();
 // if (await confirm({ title: "Delete note?", message: "…", confirmLabel: "Delete", destructive: true })) …
 export function useConfirm() {
+  // The counter is the Sheet's key, and it is load-bearing now that closing takes
+  // time. Two confirms back to back — the second awaited immediately after the
+  // first resolves — set req to null and then to the new request inside one React
+  // batch, so React never sees the null and reconciles ONE Sheet across both
+  // questions. The second would inherit the first's finished `closing` state and
+  // sit there frozen mid-exit, still showing the first question. A new key makes
+  // it a new sheet, which is what it actually is.
+  const seq = useRef(0);
   const [req, setReq] = useState(null);
-  const confirm = useCallback((opts) => new Promise((resolve) => setReq({ ...opts, resolve })), []);
-  const done = (v) => { req?.resolve(v); setReq(null); };
+  const confirm = useCallback((opts) => new Promise((resolve) => setReq({ ...opts, resolve, seq: ++seq.current })), []);
+  // The answer is RECORDED when a button is pressed and DELIVERED once the sheet
+  // has finished leaving — which is why it lives in a ref instead of riding the
+  // click. Every route out (button, scrim, Escape, the X) now goes through the
+  // sheet's exit, and the sheet's onClose is the ONE place the promise settles, so
+  // it cannot resolve twice or resolve while the sheet is still on screen. The
+  // routes that record nothing are the routes that mean "no".
+  const answer = useRef(false);
+  const settle = () => { const v = answer.current; answer.current = false; req?.resolve(v); setReq(null); };
   const el = req ? (
-    <Sheet onClose={() => done(false)} title={req.title} z={480}
-      footer={
-        <>
-          {req.cancelLabel !== false && (
-            <Button kind="quiet" size="lg" style={{ flex: 1 }} onClick={() => done(false)}>{req.cancelLabel || "Cancel"}</Button>
-          )}
-          <Button kind={req.destructive ? "danger-solid" : "primary"} size="lg" style={{ flex: 1 }} onClick={() => done(true)}>
-            {req.confirmLabel || "Confirm"}
-          </Button>
-        </>
-      }>
+    <Sheet key={req.seq} onClose={settle} title={req.title} z={480}
+      footer={<ConfirmActions req={req} pick={(v) => { answer.current = v; }} fallback={settle} />}>
       {req.message && <div className="t-body" style={{ color: "var(--sub)", paddingBottom: 6 }}>{req.message}</div>}
     </Sheet>
   ) : null;
   return [el, confirm];
+}
+
+// Its own component only so it can be INSIDE the sheet: a `footer` element is
+// created at the call site but mounts in the sheet's tree, and context is
+// resolved by position, so from here the buttons can ask the sheet to leave the
+// way the scrim does instead of yanking the node out from under themselves.
+// `fallback` is what settles the promise if that context is ever missing — an
+// await that never returns would strand a destructive flow in silence, and this
+// hook is what the app uses instead of window.confirm.
+function ConfirmActions({ req, pick, fallback }) {
+  const close = useSheetClose();
+  const answer = (v) => { pick(v); (close || fallback)(); };
+  return (
+    <>
+      {req.cancelLabel !== false && (
+        <Button kind="quiet" size="lg" style={{ flex: 1 }} onClick={() => answer(false)}>{req.cancelLabel || "Cancel"}</Button>
+      )}
+      <Button kind={req.destructive ? "danger-solid" : "primary"} size="lg" style={{ flex: 1 }} onClick={() => answer(true)}>
+        {req.confirmLabel || "Confirm"}
+      </Button>
+    </>
+  );
 }
 
 /* ── large-title page block ────────────────────────────────────────────────── */

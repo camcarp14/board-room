@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef, lazy, Suspense } from "react";
 import { supabase } from "./lib/supabase.js";
+import { isNetworkAuthFailure } from "./lib/authErrors.js";
 import { sm } from "./lib/storage.js";
 import { db, writeFailures, MERGING_SETTINGS } from "./data/db.js";
 import { queryClient } from "./lib/queryClient.js";
@@ -46,6 +47,11 @@ const UpstreamPage = lazy(() => import("./pages/upstream/UpstreamPage.jsx").then
 const PREVIEW = import.meta.env.DEV && import.meta.env.VITE_PREVIEW === "1";
 const previewParam = (k) => (PREVIEW ? new URLSearchParams(window.location.search).get(k) : null);
 
+// isNetworkAuthFailure — the network-or-account question the gate below turns on —
+// moved to lib/authErrors.js. The login screen has to ask it too, and Boot.jsx
+// cannot import this file without closing a cycle; the reasoning that shapes the
+// predicate went with it.
+
 function MigrationModal({ counts, onImport, onSkip, importing }) {
   return (
     <Sheet title="Import your existing memory?" onClose={onSkip} dismissible={!importing} z={400}
@@ -76,6 +82,19 @@ export default function App() {
 
   const [session, setSession] = useState(null);
   const [authChecked, setAuthChecked] = useState(false);
+  // "We haven't been able to find out" is a real answer about the session, and it
+  // had nowhere to live. `authChecked` still means exactly what it always meant —
+  // we know — and the gate at the bottom of this file still opens on it. The two
+  // below are the third state: `authStalled` is a reach that hasn't come back, and
+  // it is what turns the boot screen from a single word into an explanation with a
+  // way out; `authAttempt` is what the Retry on that screen bumps.
+  //
+  // A NETWORK FAILURE MUST NEVER SET authChecked. Checked plus no session renders
+  // LoginScreen, so treating an unreachable Supabase as an answer would put him in
+  // front of a password field that cannot possibly accept him, on a launch where
+  // his account is perfectly fine and only the cell tower isn't.
+  const [authStalled, setAuthStalled] = useState(false);
+  const [authAttempt, setAuthAttempt] = useState(0);
   const [messages, setMessages] = useState([]);
   const [seatNotes, setSeatNotes] = useState({});
   const [settings, setSettings] = useState(null);
@@ -150,11 +169,83 @@ export default function App() {
     setRefreshing(false);
   };
 
+  // ─── THE BOOT HAD NO CEILING ───────────────────────────────────────────────
+  // This was one line: getSession().then(set the session, mark it checked). No
+  // catch, no timeout, and — the part that made it a hang rather than a bug —
+  // setAuthChecked(true) living only inside the success path.
+  //
+  // getSession() reads localStorage and answers in a millisecond while the stored
+  // access token is still valid. Once it has expired it awaits a refresh instead,
+  // and that refresh retries with exponential backoff for up to about thirty
+  // seconds before giving up. On a cold LTE handshake — phone out of a pocket,
+  // radio still negotiating — that was thirty seconds of BootScreen, which is the
+  // one screen in the building with no error state, no stale state and nothing to
+  // tap. Then, when the promise finally rejected, the .then never ran, authChecked
+  // stayed false, and the thirty-second wait became a permanent one.
+  //
+  // 2.5 SECONDS, AND THE PROMISE IS NOT ABANDONED. Losing the race only stops the
+  // BOOT from waiting on it; the same promise keeps running underneath, so a
+  // refresh that lands at eight seconds still opens the app by itself. The
+  // subscription below is a second, independent way in for the same event —
+  // supabase fires TOKEN_REFRESHED when its own background retry eventually wins.
+  // Nothing here cancels anything. All it stops is the pretence of progress.
+  //
+  // WHY THE SHELL IS NOT OPENED OPTIMISTICALLY over the rehydrated query cache,
+  // which is the obvious next move and was considered: with no session the loader
+  // below sets `settings` to null, and null is indistinguishable from "nothing
+  // saved" to the panels that read it — Settings → Tabs takes it as no saved nav
+  // and writes the DEFAULT tab layout over his own the moment it is opened (the
+  // long version is in the note above updateSetting). It would also point every
+  // query at Supabase with no token, so the reward for a slow handshake would be a
+  // Brief full of correctly-designed error cards, and the freshness pill would owe
+  // the reader a date on rehydrated data it currently has no way to know. Three
+  // solvable problems, none of them solved here — so the boot screen keeps the
+  // launch and tells the truth about it instead.
   useEffect(() => {
     if (!supabase) { setAuthChecked(true); return; }
-    supabase.auth.getSession().then(({ data }) => { setSession(data.session || null); setAuthChecked(true); });
+    let alive = true;
+    setAuthStalled(false); // a Retry starts the screen over at "convening"
+    // Cleared by whichever branch answers first, so the ordinary launch — which
+    // resolves in a couple of milliseconds — never leaves a timer behind to flip
+    // `authStalled` two and a half seconds into a session that is already open.
+    const stall = setTimeout(() => { if (alive) setAuthStalled(true); }, 2500);
+    supabase.auth.getSession().then(({ data, error }) => {
+      if (!alive) return;
+      clearTimeout(stall);
+      // An error that is only the network's is not an answer about the account, so
+      // it must not be turned into one. Leave authChecked alone and let the boot
+      // screen say what is actually happening.
+      if (error && isNetworkAuthFailure(error)) { setAuthStalled(true); return; }
+      setSession(data?.session || null);
+      setAuthChecked(true);
+    }).catch((e) => {
+      if (!alive) return;
+      clearTimeout(stall);
+      if (isNetworkAuthFailure(e)) { setAuthStalled(true); return; }
+      // A real failure to read the session — a refused refresh token, storage the
+      // browser won't hand over — is the one case where the login screen is the
+      // honest answer. It is reached deliberately here instead of by falling
+      // through a catch that didn't exist.
+      setSession(null);
+      setAuthChecked(true);
+    });
+    return () => { alive = false; clearTimeout(stall); };
+  }, [authAttempt]);
+
+  useEffect(() => {
+    if (!supabase) return;
     const { data: sub } = supabase.auth.onAuthStateChange((event, s) => {
       setSession(s);
+      // THE SECOND WAY OUT OF A STALLED BOOT, and it has to be choosier than a
+      // bare setAuthChecked(true). A session ARRIVING is proof — INITIAL_SESSION
+      // carrying one, SIGNED_IN, or the TOKEN_REFRESHED that supabase's own
+      // background retry eventually wins all mean we are signed in, whatever the
+      // getSession that lost its race is still doing. SIGNED_OUT is proof of the
+      // opposite. What is NOT proof is a null session on any other event:
+      // supabase-js reports INITIAL_SESSION with no session when its own recovery
+      // couldn't reach the network, and taking that as an answer would be the
+      // login screen over a working account all over again.
+      if (s || event === "SIGNED_OUT") setAuthChecked(true);
       // On sign-out, purge everything persisted to this device — the query
       // cache holds notes/events/birthdays/groceries and the query keys carry
       // no user id, so without this the next account to sign in on the same
@@ -179,6 +270,14 @@ export default function App() {
     });
     return () => { sub.subscription.unsubscribe(); };
   }, []);
+
+  // The escape hatch on the boot screen. Bumping the attempt re-runs the check
+  // above from the top, which also clears authStalled — so the screen goes back to
+  // "convening" and, if the second reach is no better, earns its explanation again.
+  // A reload would be the cruder version of this and would cost the rehydrated
+  // query cache, the service worker's opinion of the current build, and any warm
+  // connection; re-asking is the same request without the demolition.
+  const retryAuth = () => setAuthAttempt((n) => n + 1);
 
   useEffect(() => {
     if (!supabase) return;
@@ -607,7 +706,10 @@ export default function App() {
     previewParam("view") === "login" ? <LoginScreen /> :
     previewParam("view") === "boot" ? <BootScreen /> :
     !supabase ? <SetupNotice /> :
-    !authChecked && !PREVIEW ? <BootScreen /> :
+    // key={authAttempt} because a Retry has to look like one: remounting restarts
+    // the seal's own draw and resets the boot screen's internal stall timer, so the
+    // second attempt reads as an attempt rather than as a button that did nothing.
+    !authChecked && !PREVIEW ? <BootScreen key={authAttempt} stalled={authStalled} onRetry={retryAuth} /> :
     !session && !PREVIEW ? <LoginScreen /> :
     null;
   if (gate) return <>{ambient}{gate}</>;

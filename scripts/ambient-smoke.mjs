@@ -1,4 +1,14 @@
-// ─── Ambient smoke — the wash, asserted ──────────────────────────────────────
+// ─── Motion smoke — the wash and the sheets, asserted ────────────────────────
+// (Still `ambient-smoke.mjs`, and still `npm run smoke:ambient`: renaming it
+// means editing package.json's verify chain, and the charter is the same one it
+// always had — MOTION WHOSE FAILURE IS SILENT. Section 9 extends it from the
+// canvas wash to the sheet exit and the drag, which fail the same way: nothing
+// throws, no number is wrong, the app just quietly stops answering the hand.
+// The sheets could not be tested where components are tested — kit.jsx's Sheet
+// is createPortal(…, document.body) and renderToString has no document, which
+// page-render-smoke.mjs prints in its own skip list every run — so the gesture's
+// arithmetic is imported and executed here instead of being grepped for.)
+//
 // The ambient layer is the one part of the design system whose failure mode is
 // SILENT: it is decoration, nothing depends on it, no test renders it, and if it
 // stops painting the app still looks fine — just flat. That is exactly how it
@@ -23,6 +33,10 @@
 // Run by `npm run verify`.
 
 import { readFileSync } from "node:fs";
+import { rm as rmFile } from "node:fs/promises";
+import { pathToFileURL } from "node:url";
+import path from "node:path";
+import { build } from "esbuild";
 
 let failed = 0;
 const check = (name, cond, detail = "") => {
@@ -152,5 +166,314 @@ check("three drift cycles are declared", durs.length === 3, durs.join(" "));
 check("every cycle is at least 45s", durs.every(d => d >= 45), durs.join(" "));
 check("no two cycles share a period (they must not re-align)", new Set(durs).size === durs.length, durs.join(" "));
 
-console.log(failed ? `\n${failed} ambient check(s) failed` : "\nambient: all checks passed");
+/* ═════════════════════════════════════════════════════════════════════════════
+   9. SHEETS — the exit that was structurally impossible, and the handle that
+      promised a drag it never had.
+
+   Twenty-four sheets, every one of them conditionally rendered by its parent
+   ({open && <Sheet/>}), so the exit could not exist: the frame the parent's flag
+   flipped, the portal's node was gone. kit.jsx's Sheet now swallows the onClose
+   it is handed, wears .out for exactly --dur-2, and tells the parent afterwards.
+   Nothing at any call site knows this, which is the point — and also the risk,
+   because a single edit in one component silently un-animates all twenty-four
+   screens and no other test in this repo renders a sheet at all.
+
+   Four things below can each break in complete silence:
+     A. the CSS classes the closing window paints with (no error, hard cut back).
+     B. the timer and the CSS duration drifting apart — 240ms of frozen sheet, or
+        a sheet cut off halfway out. This is why the JS READS the token.
+     C. the reduced-motion path, which must not merely shorten the slide but skip
+        the window entirely: for these users a held frame is the slide's whole
+        cost with none of its benefit.
+     D. the gesture's numbers. A dismiss threshold that has quietly become
+        1200px still greps fine, so §11 imports the functions and runs them.
+   ═════════════════════════════════════════════════════════════════════════════ */
+const kit = readFileSync("src/ui/kit.jsx", "utf8");
+const comp = readFileSync("src/design/components.css", "utf8");
+const tokens = readFileSync("src/design/tokens.css", "utf8");
+const hooks = readFileSync("src/hooks/index.js", "utf8");
+
+// Slice rules by BRACE, never by lazy regex. theme-smoke.mjs has the scar tissue
+// on this: a lazy match walks straight through a closing brace into a rule thirty
+// lines later, and a negative assertion against a pattern that never matched is
+// the most comfortable kind of green there is.
+const braced = (src, at) => {
+  let depth = 0;
+  for (let i = at; i < src.length; i++) {
+    if (src[i] === "{") depth++;
+    else if (src[i] === "}" && --depth === 0) return src.slice(at + 1, i);
+  }
+  return "";
+};
+const ruleOf = (src, selector) => {
+  const at = src.indexOf(selector + " {");
+  return at < 0 ? null : braced(src, src.indexOf("{", at));
+};
+
+// The whole sheets section, banner to banner — everything §9 asserts lives here.
+const sheetsFrom = comp.indexOf("/* ── sheets");
+const sheetsTo = comp.indexOf("/* ── toasts");
+check("the sheets section is findable", sheetsFrom > 0 && sheetsTo > sheetsFrom);
+const sheetsCss = comp.slice(sheetsFrom, sheetsTo);
+const modalAt = sheetsCss.indexOf("@media (min-width: 761px)");
+check("the ≥761px modal block is inside it", modalAt > 0);
+const modalCss = braced(sheetsCss, sheetsCss.indexOf("{", modalAt));
+
+// ── 9A. the classes that paint the closing window ────────────────────────────
+const out = ruleOf(sheetsCss, ".sheet.out");
+const scrimOut = ruleOf(sheetsCss, ".sheet-scrim.out");
+check(".sheet.out exists", !!out);
+check(".sheet-scrim.out exists", !!scrimOut, "the sheet cannot leave while the scrim stays");
+// The duration must be a token. A literal ms here is the drift in B waiting to
+// happen, and --dur-2 is the exit's one source of truth.
+for (const [name, rule] of [[".sheet.out", out], [".sheet-scrim.out", scrimOut]]) {
+  check(`${name} times its exit with a --dur token`, /animation:[^;]*var\(--dur-\d\)/.test(rule || ""),
+    (rule || "").match(/animation:[^;]*/)?.[0]);
+}
+// For --dur-2 the sheet looks gone. A button on a sheet that looks gone must not
+// still fire — that is the house rule about lying, expressed in CSS.
+check(".sheet.out stops answering touch", /pointer-events:\s*none/.test(out || ""));
+// The scrim is the opposite case and the asymmetry is deliberate: it is the modal
+// barrier, and it has to hold until the sheet is really unmounted, or a second tap
+// lands on a card the user cannot see yet.
+check(".sheet-scrim.out keeps the barrier up", !/pointer-events/.test(scrimOut || ""), scrimOut || "");
+check("@keyframes sheetout exists", /@keyframes sheetout\s*\{/.test(sheetsCss));
+check("@keyframes scrimout exists", /@keyframes scrimout\s*\{/.test(sheetsCss));
+// It leaves through the bottom edge by its OWN height, so a 200px confirm and a
+// full-height form both clear exactly and no further.
+check("the sheet leaves by translating its own height",
+  /@keyframes sheetout \{[^}]*translateY\(100%\)/.test(sheetsCss));
+// Never animate a colour (the Chromium wedge — see styles.css).
+check("no colour is animated on the way out",
+  !/@keyframes (sheet|scrim)out \{[^}]*(background|color)\s*:/.test(sheetsCss));
+
+// ── 9B. the tablet exit is its own animation ─────────────────────────────────
+// Above 760px the sheet is a centred modal whose translate(-50%,-50%) is
+// load-bearing. sheetout's translateY would knock it off centre before it faded.
+const modalOut = ruleOf(modalCss, ".sheet.out");
+check("the modal has its own exit", !!modalOut && /animation:\s*modalout/.test(modalOut));
+check("…and it keeps the centring translate",
+  /@keyframes modalout \{[^}]*translate\(-50%,\s*-50%\)/.test(modalCss));
+
+// ── 9C. who owns the transform ───────────────────────────────────────────────
+// While a finger drags, kit.jsx writes transform inline — and inline transform
+// LOSES to a filled animation, so .grabbed revokes it. That rule has to come
+// after .sheet.out at equal specificity or a dragged sheet's exit gets both.
+const grabbed = ruleOf(sheetsCss, ".sheet.grabbed");
+check(".sheet.grabbed hands the transform to JS", !!grabbed && /animation:\s*none/.test(grabbed));
+check(".sheet-scrim.grabbed does the same", /\.sheet-scrim\.grabbed\s*\{[^}]*animation:\s*none/.test(sheetsCss));
+check(".sheet.grabbed is declared AFTER .sheet.out (order is the mechanism)",
+  sheetsCss.indexOf(".sheet.grabbed {") > sheetsCss.indexOf(".sheet.out {"));
+
+// ── 9D. the handle can actually be grabbed ───────────────────────────────────
+const grab = ruleOf(sheetsCss, ".sheet-grab");
+check("the grabber refuses the browser's scroll gesture (touch-action: none)",
+  /touch-action:\s*none/.test(grab || ""), "without it Safari cancels the drag before the first pointermove");
+check("the grabber's hit area is bigger than the 5px bar",
+  /\.sheet-grab::before\s*\{[^}]*position:\s*absolute/.test(sheetsCss));
+check("…and it is positioned so that band has something to hang off",
+  /position:\s*relative/.test(grab || ""));
+const sheetBody = ruleOf(sheetsCss, ".sheet-body");
+check("the scroller contains its own overscroll",
+  /overscroll-behavior(-y)?:\s*none/.test(sheetBody || ""),
+  "on the SCROLLER, not on .sheet — the elastic bounce at scrollTop 0 is the gesture's only rival");
+
+// ── 9E. detents ──────────────────────────────────────────────────────────────
+// One resting height chosen at open — not a drag-between. Both named heights are
+// expressed against the same envelope as max-height, so the safe-area geometry
+// stays in one place and no detent can exceed it.
+for (const d of ["medium", "large"]) {
+  const r = ruleOf(sheetsCss, `.sheet.detent-${d}`);
+  check(`.sheet.detent-${d} sets a resting height`, !!r && /height:/.test(r));
+  check(`…derived from the same safe-area envelope as max-height`,
+    /env\(safe-area-inset-top\)/.test(r || ""), r || "");
+}
+check("a detent is a bottom-sheet idea — the modal drops it",
+  /\.sheet\.detent-medium,\s*\.sheet\.detent-large\s*\{[^}]*height:\s*auto/.test(modalCss));
+
+// ── 9F. no hex anywhere in the sheets section ────────────────────────────────
+// Nine literal hexes exist outside src/design/ in this whole app. It is an
+// achievement, and this section is new code — the likeliest place to lose it.
+const sheetHex = code(sheetsCss).match(/#[0-9a-fA-F]{3,8}\b/g) || [];
+check("the sheets section adds no literal hex", sheetHex.length === 0, sheetHex.join(" "));
+
+/* ── 10. the JS half of the same contract ─────────────────────────────────── */
+// The number in the timer and the number in the stylesheet must be one number.
+check("the closing window reads --dur-2 out of the CSS",
+  /getPropertyValue\("--dur-2"\)/.test(kit), "a restated literal is a drift waiting to happen");
+const tokenDur = Number(tokens.match(/--dur-2:\s*(\d+)ms/)?.[1]);
+const jsFallback = Number(kit.match(/let ms = (\d+);/)?.[1]);
+check("--dur-2 is readable from tokens.css", Number.isFinite(tokenDur), String(tokenDur));
+check("the JS fallback equals the authored token", jsFallback === tokenDur, `${jsFallback} vs ${tokenDur}`);
+
+// One window, one duration, three places that have to agree on it: the class, the
+// inline fly-out a thrown sheet finishes with, and the timer. All three name
+// --dur-2, so there is nothing to keep in sync by hand.
+check("the class's exit is --dur-2", /animation:\s*sheetout\s+var\(--dur-2\)/.test(sheetsCss));
+const fly = kit.slice(kit.indexOf("const flyOut ="), kit.indexOf("// ── the close"));
+check("a thrown sheet finishes on the same clock", /transition = "transform var\(--dur-2\)/.test(fly), fly.trim());
+// A snap-back is the one motion here that springs: it is the sheet refusing.
+check("a snap-back springs instead", /transition = "transform var\(--dur-3\) var\(--ease-spring\)"/.test(kit));
+
+// The three gesture routes out must go through the wrapper, or they unmount the
+// sheet before it can animate — which is the bug this whole file is about.
+check("the scrim no longer calls the parent's onClose directly",
+  !/onClick=\{dismissible \? onClose/.test(kit) && /className=\{`sheet-scrim[^`]*`\}[\s\S]{0,200}requestClose\(\)/.test(kit));
+check("the close button goes through the wrapper too", /disabled=\{!view\.dismissible\}/.test(kit) &&
+  /onClick=\{view\.dismissible \? \(\) => requestClose\(\)/.test(kit));
+check("Escape goes through the wrapper too", /if \(dismissible\) requestClose\(\);/.test(kit));
+
+// The freeze. During the closing window the parent's state has usually already
+// moved on, and half these sheets print the state the close clears.
+check("the payload is cached on every open render", /if \(!closing\) lastRef\.current = \{/.test(kit));
+// Read the line, don't pattern-match across it: the body's own handler contains
+// an arrow (`(e) => beginDrag(…)`), so any [^>]* here stops in the middle of the
+// tag and asserts nothing.
+const bodyLine = kit.split("\n").find((l) => l.includes('className="sheet-body"')) || "";
+check("the body renders the frozen children, not the live prop",
+  bodyLine.includes(">{view.children}</div>"), bodyLine.trim());
+check("the frozen payload covers the footer and the title too",
+  /\{view\.footer\}/.test(kit) && /\{view\.title\}/.test(kit));
+
+// Reduced motion: not a shorter slide — no window at all.
+const rq = kit.slice(kit.indexOf("const requestClose = useCallback"), kit.indexOf("// ── the gesture"));
+check("requestClose is findable", rq.length > 100);
+check("reduced motion delivers the close immediately",
+  rq.indexOf("allow().animateExit") > 0 && rq.indexOf("allow().animateExit") < rq.indexOf("setClosing(true)"),
+  "the check has to come BEFORE the closing state, or these users wait 240ms for nothing");
+const bd = kit.slice(kit.indexOf("const beginDrag ="), kit.indexOf("const onMove ="));
+check("beginDrag is findable", bd.length > 100);
+check("…and the drag consults the same policy", bd.includes("allow().drag"),
+  "dragging a sheet around by hand is animation performed by hand");
+const rmBlock = comp.slice(comp.indexOf("@media (prefers-reduced-motion: reduce)"));
+check("the stylesheet also holds the .out classes still",
+  /\.sheet-scrim,\s*\.sheet\.out,\s*\.sheet-scrim\.out\s*\{[^}]*animation:\s*none\s*!important/.test(rmBlock));
+
+// The affordance is bound at both ends: the handle, and the body at scrollTop 0.
+check("the grabber has a pointerdown", /className="sheet-grab" onPointerDown=/.test(kit));
+check("the body has one too", /className="sheet-body" ref=\{bodyRef\}[^>]*onPointerDown=/.test(kit));
+check("a body drag starts only at the top of the scroll", /bodyRef\.current\?\.scrollTop \|\| 0\) > 0\) return/.test(kit));
+check("a sideways gesture is never ours", /Math\.abs\(dx\) > Math\.abs\(dy\)/.test(kit));
+// The nearest gesture owner wins — SortableList's rule, and its selectors, reused
+// rather than reinvented, so a reorder list inside a sheet keeps its hold-drag.
+check("a nested sortable keeps its own gesture", /SHEET_NO_DRAG = [^\n]*\[data-sortable\]/.test(kit));
+check("…and the house's data-no-drag opt-out is honoured", /SHEET_NO_DRAG = [^\n]*\[data-no-drag\]/.test(kit));
+check("a second finger is a pinch, not a dismiss", /!e\.isPrimary/.test(kit));
+check("the sheet is never left stuck mid-pull", /onPointerCancel=\{\(e\) => endDrag\(e, false\)\}/.test(kit));
+// Escape (or a footer button) mid-drag must not leave the finger and the exit
+// writing the same transform at each other.
+check("a drag in flight loses the sheet the moment it closes", /dragRef\.current = null;/.test(rq));
+// The gesture and the geometry must agree about what a phone is.
+check("the drag uses the same breakpoint query as useIsMobile()",
+  /matchMedia/.test(hooks) && hooks.includes("(max-width: 760px)") && kit.includes("(max-width: 760px)"));
+
+// useConfirm is the house's window.confirm, so a confirm sheet that got stuck
+// mid-exit would take a destructive flow down with it. Its buttons leave through
+// the same exit as the scrim, the promise settles in exactly ONE place (the
+// sheet's own onClose, after the animation), and each request is keyed so two
+// confirms in a row cannot share one Sheet instance — and with it one finished
+// `closing` state.
+check("the confirm's buttons ask the sheet to leave", /function ConfirmActions[\s\S]{0,400}useSheetClose\(\)/.test(kit));
+check("the promise settles in exactly one place", (kit.match(/req\?\.resolve\(/g) || []).length === 1);
+check("each confirm is its own sheet", /<Sheet key=\{req\.seq\}/.test(kit),
+  "without the key, React reconciles one Sheet across two questions");
+
+// detent, as documented in DESIGN.md §6 — and only for the two named values, so
+// every existing call site keeps today's content-sized sheet exactly.
+check("Sheet takes a detent, defaulting to auto", /detent = "auto"/.test(kit));
+check("only medium and large get a class",
+  /detent === "medium" \|\| detent === "large" \? ` detent-\$\{detent\}`/.test(kit));
+
+/* ── 11. THE GESTURE, EXECUTED ─────────────────────────────────────────────── */
+// Everything above is text. These are the numbers that ARE the feel, so they get
+// run rather than read: import kit.jsx through esbuild (bare Node cannot load
+// JSX), call the two pure functions, and assert the physics. Module scope in
+// kit.jsx touches no DOM, which is what makes this importable at all.
+const kitMod = await (async () => {
+  const out = path.resolve(".ambient-smoke-kit.tmp.mjs");
+  await build({
+    entryPoints: ["src/ui/kit.jsx"], bundle: true, platform: "node", format: "esm",
+    outfile: out, loader: { ".jsx": "jsx" }, jsx: "automatic",
+    external: ["react", "react-dom"], logLevel: "error",
+  });
+  try { return await import(pathToFileURL(out).href); }
+  finally { await rmFile(out, { force: true }); }
+})();
+const { sheetPull, sheetShouldDismiss, sheetPolicy, SHEET_DISMISS_PX, SHEET_FLICK_VY } = kitMod;
+check("the gesture's math is importable",
+  [sheetPull, sheetShouldDismiss, sheetPolicy].every((f) => typeof f === "function"));
+
+// THE MANDATE, RUN RATHER THAN GREPPED. All four combinations, because the two
+// queries are independent and only one of the four is the interesting one: a
+// reduced-motion user on a phone must get no exit animation AND no drag.
+const P = (still, phone) => sheetPolicy({ still, phone });
+check("phone, motion allowed: it animates and it drags", P(false, true).animateExit && P(false, true).drag);
+check("phone, reduced motion: neither", !P(true, true).animateExit && !P(true, true).drag);
+check("tablet, motion allowed: it animates, it does not drag", P(false, false).animateExit && !P(false, false).drag);
+check("tablet, reduced motion: neither", !P(true, false).animateExit && !P(true, false).drag);
+
+// The thresholds live in the range a thumb lives in. This is the check that
+// catches a decimal point: 1200px and 12px both read fine in a diff.
+check("the dismiss threshold is a thumb's distance", SHEET_DISMISS_PX >= 100 && SHEET_DISMISS_PX <= 140, String(SHEET_DISMISS_PX));
+check("the flick threshold is a flick", SHEET_FLICK_VY > 0.2 && SHEET_FLICK_VY < 1.5, String(SHEET_FLICK_VY));
+
+// A dismissible sheet tracks the finger exactly downward. Anything less than 1:1
+// in the direction it is leaving feels like the sheet is arguing with you.
+check("down is 1:1 for a dismissible sheet", sheetPull(80) === 80 && sheetPull(4) === 4);
+// Upward it resists and never runs away: there is nothing above the top edge.
+const up = [8, 40, 200, 5000].map((v) => sheetPull(-v));
+check("up resists", up[0] > -8 && up[0] < 0, String(up[0]));
+check("up never exceeds its give", up.every((v) => v > -65), up.join(" "));
+check("up is monotonic", up[0] > up[1] && up[1] > up[2] && up[2] > up[3], up.join(" "));
+
+// dismissible={false} — a locked sheet must MOVE (a handle that ignores you is
+// the lie this change exists to remove) and must never leave.
+const locked = Array.from({ length: 400 }, (_, i) => sheetPull(i, false));
+check("a locked sheet gives a little", locked[20] > 0 && locked[20] < 20, String(locked[20]));
+check("a locked sheet never travels far", Math.max(...locked) < 29, String(Math.max(...locked)));
+check("a locked pull is monotonic", locked.every((v, i) => i === 0 || v > locked[i - 1]));
+// No cap, no corner: a Math.min() would flatten the curve, and you can feel the
+// flat spot. Strictly decreasing first differences is what "smooth" means here.
+const diffs = locked.slice(1, 200).map((v, i) => v - locked[i]);
+check("the resistance curve has no corner in it", diffs.every((d, i) => i === 0 || d < diffs[i - 1]));
+
+// The release decision.
+check("119px snaps back", sheetShouldDismiss(119, 0) === false);
+check("121px lets go", sheetShouldDismiss(121, 0) === true);
+check("a fast flick lets go early", sheetShouldDismiss(30, 0.9) === true);
+check("a flick from nowhere is a tap, not a dismiss", sheetShouldDismiss(6, 9) === false);
+check("a slow long pull still lets go", sheetShouldDismiss(200, 0.01) === true);
+check("no travel, no dismiss", sheetShouldDismiss(0, 0) === false && sheetShouldDismiss(-40, 3) === false);
+check("a locked sheet answers neither test",
+  sheetShouldDismiss(900, 0, false) === false && sheetShouldDismiss(30, 9, false) === false);
+
+// ── the parent's handle on the exit ─────────────────────────────────────────
+// useSheetClose reads context, so it only resolves BELOW the provider Sheet opens
+// in its own return — which excludes every close in this app, because they all
+// fire from a mutation callback in the scope that renders the Sheet. Those closes
+// go through closeRef instead, and the ones already converted are pinned here: a
+// panel that goes back to flipping its own state gets the hard cut back, and
+// nothing on screen would say so.
+const kitSrc = readFileSync("src/ui/kit.jsx", "utf8");
+check("Sheet takes a closeRef", /function Sheet\(\{[^)]*closeRef/s.test(kitSrc));
+check("…populated in a layout effect, so it is ready before any child handler",
+  /useLayoutEffect\(\(\) => \{\s*if \(!closeRef\) return;\s*closeRef\.current = requestClose;/.test(kitSrc));
+check("…and nulled on unmount, so closeSheet can fall back",
+  /return \(\) => \{ closeRef\.current = null; \};/.test(kitSrc));
+// The fallback is the whole reason closeSheet exists rather than callers doing
+// `ref.current?.(fn)`: optional-call on an empty ref silently drops the after-work,
+// which turns Save into a button that saves and then does nothing visible.
+check("closeSheet runs the after-work even with no sheet mounted",
+  /export function closeSheet\(ref, after\) \{[\s\S]*?else after\?\.\(\);/.test(kitSrc));
+for (const [label, file] of [
+  ["Creed", "src/features/creed/CreedPanel.jsx"],
+  ["Dreams", "src/features/dreams/DreamBoardPanel.jsx"],
+]) {
+  const src = readFileSync(file, "utf8");
+  check(`${label} hands its sheet a closeRef`, /<Sheet closeRef=\{sheetClose\}/.test(src));
+  check(`${label} closes through the exit, not a bare state flip`,
+    /closeSheet\(sheetClose,/.test(src) && !/onSuccess: \(\) => \{ setSaving\(false\); set(Form|Tile)\(null\)/.test(src));
+}
+
+console.log(failed ? `\n${failed} motion check(s) failed` : "\nmotion (the wash + the sheets): all checks passed");
 process.exit(failed ? 1 : 0);
