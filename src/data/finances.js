@@ -8,8 +8,15 @@ const KEY = ["transactions"];
 // budgeting tool that renders as a month where you spent nothing — indis-
 // tinguishable from a real quiet month, and far worse than an error. Letting it
 // throw puts the query in `error` while `data` keeps the last good ledger.
+// Returns the envelope, not the bare array: `{ rows, total, limit, capped }`.
+// loadTransactions caps at 5,000 and PostgREST has a max-rows ceiling of its own,
+// and until this carried `capped` a silent slice was indistinguishable from the
+// whole history — so the month totals, the budget status and the recurring
+// detector were all computed over "some of it" and presented as "all of it".
+// A wrong number is worse here than a missing one, because a budget you are
+// under by a slice is a budget you think you are under.
 export function useTransactions() {
-  return useQuery({ queryKey: KEY, queryFn: () => db.loadTransactions() });
+  return useQuery({ queryKey: KEY, queryFn: () => db.readTransactions() });
 }
 
 /** An import. Returns how many rows were written so the receipt can say so. */

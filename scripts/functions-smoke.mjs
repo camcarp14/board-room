@@ -19,6 +19,21 @@
 //
 // If this fails, the fix is NOT a cleverer helper — inline what you need into the
 // function. Self-contained is the house pattern here, deliberately.
+//
+// ─── the file's second job: who is allowed to call these ─────────────────────
+// Once every handler is bundled and loaded, the bundles are still sitting there
+// — so the same pass CALLS each gated one with no credential of any kind and
+// insists it refuses. That replaced a substring test (does "BOARD_USER_ID"
+// appear in the file) which was worse than nothing: see the inventory comment
+// below for how it let a wide-open endpoint pass for its entire life. Every file
+// in the directory now has to be named as owner-gated, shared-secret or
+// deliberately-public, and an unnamed one fails the build.
+//
+// The invocation is safe by construction, not by care: global fetch is replaced
+// with a stub that throws and counts, and "no upstream was touched" is one of
+// the assertions. A gated function that reaches the network before deciding
+// whether the caller is allowed has already done work for a stranger, and this
+// suite must never be the thing that spends money on a build.
 
 import esbuild from "esbuild";
 import { mkdirSync, rmSync, readdirSync, readFileSync } from "node:fs";
@@ -33,15 +48,147 @@ const require_ = createRequire(import.meta.url);
 // check doesn't depend on bundling third-party trees.
 const EXTERNALS = ["tweetnacl"];
 
-// Board Room is a personal, owner-only console. These endpoints can read
-// connected business data, spend API budget, or write through privileged
-// credentials; a valid session for a second account must never be sufficient.
-const OWNER_ONLY = [
-  "audit", "auto-fix", "calendar-events", "claude", "clarify-pipeline",
-  "db-admin", "deploy", "econ-resolve-background", "fetch-page", "gsc",
-  "mini-worker", "note-capture", "plaid", "shopify", "site-status",
-  "upstream-run-background", "workout-import", "zts-pipeline",
-];
+// ─── the front-door inventory ────────────────────────────────────────────────
+// This used to be one list and one test: does the string "BOARD_USER_ID" appear
+// anywhere in the file. That test was worth nothing, and it is worth writing down
+// exactly why, because the same shortcut is available every time this file is
+// edited.
+//
+//   · It could not tell a gate from a mention. board-work-background.js carries
+//     the string at line 72 — inside sbConfig(), where BOARD_USER_ID is the
+//     user_id it WRITES ROWS AS, not a caller it checks — and it spent its entire
+//     life accepting anonymous POSTs that read every seat note and the last eight
+//     chat messages through the service-role key, spent Anthropic budget
+//     synthesising an answer out of them, and PATCHed the answer to whatever
+//     Discord webhook the caller named.
+//   · It only looked at files that were already on the list, so a new function
+//     was un-checked by default. The default has to be the other way round.
+//   · It said nothing about the two other kinds of door this app actually has: a
+//     shared secret (no Supabase session exists inside a Shortcut, a TRMNL
+//     device, or a Discord interaction) and deliberately open (a price proxy with
+//     no credential worth stealing).
+//
+// So every .js file in netlify/functions now has to appear in exactly one of the
+// three maps below, with a reason written next to it, and the smoke fails on any
+// file that appears in none. That failure is the feature: adding a function
+// forces the decision, in the diff, where a reviewer can see it. And the two
+// gated maps are not read for their strings — the handler is bundled and CALLED
+// with no credential, and it has to refuse.
+
+// Owner-only. These read connected business data, spend API budget, or write
+// through privileged credentials; a valid session for a second account must
+// never be sufficient. netlify/functions/deploy.js is the canonical shape —
+// refuse before the first fetch, 401 with no session, 403 for the wrong user.
+const OWNER_GATED = {
+  audit: "runs Claude over a live site and writes auditor_findings",
+  "auto-fix": "opens commits against the repo with GITHUB_TOKEN",
+  "calendar-events": "fetches an arbitrary URL the caller names",
+  claude: "the model proxy — the whole Anthropic bill runs through it",
+  "clarify-pipeline": "reads the Clarify agency pipeline",
+  "db-admin": "prunes and purges tables through the service-role key",
+  deploy: "triggers and rolls back Netlify builds with NETLIFY_API_TOKEN",
+  "econ-resolve-background": "spends a web-searching model call per event",
+  "fetch-page": "fetches an arbitrary URL the caller names",
+  gsc: "reads Search Console for the owner's properties",
+  "mini-worker": "runs queued model tasks against the owner's key",
+  "note-capture": "writes into personal_notes on the owner's behalf",
+  plaid: "holds PLAID_SECRET and the bank access tokens it buys",
+  shopify: "reads the ZTS store's orders and customers",
+  "site-status": "fetches an arbitrary URL the caller names",
+  "upstream-run-background": "runs the UPSTREAM engines — minutes of model time",
+  "workout-import": "writes workouts from the watch seam",
+  "zts-pipeline": "reads the ZTS pipeline",
+};
+
+// A shared secret, because the caller cannot hold a Supabase session: a watchOS
+// Shortcut, a TRMNL device, a Discord interaction, a scheduled backup. The secret
+// IS the identity, so the only thing that matters is that an absent one refuses.
+const SHARED_SECRET = {
+  "board-work-background": "INTERNAL_WORKER_SECRET on the internal hop from discord-board",
+  "discord-board": "DISCORD_PUBLIC_KEY — every interaction is Ed25519-signed by Discord",
+  "export-data": "BACKUP_SECRET — one correct guess returns the entire database",
+  trmnl: "TRMNL_TOKEN — the device fetches the URL server-side, so a URL token is the model",
+};
+
+// Open on purpose. Each of these is a read-only proxy or a scheduled worker whose
+// payload is public information, and each entry has to say why being open is
+// acceptable — that sentence is the decision, and it is what a reviewer argues
+// with. Note what is NOT here: nothing that reaches a model. That is asserted
+// below rather than trusted, because an open faucet on the model budget is the
+// concrete cost of getting this list wrong.
+const DELIBERATELY_PUBLIC = {
+  "alt-candles": "CoinGecko OHLC for one coin id — public market data, cached",
+  "alt-cron-background": "the hourly crypto screener; writes only its own board, takes no caller input",
+  "alt-scan": "serves the stored board plus live prices — the same numbers coinmarketcap shows",
+  btc: "the CoinGecko price proxy that exists because a phone's IP gets rate-limited",
+  "btc-candles": "public BTC candles",
+  calendar: "the Forex-factory econ calendar, identical for everyone",
+  health: "a config-presence probe — reports whether env vars are SET, never their values",
+  markets: "Yahoo quotes for four public tickers",
+  "stock-cron-background": "the hourly equity tick; presents INTERNAL_WORKER_SECRET when set but must still run for the scheduler, which cannot hold one",
+  "stock-scan": "serves the stored board — public prices and the screener's own arithmetic",
+  "stock-settle-background": "the after-close settle; same scheduler constraint as stock-cron-background",
+  "ticker-candles": "public candles for one symbol",
+  tmdb: "TMDB title search — TMDB_API_KEY is a read-only catalogue key",
+  wire: "the news wire, identical for everyone",
+};
+
+// A privileged fake for every variable a function reads, so the gate under test
+// is the AUTHORIZATION check and not the "not configured yet" branch in front of
+// it. Fail-closed-when-unset already has a home (board-work-background's own
+// comment); what has never been tested is the far more dangerous state, which is
+// a fully configured deployment answering a caller who presented nothing. The
+// values are shaped like the real thing and are all unusable.
+const FAKE_ENV = {
+  SUPABASE_URL: "https://smoke.invalid",
+  SUPABASE_SERVICE_ROLE_KEY: "smoke-service-role-key-not-real",
+  BOARD_USER_ID: "00000000-0000-4000-8000-000000000000",
+  ANTHROPIC_API_KEY: "sk-ant-smoke-not-real",
+  VITE_ANTHROPIC_API_KEY: "sk-ant-smoke-not-real",
+  INTERNAL_WORKER_SECRET: "smoke-internal-worker-secret",
+  BACKUP_SECRET: "smoke-backup-secret",
+  TRMNL_TOKEN: "smoke-trmnl-token",
+  TRMNL_USER_ID: "00000000-0000-4000-8000-000000000000",
+  MINER_USER_ID: "00000000-0000-4000-8000-000000000000",
+  NETLIFY_API_TOKEN: "smoke-netlify-token",
+  GITHUB_TOKEN: "smoke-github-token",
+  GSC_CLIENT_EMAIL: "smoke@example.invalid",
+  GSC_PRIVATE_KEY: "-----BEGIN PRIVATE KEY-----\nsmoke\n-----END PRIVATE KEY-----\n",
+  GSC_SITE_URL: "https://example.invalid",
+  PLAID_CLIENT_ID: "smoke-plaid-client",
+  PLAID_SECRET: "smoke-plaid-secret",
+  PLAID_ENV: "sandbox",
+  SHOPIFY_CLIENT_ID: "smoke-shopify-client",
+  SHOPIFY_CLIENT_SECRET: "smoke-shopify-secret",
+  SHOPIFY_SHOP: "smoke.myshopify.com",
+  TMDB_API_KEY: "smoke-tmdb-key",
+  CLARIFY_SUPABASE_URL: "https://clarify.smoke.invalid",
+  CLARIFY_SUPABASE_ANON_KEY: "smoke-clarify-anon",
+  // 32 bytes of hex, so a signature check that gets as far as nacl has something
+  // well-formed to reject rather than throwing on a malformed key.
+  DISCORD_PUBLIC_KEY: "00".repeat(32),
+  URL: "https://smoke.invalid",
+  DEPLOY_URL: "https://smoke.invalid",
+  DEPLOY_PRIME_URL: "https://smoke.invalid",
+};
+// Set before anything is bundled or required: econ-resolve-background.js reads
+// SUPABASE_URL / SUPABASE_SERVICE_ROLE_KEY / BOARD_USER_ID into module-level
+// consts at import time, so a value assigned after the require never reaches it.
+for (const [k, v] of Object.entries(FAKE_ENV)) process.env[k] = v;
+
+// ─── the network, nailed shut ────────────────────────────────────────────────
+// A suite that invokes twenty-two handlers is one missing `return` away from
+// being a suite that spends money, and it would spend it silently on somebody
+// else's machine. So fetch throws, and it COUNTS, because a handler with a catch
+// around its own call would otherwise swallow the evidence. The count being zero
+// after every auth-failure invocation is itself an assertion below: a function
+// that reaches an upstream before deciding whether the caller is allowed has
+// already done work for a stranger.
+const fetchCalls = [];
+globalThis.fetch = (...args) => {
+  fetchCalls.push(String(args[0]));
+  throw new Error("functions-smoke: fetch is closed — nothing here may reach an upstream");
+};
 
 // ─── extra assertions on pure helpers a function exports for testing ─────────
 // Netlify only reads `handler`, so a function may export a pure helper purely so
@@ -171,13 +318,10 @@ mkdirSync(OUT_DIR, { recursive: true });
 const fns = readdirSync(FN_DIR).filter(f => f.endsWith(".js")).sort();
 let pass = 0;
 const failures = [];
-
-for (const name of OWNER_ONLY) {
-  const source = readFileSync(join(FN_DIR, `${name}.js`), "utf8");
-  if (!source.includes("BOARD_USER_ID")) {
-    failures.push([`${name} · owner gate`, "missing BOARD_USER_ID authorization"]);
-  }
-}
+// Bundles are kept until the auth inventory below has invoked them, then the
+// directory goes. The invocation needs the bundle, not the source.
+const loaded = new Map();
+const bundleText = new Map();
 
 for (const file of fns) {
   const name = basename(file, ".js");
@@ -195,8 +339,10 @@ for (const file of fns) {
   // The assertion that matters. A function with no handler is a 502.
   try {
     const mod = require_(out);
+    bundleText.set(name, readFileSync(out, "utf8"));
     if (typeof mod.handler === "function" || typeof mod.default === "function") {
       pass++;
+      loaded.set(name, mod);
       console.log(`ok:   ${name}`);
       for (const [label, cond, detail = ""] of (EXTRA[name]?.(mod) || [])) {
         if (cond) console.log(`ok:     ${label}`);
@@ -211,9 +357,157 @@ for (const file of fns) {
   }
 }
 
+console.log(`\n${pass}/${fns.length} functions export a callable handler`);
+
+// ─── the auth inventory: every door is named, and every gated one is knocked on ─
+{
+  const named = [
+    ["owner-gated", OWNER_GATED], ["shared-secret", SHARED_SECRET], ["deliberately-public", DELIBERATELY_PUBLIC],
+  ];
+  const listing = new Map();
+  for (const [list, map] of named) {
+    for (const [name, why] of Object.entries(map)) {
+      if (listing.has(name)) failures.push([`${name} · inventory`, `listed in both ${listing.get(name).list} and ${list} — a function has exactly one front door`]);
+      else listing.set(name, { list, why });
+      if (!why || !why.trim()) failures.push([`${name} · inventory`, `listed in ${list} with no reason written down`]);
+    }
+  }
+  // A file with no entry FAILS. That is the whole point of the map: adding a
+  // function to this directory now costs one line here, and forgetting it is
+  // loud instead of being a silently open endpoint.
+  const unlisted = fns.map((f) => basename(f, ".js")).filter((n) => !listing.has(n));
+  if (unlisted.length) {
+    failures.push(["function inventory", `not listed as owner-gated, shared-secret or deliberately-public: ${unlisted.join(", ")}. `
+      + `Add each one to the map in scripts/functions-smoke.mjs that matches its front door, with the reason beside it.`]);
+  } else console.log(`ok:   every function names its front door (${Object.keys(OWNER_GATED).length} owner-gated, ${Object.keys(SHARED_SECRET).length} shared-secret, ${Object.keys(DELIBERATELY_PUBLIC).length} public)`);
+  // The other direction: a stale entry for a file that has been renamed or
+  // deleted would leave the inventory looking complete while covering nothing.
+  const present = new Set(fns.map((f) => basename(f, ".js")));
+  const ghosts = [...listing.keys()].filter((n) => !present.has(n));
+  if (ghosts.length) failures.push(["function inventory", `listed but no such file: ${ghosts.join(", ")}`]);
+  // readdirSync also hands back netlify/functions/_shared, which Netlify does not
+  // route (a leading underscore is excluded from the function build). It is a
+  // require-only helper, so it has no front door to name — but it is asserted to
+  // be the ONLY such entry, so a second directory of routable code cannot appear
+  // without this list noticing.
+  const others = readdirSync(FN_DIR).filter((e) => !e.endsWith(".js"));
+  if (others.length !== 1 || others[0] !== "_shared") {
+    failures.push(["function inventory", `unexpected non-.js entries in ${FN_DIR}: ${others.join(", ")} — only the unrouted _shared/ helper directory belongs here`]);
+  }
+
+  // ── an open faucet on the model budget ────────────────────────────────────
+  // The one property of the public list worth checking rather than trusting.
+  // Everything else a public function touches is public information; a model
+  // call is the owner's money, and every function that makes one is on a gated
+  // list today. Tested against the BUNDLE so an indirect reach — through
+  // netlify/lib/upstream/llm.js, or the Anthropic SDK — counts the same as a
+  // literal fetch to the API.
+  const reachesAModel = (name) => /api\.anthropic\.com/.test(bundleText.get(name) || "");
+  const openFaucets = Object.keys(DELIBERATELY_PUBLIC).filter(reachesAModel);
+  if (openFaucets.length) failures.push(["public functions", `these are listed public and reach a model: ${openFaucets.join(", ")}`]);
+  else console.log(`ok:   no deliberately-public function can reach a model`);
+
+  // ── the knock ─────────────────────────────────────────────────────────────
+  // No Authorization header, no secret header, no token in the body. A gated
+  // function has to refuse — and it has to refuse WITHOUT a network call, which
+  // deploy.js gets right (`if (!auth) return 401` sits above its first fetch) and
+  // is the shape every one of these should copy.
+  //
+  // 401 unauthenticated, 403 wrong account, 503 refusing because the server is
+  // not in a state where it may answer. Anything else — a 200, a 400, a 500 from
+  // a crash — is a function that did something with an anonymous request.
+  const REFUSALS = new Set([401, 403, 503]);
+  // Netlify's legacy event, as the runtime builds it. Headers arrive lowercased,
+  // and the authorization key is deliberately ABSENT rather than empty — that is
+  // the case a gate is most likely to get wrong, because `event.headers
+  // .authorization` is then undefined and a gate that reads it without the `|| ""`
+  // guard crashes into a 502 instead of answering 401.
+  const legacyEvent = () => ({
+    httpMethod: "POST", path: "/.netlify/functions/x", rawUrl: "https://smoke.invalid/.netlify/functions/x",
+    headers: { "content-type": "application/json" }, queryStringParameters: {}, body: "{}", isBase64Encoded: false,
+  });
+  const modernRequest = (name) => new Request(`https://smoke.invalid/.netlify/functions/${name}`, {
+    method: "POST", headers: { "content-type": "application/json" }, body: "{}",
+  });
+
+  // BOTH SHAPES, READ FROM THE ANSWER RATHER THAN ASSUMED. A v2 handler answers
+  // with a WHATWG Response, which carries `status` and NO `statusCode` — so a
+  // harness that reads only `res.statusCode` sees undefined on every one of them
+  // and would have to treat undefined as either a pass (which excuses exactly the
+  // functions that were open) or a fail (which makes the modern convention
+  // untestable). Both are read, the shape is recorded, and the tally is printed
+  // so a convention change cannot quietly leave one reader unexercised.
+  const codeOf = (res) => {
+    if (res && typeof res.status === "number" && typeof res.headers?.get === "function") {
+      return { code: res.status, shape: "Response", statusCodeField: res.statusCode };
+    }
+    if (res && typeof res.statusCode === "number") return { code: res.statusCode, shape: "legacy", statusCodeField: res.statusCode };
+    return { code: null, shape: res == null ? "nothing" : typeof res, statusCodeField: res?.statusCode };
+  };
+
+  const shapes = { Response: [], legacy: [] };
+  const carriesAStatusCode = [];
+  const gated = [...Object.keys(OWNER_GATED), ...Object.keys(SHARED_SECRET)].sort();
+  for (const name of gated) {
+    const mod = loaded.get(name);
+    if (!mod) continue; // already reported above as un-bundleable / handler-less
+    const before = fetchCalls.length;
+    let res, threw = null;
+    try {
+      res = typeof mod.default === "function" ? await mod.default(modernRequest(name)) : await mod.handler(legacyEvent(), {});
+    } catch (e) {
+      threw = e;
+    }
+    const spent = fetchCalls.slice(before);
+    if (threw) {
+      failures.push([`${name} · refuses an anonymous caller`,
+        `threw instead of answering: ${threw.message}`
+        + (spent.length ? ` — and it called fetch first (${spent[0]})` : "")]);
+      continue;
+    }
+    const { code, shape, statusCodeField } = codeOf(res);
+    if (shape === "Response" || shape === "legacy") shapes[shape].push(name);
+    if (shape === "Response" && statusCodeField !== undefined) carriesAStatusCode.push(`${name} (${statusCodeField})`);
+    if (!REFUSALS.has(code)) {
+      failures.push([`${name} · refuses an anonymous caller`,
+        `answered ${code === null ? `a ${shape}` : code} to a request with no Authorization header, no secret header and no token. `
+        + `Expected 401, 403 or 503.`]);
+      continue;
+    }
+    if (spent.length) {
+      failures.push([`${name} · refuses before spending anything`,
+        `refused with ${code}, but reached ${spent.length} upstream(s) getting there — first was ${spent[0]}. `
+        + `Decide whether the caller is allowed BEFORE the first fetch (netlify/functions/deploy.js is the pattern).`]);
+      continue;
+    }
+    console.log(`ok:     ${name} · ${code} to an anonymous caller, no upstream touched (${shape})`);
+  }
+
+  // Printed every run, because "which convention is this function on" is the
+  // thing a reader of this file needs and cannot get from the lists above.
+  console.log(`ok:   ${shapes.Response.length} gated function(s) answer with a v2 Response (statusCode is undefined on all of them): ${shapes.Response.join(", ")}`);
+  console.log(`ok:   ${shapes.legacy.length} gated function(s) answer with a legacy { statusCode }`);
+  if (!shapes.Response.length || !shapes.legacy.length) {
+    failures.push(["handler conventions", `only one convention was exercised (Response: ${shapes.Response.length}, legacy: ${shapes.legacy.length}) — `
+      + `the reader for the other one is now untested; either the inventory is wrong or a convention has been retired and codeOf() should follow it`]);
+  }
+  // The Response-shaped ones must genuinely carry `statusCode: undefined`. That
+  // is the fact the old shape of this check depended on without knowing it, and
+  // asserting it keeps the sentence above from going stale: if a future runtime
+  // starts populating both fields, this says so instead of the note quietly
+  // becoming wrong.
+  if (carriesAStatusCode.length) {
+    failures.push(["handler conventions",
+      `these answered with a Response that ALSO carries a statusCode: ${carriesAStatusCode.join(", ")} — `
+      + `the note printed above is now wrong and codeOf() should prefer whichever field the runtime actually honours`]);
+  }
+
+  if (!fetchCalls.length) console.log(`ok:   no auth-failure invocation touched the network`);
+  else failures.push(["outbound during auth failure", `${fetchCalls.length} fetch(es) attempted: ${[...new Set(fetchCalls)].join(", ")}`]);
+}
+
 rmSync(OUT_DIR, { recursive: true, force: true });
 
-console.log(`\n${pass}/${fns.length} functions export a callable handler`);
 // ─── every outbound fetch carries a deadline ─────────────────────────────────
 // A fetch with no timeout in a Netlify function does not fail — it HANGS, until
 // the platform kills the invocation. On a synchronous function that is ~10

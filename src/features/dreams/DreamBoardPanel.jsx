@@ -141,8 +141,12 @@ export function DreamBoardPanel({ isMobile, settings, updateSetting }) {
     const n = counts[name] || 0;
     const ok = await confirm({
       title: `Delete ${name}?`,
+      // This said "This can't be undone" until the delete became a soft one.
+      // Deleting now writes deleted_at and the row stays for thirty days, so the
+      // old sentence had become the wrong kind of untrue — the kind that makes
+      // you keep a board you wanted rid of.
       message: n
-        ? `The ${n} tile${n === 1 ? "" : "s"} on this board are deleted with it. This can't be undone.`
+        ? `The ${n} tile${n === 1 ? "" : "s"} on this board come off the wall with it. Recoverable for 30 days.`
         : `This board is empty — nothing is lost.`,
       confirmLabel: "Delete board",
       destructive: true,
@@ -170,7 +174,8 @@ export function DreamBoardPanel({ isMobile, settings, updateSetting }) {
     });
   };
   const removeTile = async () => {
-    if (!(await confirm({ title: "Remove this tile?", message: "It comes off the board for good.", confirmLabel: "Remove", destructive: true }))) return;
+    // "for good" stopped being true when the delete became a soft one.
+    if (!(await confirm({ title: "Remove this tile?", message: "It comes off the board. Recoverable for 30 days.", confirmLabel: "Remove", destructive: true }))) return;
     setSaving(true);
     delMut.mutate(tile.id, {
       onSuccess: () => { setSaving(false); setTile(null); },

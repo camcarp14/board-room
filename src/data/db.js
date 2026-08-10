@@ -104,6 +104,185 @@ async function reported(key, label, run, { strict = false } = {}) {
   }
 }
 
+// ─── soft delete, for the two tables that had no undo ────────────────────────
+// personal_notes has had one since a bulk delete took a note somebody wanted
+// back: restoreNotes, below, re-upserts the rows a delete removed. It was the
+// only undo in the app. Meanwhile deleteDreamBoard took every tile on a board in
+// a single statement — a wall built over months, gone behind one confirm dialog —
+// and deleteAffirmation took a line of the Creed the same way. Neither table was
+// even in the backup until this week, so "undo" meant retyping it from memory.
+//
+// Those two stop losing rows here. A delete writes `deleted_at` and leaves the
+// row where it is, the readers filter it out, and a restore clears the column
+// again. The row is destroyed thirty days later by `purge deleted > 30d` in
+// netlify/functions/db-admin.js, alongside the prunes that already live there for
+// auditor_findings and usage_log: a deliberate, counted act rather than a cron
+// nobody watches.
+//
+// THE FILTER LIVES IN THE READERS, NOT AT THE CALL SITES. readUndeleted() below
+// is the only read path either table has, which leaves exactly one place to
+// forget it — and forgetting it there fails loudly, because deleted tiles come
+// back on the wall. Filter in the panels instead and every reader written after
+// this one starts out wrong, silently, with no way to notice from the code.
+//
+// netlify/functions/export-data.js reads both tables whole, through the service
+// role, and is deliberately left alone: a backup that dropped the rows you
+// deleted last week would be the one copy that cannot hand them back.
+//
+// TRANSACTIONS ARE NOT PART OF THIS. See deleteTransactionsForAccount.
+
+// ─── the window in which the column does not exist yet ───────────────────────
+// deleted_at arrives by pasting supabase/migrations/0013_affirmations.sql and
+// 0014_dream_items.sql into the SQL editor. The code that needs it arrives on a
+// deploy. Those are two separate acts, in either order, and between them a filter
+// on deleted_at is a filter on a column PostgREST has never heard of: 42703, and
+// the Creed panel renders an error instead of your Creed. The in-app setup cards
+// (dreamLogic.js's SETUP_SQL, CreedPanel.jsx's CREED_SETUP_SQL) do not create the
+// column at all yet, so a table built from one of those lands in the same state.
+//
+// So the READ falls back to the unfiltered query, exactly the way loadNotes falls
+// back for pinned/color. The fallback cannot hide anything: a row cannot be
+// soft-deleted before the column it would be marked in exists.
+//
+// The DELETE does not fall back. Writing deleted_at IS the delete now, and the
+// only other version of it destroys the row — the precise thing this code exists
+// to prevent — so falling back would trade an inconvenience for the loss. Calling
+// it done without writing anything would be worse still: a tile that vanishes
+// from the sheet and is back on the wall after a refetch. It throws instead, and
+// it names the file to run.
+const RUN_THE_MIGRATION =
+  "Deleting needs the deleted_at column. Run supabase/migrations/0013_affirmations.sql and supabase/migrations/0014_dream_items.sql in the Supabase SQL editor, then try again — nothing was deleted.";
+
+const isMissingColumn = (e, col) =>
+  /42703/.test(e?.code || "") ||
+  new RegExp(`column .*${col}.* does not exist`, "i").test(e?.message || "");
+
+/** A soft-delete failure, with the pre-migration case turned into instructions. */
+function softDeleteError(error, what) {
+  if (!isMissingColumn(error, "deleted_at")) return error;
+  const e = new Error(RUN_THE_MIGRATION);
+  e.code = error.code || "42703";
+  e.what = what;
+  return e;
+}
+
+/**
+ * Read rows that have not been soft-deleted, and survive the column being absent.
+ *
+ * `build` must hand back a FRESH query each call: a PostgREST builder is a
+ * one-shot thenable, so the fallback cannot re-await the one that already
+ * resolved with an error.
+ */
+async function readUndeleted(build) {
+  const live = await build().is("deleted_at", null);
+  if (!live.error) return live.data || [];
+  if (!isMissingColumn(live.error, "deleted_at")) throw live.error;
+  const all = await build();
+  if (all.error) throw all.error;
+  return all.data || [];
+}
+
+// ─── settings two devices edit at the same time ──────────────────────────────
+// saveSetting above is a whole-value upsert, and for most of app_settings that is
+// the right shape: calendar_url is a string, theme is a string, whoever typed it
+// last meant it. But several values are documents rather than preferences, and
+// there the whole-value upsert loses work without saying a word.
+//
+// The mechanism, because it is worth stating exactly. loadSettings runs ONCE at
+// sign-in and hands App one plain object; there is no realtime subscription
+// anywhere in src/, so that object never learns that anything changed. Every
+// panel writes by reading it, changing one thing inside, and upserting the whole
+// value back. Park a thought in Ponder on the iPad and app_settings.ponder_items
+// becomes [new, …old]. The phone, signed in since this morning, still holds the
+// array from before that thought existed — so the moment it archives an item it
+// upserts its own array over the top and the thought is gone. The upsert did
+// exactly what it was told, so no error comes back; the only trace is the thought
+// missing on the next reload, which reads as "I must not have saved it".
+//
+// boardroom.settings_merge (supabase/migrations/0033_settings_merge_rpc.sql) does
+// the read-modify-write inside the database, and takes the updated_at this device
+// believes the row has so a writer working from a superseded copy can be refused.
+// Two strategies, because there are two shapes:
+//
+//   merge   — objects (finance_rules). The patch is applied key by key to
+//             whatever the row holds at the instant of the write, so a rule the
+//             other device added for a different merchant survives. A JSON null
+//             means "remove this key", the RFC 7386 convention, because a key
+//             absent from a patch has to mean "leave it alone".
+//   replace — arrays (ponder_items). No merge is honest: union by id resurrects
+//             what the other device deleted, per-element last-write drops edits,
+//             and both throw away the order, which in a list IS the data. So the
+//             array is written whole onto the exact revision it was read from, and
+//             refused outright if that revision has moved.
+//
+// TWO KEYS, and that is the safety valve. Everything else keeps saveSetting's
+// plain upsert. This list is the same list as the CASE in the migration; the
+// systems smoke fails if they drift apart.
+export const MERGING_SETTINGS = { finance_rules: "merge", ponder_items: "replace" };
+
+// The revision of each merging key as this device last saw it, straight from the
+// server: loadSettings fills it, and every merge response refreshes it. The stamp
+// is kept as the STRING Postgres sent, never a Date — the comparison happens in
+// SQL against a timestamptz with microsecond precision, and a round trip through
+// JS's millisecond Date would round it off and make every write look stale.
+//
+// The value half is the base the object diff is computed against, which makes it
+// a contract with the caller: whatever App is showing has to be what was last
+// adopted from here, or a key it never adopted will read as a deletion on the
+// next write. That is why mergeSetting reports adopt.
+const lastSeen = new Map();
+
+// How many times a write to this key has been REFUSED because the row had moved —
+// that is, how many times another device got there first. mergeSetting captures it
+// when it is called and checks it again before sending, which is the only way to
+// tell "the row changed because of my own previous write" (fine, and the queue
+// below arranges exactly that) from "the row changed because of the phone" (not
+// fine: everything still queued behind that discovery was built on what the row
+// used to hold).
+const foreignMoves = new Map();
+
+const isPlainObject = (v) => !!v && typeof v === "object" && !Array.isArray(v);
+
+/**
+ * The smallest patch that turns `before` into `next`: changed and added keys with
+ * their new values, removed keys as null. Sending only what moved is what lets
+ * two devices edit different merchants without either one's copy of the rest
+ * mattering — the whole object would carry a stale copy of every other key.
+ *
+ * Values are compared by identity, so a nested object is re-sent whenever it is
+ * rebuilt even if it reads the same. That costs bytes and nothing else: the merge
+ * is shallow, so a re-sent value replaces its own key and no other.
+ *
+ * With no base — a key written before anything was loaded — the patch is the
+ * whole value and carries no deletions at all. That direction is the safe one:
+ * nothing can be removed by a device that does not know what is there.
+ */
+const objectPatch = (next, before) => {
+  if (!isPlainObject(next)) return next; // let the RPC refuse it by shape instead of guessing here
+  const base = isPlainObject(before) ? before : {};
+  const patch = {};
+  for (const k of Object.keys(next)) if (next[k] !== base[k]) patch[k] = next[k];
+  for (const k of Object.keys(base)) if (!(k in next)) patch[k] = null;
+  return patch;
+};
+
+// ONE MERGE AT A TIME PER KEY, and this is not an optimisation. Ponder writes the
+// whole array on every tap, so archiving two items quickly fires two writes; the
+// second one reads its expected updated_at before the first one's response has
+// landed, and would be refused as stale by this device's own previous write.
+// Serialising per key means each attempt reads the stamp its predecessor just
+// established, so a rejection can only ever mean another DEVICE moved the row.
+const chains = new Map();
+const shrug = () => {};
+const queued = (key, run) => {
+  const prev = chains.get(key) || Promise.resolve();
+  // Runs whichever way the predecessor settled: a failed write must not strand
+  // every later write to the same key behind it forever.
+  const mine = prev.then(() => run(), () => run());
+  chains.set(key, mine.then(shrug, shrug));
+  return mine;
+};
+
 // ─── db — Supabase-backed memory layer (unchanged contract) ──────────────────
 export const db = {
   async uid() {
@@ -150,15 +329,31 @@ export const db = {
     }, opts);
   },
   async loadSettings() {
-    const { data, error } = await supabase.from("app_settings").select("setting_key,setting_value");
+    // updated_at comes back for every row, not because callers want it — App's
+    // settings object is still key → value — but because it is the revision a
+    // merging write has to claim it read (see MERGING_SETTINGS above). Without it
+    // every merge would arrive with no expectation, and an array write with no
+    // expectation is exactly the blind overwrite this all exists to stop.
+    const { data, error } = await supabase.from("app_settings").select("setting_key,setting_value,updated_at");
     // Throw, don't return {} — an error here previously looked like "no settings
     // saved" and one flaky refresh wiped calendar_url, model prefs, and the Mini
     // Me queue out of live state. Callers keep the previous settings on throw.
     if (error) throw error;
     const out = {};
-    (data || []).forEach(r => { out[r.setting_key] = r.setting_value; });
+    // Cleared, not merged into: a key that no longer has a row must not leave a
+    // revision behind for the next write to claim. This also runs on every manual
+    // Refresh, which makes the refresh button a way out of a stale baseline.
+    lastSeen.clear();
+    (data || []).forEach(r => {
+      out[r.setting_key] = r.setting_value;
+      if (MERGING_SETTINGS[r.setting_key]) lastSeen.set(r.setting_key, { value: r.setting_value, at: r.updated_at });
+    });
     return out;
   },
+  /** Forget which revision of each merging setting this device has seen. Called
+   *  on sign-out: the revisions belong to the account, and a leftover base would
+   *  have the next user's first write diff against a stranger's value. */
+  forgetSettings() { lastSeen.clear(); foreignMoves.clear(); },
   async saveSetting(key, value, opts) {
     // Keyed on the setting, so a rapid burst — a tab drag, a slider — collapses
     // to one pending failure carrying the last value, and the label is the
@@ -168,6 +363,111 @@ export const db = {
       if (!user_id) throw new Error("Not signed in");
       await write(supabase.from("app_settings").upsert({ user_id, setting_key: key, setting_value: value, updated_at: new Date().toISOString() }, { onConflict: "user_id,setting_key" }), `the ${key} setting`);
     }, opts);
+  },
+  /**
+   * Save one of the MERGING_SETTINGS through boardroom.settings_merge instead of
+   * the whole-value upsert, so the other device's copy of the same key survives.
+   *
+   * Returns reported()'s { ok } plus what the server decided — applied, stale, the
+   * value the row now holds, and `adopt`.
+   *
+   * ADOPT MEANS "the row was not where this device thought it was, so take this
+   * value". It is true whether the write landed or was refused, because in both
+   * cases what came back is news: a merge can carry keys added on the other
+   * device, and a refusal carries the version that beat us. Adopting is part of
+   * the contract rather than a nicety — the object diff above is computed against
+   * the last value adopted from here, so a key handed back and ignored would read
+   * as a deletion on the next write. When nothing moved there is nothing to adopt:
+   * the value coming back is the one we just sent, and repainting it would only
+   * fight a newer local edit.
+   *
+   * A REFUSAL IS A FAILURE AND IS FILED AS ONE, under `setting:<key>` — the same
+   * entry saveSetting uses, so one setting can only ever put one chip in the top
+   * bar, and a later write that lands through either path clears it. Nothing new
+   * was invented to carry this: the whole point of the writeFailures store is that
+   * a write which did not happen has somewhere to be seen.
+   *
+   * NOTHING IS RE-SENT ON ITS OWN, and a retry re-sends the SAME claim — the same
+   * patch against the same revision it was built for, captured on the first
+   * attempt. That is what makes retry honest in both directions. A write that
+   * failed on the wire retries and lands, because the revision it claimed is still
+   * the current one. A write that was REFUSED retries and is refused again, for as
+   * long as the row has moved on — which is correct: an array edit computed
+   * against a revision that no longer exists cannot be re-applied without throwing
+   * away whatever replaced it, and the app does not get to make that call quietly.
+   * The way out is the next real edit, made against the value that was adopted,
+   * which lands and clears the chip.
+   */
+  async mergeSetting(key, value, opts) {
+    const strategy = MERGING_SETTINGS[key];
+    // Off the allowlist means the plain path, not an error. The allowlist is a
+    // safety valve, and a caller reaching for a key that has never needed merging
+    // should keep working exactly as every other setting does.
+    if (!strategy) return db.saveSetting(key, value, opts);
+    // Which generation of this row the CALLER was looking at when it built this
+    // value. See the guard below.
+    const gen = foreignMoves.get(key) || 0;
+    let outcome = null;
+    let sent = null; // { patch, at } — frozen on the first attempt so a retry re-claims it
+    const res = await reported(`setting:${key}`, key.replace(/_/g, " "), () => queued(key, async () => {
+      const user_id = await db.uid();
+      if (!user_id) throw new Error("Not signed in");
+      // AN ARRAY BUILT ON A VERSION ANOTHER DEVICE HAS ALREADY REPLACED IS NOT
+      // SENT AT ALL. This fires for a write that was still in the queue when the
+      // one ahead of it came back refused: the revision has since been rebased, so
+      // the server would accept this array — and it carries content from before
+      // the other device's edit, which is exactly the overwrite all of this exists
+      // to prevent. An object patch is safe in the same situation and is allowed
+      // through: it only names keys the caller actually touched, and its deletions
+      // can only name keys the caller had already seen.
+      if (strategy === "replace" && !sent && (foreignMoves.get(key) || 0) !== gen) {
+        const e = new Error(`Your ${key.replace(/_/g, " ")} changed on another device, so this edit wasn't saved.`);
+        e.what = `the ${key} setting`;
+        e.stale = true;
+        throw e;
+      }
+      if (!sent) {
+        // Read AFTER the write ahead of this one settled — that is what the queue
+        // is for. No revision at all means this device has never seen the row: the
+        // function reads that as "there should be nothing there", so it inserts if
+        // the key is absent and refuses an array write if it is not.
+        const base = lastSeen.get(key);
+        sent = { patch: strategy === "merge" ? objectPatch(value, base?.value) : value, at: base?.at ?? null };
+      }
+      const { data, error } = await supabase.rpc("settings_merge", {
+        p_key: key,
+        p_patch: sent.patch,
+        p_expected_updated_at: sent.at,
+      });
+      // write() is the helper for this and cannot be used here: it drops .data on
+      // purpose, and the merged value plus the new revision are the reason for the
+      // call. Same shape as its throw, so a caller cannot tell the two apart.
+      if (error) {
+        const e = new Error(error.message || `Couldn't save ${key.replace(/_/g, " ")}.`);
+        e.code = error.code || null;
+        e.details = error.details || null;
+        e.what = `the ${key} setting`;
+        throw e;
+      }
+      // A 200 with nothing in it would otherwise become an adopted `undefined`,
+      // which is how a settings row gets emptied by a success.
+      if (!data || typeof data !== "object") throw new Error(`The ${key.replace(/_/g, " ")} merge returned nothing.`);
+      // Whatever the verdict, the server just said what it holds. Taking that as
+      // the base is the refetch: the refusal already carries the current row, so
+      // there is no second read to make and nothing to poll for.
+      lastSeen.set(key, { value: data.value, at: data.updated_at });
+      outcome = { applied: !!data.applied, stale: !!data.stale, adopt: !!data.stale, value: data.value };
+      if (data.applied) return;
+      // The row moved under a queue that may still have writes in it, all of them
+      // built on what it used to hold. Counting the move is what lets those refuse
+      // themselves at the guard above instead of landing.
+      foreignMoves.set(key, (foreignMoves.get(key) || 0) + 1);
+      const e = new Error(`Your ${key.replace(/_/g, " ")} changed on another device, so this edit wasn't saved.`);
+      e.what = `the ${key} setting`;
+      e.stale = true;
+      throw e;
+    }), opts);
+    return { ...res, ...(outcome || { applied: false, stale: false, adopt: false }) };
   },
   async loadFindings(limit = 40) {
     const { data, error } = await supabase.from("auditor_findings")
@@ -425,14 +725,54 @@ export const db = {
   // because a Chase CSV carries no transaction id. That is what makes an import
   // idempotent: upserting on (user_id, id) means re-importing an overlapping
   // export updates rows instead of doubling your month.
-  async loadTransactions(limit = 5000) {
-    const { data, error } = await supabase.from("transactions")
-      .select("id,account,date,amount_cents,description,merchant,category,category_override")
+  /**
+   * The ledger, and whether you are looking at all of it.
+   *
+   * loadTransactions(5000) handed back a slice with nothing on it to say it was
+   * one. Every number in the Finances panel is a sum over whatever came back —
+   * the month, the budget bars, the recurring detector's history — so a ledger
+   * longer than the cap produced totals that were arithmetically perfect and
+   * factually wrong, printed with no qualifier. "You have $312 left in Dining"
+   * because the charges that spent it fell off the end of the read is exactly the
+   * failure this app is not allowed to have.
+   *
+   * The count is what makes truncation visible, and it catches BOTH ways this
+   * read can come back short: the `limit` above, and the project's own max-rows
+   * ceiling, which PostgREST applies without telling you (export-data.js has the
+   * long version of that scar). Where no count comes back — some configurations
+   * return none — it falls back to the weaker test of whether the read came back
+   * exactly full, which cannot tell a ledger of precisely 5,000 rows from one of
+   * 6,000 and so errs toward saying it was capped. Overstating the doubt is the
+   * safe direction; understating it is how you get the wrong number on screen.
+   *
+   * The rows kept are the NEWEST, because the order is date descending. So a
+   * capped read usually still has this month intact and is short on history,
+   * which is worth knowing when deciding what to warn about: the recurring
+   * detector and any all-time total are the parts that go wrong first.
+   */
+  async readTransactions(limit = 5000) {
+    const { data, count, error } = await supabase.from("transactions")
+      .select("id,account,date,amount_cents,description,merchant,category,category_override", { count: "exact" })
       .order("date", { ascending: false }).limit(limit);
     // Throws rather than returning [] — a dropped request must not read as "you
     // have no transactions", which in a budgeting tool is a $0 month.
     if (error) throw error;
-    return (data || []).map((r) => ({ ...r, amount: r.amount_cents }));
+    const rows = (data || []).map((r) => ({ ...r, amount: r.amount_cents }));
+    const total = typeof count === "number" ? count : null;
+    return { rows, total, limit, capped: total != null ? rows.length < total : rows.length >= limit };
+  },
+  /**
+   * The rows alone, for callers that have nowhere to put the cap state yet.
+   *
+   * Kept because useTransactions and everything under FinancesPanel take an
+   * array, and changing that return type from here would hand a `.map` an object
+   * in a live panel. A caller that can render the warning should move to
+   * readTransactions and say so on screen; until it does, this is the same read
+   * with the honesty thrown away, and that is a debt this comment is holding open
+   * rather than hiding.
+   */
+  async loadTransactions(limit = 5000) {
+    return (await db.readTransactions(limit)).rows;
   },
   async saveTransactions(rows) {
     const user_id = await db.uid();
@@ -460,16 +800,42 @@ export const db = {
       .update({ category_override: category }).eq("id", id);
     if (error) throw error;
   },
+  /**
+   * Forget an account — and this one is STILL A HARD DELETE, on purpose.
+   *
+   * It is the same shape of loss as deleteDreamBoard: a whole account's history in
+   * one statement, no undo. It did not get soft-deleted with the dream boards
+   * anyway, because the flow it exists for is "forget this account, then import
+   * the file again", and that flow depends on the rows genuinely going away.
+   *
+   * A row's id is derived from the transaction itself (financeLogic.txKey), so the
+   * re-import upserts onto whatever is still there. Mark the old rows deleted
+   * instead of removing them and the re-import walks straight back onto those same
+   * primary keys — with deleted_at still set, because an upsert only writes the
+   * columns it sends. The import would report 900 rows written, every one of them
+   * invisible. Send deleted_at: null on the way in and the opposite happens: rows
+   * you deliberately forgot come back from the dead any time an overlapping export
+   * is imported. Either way, a year of transactions is wrong and the receipt says
+   * it worked.
+   *
+   * Doing this properly means making the import aware of the soft delete rather
+   * than making the delete soft: the account's rows get deleted_at, the import
+   * clears it for exactly the ids present in the file it just read, and the
+   * Finances panel gets somewhere to show what is currently hidden. That is a
+   * change to db.js, finances.js and FinancesPanel.jsx together, with the
+   * idempotency of the import as the thing under test. It is not a line edit here,
+   * and pretending otherwise is how the year gets duplicated.
+   */
   async deleteTransactionsForAccount(account) {
     const { error } = await supabase.from("transactions").delete().eq("account", account);
     if (error) throw error;
   },
+  // Soft-deleted lines are filtered out HERE, in the reader, which is the only
+  // read of this table in the browser. See the block above the db object.
   async loadAffirmations() {
-    const { data, error } = await supabase.from("affirmations")
+    return readUndeleted(() => supabase.from("affirmations")
       .select("id,text,kind,created_at")
-      .order("created_at", { ascending: true });
-    if (error) throw error;
-    return data || [];
+      .order("created_at", { ascending: true }));
   },
   async saveAffirmation(a) {
     const user_id = await db.uid();
@@ -477,11 +843,33 @@ export const db = {
     const row = { id: a.id, user_id, text: a.text, kind: a.kind || "creed", updated_at: new Date().toISOString() };
     const { data, error } = await supabase.from("affirmations").upsert(row, { onConflict: "id" }).select().single();
     if (error) throw error;
+    // Saving a line asserts that the line exists, so a save onto a row that is
+    // soft-deleted has to bring it back. Nothing in the panel can reach that on
+    // purpose — you edit what you can see — but the editor holds an id across a
+    // delete performed in another tab, and without this the sheet would close on
+    // "saved" over a row that stays hidden. deleted_at is deliberately NOT part of
+    // the upsert above: sending it would make every save fail with 42703 in the
+    // window before the migration is run, which is a worse trade than this one
+    // extra write in a case that almost never happens.
+    if (data?.deleted_at) return db.restoreAffirmation(a.id);
     return data;
   },
   async deleteAffirmation(id) {
-    const { error } = await supabase.from("affirmations").delete().eq("id", id);
-    if (error) throw error;
+    const now = new Date().toISOString();
+    const { error } = await supabase.from("affirmations")
+      .update({ deleted_at: now, updated_at: now })
+      // `is deleted_at null` so a second delete of the same line cannot push its
+      // thirty-day clock forward. deleted_at means when it was deleted.
+      .eq("id", id).is("deleted_at", null);
+    if (error) throw softDeleteError(error, "the creed entry");
+  },
+  /** The undo. Restores by id, which is all the caller of a delete needs to keep. */
+  async restoreAffirmation(id) {
+    const { data, error } = await supabase.from("affirmations")
+      .update({ deleted_at: null, updated_at: new Date().toISOString() })
+      .eq("id", id).select().single();
+    if (error) throw softDeleteError(error, "the creed entry");
+    return data;
   },
   async deleteBirthday(id) {
     const { error } = await supabase.from("personal_birthdays").delete().eq("id", id);
@@ -494,12 +882,13 @@ export const db = {
   // from the tiles (see dreamLogic.boardsOf) and unioned with the names saved in
   // app_settings, which is what lets a board you just created survive being
   // empty. Exactly the shape the grocery list's stores landed on.
+  //
+  // Soft-deleted tiles are filtered out HERE, in the reader, which is the only
+  // read of this table in the browser. See the block above the db object.
   async loadDreamItems() {
-    const { data, error } = await supabase.from("dream_items")
+    return readUndeleted(() => supabase.from("dream_items")
       .select("id,board,title,image_url,note,sort,created_at")
-      .order("sort", { ascending: true }).order("created_at", { ascending: true });
-    if (error) throw error;
-    return data || [];
+      .order("sort", { ascending: true }).order("created_at", { ascending: true }));
   },
   async saveDreamItem(it) {
     const user_id = await db.uid();
@@ -512,21 +901,62 @@ export const db = {
     };
     const { data, error } = await supabase.from("dream_items").upsert(row, { onConflict: "id" }).select().single();
     if (error) throw error;
+    // Same reasoning as saveAffirmation: saving a tile asserts the tile exists, so
+    // a save that lands on a soft-deleted row un-deletes it rather than reporting
+    // success over something that stays off the wall.
+    if (data?.deleted_at) { const [back] = await db.restoreDreamItems([it.id]); return back || data; }
     return data;
   },
   async deleteDreamItem(id) {
-    const { error } = await supabase.from("dream_items").delete().eq("id", id);
-    if (error) throw error;
+    const now = new Date().toISOString();
+    const { error } = await supabase.from("dream_items")
+      .update({ deleted_at: now, updated_at: now })
+      // `is deleted_at null` so deleting the same tile twice cannot push its
+      // thirty-day clock forward. deleted_at means when it was deleted.
+      .eq("id", id).is("deleted_at", null);
+    if (error) throw softDeleteError(error, "the tile");
   },
   /** Rename a board = rewrite every tile on it. See the note above on why the
-   *  board name lives on the tile. */
+   *  board name lives on the tile.
+   *
+   *  THIS ONE HAS NO deleted_at FILTER, AND THAT IS THE POINT. A rename has to
+   *  reach the soft-deleted tiles too, because the board name is the only thing
+   *  connecting a tile to a board: leave a deleted tile behind on "Health" after
+   *  the board becomes "Wellness" and restoring it resurrects a board name nothing
+   *  else uses — a tile back on the wall, on a board that is not in the strip.
+   *  Renaming rows nobody can currently see costs nothing and keeps the undo
+   *  landing where the tile belongs. */
   async renameDreamBoard(from, to) {
     const { error } = await supabase.from("dream_items").update({ board: to, updated_at: new Date().toISOString() }).eq("board", from);
     if (error) throw error;
   },
+  /**
+   * Delete a whole board — the call this soft delete was written for.
+   *
+   * Returns the ids it marked, and the panel should hold them for an undo. That is
+   * the notes pattern (bulkDeleteNotes hands the caller what restoreNotes needs),
+   * and it is more precise than restoring "the board" by name would be: a tile
+   * deleted on its own three weeks ago is still sitting in this table with the same
+   * board value, and a name-based restore would drag it back too, which is not what
+   * "undo that" means.
+   */
   async deleteDreamBoard(board) {
-    const { error } = await supabase.from("dream_items").delete().eq("board", board);
-    if (error) throw error;
+    const now = new Date().toISOString();
+    const { data, error } = await supabase.from("dream_items")
+      .update({ deleted_at: now, updated_at: now })
+      .eq("board", board).is("deleted_at", null)
+      .select("id");
+    if (error) throw softDeleteError(error, "the board");
+    return (data || []).map((r) => r.id);
+  },
+  /** The undo for either dream delete. Ids, because that is what the deletes hand back. */
+  async restoreDreamItems(ids) {
+    if (!ids?.length) return [];
+    const { data, error } = await supabase.from("dream_items")
+      .update({ deleted_at: null, updated_at: new Date().toISOString() })
+      .in("id", ids).select();
+    if (error) throw softDeleteError(error, "the tiles");
+    return data || [];
   },
 };
 

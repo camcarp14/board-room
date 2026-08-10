@@ -528,6 +528,209 @@ function ConnGroup({ group, checks, open, onToggle }) {
   );
 }
 
+/* ── Crashes on this build ────────────────────────────────────────────────────
+   The read that makes the crash log worth writing. ErrorBoundary has always
+   recorded render crashes into localStorage.br_crashes, and until now nothing in
+   src/ ever read that key back — a diary kept for nobody, thrown away the next
+   time Safari evicted this origin's storage. Errors thrown outside a render were
+   not recorded at all. src/lib/telemetry.js now files both into
+   boardroom.client_errors with the build stamped on the row, and this is the
+   surface that reads it.
+
+   It belongs on Status beside the build stamp in the footer below, because the
+   question it answers is about that exact string: has anything thrown since this
+   deploy went out. */
+
+// The local log, exactly as ErrorBoundary writes it. Defensive on both counts —
+// localStorage throws in Safari private mode, and the value is whatever a
+// previous version of that code left behind — because a malformed crash log must
+// not be able to crash the panel that displays it.
+const readLocalCrashes = () => {
+  try {
+    const log = JSON.parse(localStorage.getItem("br_crashes") || "[]");
+    return Array.isArray(log) ? log.filter(r => r && typeof r === "object") : [];
+  } catch { return []; }
+};
+
+// A render loop fills the local log with twenty copies of one line — the boundary
+// unshifts an entry on every catch — so identical entries fold into one row with
+// a tally. Nothing is lost by that: "×20" says precisely what the twenty lines
+// said, and it keeps this list honest against the count above it, which is one
+// row per distinct crash by design. The entries arrive newest-first, so the one
+// kept carries the most recent timestamp.
+const foldLocal = (rows) => {
+  const out = [];
+  for (const r of rows) {
+    const key = `${r.where || "root"}|${r.msg}|${r.build || ""}`;
+    const hit = out.find(o => o.key === key);
+    if (hit) hit.n++;
+    else out.push({ ...r, key, n: 1 });
+  }
+  return out;
+};
+
+// A fourth age formatter in this file, and it earns its place: `ago` in the usage
+// card has no " ago" suffix, `agoCheck` in StatusTab clips at minutes because a
+// status check always just ran, and `deployAge` is spelled for deploys. A crash
+// can be four days old and needs to say so.
+const crashAge = (ts) => {
+  const s = Math.floor((Date.now() - new Date(ts).getTime()) / 1000);
+  if (!isFinite(s) || s < 0) return "";
+  if (s < 60) return `${s}s ago`;
+  if (s < 3600) return `${Math.floor(s / 60)}m ago`;
+  if (s < 86400) return `${Math.floor(s / 3600)}h ago`;
+  return `${Math.floor(s / 86400)}d ago`;
+};
+
+function CrashRow() {
+  const [open, setOpen] = useState(false);
+  const [state, setState] = useState(null);        // null = reading; { n, rows } | { err }
+  const [local, setLocal] = useState(readLocalCrashes);
+  const [nonce, setNonce] = useState(0);
+
+  useEffect(() => {
+    let alive = true;
+    setState(null);
+    (async () => {
+      if (!supabase) { if (alive) setState({ err: "No Supabase client in this build, so there is no durable crash log to read." }); return; }
+      try {
+        // count: "exact" is the load-bearing part. The row list is capped at 20
+        // because nobody scrolls further, and taking the headline number from a
+        // capped list is the bug the usage card already paid for once — it would
+        // read "20 crashes" forever no matter how many there really were. The
+        // count comes from Postgres and describes every matching row.
+        const { data, error, count } = await supabase
+          .from("client_errors")
+          .select("kind,message,created_at", { count: "exact" })
+          .eq("build", BUILD)
+          .order("created_at", { ascending: false })
+          .limit(20);
+        if (!alive) return;
+        if (error) {
+          // The one refusal worth translating. Until 0034_client_errors.sql is
+          // pasted into the SQL editor, PostgREST answers this select with
+          // "relation does not exist" — and that is the precise moment when
+          // showing a calm zero would be the app lying about the thing it was
+          // built to stop lying about.
+          const missing = error.code === "42P01" || /client_errors/.test(error.message || "");
+          setState({ err: missing
+            ? "The client_errors table isn't there yet — paste supabase/migrations/0034_client_errors.sql into the Supabase SQL editor."
+            : error.message || "The crash log refused the read." });
+          return;
+        }
+        // A select that comes back without a count is a select whose total is
+        // unknown, and an unknown total does not get to be printed as a number.
+        if (typeof count !== "number") { setState({ err: "The crash log answered without a count, so the total isn't known." }); return; }
+        setState({ n: count, rows: data || [] });
+      } catch (e) {
+        if (alive) setState({ err: e?.message || "The crash log didn't answer." });
+      }
+    })();
+    return () => { alive = false; };
+  }, [nonce]);
+
+  const retry = () => { setLocal(readLocalCrashes()); setNonce(n => n + 1); };
+
+  const reading = state === null;
+  const failed = !!state?.err;
+  const n = state?.n ?? 0;
+  const latest = state?.rows?.[0];
+
+  // Three states, three tones, in this page's own vocabulary: checking is --sub,
+  // a thing that is wrong is --red, a thing we could not determine is --amber
+  // (the same "partial" the group headers use), and healthy is --green. Zero
+  // crashes gets a sentence rather than an empty line — a blank row here reads
+  // as a panel that failed to load, which is the opposite of the news it is
+  // carrying.
+  const tone = reading ? "var(--sub)" : failed ? "var(--amber)" : n > 0 ? "var(--red)" : "var(--green)";
+  const headline = reading ? "reading…" : failed ? "read failed" : n > 0 ? `${n} since this deploy` : "none since this deploy";
+  const sub = reading ? "" : failed ? state.err
+    : n > 0 ? [latest?.message, crashAge(latest?.created_at)].filter(Boolean).join(" · ")
+    : "Nothing has thrown since this build went out.";
+
+  return (
+    <div>
+      <button onClick={() => setOpen(o => !o)} aria-expanded={open}
+        style={{ width: "100%", display: "flex", alignItems: "center", gap: 10, background: "none", border: 0, padding: "12px 4px", font: "inherit", color: "inherit", textAlign: "left", cursor: "pointer" }}>
+        <Dot tone={tone} size={7} pulse={reading} />
+        <span className="t-label" style={{ flex: "none" }}>Crashes</span>
+        <span style={{ display: "flex", flexDirection: "column", gap: 2, flex: 1, minWidth: 0 }}>
+          <span className="t-cap t-num" style={{ color: tone, fontWeight: 600 }}>{headline}</span>
+          {/* A crash message is one long line and must clip; a failure reason is
+              a sentence you have to be able to finish reading, so it wraps. */}
+          {sub && (
+            <span className="t-num" style={{ fontSize: 11, color: "var(--faint)", lineHeight: 1.5, ...(failed ? { wordBreak: "break-word" } : { overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }) }}>{sub}</span>
+          )}
+        </span>
+        <IcChevronDown size={13} style={{ flex: "none", color: "var(--faint)", transform: open ? "rotate(180deg)" : "none", transition: "transform var(--dur-2) var(--ease-out)" }} />
+      </button>
+      <div className={`expand${open ? " open" : ""}`}>
+        <div style={{ display: "flex", flexDirection: "column", gap: 12, paddingBottom: 4 }}>
+          {failed && (
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "flex-end", padding: "0 2px" }}>
+              <Button kind="tinted" size="sm" onClick={retry}>Retry</Button>
+            </div>
+          )}
+          {!!state?.rows?.length && (
+            <div style={{ display: "flex", flexDirection: "column" }}>
+              {state.rows.map((r, i) => (
+                <div key={i} style={{ display: "flex", alignItems: "baseline", gap: 9, padding: "6px 2px", borderTop: i > 0 ? "0.5px solid var(--line)" : "none" }}>
+                  <span className="t-num" style={{ fontSize: 11, color: "var(--faint)", flex: "none", width: 44 }}>{crashAge(r.created_at)}</span>
+                  <span className="t-cap" style={{ color: "var(--faint)", flex: "none", width: 50 }}>{r.kind}</span>
+                  <span className="t-num" style={{ fontSize: 11.5, color: "var(--ink)", flex: 1, minWidth: 0, lineHeight: 1.5, wordBreak: "break-word" }}>{r.message}</span>
+                </div>
+              ))}
+              {n > state.rows.length && (
+                <div className="t-foot" style={{ color: "var(--faint)", padding: "6px 2px 0" }}>
+                  The {state.rows.length} most recent of {n}.
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* The local log, finally read. It is a different record, not a copy:
+              it needs no network and no session, it holds the last twenty
+              whatever build they came from, and it is per-browser — so it is
+              labelled as this device rather than folded into the count above. */}
+          <div>
+            <div style={{ display: "flex", alignItems: "baseline", gap: 8, padding: "0 2px 4px" }}>
+              <span className="t-label">This device</span>
+              <span className="t-cap" style={{ color: "var(--faint)" }}>written with no network</span>
+            </div>
+            {local.length === 0 ? (
+              <div className="t-foot" style={{ color: "var(--faint)", padding: "0 2px" }}>This browser has no local crash log — nothing has hit a boundary here.</div>
+            ) : foldLocal(local).map((r, i) => (
+              <div key={r.key} style={{ display: "flex", alignItems: "baseline", gap: 9, padding: "6px 2px", borderTop: i > 0 ? "0.5px solid var(--line)" : "none" }}>
+                <span className="t-num" style={{ fontSize: 11, color: "var(--faint)", flex: "none", width: 44 }}>{crashAge(r.at)}</span>
+                <span className="t-cap" style={{ color: "var(--faint)", flex: "none", width: 50, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{r.where || "root"}</span>
+                <span className="t-num" style={{ fontSize: 11.5, color: "var(--ink)", flex: 1, minWidth: 0, lineHeight: 1.5, wordBreak: "break-word" }}>
+                  {r.msg}
+                  {r.n > 1 && <span style={{ color: "var(--sub)", fontWeight: 600 }}> ×{r.n}</span>}
+                  {/* Only said when it is known and it differs. Entries written
+                      before the build stamp existed carry no build, and guessing
+                      one onto them would be the invention this app doesn't do. */}
+                  {r.build && r.build !== BUILD && <span style={{ color: "var(--faint)" }}> · another build</span>}
+                </span>
+              </div>
+            ))}
+          </div>
+
+          {/* Said out loud because the number above would otherwise imply a
+              frequency it does not measure. telemetry.js sends one row per
+              distinct message+stack per build — a component in a render loop
+              throws hundreds of times a second, and reporting each throw would
+              make the crash reporter the outage. So this counts what broke, not
+              how often, and that distinction has to be on screen next to the
+              count rather than buried in the module that made the choice. */}
+          <div className="t-foot" style={{ color: "var(--faint)", padding: "0 2px", lineHeight: 1.5 }}>
+            One line per distinct crash: a repeat of the same error is reported once per build, and folded into a ×count on this device. These say what broke, not how often.
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // Status sub-tab — connection roll-up + per-pipe health. The connections hook
 // lives in the parent (Assets page) so results persist across sub-tab switches;
 // this tab is pure presentation over the passed-in state.
@@ -577,6 +780,12 @@ export function StatusTab({ checks, lastRun, running, runAll, isMobile }) {
               onToggle={() => setOpenMap(m => ({ ...m, [g.title]: !isOpen(g) }))} />
           </div>
         ))}
+        {/* Last in the card and immediately above the build stamp, because it is
+            a fact about that stamp: the pipes above answer "is anything down",
+            this answers "did this deploy break anything". */}
+        <div style={{ borderTop: "0.5px solid var(--line)" }}>
+          <CrashRow />
+        </div>
         <div className="t-foot" style={{ color: "var(--faint)", paddingTop: 8, lineHeight: 1.5 }}>
           Every group counts its own pipes here. Tap one to see which row is which.
           <br />
@@ -807,7 +1016,7 @@ export function SupabaseTab() {
       <Card pad="md">
         <div className="t-foot" style={{ color: "var(--sub)" }}>Run maintenance against Board Room's shared memory. Allowlisted commands only — anything else is refused.</div>
         <div style={{ display: "flex", flexWrap: "wrap", gap: 8, margin: "14px 0 12px" }}>
-          {["backup chat_messages", "vacuum seat_notes", "clear findings > 30d", "clear usage_log > 30d"].map(q => (
+          {["backup chat_messages", "vacuum seat_notes", "clear findings > 30d", "clear usage_log > 30d", "purge deleted > 30d"].map(q => (
             <Pill key={q} onClick={() => setSqlInput(q)} style={{ fontFamily: "var(--font-mono)", fontSize: 12 }}>{q}</Pill>
           ))}
         </div>

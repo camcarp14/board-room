@@ -6,6 +6,67 @@ import "./styles.css";
 import App from "./App.jsx";
 import { queryClient, shouldPersistMutation, dropStaleOutboxMutations } from "./lib/queryClient.js";
 import { ErrorBoundary } from "./shell/ErrorBoundary.jsx";
+import { reportClientError } from "./lib/telemetry.js";
+
+// ─── crashes thrown outside a render ─────────────────────────────────────────
+// ErrorBoundary only ever sees what React throws while rendering. Everything
+// else in this app — a rejected supabase promise, an await in a click handler, a
+// visibilitychange listener, the service-worker plumbing at the bottom of this
+// file — throws into nothing. There was no window error handler and no
+// unhandledrejection handler anywhere in the app, so those failures left no
+// record on any surface: no card, no console line anybody would find later, no
+// row. The app would just quietly stop doing the thing you asked for. These two
+// listeners are the other half of the boundary, and they file through the same
+// reporter, so a crash is a crash whichever side of a render it happened on.
+//
+// Registered here, at the top of the entry module, because everything below this
+// line — the persister, the hydrate, the root render, the SW registration — can
+// throw, and a handler installed after them would miss exactly the launch-time
+// failures that are hardest to reproduce.
+//
+// addEventListener, not `window.onerror = `. The property holds one function, so
+// assigning it silently evicts whatever else set it; two listeners compose.
+// Failed resource loads (an <img> that 404s) do not reach a non-capturing window
+// listener at all, which is what we want — a missing image is not a crash — but
+// the guards below still cover the shapes that do arrive without an Error
+// attached, including the cross-origin "Script error." with everything stripped.
+//
+// NOT gated on import.meta.env.PROD, unlike the service worker below. A crash
+// reporter you cannot exercise locally is one you find out about on the night it
+// was supposed to work, and dev rows carry the dev build stamp so they never mix
+// into a deploy's count. The cost is that a dev build files a render crash twice
+// — React rethrows to window in development an error the boundary has already
+// handled, so it lands as 'render' and again as 'window'. That is left alone on
+// purpose: telling the two apart means guessing at React internals, and the
+// version that drops window errors resembling a recent render error would drop
+// real ones.
+const errorText = (v) => {
+  if (v == null) return "";
+  if (typeof v === "string") return v;
+  if (v.message) return String(v.message);
+  // A rejection reason is whatever was passed to reject() — often a plain object
+  // (a PostgREST error, a fetch response body), and String() turns every one of
+  // those into "[object Object]", a row that records that something broke and
+  // nothing about what.
+  try { const s = JSON.stringify(v); if (s && s !== "{}" && s !== "null") return s; } catch {}
+  return String(v);
+};
+window.addEventListener("error", (e) => {
+  reportClientError({
+    kind: "window",
+    message: errorText(e?.error) || e?.message || "(no message)",
+    // No stack on a cross-origin error, so fall back to the location the event
+    // does carry — "index-abc.js 812:19" is not a stack but it is a place.
+    stack: e?.error?.stack || [e?.filename, e?.lineno ? `${e.lineno}:${e.colno ?? 0}` : ""].filter(Boolean).join(" "),
+  });
+});
+window.addEventListener("unhandledrejection", (e) => {
+  reportClientError({
+    kind: "rejection",
+    message: errorText(e?.reason) || "(rejected with no reason)",
+    stack: e?.reason?.stack || "",
+  });
+});
 
 // Persist the query cache to localStorage so a relaunch (iOS evicts backgrounded
 // PWAs constantly) paints last-known data immediately, then revalidates in the

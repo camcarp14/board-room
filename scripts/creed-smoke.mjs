@@ -14,6 +14,7 @@
 //
 // Run by `npm run verify`.
 
+import { readFileSync } from "node:fs";
 import {
   KINDS, kindMeta, splitQuote, dailyIndex, dayKey, countsByKind, filterByKind, STARTERS,
 } from "../src/features/creed/creedLogic.js";
@@ -116,6 +117,56 @@ check("every row is reachable through exactly one pill", (() => {
   const seen = KINDS.flatMap(k => filterByKind(rows, k.key).map(r => r.id));
   return seen.length === rows.length && new Set(seen).size === rows.length;
 })());
+
+// ─── 5. a deleted line is recoverable, and the logic can't be what hides it ───
+// Deleting a line of the Creed used to destroy the row. It writes `deleted_at` now
+// and db.restoreAffirmation puts it back, which is the whole reason this section
+// exists — the recovery is only real if the row is still intact, and it is only
+// invisible if something filters it.
+//
+// THAT SOMETHING CANNOT BE THIS FILE'S SUBJECT. creedLogic is pure and has never
+// heard of deleted_at: hand it a deleted row and it counts it, files it under a
+// pill, and puts it on the plate. That is not a bug to fix here — teaching the
+// logic about deleted_at would mean every future caller has to remember to pass
+// unfiltered rows and hope — it is the argument for the filter living in
+// db.loadAffirmations, and this check is that argument written down.
+{
+  const deleted = [{ id: "x", kind: "creed", text: "Struck out yesterday", deleted_at: "2026-08-01T00:00:00Z" }];
+  check("a deleted row reaches the plate if the READER lets it through",
+    filterByKind(deleted, "creed").length === 1 && countsByKind(deleted)[""] === 1);
+}
+
+// The rest is text-based against src/data/db.js, like the setup-SQL section in
+// dreams-smoke.mjs: these statements only ever run against Supabase, and the thing
+// worth pinning is which columns they touch. dreams-smoke.mjs owns the sweep that
+// proves nothing outside db.js reads either table; this owns what the Creed's own
+// delete and restore are allowed to write.
+const dbSrc = readFileSync("src/data/db.js", "utf8");
+const body = (name) => dbSrc.match(new RegExp(`async ${name}\\([^)]*\\) \\{([\\s\\S]*?)\\n  \\},`))?.[1] || "";
+for (const name of ["loadAffirmations", "deleteAffirmation", "restoreAffirmation"]) {
+  // Without this every check below goes quietly true if db.js is reshaped.
+  check(`db.${name} is still where this check looks for it`, body(name).length > 0, name);
+}
+check("the reader hides deleted lines", /readUndeleted\(/.test(body("loadAffirmations")));
+check("a delete marks the row rather than removing it",
+  /deleted_at: now/.test(body("deleteAffirmation")) && !/\.delete\(/.test(body("deleteAffirmation")));
+check("a restore clears the mark", /deleted_at: null/.test(body("restoreAffirmation")));
+// THE ORDER IS THE NUMBERING. The Creed is read created_at ascending and CreedPanel
+// renders those positions as Roman numerals, so a delete or a restore that touched
+// created_at would renumber your own doctrine — VII comes back as XII. Neither may
+// write it.
+for (const name of ["deleteAffirmation", "restoreAffirmation"]) {
+  check(`db.${name} leaves created_at alone, so the numbering survives`,
+    !/created_at/.test(body(name)));
+}
+
+// The undo has to be reachable from the panel, and through the same query key, or
+// the line comes back in the table and not on screen until a reload.
+const creedSrc = readFileSync("src/data/creed.js", "utf8");
+check("there is a restore hook next to the delete hook",
+  /useRestoreAffirmation/.test(creedSrc) && /db\.restoreAffirmation/.test(creedSrc));
+check("it invalidates the same query as everything else here",
+  /useRestoreAffirmation = \(\) => useInvalidatingMutation/.test(creedSrc));
 
 console.log(failed ? `\n${failed} creed check(s) failed` : "\nCREED SMOKE PASS");
 process.exit(failed ? 1 : 0);

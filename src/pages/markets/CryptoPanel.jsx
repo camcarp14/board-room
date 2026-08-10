@@ -123,9 +123,20 @@ export function CryptoPanel({ isMobile, btc }) {
           The other two panels have carried this row at the top of their column
           since they shipped. This one never did. Same anatomy, same wording,
           same place — first in the column, so Retry cannot hide below the fold. */}
+      {/* TWO BRANCHES, BECAUSE THEY ARE TWO DIFFERENT DAYS. This row said
+          "showing the last good scan" whenever the query errored — including on a
+          cold cache, where there is no last good scan and every card below it is
+          a skeleton. That sentence tells you the numbers on screen are merely old
+          when in fact there are no numbers on screen, which is the same lie the
+          row was added to prevent, pointed the other way. StocksPanel already
+          splits these; this one now does too. */}
       {alt.isError && (
         <Card pad="sm">
-          <FallbackRow detail={`Refresh failed — showing the last good scan (${alt.error?.message || "unreachable"})`} onRetry={() => alt.refetch()} />
+          <FallbackRow
+            detail={alt.data
+              ? `Refresh failed — showing the last good scan (${alt.error?.message || "unreachable"})`
+              : `Couldn't reach the scan, and there's no earlier one on this device (${alt.error?.message || "unreachable"})`}
+            onRetry={() => alt.refetch()} />
         </Card>
       )}
 

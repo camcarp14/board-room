@@ -182,10 +182,17 @@ export default function RecordCard({ stats, recent, collapseProps, noun = "flags
             <Stat value={signedPct(s.medianPeakPct)} label="median peak"
               tone={!Number.isFinite(s.medianPeakPct) ? "var(--faint)" : s.medianPeakPct >= 0 ? T.green : T.red} />
             <Stat value={s.medianHeldDays != null ? `${Math.round(s.medianHeldDays)}d` : "—"} label="median hold" />
+            {/* Same bug as the median above, two lines later: tone was
+                unconditional, so with nothing measured these drew a GREEN and a
+                RED em-dash side by side — two coloured verdicts on statistics
+                nobody computed. best and worst both come off flagStats()'s
+                `peaks` array, so they are absent together, and the median right
+                next to them was already handling it correctly. Absent has no
+                tone. */}
             <Stat value={s.best ? signedPct(s.best.pct, 0) : "—"} label={s.best ? `best · ${s.best.symbol}` : "best"}
-              tone={T.green} />
+              tone={s.best ? T.green : "var(--faint)"} />
             <Stat value={s.worst ? signedPct(s.worst.pct, 0) : "—"} label={s.worst ? `worst · ${s.worst.symbol}` : "worst"}
-              tone={T.red} />
+              tone={s.worst ? T.red : "var(--faint)"} />
           </div>
 
           {/* 4 — lately */}

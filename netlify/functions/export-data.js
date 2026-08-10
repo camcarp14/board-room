@@ -52,6 +52,11 @@ const TABLES = [
   "alt_state", "alt_flags", "alt_snapshots",
   "stock_state", "stock_flags", "stock_sessions",
   "upstream_runs", "upstream_run_events", "upstream_predictions", "upstream_tell_checks",
+  // client_errors joined the record when crash telemetry landed. It belongs in the
+  // backup rather than in SKIP below: a crash log holds no credentials, and the
+  // history of what broke on which build is exactly the kind of thing you only
+  // want after you have lost it.
+  "client_errors",
 ];
 
 // LEFT OUT, AND SAID OUT LOUD. The reason travels in the response next to the

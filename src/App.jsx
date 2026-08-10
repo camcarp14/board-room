@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef, lazy, Suspense } from "react";
 import { supabase } from "./lib/supabase.js";
 import { sm } from "./lib/storage.js";
-import { db, writeFailures } from "./data/db.js";
+import { db, writeFailures, MERGING_SETTINGS } from "./data/db.js";
 import { queryClient } from "./lib/queryClient.js";
 import { callClaude, convene, DEFAULT_MODELS } from "./lib/claude.js";
 import { parseLearnCommand, learnFromInput, makeSdb as makeSkillsDb } from "./LearnPanel.jsx";
@@ -167,6 +167,12 @@ export default function App() {
           // behind would both show the next signed-in user someone else's
           // unsaved changes and, on a retry, try to write them.
           writeFailures.clearAll();
+          // Same reasoning for the merging settings' revisions: they say which
+          // version of this account's ponder_items and finance_rules this device
+          // last saw, and the next account's first write diffs against whatever is
+          // left here. loadSettings clears it too, but leaving it out of the purge
+          // that enumerates everything else would be an omission to trip over.
+          db.forgetSettings();
           ["br_rq_cache", "br_snapshot", "br_event_takes"].forEach(k => localStorage.removeItem(k));
         } catch { /* storage unavailable — nothing to leak anyway */ }
       }
@@ -240,8 +246,39 @@ export default function App() {
   // unhandled rejection at best and a dead panel at worst. The failure comes
   // back as { ok: false } and is already filed under this setting's key, which
   // is what puts the unsaved chip in the top bar.
+  //
+  // TWO OF THOSE KEYS DO NOT GO OUT AS A WHOLE VALUE ANY MORE. `settings` is
+  // loaded once at sign-in and there is no realtime subscription anywhere in the
+  // app, so the copy this function reads and rewrites goes out of date the moment
+  // another device writes. For a preference that is fine — whoever set it last
+  // meant it. For ponder_items and finance_rules it was silent deletion: park a
+  // thought on the iPad, archive an item on the phone, and the phone upserts the
+  // array it loaded this morning straight over the iPad's thought. No error, no
+  // trace, and the thought is simply missing next time the iPad reloads.
+  //
+  // Those two keys route through db.mergeSetting, which does the read-modify-write
+  // inside Postgres: finance_rules is merged key by key onto whatever is really
+  // there, and ponder_items is only written onto the exact revision it was read
+  // from and refused if that revision has moved. Everything else keeps the plain
+  // upsert — the allowlist lives in data/db.js and is deliberately two keys long.
+  //
+  // ADOPTING IS THE OTHER HALF, and it is what keeps the screen honest. res.adopt
+  // means the row was not where this device thought it was, so what came back is
+  // news: a merged finance_rules carrying a rule the phone added while this tab sat
+  // open, or — when the write was REFUSED — the ponder list that beat it. Both get
+  // painted over the optimistic value, so the list on screen is the list the
+  // database has, and the unsaved chip in the top bar says the edit that was
+  // refused did not save. Watching an archive undo itself while the chip lights up
+  // is a strange half-second, and it is the truth; the tap that follows it lands,
+  // because it is finally built on the real list. When nothing moved there is
+  // nothing to adopt: the value coming back is the one we just sent.
   const updateSetting = async (key, value) => {
     setSettings(prev => ({ ...(prev || {}), [key]: value }));
+    if (MERGING_SETTINGS[key]) {
+      const res = await db.mergeSetting(key, value);
+      if (res?.adopt) setSettings(prev => ({ ...(prev || {}), [key]: res.value }));
+      return res;
+    }
     return await db.saveSetting(key, value);
   };
 

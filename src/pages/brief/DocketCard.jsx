@@ -90,8 +90,19 @@ export function DocketCard({ isMobile, birthdays, macroEvents, settings, onOpenC
     if (od) summaryBits.push(`${od} upkeep item${od === 1 ? "" : "s"} due`);
     if (bdays.length) summaryBits.push(`${bdays.length} birthday${bdays.length === 1 ? "" : "s"} this week`);
   }
+  // A FAILED READ IS NOT A CLEAR DAY. With both reads in error this card said
+  // "Clear slate — nothing on the books", which is the one substitution the house
+  // rule forbids: an empty state standing in for a read that never landed. On the
+  // Brief that is the worst place for it, because "nothing on the books" is a
+  // sentence you act on — you go and do something else, having been told the
+  // calendar is empty by a card that never saw the calendar.
+  //
+  // Named per slice, so a working calendar and a broken upkeep read say exactly
+  // that instead of collapsing into one vague apology.
+  const failedReads = [eventsErr && "the calendar", upkeepErr && "upkeep"].filter(Boolean);
   const summary = loading ? "Pulling the day together…"
-    : summaryBits.length ? `${summaryBits.join(" · ")}.`
+    : failedReads.length && !summaryBits.length ? `Couldn't reach ${failedReads.join(" or ")} — this is not a clear day, it's an unread one.`
+    : summaryBits.length ? `${summaryBits.join(" · ")}${failedReads.length ? ` · couldn't reach ${failedReads.join(" or ")}` : "."}`
     : "Clear slate — nothing on the books. Set the agenda yourself.";
 
   return (
@@ -101,7 +112,7 @@ export function DocketCard({ isMobile, birthdays, macroEvents, settings, onOpenC
         <span className="t-cap t-num" style={{ color: "var(--faint)", flex: "none" }}>{dateLabel}</span>
       </div>
       <div className="t-title2" style={{ marginTop: 6 }}>{greeting}, Cameron.</div>
-      <div className="t-foot" style={{ marginTop: 2, marginBottom: rows.length || loading ? 6 : 0 }}>{summary}</div>
+      <div className="t-foot" style={{ marginTop: 2, marginBottom: rows.length || loading ? 6 : 0, color: failedReads.length ? "var(--amber)" : undefined }}>{summary}</div>
       {loading ? (
         <div style={{ display: "flex", flexDirection: "column", gap: 8, paddingTop: 2 }}>
           <div className="sk sk-line w80" style={{ margin: 0 }} />

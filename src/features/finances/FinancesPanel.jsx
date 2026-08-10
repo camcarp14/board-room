@@ -322,7 +322,12 @@ function ImportSheet({ onClose, onDone }) {
 }
 
 export function FinancesPanel({ isMobile, settings, updateSetting }) {
-  const { data: rows = null, error, refetch } = useTransactions();
+  // useTransactions returns an envelope now, not a bare array — the read caps at
+  // 5,000 rows and nothing used to say so, which made every total on this page a
+  // number computed over a silent slice and presented as the whole history.
+  const { data: txData = null, error, refetch } = useTransactions();
+  const rows = txData ? txData.rows : null;
+  const txCapped = txData?.capped ? { total: txData.total, limit: txData.limit } : null;
   const needsSetup = !!error && isMissingTable(error, "transactions");
   const loadErr = error && !needsSetup ? (error.message || "Couldn't load your transactions.") : null;
   const setCat = useSetCategory();
@@ -611,6 +616,20 @@ export function FinancesPanel({ isMobile, settings, updateSetting }) {
         <Card pad="md" style={{ display: "flex", alignItems: "center", gap: 10 }}>
           <span className="t-cap" style={{ color: "var(--red)", flex: 1 }}>{loadErr}</span>
           <Button kind="tinted" size="sm" onClick={() => refetch()}>Retry</Button>
+        </Card>
+      )}
+
+      {/* THE READ WAS CAPPED, so say so above everything computed from it. Amber,
+          not red: nothing failed and nothing on this page is fabricated — but the
+          month totals, the budget status and the recurring detector are all
+          derived from this slice, and a budget you are under by 3,000 missing
+          transactions is a budget you only think you are under. */}
+      {txCapped && (
+        <Card pad="md">
+          <span className="t-cap" style={{ color: "var(--amber)" }}>
+            Showing the newest {txCapped.limit.toLocaleString()} of {txCapped.total.toLocaleString()} transactions —
+            every total on this page is computed over that slice, not your whole history.
+          </span>
         </Card>
       )}
 

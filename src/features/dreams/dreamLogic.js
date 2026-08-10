@@ -152,7 +152,12 @@ create table if not exists boardroom.dream_items (
   note       text,
   sort       integer not null default 0,
   created_at timestamptz not null default now(),
-  updated_at timestamptz not null default now()
+  updated_at timestamptz not null default now(),
+  -- Nullable, no default: a default of now() would mark every row deleted the
+  -- moment this ran. Deleting a tile writes this column instead of removing the
+  -- row, and db.js's readers filter on it — so a table built without it reads
+  -- fine but refuses every delete. See supabase/migrations/0014_dream_items.sql.
+  deleted_at timestamptz
 );
 create index if not exists dream_items_board_idx
   on boardroom.dream_items (user_id, board, sort);

@@ -37,7 +37,12 @@ create table if not exists boardroom.affirmations (
   text text not null,
   kind text not null default 'creed',
   created_at timestamptz not null default now(),
-  updated_at timestamptz not null default now()
+  updated_at timestamptz not null default now(),
+  -- Nullable, no default: a default of now() would mark every row deleted the
+  -- moment this ran. Deleting a line writes this column instead of removing the
+  -- row, and db.js's readers filter on it — so a table built without it reads
+  -- fine but refuses every delete. See supabase/migrations/0013_affirmations.sql.
+  deleted_at timestamptz
 );
 alter table boardroom.affirmations enable row level security;
 drop policy if exists "affirmations own rows" on boardroom.affirmations;
@@ -110,7 +115,10 @@ export function CreedPanel({ isMobile }) {
     });
   };
   const remove = async () => {
-    if (!(await confirm({ title: "Delete this entry?", message: "It comes off the plate for good.", confirmLabel: "Delete", destructive: true }))) return;
+    // "for good" stopped being true when the delete became a soft one — the row
+    // keeps its place for thirty days now, and the Roman numerals do not renumber
+    // because created_at is untouched.
+    if (!(await confirm({ title: "Delete this entry?", message: "It comes off the plate. Recoverable for 30 days.", confirmLabel: "Delete", destructive: true }))) return;
     setSaving(true);
     delMut.mutate(form.id, {
       onSuccess: () => { setSaving(false); setForm(null); setTurned(0); },

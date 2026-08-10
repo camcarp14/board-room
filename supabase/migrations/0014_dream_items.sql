@@ -45,6 +45,33 @@ create policy "dream_items own rows" on boardroom.dream_items
 
 grant select, insert, update, delete on boardroom.dream_items to authenticated;
 
+-- ─── deleted_at · the delete that took a whole wall ─────────────────────────
+-- Added after the fact, which is why it is an alter rather than a column in the
+-- create above: this table is live and the create is a no-op against it. Written
+-- with `if not exists` so the file stays re-runnable, the property
+-- scripts/migrations-smoke.mjs checks.
+--
+-- THE CALL THIS IS FOR: db.deleteDreamBoard used to be one statement that deleted
+-- every tile on a board, behind a single confirm dialog, with no undo and — until
+-- the week this was written — no backup either. It now writes now() into this
+-- column and hands the ids back to the caller, db.loadDreamItems filters on
+-- `deleted_at is null`, and db.restoreDreamItems clears it again. The rows are
+-- destroyed thirty days later by `purge deleted > 30d` in
+-- netlify/functions/db-admin.js.
+--
+-- NULL means live. The timestamp is the thirty-day clock, so a boolean flag would
+-- need a second column to carry the same thing.
+--
+-- db.renameDreamBoard deliberately rewrites `board` on deleted rows as well as live
+-- ones. The board name is the only link between a tile and a board, so a deleted
+-- tile left behind on the old name comes back onto a board that no longer exists.
+--
+-- No partial index. dream_items_board_idx above still serves the filtered read at
+-- the size a hand-built vision board reaches, and a partial index here would be an
+-- object nobody can measure.
+alter table boardroom.dream_items
+  add column if not exists deleted_at timestamptz;
+
 -- If the first version of the in-app block was ever run, it made
 -- public.dream_items, which this app cannot see. Nothing was ever written to it:
 --   drop table if exists public.dream_items;

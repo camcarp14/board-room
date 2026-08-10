@@ -75,6 +75,34 @@ exports.handler = async (event) => {
       const count = res.headers.get("content-range")?.split("/")[1] || "0";
       return json(200, { success: true, deleted: Number(count) || 0, message: `deleted ${count} usage_log rows older than 30 days` });
     }
+    if (cmd === "purge deleted > 30d") {
+      // The other half of the soft delete in src/data/db.js. Deleting a dream
+      // board or a line of the Creed writes deleted_at and leaves the row where
+      // it is, so something eventually has to mean it. It lives here, beside the
+      // prunes for auditor_findings and usage_log, rather than in a scheduled
+      // function: a purge nobody counts is how a thirty-day window quietly
+      // becomes a forever window, and the cost of it being manual is only that
+      // rows live longer, which loses nothing.
+      //
+      // `deleted_at=lt.<cutoff>` cannot match a live row, because a SQL
+      // comparison against NULL is unknown rather than true. The redundant
+      // not.is.null stays anyway — this is an irreversible DELETE against the
+      // very table the soft delete exists to protect, and one extra clause is
+      // cheaper than being clever.
+      //
+      // TWO TABLES, AND ONE FAILURE IS NOT BOTH. Each delete is counted on its
+      // own and a refusal stops the run and says so. A combined "done" over a
+      // DELETE that was rejected would be the console reporting a sweep it did
+      // not perform.
+      const cutoff = new Date(Date.now() - 30 * 86400000).toISOString();
+      const out = [];
+      for (const table of ["dream_items", "affirmations"]) {
+        const res = await rest(`${table}?deleted_at=lt.${cutoff}&deleted_at=not.is.null`, { method: "DELETE" });
+        if (!res.ok) return json(502, { error: `${table}: ${await res.text().catch(() => `HTTP ${res.status}`)} — nothing further was purged. ${out.length ? out.join(" · ") : "Nothing was purged."}` });
+        out.push(`${table}: ${res.headers.get("content-range")?.split("/")[1] || "0"}`);
+      }
+      return json(200, { success: true, message: `purged rows soft-deleted before ${cutoff.slice(0, 10)} — ${out.join(" · ")}` });
+    }
     if (cmd.startsWith("count ")) {
       const table = cmd.slice(6).replace(/[^a-z_]/g, "");
       // usage_log is countable so the prune above can be checked either side of
@@ -86,7 +114,7 @@ exports.handler = async (event) => {
       return json(200, { success: true, message: `${table}: ${count} rows` });
     }
 
-    return json(400, { error: `command not in allowlist. Supported: backup chat_messages · vacuum seat_notes · clear findings > 30d · clear usage_log > 30d · count <table>` });
+    return json(400, { error: `command not in allowlist. Supported: backup chat_messages · vacuum seat_notes · clear findings > 30d · clear usage_log > 30d · purge deleted > 30d · count <table>` });
   } catch (e) {
     return json(502, { error: e.message });
   }
