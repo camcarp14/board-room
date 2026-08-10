@@ -1,6 +1,33 @@
+# The build command is the gate, not just the build. This used to be `npm run
+# build`, which meant the 28-smoke suite and the deploy raced each other instead
+# of running in series: Netlify shipped whatever compiled, and GitHub Actions got
+# around to having an opinion afterward. Two of the most consequential commits in
+# this repo's history — 85894b7, which put a deadline on every outbound fetch in
+# every function, and e714185, seven ways to lose data — went live while their
+# Actions job sat cancelled at 15m01s, for a suite that finishes in about eleven
+# seconds. Nothing checked either one at the moment it started serving.
+#
+# The build is the right place for the gate because of what failing here does: a
+# failed Netlify build leaves the PREVIOUS deploy live and serving. A red CI job
+# is a notification you have to go read; a red build is a rollback that already
+# happened, with no window in which the broken version was the one answering
+# requests. `verify` ends with `npm run build` (and then the service-worker smoke,
+# which reads dist/), so `publish` still gets exactly the directory it always did.
 [build]
-  command = "npm run build"
+  command = "npm run verify"
   publish = "dist"
+
+# Node 22, and it has to be 22 in four places at once. This used to be four
+# different answers: CI pinned 20, there was no .nvmrc, package.json had no
+# engines field, and this file said nothing at all — so the deploy ran on whatever
+# Netlify's default happened to be that month, while the machine this code is
+# written and smoke-tested on runs v22.22.2. A suite that passes locally and fails
+# on the deploy over a runtime nobody declared is a miserable thing to debug,
+# especially now that the deploy is the gate. The four places are .nvmrc,
+# package.json engines.node, this NODE_VERSION, and .github/workflows/verify.yml.
+# Change one, change all four.
+[build.environment]
+  NODE_VERSION = "22"
 
 [functions]
   directory = "netlify/functions"

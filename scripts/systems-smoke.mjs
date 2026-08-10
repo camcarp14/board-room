@@ -104,8 +104,12 @@ const sheetTabs = [...(sheet.match(/const SHEET_TABS = \[([^\]]*)\]/)?.[1] || ""
 check("Systems first, Theme second, Tabs third",
   sheetTabs.join(",") === "systems,theme,tabs", sheetTabs.join(","));
 const sysTabs = [...(sheet.match(/const SYS_TABS = \[([\s\S]*?)\n\];/)?.[1] || "").matchAll(/key: "(\w+)"/g)].map(m => m[1]);
-check("Systems holds Status, Usage, Miner and Account",
-  sysTabs.slice().sort().join(",") === "account,miner,status,usage", sysTabs.join(","));
+// Deploy joined the four when Rollback shipped. DeployTab had been exported
+// from SystemsPage.jsx and mounted nowhere since Assets left the nav — which
+// meant the one control you want during a bad deploy was reachable only from
+// the Netlify dashboard, on a laptop, during whatever went wrong.
+check("Systems holds Status, Usage, Deploy, Miner and Account",
+  sysTabs.slice().sort().join(",") === "account,deploy,miner,status,usage", sysTabs.join(","));
 check("the sheet lands on Systems → Usage",
   /useState\("systems"\)/.test(sheet) && /useState\("usage"\)/.test(sheet));
 // Landing on Systems makes this guard load-bearing rather than merely tidy: a

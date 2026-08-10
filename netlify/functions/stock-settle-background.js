@@ -56,6 +56,7 @@
 // the outage that rule paid for.
 
 const { createClient } = require("@supabase/supabase-js");
+const crypto = require("node:crypto"); // hopDenied's constant-time secret compare
 
 const CHART = (sym, range) =>
   `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(sym)}?range=${range}&interval=1d`;
@@ -2009,6 +2010,92 @@ async function tick(db, prev, spy, now) {
   return { counts, errors };
 }
 
+/**
+ * The owner gate on `force`, and an honest account of what it does not cover.
+ *
+ * WHAT WAS OPEN. Any POST to this public URL ran a pass, and a POST carrying
+ * {force:true} ran the FULL universe screen on demand — every equity plus the
+ * five instruments, paced at one request every two seconds against an
+ * undocumented Yahoo endpoint. Repeat that and the sweep's own breaker trips on
+ * a 429, a 403 or Yahoo's HTML block page, and a tripped breaker is not a
+ * degraded tab, it is a dark one: no board, no flags, no plan for the open,
+ * until the ban lifts. The header at the top of this file already argued that
+ * concurrency is handled by the database — stock_flags_one_open_uidx makes a
+ * duplicate episode impossible — and that argument is still correct. It was
+ * never the concurrency that was wrong. It was that nobody had to be Cameron.
+ *
+ * WHY THE GATE COVERS `force` AND NOT EVERY CALL. The hourly pass does not
+ * arrive from Netlify's scheduler; it arrives from stock-cron-background, a
+ * shim that carries the schedule and then POSTs here over ordinary HTTP with a
+ * {source:"cron"} body and no Authorization header. Nothing on that request
+ * distinguishes it from the internet — the body is caller-supplied, and the
+ * platform marks the SCHEDULED function, which is the shim, not this one.
+ * Demanding a session token on every call would therefore silence the cron and
+ * leave the tab empty every morning, which is a worse outcome than the one
+ * being fixed here. So the gate goes on the branch that actually carries the
+ * abuse: `force` is the only way to make this run the whole universe out of
+ * turn, and it is the only path a human ever takes — the Run now button sends
+ * it through callFnFull, which attaches the session token already.
+ *
+ * THE UNFORCED PATH IS NOW COVERED TOO, by the other half of that two-file
+ * change: stock-cron-background presents INTERNAL_WORKER_SECRET on the hop, the
+ * same header discord-board.js presents to board-work-background, and
+ * `hopDenied` below requires it on every non-ping call that isn't already
+ * carrying an owner session.
+ *
+ * That gate FAILS OPEN when the secret is unset, and the asymmetry with
+ * board-work-background is deliberate. There, failing closed costs you a
+ * legible error in a Discord reply. Here it would cost you the hourly pass —
+ * the flag ledger's "first flagged" date is only honest if the scan runs on
+ * time, so a silenced cron is a tab that is empty in the morning AND a ledger
+ * with a hole in it that no later run can repair. An unset secret leaves this
+ * exactly as open as it was ten minutes ago and says so in the log; setting the
+ * variable is what closes it. Fail-open is only defensible because the thing
+ * behind the door is a bounded, paced read the cron performs anyway.
+ *
+ * These status codes are for the log, not the caller. A background function is
+ * acknowledged with a 202 before the handler returns, so what a refusal buys is
+ * that the work does not happen, not that anyone is told.
+ */
+async function forceDenied(event) {
+  const supaUrl = process.env.SUPABASE_URL, service = process.env.SUPABASE_SERVICE_ROLE_KEY;
+  const owner = String(process.env.BOARD_USER_ID || "").trim();
+  if (!supaUrl || !service || !owner) return json(503, { error: "server owner is not configured" });
+  const h = (event && event.headers) || {};
+  const auth = String(h.authorization || h.Authorization || "").replace(/^Bearer\s+/i, "").trim();
+  if (!auth) return json(401, { error: "sign in first" });
+  try {
+    const who = await fetch(`${supaUrl}/auth/v1/user`, { signal: AbortSignal.timeout(15000), headers: { apikey: service, Authorization: `Bearer ${auth}` } });
+    if (!who.ok) return json(401, { error: "session expired — refresh and try again" });
+    const user = await who.json().catch(() => null);
+    if (user?.id !== owner) return json(403, { error: "this account is not allowed to use Board Room" });
+  } catch {
+    return json(503, { error: "couldn't verify your session — try again in a moment" });
+  }
+  return null;
+}
+
+// The internal-hop gate. Returns a refusal for anything that is neither the
+// cron shim (carrying INTERNAL_WORKER_SECRET) nor a signed-in owner (carrying a
+// bearer token, which forceDenied checks properly). timingSafeEqual throws on
+// buffers of unequal length, so the length is compared first and separately —
+// that comparison leaks only the length of a secret the caller already failed
+// to guess.
+function hopDenied(event) {
+  const expected = process.env.INTERNAL_WORKER_SECRET;
+  if (!expected) return null; // unset — see the fail-open note above
+  const h = (event && event.headers) || {};
+  const got = String(h["x-internal-worker-secret"] || h["X-Internal-Worker-Secret"] || "");
+  const a = Buffer.from(got), b = Buffer.from(expected);
+  if (a.length === b.length && crypto.timingSafeEqual(a, b)) return null;
+  // A human at the Run now button never sends the header — they send a session
+  // token instead, and that path is allowed through to forceDenied, which is
+  // the stricter check of the two.
+  const auth = String(h.authorization || h.Authorization || "").trim();
+  if (auth) return null;
+  return json(401, { error: "this endpoint is not open" });
+}
+
 // Invoked by stock-cron-background (hourly) and by the tab's Run now button.
 // Counts only on every path — the payload never leaves through this endpoint,
 // and error DETAIL stays in the function log rather than going to an
@@ -2025,6 +2112,20 @@ exports.handler = async (event) => {
   let body = {};
   try { body = JSON.parse((event && event.body) || "{}"); } catch {}
   if (body.ping) return json(200, { success: true, service: "stock-settle-background", configured });
+
+  const hop = hopDenied(event);
+  if (hop) {
+    console.warn(`[stock-settle-background] refused an anonymous pass — HTTP ${hop.statusCode}`);
+    return hop;
+  }
+
+  if (body.force) {
+    const denied = await forceDenied(event);
+    if (denied) {
+      console.warn(`[stock-settle-background] refused a forced pass — HTTP ${denied.statusCode}`);
+      return denied;
+    }
+  }
 
   try {
     const { counts, errors } = await runPass(Date.now(), { force: !!body.force });

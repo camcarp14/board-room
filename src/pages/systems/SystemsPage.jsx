@@ -11,11 +11,16 @@
 import { useState, useEffect } from "react";
 import {
   Card, SectionHeader, CellGroup, Cell, StatTile, Button, Pill,
-  Segmented, Field, Dot, EmptyState,
+  Segmented, Field, Dot, EmptyState, useConfirm,
 } from "../../ui/kit.jsx";
 import { IcChevronDown } from "../../ui/icons.jsx";
 import { supabase } from "../../lib/supabase.js";
-import { callFn } from "../../lib/functions.js";
+// callFnFull everywhere on this page, never callFn: every control here talks to
+// a function that explains its own refusals in the response body, and callFn
+// throws that body away. Two panels on this page have already shipped a button
+// that reported the wrong reason for failing — see the notes in DeployTab and
+// SupabaseTab.
+import { callFnFull } from "../../lib/functions.js";
 import { PROPERTIES } from "../assets/properties.js";
 import { CONN_GROUPS, CONN_META, CONN_STATUS } from "./connections.js";
 // Re-exported so the hook keeps ONE public name even though it now lives next
@@ -32,6 +37,15 @@ export const SYSTEMS_SUBTABS = [
   { key: "supabase", label: "Supabase" },
   { key: "miner", label: "Miner" },
 ];
+
+// Which build this device is actually running — timestamp AND short commit sha,
+// stamped into __BUILD__ at build time by vite.config.js. The timestamp alone
+// used to be the whole stamp, and a timestamp only answers "when": staring at a
+// bug on the phone that isn't in the working tree, the thing you need is the
+// commit to check out. Printed on Status so a screenshot of this tab carries
+// it. The typeof guard is not for `vite dev` (vite applies define there too) —
+// it is for anything that loads this module without vite in front of it.
+const BUILD = typeof __BUILD__ !== "undefined" ? __BUILD__ : "dev";
 
 /* ═══ Usage ════════════════════════════════════════════════════════════════ */
 
@@ -565,20 +579,45 @@ export function StatusTab({ checks, lastRun, running, runAll, isMobile }) {
         ))}
         <div className="t-foot" style={{ color: "var(--faint)", paddingTop: 8, lineHeight: 1.5 }}>
           Every group counts its own pipes here. Tap one to see which row is which.
+          <br />
+          <span className="t-num">Build {BUILD}</span>
         </div>
       </Card>
     </>
   );
 }
 
-/* ═══ Deploy — build triggers ══════════════════════════════════════════════ */
+/* ═══ Deploy — build triggers and rollback ═════════════════════════════════ */
+
+// How long ago a deploy went out, in the same clipped vocabulary the usage log
+// uses. The question a rollback list is opened with is "how far back am I
+// going", and "3d ago" answers that faster than a formatted date does.
+const deployAge = (ts) => {
+  const s = Math.floor((Date.now() - new Date(ts).getTime()) / 1000);
+  if (!isFinite(s) || s < 0) return "";
+  if (s < 60) return `${s}s ago`;
+  if (s < 3600) return `${Math.floor(s / 60)}m ago`;
+  if (s < 86400) return `${Math.floor(s / 3600)}h ago`;
+  return `${Math.floor(s / 86400)}d ago`;
+};
+const shortSha = (ref) => String(ref || "").slice(0, 7);
 
 export function DeployTab({ isMobile }) {
+  const [confirmEl, confirm] = useConfirm();
   const [deploys, setDeploys] = useState({});
+  const [histFor, setHistFor] = useState(null); // the property whose deploy list is open
+  const [hist, setHist] = useState(null);       // null = loading; { rows } or { err }
+  const [restoring, setRestoring] = useState(null); // id of the deploy mid-restore
+
   const redeploy = async (p) => {
     setDeploys(d => ({ ...d, [p.name]: { busy: true } }));
-    const res = await callFn("deploy", { site: p.site, action: "build" });
-    setDeploys(d => ({ ...d, [p.name]: { busy: false, ok: !!res?.success, when: "just now" } }));
+    // callFnFull, not callFn: a build trigger that fails does it for a reason
+    // the function already puts in the body (no token, site not on this token,
+    // Netlify said no), and callFn throws that body away. See the Replace-a-File
+    // note below for what "failed — check the deploy function" cost last time.
+    const { ok, data } = await callFnFull("deploy", { site: p.site, action: "build" });
+    const good = ok && !!data?.success;
+    setDeploys(d => ({ ...d, [p.name]: { busy: false, ok: good, when: "just now", err: good ? null : (data?.error || "the deploy function didn't answer") } }));
   };
   // The "Replace a File" panel lived here and could never work: it POSTed
   // action:"replace-file", and deploy.js answers that with 400 "only
@@ -587,6 +626,55 @@ export function DeployTab({ isMobile }) {
   // deploy log" and sent you to a log with nothing in it, because no build was
   // ever triggered. Removed rather than reimplemented: the function disables
   // this deliberately, so the UI was the side that was wrong.
+  //
+  // Rollback is the opposite case, and the reason this tab now has two controls
+  // per site. A build takes minutes and can fail again; putting the last good
+  // deploy back is instant, because the artifact is already on Netlify's CDN.
+  // When a bad deploy is live, that difference is the whole outage.
+
+  const loadHistory = async (p) => {
+    setHist(null);
+    const { ok, data } = await callFnFull("deploy", { site: p.site, action: "list" });
+    if (!ok || !data?.success) { setHist({ err: data?.error || "the deploy function didn't answer" }); return; }
+    setHist({ rows: data.deploys || [] });
+  };
+  const toggleHistory = (p) => {
+    if (histFor?.name === p.name) { setHistFor(null); setHist(null); return; }
+    setHistFor(p);
+    loadHistory(p);
+  };
+
+  // Rolling back republishes a build that already exists, which makes it
+  // reversible in principle — the deploy you are leaving stays in the list — but
+  // it changes what the public sees the moment it lands, and it does it without
+  // a build log to read afterwards. So it goes through the house confirm, and
+  // the confirm names the commit, because "roll back?" with no sha in it is a
+  // question you cannot actually answer.
+  const rollBack = async (p, d) => {
+    const sha = shortSha(d.commit_ref);
+    const age = deployAge(d.created_at);
+    const ok = await confirm({
+      title: `Roll back to ${sha || "this deploy"}?`,
+      message: `${p.name} goes back to "${d.title || "this deploy"}"${age ? `, built ${age}` : ""}. It publishes immediately, with no rebuild. The deploy you're leaving stays in this list, so you can come forward the same way.`,
+      confirmLabel: "Roll back",
+      destructive: true,
+    });
+    if (!ok) return;
+    setRestoring(d.id);
+    const res = await callFnFull("deploy", { site: p.site, action: "restore", deploy_id: d.id });
+    setRestoring(null);
+    if (!res.ok || !res.data?.success) {
+      await confirm({
+        title: "Rollback failed",
+        message: res.data?.error || "Netlify didn't accept the restore. Nothing changed — the deploy that was live is still live.",
+        confirmLabel: "OK", cancelLabel: false,
+      });
+      return;
+    }
+    // Re-read the list rather than patching it locally, so the "Live now" mark
+    // comes from Netlify's answer to who is published instead of our assumption.
+    loadHistory(p);
+  };
 
   const deployables = PROPERTIES.filter(p => !p.assetsOnly); // Runway/FFSR excluded on purpose
 
@@ -597,17 +685,21 @@ export function DeployTab({ isMobile }) {
         <CellGroup>
           {deployables.map(p => {
             const d = deploys[p.name] || {};
-            const line = d.busy ? "Triggering build…" : d.when ? (d.ok ? `Build triggered · ${d.when}` : "Trigger failed — check deploy function") : `netlify · ${p.site}`;
+            const open = histFor?.name === p.name;
+            const line = d.busy ? "Triggering build…" : d.when ? (d.ok ? `Build triggered · ${d.when}` : `Trigger failed — ${d.err}`) : `netlify · ${p.site}`;
             return (
               <Cell
                 key={p.name}
                 leading={<Dot tone={d.busy ? "var(--amber)" : d.when ? (d.ok ? "var(--green)" : "var(--red)") : "var(--faint)"} size={7} pulse={d.busy} />}
                 title={p.name}
-                sub={<span className="t-num" style={{ fontSize: 11.5, color: d.busy ? "var(--amber)" : "var(--sub)" }}>{line}</span>}
+                sub={<span className="t-num" style={{ fontSize: 11.5, color: d.busy ? "var(--amber)" : d.when && !d.ok ? "var(--red)" : "var(--sub)" }}>{line}</span>}
                 trailing={
-                  <Button kind="quiet" size="md" disabled={d.busy} onClick={() => redeploy(p)} style={{ flex: "none" }}>
-                    {d.busy ? "Deploying…" : "Redeploy"}
-                  </Button>
+                  <span style={{ display: "inline-flex", alignItems: "center", gap: 6, flex: "none" }}>
+                    <Button kind="plain" size="sm" onClick={() => toggleHistory(p)}>{open ? "Hide" : "Rollback"}</Button>
+                    <Button kind="quiet" size="md" disabled={d.busy} onClick={() => redeploy(p)} style={{ flex: "none" }}>
+                      {d.busy ? "Deploying…" : "Redeploy"}
+                    </Button>
+                  </span>
                 }
               />
             );
@@ -618,6 +710,63 @@ export function DeployTab({ isMobile }) {
         </div>
       </div>
 
+      {histFor && (
+        <div style={{ marginTop: 16 }}>
+          <SectionHeader title="Recent deploys" trailing={histFor.name} />
+          <Card pad="md">
+            {hist === null && (
+              <div className="t-foot" style={{ color: "var(--faint)", textAlign: "center", padding: "18px 0" }}>Loading…</div>
+            )}
+            {hist?.err && (
+              <EmptyState
+                title="Deploy history unreachable"
+                sub={hist.err}
+                action={<Button kind="tinted" size="sm" onClick={() => loadHistory(histFor)}>Retry</Button>}
+                style={{ padding: "20px 12px" }}
+              />
+            )}
+            {hist?.rows?.length === 0 && (
+              <div className="t-foot" style={{ color: "var(--faint)", textAlign: "center", padding: "18px 0" }}>No finished builds on this site yet.</div>
+            )}
+            {hist?.rows?.map((d, i) => {
+              const sha = shortSha(d.commit_ref);
+              const busy = restoring === d.id;
+              return (
+                <div key={d.id} style={{ display: "flex", alignItems: "center", gap: 10, padding: "9px 2px", borderTop: i > 0 ? "0.5px solid var(--line)" : "none" }}>
+                  <div style={{ display: "flex", flexDirection: "column", gap: 2, flex: 1, minWidth: 0 }}>
+                    <div style={{ display: "flex", alignItems: "baseline", gap: 8, minWidth: 0 }}>
+                      <span className="t-num" style={{ fontSize: 12, fontWeight: 600, color: "var(--ink)", flex: "none" }}>{sha || "no commit"}</span>
+                      <span className="t-call" style={{ fontSize: 12, color: "var(--sub)", flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{d.title || "(no message)"}</span>
+                    </div>
+                    <div className="t-num" style={{ fontSize: 11, color: "var(--faint)" }}>
+                      {[deployAge(d.created_at), d.branch].filter(Boolean).join(" · ")}
+                    </div>
+                  </div>
+                  {/* The published deploy gets the status vocabulary, not a
+                      button: restoring what is already live is a no-op that
+                      Netlify reports as a success, which is the worst possible
+                      answer to a tap on a rollback control. */}
+                  {d.published ? (
+                    <span style={{ display: "inline-flex", alignItems: "center", gap: 6, flex: "none" }}>
+                      <Dot tone="var(--green)" size={6} />
+                      <span className="t-cap" style={{ color: "var(--green)", fontWeight: 600 }}>Live now</span>
+                    </span>
+                  ) : (
+                    <Button kind="quiet" size="sm" disabled={!!restoring} onClick={() => rollBack(histFor, d)} style={{ flex: "none" }}>
+                      {busy ? "Rolling back…" : "Roll back"}
+                    </Button>
+                  )}
+                </div>
+              );
+            })}
+          </Card>
+          <div className="t-foot" style={{ color: "var(--faint)", padding: "8px 16px 0", lineHeight: 1.5 }}>
+            Only finished builds are listed — a failed one has no artifact to publish. Rolling back republishes an existing build in seconds; it does not rebuild, so the next push still deploys whatever is on the branch.
+          </div>
+        </div>
+      )}
+
+      {confirmEl}
     </div>
   );
 }
@@ -638,8 +787,17 @@ export function SupabaseTab() {
     if (!q || sqlBusy) return;
     setSqlLog(l => [...l, { kind: "cmd", text: `> ${q}` }]);
     setSqlInput(""); setSqlBusy(true);
-    const data = await callFn("db-admin", { command: q });
-    setSqlLog(l => [...l, { kind: data?.success ? "ok" : "err", text: data?.success ? "✓ " + (data.message || "done") : "✗ " + (data?.error || "db-admin function not deployed yet") }]);
+    // callFnFull, not callFn: db-admin always says WHY it refused — the
+    // allowlist, a missing key, a 502 out of PostgREST — and callFn drops that
+    // body on the floor. So every refusal printed "db-admin function not
+    // deployed yet" and sent you hunting a deploy problem that wasn't there.
+    // The pill that pruned usage_log answered 400 for months and this is the
+    // line that hid it. A 404 is the only status that means not deployed.
+    const { ok, status, data } = await callFnFull("db-admin", { command: q });
+    const good = ok && !!data?.success;
+    const why = data?.error
+      || (status === 404 ? "db-admin function not deployed yet" : status ? `db-admin returned HTTP ${status}` : "db-admin didn't answer");
+    setSqlLog(l => [...l, { kind: good ? "ok" : "err", text: good ? "✓ " + (data.message || "done") : "✗ " + why }]);
     setSqlBusy(false);
   };
 

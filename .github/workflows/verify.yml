@@ -1,10 +1,31 @@
 name: Verify
 
+# claude/** is here because that is where work in this repo actually lands.
+# Branches get pushed, reviewed and merged from there, and until now none of
+# those pushes ran the suite at all — main-only meant the first time CI had an
+# opinion about a branch was the pull request, or after the merge.
 on:
   pull_request:
   push:
     branches:
       - main
+      - 'claude/**'
+
+# A superseded run should stop costing time the moment it is superseded. The
+# failure this exists for: 85894b7 and e714185, two of the largest commits in
+# this repo, both shipped while this job sat cancelled at 15m01s. GitHub had it
+# queued behind newer pushes and eventually killed it, and a cancelled job renders
+# as a grey dot, not a red X — so a suite that takes eleven seconds silently never
+# reported on the two commits that most needed it. Cancelling deliberately, at the
+# instant a newer commit arrives, makes that grey dot mean the one thing it should
+# mean ("something newer replaced this") rather than hiding a run that never
+# happened. The tradeoff is real and worth stating: an intermediate commit on a
+# fast-moving branch can go unverified by CI. That is survivable now only because
+# the deploy itself runs `npm run verify` (see netlify.toml) — CI is the fast
+# signal, the Netlify build is the gate.
+concurrency:
+  group: verify-${{ github.ref }}
+  cancel-in-progress: true
 
 permissions:
   contents: read
@@ -12,11 +33,20 @@ permissions:
 jobs:
   verify:
     runs-on: ubuntu-latest
+    # Eleven seconds locally; a couple of minutes here once npm ci has to warm a
+    # cold cache. Five minutes is generous for that and still short enough that a
+    # hung install, or a smoke that has started waiting on a network call it has no
+    # business making, fails loudly and visibly instead of idling toward the
+    # six-hour default and getting cancelled with nothing to show for it.
+    timeout-minutes: 5
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: 20
+          # Must match .nvmrc, package.json engines.node, and NODE_VERSION in
+          # netlify.toml. This said 20 while everything else said nothing and the
+          # owner's machine ran 22.
+          node-version: 22
           cache: npm
       - run: npm ci
       - run: npm run verify

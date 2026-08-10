@@ -72,7 +72,7 @@ exports.handler = async (event) => {
   if (!supaUrl || !service || !owner) return json(503, { error: "server owner is not configured" });
   const token = (event.headers.authorization || event.headers.Authorization || "").replace(/^Bearer\s+/i, "");
   if (!token) return json(401, { error: "sign in first" });
-  const res = await fetch(`${supaUrl}/auth/v1/user`, { headers: { apikey: service, Authorization: `Bearer ${token}` } });
+  const res = await fetch(`${supaUrl}/auth/v1/user`, { signal: AbortSignal.timeout(15000), headers: { apikey: service, Authorization: `Bearer ${token}` } });
   if (!res.ok) return json(401, { error: "session expired — refresh and try again" });
   const user = await res.json().catch(() => null);
   if (user?.id !== owner) return json(403, { error: "this account is not allowed to use Board Room" });

@@ -54,16 +54,39 @@ exports.handler = async (event) => {
       const count = res.headers.get("content-range")?.split("/")[1] || "0";
       return json(200, { success: true, message: `deleted ${count} findings older than 30 days` });
     }
+    if (cmd === "clear usage_log > 30d") {
+      // This one was offered and never implemented. The Supabase console has
+      // shown a "clear usage_log > 30d" pill since the console shipped, and
+      // every tap of it came back "command not in allowlist" — a button whose
+      // whole job was to answer 400.
+      //
+      // It is the table that most needs it. usage_log is the only thing here
+      // that purely grows: every Anthropic call and every Netlify function hit
+      // writes a row, from six writers between the browser and the background
+      // functions, and nothing has ever deleted one. Know what the prune costs
+      // before you run it — the Usage tab's "All" window is ten years wide, so
+      // afterwards it reads the same as 30d. That is the trade, and it is worth
+      // making once the table is big enough to slow usage_summary down.
+      const cutoff = new Date(Date.now() - 30 * 86400000).toISOString();
+      const res = await rest(`usage_log?created_at=lt.${cutoff}`, { method: "DELETE" });
+      // Same trick the findings prune uses: `Prefer: count=exact` makes
+      // PostgREST report the affected row count in Content-Range on a DELETE,
+      // so the console can say a number instead of "done".
+      const count = res.headers.get("content-range")?.split("/")[1] || "0";
+      return json(200, { success: true, deleted: Number(count) || 0, message: `deleted ${count} usage_log rows older than 30 days` });
+    }
     if (cmd.startsWith("count ")) {
       const table = cmd.slice(6).replace(/[^a-z_]/g, "");
-      const allowed = ["chat_messages", "seat_notes", "app_settings", "auditor_findings"];
+      // usage_log is countable so the prune above can be checked either side of
+      // running it — a deletion you can't measure is one you have to trust.
+      const allowed = ["chat_messages", "seat_notes", "app_settings", "auditor_findings", "usage_log"];
       if (!allowed.includes(table)) return json(400, { error: `count only supports: ${allowed.join(", ")}` });
       const res = await rest(`${table}?select=*`, { method: "HEAD" });
       const count = res.headers.get("content-range")?.split("/")[1] || "?";
       return json(200, { success: true, message: `${table}: ${count} rows` });
     }
 
-    return json(400, { error: `command not in allowlist. Supported: backup chat_messages · vacuum seat_notes · clear findings > 30d · count <table>` });
+    return json(400, { error: `command not in allowlist. Supported: backup chat_messages · vacuum seat_notes · clear findings > 30d · clear usage_log > 30d · count <table>` });
   } catch (e) {
     return json(502, { error: e.message });
   }

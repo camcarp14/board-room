@@ -40,10 +40,18 @@ exports.handler = async () => {
     return json(200, { success: false, service: "stock-cron-background", error: "no site URL" });
   }
   const target = `${base}/.netlify/functions/stock-settle-background`;
+  // The engine sits on a public URL, and `{source:"cron"}` in the body proves
+  // nothing — anyone can type it. This header is what actually distinguishes
+  // the hourly pass from the internet, and it is the same INTERNAL_WORKER_SECRET
+  // discord-board.js presents to board-work-background: one secret for every
+  // function-to-function hop on this site, so there is one variable to set and
+  // one to rotate. Unset is not fatal here — see the note on the engine's side.
+  const workerSecret = process.env.INTERNAL_WORKER_SECRET;
+  if (!workerSecret) console.warn("[stock-cron-background] INTERNAL_WORKER_SECRET is not set — the engine cannot tell this pass from an anonymous one");
   try {
     const res = await fetch(target, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: { "Content-Type": "application/json", ...(workerSecret ? { "x-internal-worker-secret": workerSecret } : {}) },
       body: JSON.stringify({ source: "cron" }),
       // Generous relative to a 202, tight relative to the scheduler's patience.
       signal: AbortSignal.timeout(10000),

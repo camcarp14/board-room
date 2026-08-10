@@ -35,6 +35,12 @@ import { PALETTES } from "../design/palettes.js";
 const UsageTab = lazy(() => import("../pages/systems/SystemsPage.jsx").then(m => ({ default: m.UsageTab })));
 const StatusTab = lazy(() => import("../pages/systems/SystemsPage.jsx").then(m => ({ default: m.StatusTab })));
 const MinerPanel = lazy(() => import("../pages/systems/MinerPanel.jsx").then(m => ({ default: m.MinerPanel })));
+// Deploy was written and then stranded: DeployTab has lived in SystemsPage.jsx
+// since Assets left the nav, exported and imported by nothing. It matters now
+// because it is where Rollback lives, and a rollback you cannot reach from the
+// phone is not a rollback — it is a Netlify dashboard login during whatever
+// went wrong.
+const DeployTab = lazy(() => import("../pages/systems/SystemsPage.jsx").then(m => ({ default: m.DeployTab })));
 
 const SHEET_TABS = [{ key: "systems", label: "Systems" }, { key: "theme", label: "Theme" }, { key: "tabs", label: "Tabs" }];
 // Account sits with the systems panels rather than in Theme: your calendar feed
@@ -42,6 +48,7 @@ const SHEET_TABS = [{ key: "systems", label: "Systems" }, { key: "theme", label:
 const SYS_TABS = [
   { key: "usage", label: "Usage" },
   { key: "status", label: "Status" },
+  { key: "deploy", label: "Deploy" },
   { key: "miner", label: "Miner" },
   { key: "account", label: "Account" },
 ];
@@ -136,6 +143,7 @@ export function SettingsSheet({ onClose, session, theme, calUrl, onSaveCalUrl, i
             <Suspense fallback={<div style={{ display: "flex", justifyContent: "center", padding: "40px 0" }}><Spinner /></div>}>
               {sys === "usage" && <UsageTab isMobile={isMobile} />}
               {sys === "status" && <StatusTab checks={conn?.checks || {}} lastRun={conn?.lastRun} running={conn?.running} runAll={conn?.runAll} isMobile={isMobile} />}
+              {sys === "deploy" && <DeployTab isMobile={isMobile} />}
               {/* `active` gates the 5s poll — it stops the moment you leave. */}
               {sys === "miner" && <MinerPanel active isMobile={isMobile} />}
             </Suspense>

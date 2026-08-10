@@ -3,8 +3,11 @@
 // Reads Cameron's seat notes + recent chat history before answering, and writes
 // the exchange back — so /board in Discord and the web chat are one continuous mind.
 // Env: ANTHROPIC_API_KEY (required)
+//      INTERNAL_WORKER_SECRET (required — the shared secret discord-board.js
+//      presents on the internal hop; see the gate below for what it closes)
 //      SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, BOARD_USER_ID (memory — server-side
 //      ONLY; the service-role key bypasses RLS and must never reach any client)
+import { timingSafeEqual } from "node:crypto";
 
 // Alias, not the dated snapshot this used to pin: same model, but the alias is
 // what MODEL_IDS and the proxy allowlist carry, so a model move is one id to
@@ -88,8 +91,67 @@ async function sbInsert(cfg, table, rows) {
   } catch {}
 }
 
+/* ─── the internal hop had no lock on it ─────────────────────────────────────
+ *
+ * This is a public URL and it accepted anyone. A POST of
+ * {question, application_id, token} with no credential of any kind read every
+ * one of Cameron's seat_notes and the last eight chat_messages using the
+ * SERVICE-ROLE key — which bypasses RLS by design, so there was nothing else
+ * left to stop it — spent two to seven Anthropic calls of his budget
+ * synthesising an answer out of them, wrote the exchange into chat_messages as
+ * though he had asked it, and then PATCHed that answer to whatever discord.com
+ * webhook the CALLER named. The last step is what made it a disclosure rather
+ * than a billing problem: the attacker picks where the answer is delivered, and
+ * the answer is built out of private seat notes and private chat history.
+ *
+ * discord-board.js is the only legitimate caller and its own front door was
+ * never the weak part — Discord signs every interaction with Ed25519 and that
+ * signature is verified before anything happens. It was the hop from there to
+ * here that was open, so that hop now carries a shared secret.
+ *
+ * IT FAILS CLOSED WHEN THE SECRET IS UNSET. The tempting alternative is to
+ * treat a missing variable as "not configured yet, so allow and log a warning",
+ * and that instinct is precisely how this function spent its entire life open.
+ * An unconfigured worker refuses and names the variable it wants.
+ */
+const SECRET_HEADER = "x-internal-worker-secret";
+
+// timingSafeEqual THROWS on buffers of unequal length instead of returning
+// false, so the lengths are compared first. That comparison is not constant
+// time and does not need to be: the length of the configured secret is not the
+// secret, and an attacker who can guess its length still has to guess its bytes.
+function secretOk(presented, expected) {
+  const a = Buffer.from(String(presented || ""), "utf8");
+  const b = Buffer.from(String(expected), "utf8");
+  return a.length === b.length && timingSafeEqual(a, b);
+}
+
+// Both of these get interpolated into the Discord webhook URL at the end of the
+// run. The host is a literal, so this was never arbitrary SSRF — but a
+// malformed value has no business reaching a fetch at all, and both fields have
+// a shape worth insisting on: application_id is a snowflake, and an interaction
+// token is a long opaque url-safe string.
+const SNOWFLAKE = /^\d{17,20}$/;
+const INTERACTION_TOKEN = /^[\w-]{50,120}$/;
+// A slash command's question is one line typed into Discord. Anything past this
+// is someone using the convene as a free LLM with the owner's key.
+const MAX_QUESTION = 2000;
+
 export default async (req) => {
-  const { question, application_id, token } = await req.json();
+  const expected = process.env.INTERNAL_WORKER_SECRET;
+  if (!expected) return new Response("INTERNAL_WORKER_SECRET is not set — this worker will not run without it", { status: 503 });
+  if (!secretOk(req.headers.get(SECRET_HEADER), expected)) return new Response("unauthorized", { status: 401 });
+
+  let payload = null;
+  try { payload = await req.json(); } catch { return new Response("invalid JSON body", { status: 400 }); }
+  const { question, application_id, token } = payload || {};
+  if (typeof question !== "string" || !question.trim() || question.length > MAX_QUESTION) {
+    return new Response(`question must be a non-empty string of at most ${MAX_QUESTION} characters`, { status: 400 });
+  }
+  if (!SNOWFLAKE.test(String(application_id ?? "")) || !INTERACTION_TOKEN.test(String(token ?? ""))) {
+    return new Response("application_id or token is not shaped like a Discord value", { status: 400 });
+  }
+
   let answer;
   const cfg = sbConfig();
   let memoryOn = !!cfg;
