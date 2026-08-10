@@ -256,11 +256,21 @@ const SEARCHED = [
   "src/pages/systems/SystemsPage.jsx",
 ].filter(p => /\.(js|jsx|mjs)$/.test(p));
 
+// A bare `0014_dream_items.sql` is still a promise, but it is not a path — and
+// since the schema record landed there are 34 of them, all living in
+// supabase/migrations/. Resolve an unqualified .sql name against the places this
+// repo actually keeps SQL (the root, for supabase-usage-fix.sql, and the
+// migrations directory) before calling it a phantom. Qualified paths are
+// unaffected: they still have to exist exactly where they say they do.
+const SQL_DIRS = ["", "supabase/migrations/"];
+const resolves = (named) =>
+  named.includes("/") ? existsSync(named) : SQL_DIRS.some(d => existsSync(`${d}${named}`));
+
 const phantoms = new Map();
 for (const p of SEARCHED) {
   for (const m of read(p).matchAll(PROMISE_RE)) {
     const named = m[1];
-    if (existsSync(named)) continue;
+    if (resolves(named)) continue;
     if (!phantoms.has(named)) phantoms.set(named, new Set());
     phantoms.get(named).add(p.split("/").pop());
   }

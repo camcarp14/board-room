@@ -55,8 +55,18 @@ import WatchSheet from "./pages/train/WatchSheet.jsx";
 // ════════════════════════════════════════════════════════════════════════════
 
 // ─── One-time Supabase setup (shown in-app if the tables don't exist yet) ────
+// THIS SAID `public.` FOR ITS ENTIRE LIFE, and the client reads `boardroom` —
+// src/lib/supabase.js pins db.schema and every function sends Accept-Profile.
+// So following this card built three tables the app could never see, and the
+// setup notice stayed up afterwards with no way to tell you why. It is the same
+// mistake financeLogic.js:653 records the Dream boards having already shipped
+// once. The authoritative shape now lives in supabase/migrations/ — 0015, 0016
+// and 0017 — and migrations-smoke keeps them from drifting apart again.
 export const WORKOUT_SETUP_SQL = `-- Board Room · Workout — one-time setup
-create table if not exists public.workout_templates (
+-- Runs against the boardroom schema, which is the one this app reads.
+create schema if not exists boardroom;
+grant usage on schema boardroom to anon, authenticated;
+create table if not exists boardroom.workout_templates (
   id uuid primary key,
   user_id uuid not null references auth.users(id) on delete cascade,
   name text not null,
@@ -66,11 +76,12 @@ create table if not exists public.workout_templates (
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
 );
-alter table public.workout_templates enable row level security;
-create policy "own workout_templates" on public.workout_templates
+alter table boardroom.workout_templates enable row level security;
+drop policy if exists "own workout_templates" on boardroom.workout_templates;
+create policy "own workout_templates" on boardroom.workout_templates
   for all using (auth.uid() = user_id) with check (auth.uid() = user_id);
 
-create table if not exists public.workout_sessions (
+create table if not exists boardroom.workout_sessions (
   id uuid primary key,
   user_id uuid not null references auth.users(id) on delete cascade,
   template_id uuid,
@@ -86,11 +97,12 @@ create table if not exists public.workout_sessions (
   pr_count int not null default 0,
   created_at timestamptz not null default now()
 );
-alter table public.workout_sessions enable row level security;
-create policy "own workout_sessions" on public.workout_sessions
+alter table boardroom.workout_sessions enable row level security;
+drop policy if exists "own workout_sessions" on boardroom.workout_sessions;
+create policy "own workout_sessions" on boardroom.workout_sessions
   for all using (auth.uid() = user_id) with check (auth.uid() = user_id);
 
-create table if not exists public.body_weight_log (
+create table if not exists boardroom.body_weight_log (
   id uuid primary key default gen_random_uuid(),
   user_id uuid not null references auth.users(id) on delete cascade,
   weight numeric not null check (weight > 0 and weight < 1500),
@@ -98,10 +110,17 @@ create table if not exists public.body_weight_log (
   logged_at timestamptz not null default now(),
   created_at timestamptz not null default now()
 );
-alter table public.body_weight_log enable row level security;
-create policy "own body_weight_log" on public.body_weight_log
+alter table boardroom.body_weight_log enable row level security;
+drop policy if exists "own body_weight_log" on boardroom.body_weight_log;
+create policy "own body_weight_log" on boardroom.body_weight_log
   for all using (auth.uid() = user_id) with check (auth.uid() = user_id);
-create index if not exists body_weight_log_user_time on public.body_weight_log (user_id, logged_at desc);`;
+create index if not exists body_weight_log_user_time on boardroom.body_weight_log (user_id, logged_at desc);
+
+-- A custom schema grants nothing by default. Without these the tables exist,
+-- RLS is on, the policies are right, and every read still comes back empty.
+grant select, insert, update, delete on boardroom.workout_templates to authenticated;
+grant select, insert, update, delete on boardroom.workout_sessions to authenticated;
+grant select, insert, update, delete on boardroom.body_weight_log to authenticated;`;
 
 // ─── db layer (client passed in from App.jsx — same contract style as db.*) ──
 function makeWdb(sb) {
@@ -122,7 +141,19 @@ function makeWdb(sb) {
       if (error) throw error;
       return data;
     },
-    async deleteTemplate(id) { try { await sb.from("workout_templates").delete().eq("id", id); } catch {} },
+    // Handled here rather than through data/db.js's write() helper because this
+    // whole wdb layer takes its client as an argument and reads .error inline,
+    // the way saveTemplate above and deleteSession below already do. What it did
+    // NOT do was read it at all: this was `try { await … } catch {}`, an empty
+    // catch around a call that cannot throw, because supabase-js resolves with
+    // { error } instead of rejecting (the long note at the top of data/db.js has
+    // the full story). So a delete the database refused looked exactly like one
+    // it accepted — the editor closed, the list refreshed, and the routine was
+    // still sitting there as if the tap had missed.
+    async deleteTemplate(id) {
+      const { error } = await sb.from("workout_templates").delete().eq("id", id);
+      if (error) throw error;
+    },
     // 300, not 120: Rides reads all-time bests and a 12-week shape out of the
     // same list, and a rider who also lifts four times a week would have their
     // cycling history quietly cut off at the old ceiling.
@@ -520,7 +551,18 @@ export default function WorkoutPanel({ isMobile, supabase, settings, updateSetti
             initial={editingTpl === "new" ? null : editingTpl}
             nextPosition={(templates || []).length}
             onSave={async (tpl) => { await wdb.saveTemplate(tpl); setEditingTpl(null); refreshAll(); }}
-            onDelete={async (id) => { await wdb.deleteTemplate(id); setEditingTpl(null); refreshAll(); }}
+            onDelete={async (id) => {
+              // deleteTemplate throws now. Closing the editor and refreshing on
+              // a refused delete would put the routine back on screen with no
+              // explanation, which reads as the button not having registered.
+              // Stay open, say what happened, and let him try again.
+              try { await wdb.deleteTemplate(id); }
+              catch (e) {
+                await confirm({ title: "Couldn't delete routine", message: e.message || "Try again in a moment.", confirmLabel: "OK", cancelLabel: false });
+                return;
+              }
+              setEditingTpl(null); refreshAll();
+            }}
             onCancel={() => setEditingTpl(null)}
           />
         ) : (

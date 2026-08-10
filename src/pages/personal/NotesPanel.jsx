@@ -21,8 +21,11 @@ const CaptureSheet = lazy(() => import("./CaptureSheet.jsx"));
 
 // Copy-pasted by the user into Supabase → SQL Editor — exact text matters.
 export const NOTES_UPGRADE_SQL = `-- Notes upgrade — pins + color seals (safe to re-run)
-alter table public.personal_notes add column if not exists pinned boolean not null default false;
-alter table public.personal_notes add column if not exists color text;`;
+alter table boardroom.personal_notes add column if not exists pinned boolean not null default false;
+alter table boardroom.personal_notes add column if not exists color text;`;
+// It said `alter table public.personal_notes` — a table the app does not read.
+// So the upgrade appeared to succeed, nothing changed, and this banner stayed on
+// screen for good. Authoritative shape: supabase/migrations/0008_personal_notes.sql.
 
 /**
  * The reordered ids, followed by everything the drag could not see.

@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef, lazy, Suspense } from "react";
 import { supabase } from "./lib/supabase.js";
 import { sm } from "./lib/storage.js";
-import { db } from "./data/db.js";
+import { db, writeFailures } from "./data/db.js";
 import { queryClient } from "./lib/queryClient.js";
 import { callClaude, convene, DEFAULT_MODELS } from "./lib/claude.js";
 import { parseLearnCommand, learnFromInput, makeSdb as makeSkillsDb } from "./LearnPanel.jsx";
@@ -10,6 +10,7 @@ import { NAV } from "./shell/nav.js";
 import { MobileShell } from "./shell/MobileShell.jsx";
 import { SidebarShell } from "./shell/SidebarShell.jsx";
 import { BootScreen, LoginScreen, SetupNotice } from "./shell/Boot.jsx";
+import { WriteFailures } from "./shell/TopStatus.jsx";
 import { Ambient } from "./shell/Ambient.jsx";
 import { SettingsSheet } from "./shell/SettingsSheet.jsx";
 import { useConnections } from "./pages/systems/connections.js";
@@ -90,6 +91,31 @@ export default function App() {
   const [now, setNow] = useState(Date.now());
   const endRef = useRef(null);
 
+  // WRITES THAT DID NOT LAND. Every save in data/db.js that can fail quietly
+  // files itself in the writeFailures store (see the long note above write()
+  // there); this is the shell's copy of it, and TopStatus draws the count with a
+  // retry. It exists because the write path had no way at all to say "that
+  // didn't happen": updateSetting painted the new value into state and dropped
+  // the promise, so a refused upsert looked identical to a saved one until the
+  // next reload took the change back.
+  const [failedWrites, setFailedWrites] = useState([]);
+  const [retryingWrites, setRetryingWrites] = useState(false);
+  useEffect(() => {
+    // Read once on mount as well as subscribing — a write can fail between this
+    // component's first render and the effect running, and a failure the store
+    // knows about but the shell doesn't is the same silence all over again.
+    const already = writeFailures.list();
+    if (already.length) setFailedWrites(already);
+    return writeFailures.subscribe(() => setFailedWrites(writeFailures.list()));
+  }, []);
+  const retryWrites = async () => {
+    if (retryingWrites) return;
+    setRetryingWrites(true);
+    // finally, not a bare await: retryAll doesn't reject, but a chip left stuck
+    // on "Retrying…" would be its own small lie about what the app is doing.
+    try { await writeFailures.retryAll(); } finally { setRetryingWrites(false); }
+  };
+
   // Tick every 30s so the clock and freshness pill stay current.
   useEffect(() => {
     const iv = setInterval(() => setNow(Date.now()), 30 * 1000);
@@ -136,6 +162,11 @@ export default function App() {
       if (event === "SIGNED_OUT") {
         try {
           queryClient.clear();
+          // The failed-write store belongs to the account too: each entry holds
+          // a retry closure over whatever was being saved, so leaving them
+          // behind would both show the next signed-in user someone else's
+          // unsaved changes and, on a retry, try to write them.
+          writeFailures.clearAll();
           ["br_rq_cache", "br_snapshot", "br_event_takes"].forEach(k => localStorage.removeItem(k));
         } catch { /* storage unavailable — nothing to leak anyway */ }
       }
@@ -195,9 +226,23 @@ export default function App() {
     if (scroller) scroller.scrollTop = scroller.scrollHeight;
   }, [messages, thinking, page]);
 
-  const updateSetting = (key, value) => {
+  // AWAITED NOW, and the failure has somewhere to go. This was a bare
+  // `db.saveSetting(key, value)` one line under the optimistic setState, promise
+  // dropped on the floor — and app_settings is where the tab bar, budgets,
+  // finance rules, grocery stores, the brief order, the notes order, ponder
+  // items and the dream boards live. Several of those are things he typed, not
+  // preferences, so a refused upsert wasn't a lost setting; it was lost content
+  // that the screen went on showing as saved.
+  //
+  // saveSetting deliberately does NOT throw (data/db.js) and this must stay that
+  // way: updateSetting is handed straight to onChange handlers all over the app,
+  // most of which never await it, and a rejected promise from one of those is an
+  // unhandled rejection at best and a dead panel at worst. The failure comes
+  // back as { ok: false } and is already filed under this setting's key, which
+  // is what puts the unsaved chip in the top bar.
+  const updateSetting = async (key, value) => {
     setSettings(prev => ({ ...(prev || {}), [key]: value }));
-    db.saveSetting(key, value);
+    return await db.saveSetting(key, value);
   };
 
   // The bar the owner built (Settings → Tabs), stored as
@@ -222,9 +267,13 @@ export default function App() {
     return out;
   })();
   const visibleNav = orderedNav.filter(n => n.key === "brief" || !hiddenTabs.has(n.key));
+  // Not strict, on purpose: SeatNotesModal does `await onSave(…)` and then closes,
+  // with no catch of its own, so a throw here would leave the sheet stuck on
+  // "Saving…" forever. The failure is recorded instead and shows in the top bar,
+  // which is the one place that can outlive the sheet.
   const saveSeatNote = async (key, notes) => {
     setSeatNotes(prev => ({ ...prev, [key]: notes }));
-    await db.saveSeatNote(key, notes);
+    return await db.saveSeatNote(key, notes);
   };
 
   const runImport = async () => {
@@ -233,15 +282,30 @@ export default function App() {
       const localChat = sm.get("chat") || [];
       if (localChat.length) {
         const rows = localChat.map(m => ({ role: m.role === "assistant" ? "assistant" : "user", content: String(m.content || ""), consulted_seats: m.consulted || [], created_at: m.ts ? new Date(m.ts).toISOString() : new Date().toISOString(), source: "web" }));
-        await supabase.from("chat_messages").insert(rows);
+        const { error } = await supabase.from("chat_messages").insert(rows);
+        // Same resolve-on-error shape the rest of the write path had to be fixed
+        // for (see the note above write() in data/db.js): this insert never
+        // rejected, so an import that landed nothing at all fell straight
+        // through to sm.set("migrated", true) below and the offer never came
+        // back. One tap, and the chat this browser had been holding since before
+        // the account existed was unreachable from the app for good.
+        if (error) throw error;
       }
       const localNotes = sm.get("seat_notes") || {};
-      for (const [k, v] of Object.entries(localNotes)) { if (v) await db.saveSeatNote(k, v); }
+      // strict: this is one of the few places with a real catch and something
+      // real to say, so it takes the throw instead of the quiet chip — an import
+      // that half happened must stop before it marks itself done.
+      for (const [k, v] of Object.entries(localNotes)) { if (v) await db.saveSeatNote(k, v, { strict: true }); }
       sm.set("migrated", true);
       const chat = await db.loadChat();
       setMessages(chat);
       setSeatNotes(prev => ({ ...prev, ...localNotes }));
-    } catch {}
+    } catch (e) {
+      // Nothing was marked migrated on this path, so the local copy is still
+      // there and the offer returns on the next launch. Say so rather than
+      // closing the sheet as though it worked.
+      await confirm({ title: "Couldn't import", message: `${e.message || "The import didn't finish."} Nothing was marked as imported — the offer will come back next time you open the app.`, confirmLabel: "OK", cancelLabel: false });
+    }
     setImporting(false);
     setMigration(null);
   };
@@ -484,9 +548,15 @@ export default function App() {
       const system = `You audit a "Chief of Staff" AI's synthesis for whether it fairly represented disagreement between specialist seats, or smoothed it over. Question: "${question}"\n\nSeat takes:\n${seatBlock}\n\nChief's synthesized answer:\n${result.answer}\n\nIf the seats meaningfully disagreed and the Chief's answer glossed over, hid, or flattened that disagreement, respond with ONLY a one-sentence description of what was smoothed over. If the Chief fairly represented any disagreement (or the seats didn't meaningfully disagree), respond with exactly: OK`;
       const verdict = await callClaude({ system, messages: [{ role: "user", content: "Audit this exchange." }], modelKey: mini.model || "haiku", maxTokens: 150, fn: "oversight" });
       if (verdict && verdict.trim() !== "OK" && !verdict.trim().startsWith("OK")) {
-        await supabase.from("mini_feed").insert({ user_id: (await supabase.auth.getUser()).data?.user?.id, text: `Oversight: ${verdict.trim()}` });
+        const { error } = await supabase.from("mini_feed").insert({ user_id: (await supabase.auth.getUser()).data?.user?.id, text: `Oversight: ${verdict.trim()}` });
+        // The catch below is meant to make this best-effort, and it could not:
+        // this insert resolves with { error } rather than rejecting (data/db.js
+        // explains why), so a refused feed write never reached the handler that
+        // was written to absorb it. Reading .error is what makes "best-effort"
+        // a true description of this function instead of a hopeful one.
+        if (error) throw error;
       }
-    } catch { /* best-effort — never surface oversight failures to the user */ }
+    } catch { /* best-effort — this stays quiet by design; a lost oversight note is not worth a chip in the top bar */ }
   };
 
   // One ambient canvas for the entire app, mounted above the auth gate so the
@@ -567,11 +637,20 @@ export default function App() {
     </>
   );
 
+  // The unsaved-writes chip lives in TopStatus, which both shells render — so it
+  // comes down as context rather than as two more props threaded through chrome
+  // that has no other reason to know about the write path. The Provider renders
+  // no DOM of its own, so unlike a wrapper element it cannot become the
+  // containing block for the fixed tab bar or a sheet (see the Ambient note).
+  const writeFailureValue = { failed: failedWrites, retrying: retryingWrites, onRetry: retryWrites };
+
   if (isMobile) {
     return (
       <>
         {ambient}
-        <MobileShell {...shellProps} navDir={navDir}>{renderPage(page)}</MobileShell>
+        <WriteFailures.Provider value={writeFailureValue}>
+          <MobileShell {...shellProps} navDir={navDir}>{renderPage(page)}</MobileShell>
+        </WriteFailures.Provider>
         {overlays}
       </>
     );
@@ -579,13 +658,15 @@ export default function App() {
   return (
     <>
       {ambient}
-      <SidebarShell
-        {...shellProps}
-        btc={btc}
-        session={session}
-      >
-        {renderPage(page)}
-      </SidebarShell>
+      <WriteFailures.Provider value={writeFailureValue}>
+        <SidebarShell
+          {...shellProps}
+          btc={btc}
+          session={session}
+        >
+          {renderPage(page)}
+        </SidebarShell>
+      </WriteFailures.Provider>
       {overlays}
     </>
   );

@@ -8,6 +8,7 @@
 //
 // Run by `npm run verify`.
 
+import { readFileSync } from "node:fs";
 import { applyNotesOrder, reorder, bumpToFront, orderOf } from "../src/lib/notes-order.js";
 
 let failed = 0;
@@ -74,6 +75,57 @@ check("a drag survives a refetch that returns rows in another order",
   ids(applyNotesOrder([C, A, D, B], persisted)));
 check("re-applying a persisted order is stable (no drift on every render)",
   ids(applyNotesOrder(ALL, persisted)) === ids(applyNotesOrder(ALL, orderOf(applyNotesOrder(ALL, persisted)))));
+
+// 9 — THE WRITE THAT KEEPS ALL OF THE ABOVE. Everything up to here checks that
+// the order is computed right; a computed order nobody manages to store is worth
+// nothing. It persists through db.saveSetting("notes_order", …), and that
+// function was `try { await supabase…upsert(…) } catch {}` for a long time —
+// which catches nothing, because supabase-js resolves with { data: null, error }
+// instead of rejecting on a PostgREST rejection, an RLS denial or a 500. A drag
+// the database refused was therefore indistinguishable from one it accepted: the
+// list was already reordered on screen, the write went out unobserved, and the
+// next reload put the old order back with nothing having said no.
+//
+// Text-based, like systems-smoke.mjs — the sources are ESM/JSX and there is no
+// bundler here. These are cheap to keep and they pin the one shape that must not
+// come back.
+const dbSrc = readFileSync("src/data/db.js", "utf8");
+// The comments in there narrate this bug at length and quote the old shape
+// verbatim, so the prose comes off before looking for that shape in the code.
+const codeOnly = (s) => s.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
+check("db.js swallows nothing — no empty catch anywhere in the data layer",
+  !/catch\s*(\([^)]*\))?\s*\{\s*\}/.test(codeOnly(dbSrc)));
+const helper = dbSrc.match(/async function write\([\s\S]*?\n\}/)?.[0] || "";
+check("there is a single write() helper", helper.length > 0);
+check("write() reads .error off the resolved query", /const \{ error \} = await query;/.test(helper));
+check("…and throws it rather than returning it", /\bthrow e;/.test(helper));
+for (const fn of ["saveMessage", "saveSeatNote", "saveSetting", "saveFindings"]) {
+  const body = dbSrc.match(new RegExp(`async ${fn}\\([\\s\\S]*?\\n  \\},`))?.[0] || "";
+  check(`${fn} routes through write()`, /\bwrite\(/.test(body), body ? "" : "(function not found)");
+  check(`${fn} reports its failure instead of dropping it`, /\breported\(/.test(body));
+}
+// The throw has to stay opt-in. updateSetting is handed to onChange handlers all
+// over the app, most of which never await it — a saveSetting that rejected by
+// default would turn a failed write into an unhandled rejection or a dead panel.
+check("the throw is opt-in, and off by default", /\{ strict = false \} = \{\}/.test(dbSrc));
+// A failure nobody is told about is the bug itself, so the store and its one
+// consumer are part of the invariant.
+check("failed writes are recorded for the shell to show", /export const writeFailures = \{/.test(dbSrc));
+const appSrc = readFileSync("src/App.jsx", "utf8");
+check("App awaits the setting write instead of dropping the promise",
+  /await db\.saveSetting\(key, value\)/.test(appSrc));
+check("App subscribes to the failed-write store", /writeFailures\.subscribe\(/.test(appSrc));
+check("signing out clears another account's unsaved writes", /writeFailures\.clearAll\(\)/.test(appSrc));
+// Same class of bug, same fix, one file over: the workout db layer had one write
+// left wrapped in an empty catch.
+const workout = codeOnly(readFileSync("src/WorkoutPanel.jsx", "utf8"));
+check("the workout db layer swallows no write either",
+  !/catch\s*(\([^)]*\))?\s*\{\s*\}/.test(workout.match(/function makeWdb\(sb\)[\s\S]*?\n\}/)?.[0] || "x catch {}"));
+check("deleting a routine reads .error",
+  /async deleteTemplate\(id\) \{[\s\S]*?const \{ error \} = await sb[\s\S]*?if \(error\) throw error;/.test(workout));
+const topStatus = readFileSync("src/shell/TopStatus.jsx", "utf8");
+check("the chip only draws when there is a real failure", /\{n > 0 && \(/.test(topStatus));
+check("…and it offers the retry", /onClick=\{onRetry\}/.test(topStatus));
 
 console.log(`\n${failed ? `${failed} FAILURE(S)` : "NOTES ORDER SMOKE: ALL CLEAN"}`);
 if (failed) { console.error("NOTES ORDER SMOKE FAILED"); process.exit(1); }

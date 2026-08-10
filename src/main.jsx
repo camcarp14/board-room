@@ -4,7 +4,7 @@ import { PersistQueryClientProvider } from "@tanstack/react-query-persist-client
 import { createSyncStoragePersister } from "@tanstack/query-sync-storage-persister";
 import "./styles.css";
 import App from "./App.jsx";
-import { queryClient } from "./lib/queryClient.js";
+import { queryClient, shouldPersistMutation, dropStaleOutboxMutations } from "./lib/queryClient.js";
 import { ErrorBoundary } from "./shell/ErrorBoundary.jsx";
 
 // Persist the query cache to localStorage so a relaunch (iOS evicts backgrounded
@@ -12,12 +12,51 @@ import { ErrorBoundary } from "./shell/ErrorBoundary.jsx";
 // background — instead of an empty screen while every fetch round-trips.
 const persister = createSyncStoragePersister({ storage: window.localStorage, key: "br_rq_cache" });
 
+// What is persisted was never only reads. An optimistic write goes into the same
+// cache, so before the three options below existed you could tick a grocery item
+// off in a dead zone, relaunch the next morning to a still-ticked box, and watch
+// it un-tick itself the moment the first good read landed. Nothing had been sent
+// and nothing ever would be: the restored mutation had no function to run (see
+// lib/queryClient.js) and nothing asked it to run. The box was a claim about the
+// database that the database had never agreed to.
+//
+// shouldDehydrateMutation decides what is worth writing down. shouldDehydrateQuery
+// is deliberately NOT passed, so the read half persists exactly as it did before —
+// successful queries and nothing else.
+//
+// The hydrate scope is what makes the replay SEQUENTIAL, and it is not optional.
+// resumePausedMutations starts every paused write at once, and these writes send
+// absolute values — "3x Milk", checked=false — so two of them queued against the
+// same row in the same dead zone (type milk, tap +, tap +) race on the way out,
+// and whichever answers last wins even when it carries the oldest thing you
+// meant. That lands the row on a value you had already moved past: the reverting
+// lie again, one layer down. A shared scope makes the mutation cache run them one
+// at a time in the order they were made. It is set here rather than on the
+// mutations themselves so it applies ONLY to what came back off the disk — live
+// writes keep firing in parallel exactly as they do today.
+const persistOptions = {
+  persister,
+  maxAge: 1000 * 60 * 60 * 24,
+  buster: "br-rq-1",
+  dehydrateOptions: { shouldDehydrateMutation: shouldPersistMutation },
+  hydrateOptions: { defaultOptions: { mutations: { scope: { id: "br-outbox" } } } },
+};
+
+// The restore finishing is the only moment the resume can happen — the restored
+// mutations do not exist before it. Stale ones go first (lib/queryClient.js says
+// why a day is the limit), and the resume is deliberately NOT returned: this
+// callback is awaited before isRestoring flips, which gates every query in the
+// app, so returning the promise would hold the whole UI behind the outbox
+// draining. It cannot reject, and it no-ops while still offline — the client's
+// own onlineManager subscription picks the writes up when the signal returns.
+const drainOutbox = () => {
+  dropStaleOutboxMutations();
+  queryClient.resumePausedMutations();
+};
+
 createRoot(document.getElementById("root")).render(
   <ErrorBoundary full>
-    <PersistQueryClientProvider
-      client={queryClient}
-      persistOptions={{ persister, maxAge: 1000 * 60 * 60 * 24, buster: "br-rq-1" }}
-    >
+    <PersistQueryClientProvider client={queryClient} persistOptions={persistOptions} onSuccess={drainOutbox}>
       <App />
     </PersistQueryClientProvider>
   </ErrorBoundary>

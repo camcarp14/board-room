@@ -19,8 +19,14 @@
 
 
 // ─── one-time setup SQL ───────────────────────────────────────────────────────
+// Said `public.` until the schema record landed, while the client reads
+// `boardroom` — so following this card created a table the app could never see.
+// Authoritative shape: supabase/migrations/0020_mini_skills.sql.
 export const SKILLS_SETUP_SQL = `-- Board Room · Learn — one-time setup
-create table if not exists public.mini_skills (
+create schema if not exists boardroom;
+grant usage on schema boardroom to anon, authenticated;
+
+create table if not exists boardroom.mini_skills (
   id uuid primary key,
   user_id uuid not null references auth.users(id) on delete cascade,
   title text not null,
@@ -32,10 +38,14 @@ create table if not exists public.mini_skills (
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
 );
-alter table public.mini_skills enable row level security;
-drop policy if exists "own mini_skills" on public.mini_skills;
-create policy "own mini_skills" on public.mini_skills
-  for all using (auth.uid() = user_id) with check (auth.uid() = user_id);`;
+alter table boardroom.mini_skills enable row level security;
+drop policy if exists "own mini_skills" on boardroom.mini_skills;
+create policy "own mini_skills" on boardroom.mini_skills
+  for all using (auth.uid() = user_id) with check (auth.uid() = user_id);
+
+-- A custom schema grants nothing by default: without this the table exists,
+-- the policy is right, and every read still comes back empty.
+grant select, insert, update, delete on boardroom.mini_skills to authenticated;`;
 
 // ─── small helpers ────────────────────────────────────────────────────────────
 const uuid = () => (crypto.randomUUID ? crypto.randomUUID() : `${Date.now()}-${Math.random().toString(36).slice(2)}`);

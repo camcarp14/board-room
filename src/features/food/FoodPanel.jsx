@@ -13,7 +13,13 @@ export function FoodPanel({ isMobile, settings, updateSetting }) {
   const prefs = settings?.food_preferences || { likes: [], dislikes: [] };
   const [newLike, setNewLike] = useState("");
   const [newDislike, setNewDislike] = useState("");
-  const { data: savedRecipes = null } = useSavedRecipes();
+  // `error` is read here because the recipes query used to carry a
+  // `.catch(() => [])`, which turned a failed read into an empty list and then
+  // CACHED that empty list — into a cache persisted for 24 hours. The read is
+  // honest now and lands in `error`, so this panel has to draw it: otherwise a
+  // failure and "you have saved nothing" are the same blank space, which is the
+  // costume the bug was wearing in the first place.
+  const { data: savedRecipes = null, error: recipesError, refetch: refetchRecipes } = useSavedRecipes();
   const saveRecipeMut = useSaveRecipe();
   const delRecipeMut = useDeleteRecipe();
   const [generating, setGenerating] = useState(false);
@@ -119,7 +125,16 @@ export function FoodPanel({ isMobile, settings, updateSetting }) {
             )}
           </div>
         )}
-        {(savedRecipes || []).length > 0 && (
+        {recipesError && (
+          <div>
+            <span className="t-label" style={{ display: "block", padding: "2px 0 8px" }}>Saved</span>
+            <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "0 4px" }}>
+              <span className="t-foot" style={{ color: "var(--red)", flex: 1 }}>Couldn't load your saved recipes.</span>
+              <Button kind="tinted" size="sm" style={{ flex: "none" }} onClick={() => refetchRecipes()}>Retry</Button>
+            </div>
+          </div>
+        )}
+        {!recipesError && (savedRecipes || []).length > 0 && (
           <div>
             <span className="t-label" style={{ display: "block", padding: "2px 0 8px" }}>Saved</span>
             <CellGroup style={inCardGroup}>

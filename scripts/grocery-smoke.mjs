@@ -12,8 +12,14 @@
 // this file is the only thing standing between the lexicon and a list that sorts
 // confidently and wrongly.
 //
+// Section 7 covers the OUTBOX, which is the same family of failure one layer
+// down: a write that looks saved and isn't. Grocery is the only thing wired into
+// it, so it is asserted here.
+//
 // Run by `npm run verify`.
 
+import { readFileSync } from "node:fs";
+import { QueryClient, dehydrate, hydrate, onlineManager } from "@tanstack/react-query";
 import {
   AISLES, aisleOf, aisleMeta, aisleOfSection, parseItem, formatItem, canonicalName,
   findDuplicate, groupList, bumpFrequency, frequentSuggestions, STAPLE_MIN_BUYS,
@@ -504,6 +510,250 @@ check("the plan keeps the typed text, so a failed add can be retried",
 check("a real uuid is never mistaken for a temporary id",
   !isTempId("0d2f6286-1780-49aa-9d48-d4a7dac2ce66") && !isTempId(undefined) && !isTempId(null)
   && !isTempId({}) && isTempId(`${TMP_PREFIX}1`));
+
+// ─── 7. the outbox: a write that looks saved had better be one ─────────────────
+// THE BUG THIS SECTION IS ABOUT. Reads are offlineFirst, writes are not: a write
+// made with no signal pauses and waits for the connection. The optimistic cache
+// write is persisted to localStorage along with every read — so you could tick an
+// item off in a dead zone, relaunch the next morning to a still-ticked box, and
+// watch it un-tick itself the moment the first good read landed. The request had
+// never been sent, and after the relaunch there was nothing left that could send
+// it: a dehydrated mutation keeps its key, its state and its variables, and a
+// function is not serialisable. Nothing called resumePausedMutations() either.
+//
+// Two halves below. First the WIRING, read out of the three files, because the
+// mechanism is spread across them and any one of them alone is inert. That has to
+// be textual: lib/queryClient.js reaches supabase.js through data/food.js, which
+// needs Vite's import.meta.env, so none of the three can be imported here.
+//
+// Then the CONTRACT those files lean on, exercised against the real TanStack
+// build in node_modules. Every one of those assertions is a fact about the
+// library that the outbox would silently stop working without — which makes this
+// the half that fails loudly on a version bump instead of in a shop.
+
+const read = (p) => readFileSync(new URL(`../${p}`, import.meta.url), "utf8");
+// Comments stripped before anything matches. A check that passes on the prose
+// explaining the code is not a check — spend-smoke shipped a /usage_log/ test
+// that was satisfied by a comment saying the file did NOT log. Block comments
+// first, then line comments; none of these three files has a regex literal or a
+// string containing "//" for this to chew on.
+const code = (src) => src
+  .replace(/\/\*[\s\S]*?\*\//g, "")
+  .split("\n").map((l) => l.replace(/\/\/.*$/, "")).join("\n");
+
+const food = code(read("src/data/food.js"));
+const qc = code(read("src/lib/queryClient.js"));
+const main = code(read("src/main.jsx"));
+
+// ── 7a. every grocery mutation declares a key ────────────────────────────────
+// The key is the only thing that survives dehydration and can find the request
+// again, so a grocery mutation without one is a write that cannot be resumed —
+// which is the whole bug, still present, in exactly one hook.
+const GROCERY_HOOKS = {
+  useAddGrocery: "add", useToggleGrocery: "toggle", useDeleteGrocery: "delete",
+  useSetGroceryQty: "qty", useEditGrocery: "edit",
+  useRetagGroceryStore: "retag", useClearCheckedGroceries: "clearChecked",
+};
+// One hook's body: from its declaration to the next top-level export.
+const hookBody = (name) => {
+  const at = food.indexOf(`export function ${name}(`);
+  if (at < 0) return "";
+  const rest = food.slice(at + 1);
+  const end = rest.search(/\nexport (?:function|const) /);
+  return end < 0 ? rest : rest.slice(0, end);
+};
+for (const [hook, key] of Object.entries(GROCERY_HOOKS)) {
+  const body = hookBody(hook);
+  check(`${hook} exists`, body.length > 0);
+  check(`${hook} declares GROCERY_KEYS.${key}`, body.includes(`GROCERY_KEYS.${key}`), body.slice(0, 120));
+}
+check("every declared key is distinct", (() => {
+  const keys = [...food.matchAll(/^\s{2}(\w+): \["grocery", "([a-z-]+)"\]/gm)].map((m) => m[2]);
+  return keys.length === Object.keys(GROCERY_HOOKS).length && new Set(keys).size === keys.length;
+})());
+
+// ── 7b. the outbox holds what may be replayed, and only that ─────────────────
+// A key with no entry in GROCERY_REPLAY is how a write stays OUT, so the contents
+// of that object are the guest list and worth pinning. Both exclusions are
+// deliberate and both are load-bearing: clear-checked increments a buy tally
+// (replaying it inflates the counts that decide what surfaces as a staple), and
+// the store rename's other half — the grocery_stores setting — is written from a
+// per-call onSuccess that cannot be dehydrated, so a replayed rename would put
+// two shops in the picker where you renamed one.
+const replayBlock = (() => {
+  const at = food.indexOf("export const GROCERY_REPLAY = {");
+  const end = food.indexOf("\n};", at);
+  return at < 0 || end < 0 ? "" : food.slice(at, end);
+})();
+const replayable = [...replayBlock.matchAll(/^\s{2}(\w+):/gm)].map((m) => m[1]);
+check("GROCERY_REPLAY is found and populated", replayable.length > 0, replayBlock.slice(0, 80));
+check("the outbox is exactly add, toggle, qty, edit, delete",
+  replayable.slice().sort().join(",") === "add,delete,edit,qty,toggle", replayable.join(","));
+check("clear-checked is NOT replayable — its tally is a delta", !replayable.includes("clearChecked"));
+check("the store rename is NOT replayable — its saved-store half can't be", !replayable.includes("retag"));
+check("clear-checked keeps its own inline request, not a shared one",
+  !hookBody("useClearCheckedGroceries").includes("GROCERY_REPLAY"));
+check("the store rename keeps its own inline request too",
+  !hookBody("useRetagGroceryStore").includes("GROCERY_REPLAY"));
+// The live write and the replayed write have to be the same function, or the
+// outbox eventually sends something the app stopped sending.
+for (const [hook, key] of Object.entries(GROCERY_HOOKS)) {
+  if (!replayable.includes(key)) continue;
+  check(`${hook} sends GROCERY_REPLAY.${key} itself`, hookBody(hook).includes(`GROCERY_REPLAY.${key}`));
+}
+
+// ── 7c. the reads don't dress a failure as an empty list ─────────────────────
+// `.catch(() => [])` turns a failed read into a successful empty result, which
+// react-query caches — and main.jsx dehydrates successful queries, so the lie
+// went to localStorage and outlived the blip by a day.
+check("the recipes read no longer swallows a failure into []",
+  !/loadSavedRecipes\(\)[\s\S]{0,40}\.catch/.test(food), "loadSavedRecipes still has a .catch");
+check("the grocery read still doesn't either", !/loadGroceryItems\(\)[\s\S]{0,40}\.catch/.test(food));
+check("no read in the file swallows into []", !/\.catch\(\(\)\s*=>\s*\[\]\)/.test(food));
+
+// ── 7d. the defaults, the cap, and the resume ────────────────────────────────
+check("queryClient registers mutation defaults", /queryClient\.setMutationDefaults\(/.test(qc));
+check("…driven off the same tables food.js declares",
+  /GROCERY_KEYS/.test(qc) && /GROCERY_REPLAY\[/.test(qc));
+check("…and each default carries a mutationFn", /setMutationDefaults\([\s\S]{0,120}mutationFn/.test(qc));
+// If mutations were ever given a networkMode of their own they would RUN offline
+// and fail instead of pausing, and an outbox of paused writes would quietly hold
+// nothing at all. The reads' offlineFirst is a separate decision, and stays.
+check("reads are still offlineFirst", /queries:\s*\{[\s\S]*?networkMode:\s*"offlineFirst"/.test(qc));
+check("mutations are still left on the default networkMode",
+  !/mutations:\s*\{[^}]*networkMode/.test(qc));
+check("the cap is a day, in one place", /export const OUTBOX_MAX_AGE = 1000 \* 60 \* 60 \* 24;/.test(qc));
+check("what gets persisted is gated on isPaused",
+  /shouldPersistMutation[\s\S]{0,200}state\.isPaused/.test(qc));
+check("…and on the age cap", /shouldPersistMutation[\s\S]{0,300}OUTBOX_MAX_AGE/.test(qc));
+check("a stale write is REMOVED on restore, not replayed",
+  /dropStaleOutboxMutations[\s\S]{0,600}cache\.remove\(/.test(qc));
+
+check("main.jsx persists paused mutations", /shouldDehydrateMutation: shouldPersistMutation/.test(main));
+// Left to its default on purpose: the read half of the cache must keep behaving
+// exactly as it did before the outbox existed.
+check("main.jsx leaves the query half of dehydration alone", !/shouldDehydrateQuery/.test(main));
+check("main.jsx restores paused mutations in order", /mutations:\s*\{\s*scope:/.test(main));
+check("main.jsx resumes them after the restore", /queryClient\.resumePausedMutations\(\)/.test(main));
+check("…dropping the stale ones first",
+  main.indexOf("dropStaleOutboxMutations()") > 0
+  && main.indexOf("dropStaleOutboxMutations()") < main.indexOf("queryClient.resumePausedMutations()"));
+// Awaiting it would hold isRestoring true, which gates every query in the app
+// behind the outbox draining — a cold launch would sit on skeletons.
+check("the resume is not awaited", !/(await|return)\s+queryClient\.resumePausedMutations/.test(main));
+
+// ── 7e. the library contract the whole thing rests on ────────────────────────
+const KEY = ["grocery", "toggle"];
+const pausedClient = () => {
+  const client = new QueryClient();
+  client.setMutationDefaults(KEY, { mutationFn: () => Promise.resolve() });
+  return client;
+};
+// A paused mutation is created by starting one while offline. That it never calls
+// its own mutationFn is THE fact the outbox is built on: a paused write has not
+// been sent and cannot have been, so replaying it is a first send rather than a
+// second one — which is what makes even the add's non-idempotent insert safe.
+onlineManager.setOnline(false);
+const sent = [];
+const live = pausedClient();
+const m = live.getMutationCache().build(live, {
+  mutationKey: KEY, mutationFn: (v) => { sent.push(v); return Promise.resolve(); },
+});
+m.execute({ id: "row-1", checked: true }).catch(() => {});
+await new Promise((r) => setTimeout(r, 10));
+check("a write made offline pauses", m.state.isPaused === true && m.state.status === "pending");
+check("a paused write has NOT called its request", sent.length === 0, JSON.stringify(sent));
+check("a paused write is stamped with when it was made", m.state.submittedAt > 0);
+
+// A write that was in flight when the process died is pending but NOT paused, so
+// the isPaused gate leaves it out — we cannot know whether it landed, and an
+// insert sent twice is a duplicate row.
+onlineManager.setOnline(true);
+const inflight = live.getMutationCache().build(live, {
+  mutationKey: KEY, mutationFn: () => new Promise(() => {}),
+});
+inflight.execute({ id: "row-9" }).catch(() => {});
+await new Promise((r) => setTimeout(r, 10));
+check("an in-flight write is pending but not paused",
+  inflight.state.status === "pending" && inflight.state.isPaused === false);
+onlineManager.setOnline(false);
+
+const blob = dehydrate(live, { shouldDehydrateMutation: (x) => x.state.isPaused });
+check("only the paused write is dehydrated", blob.mutations.length === 1, JSON.stringify(blob.mutations.length));
+const disk = JSON.parse(JSON.stringify(blob));   // localStorage is text
+const one = disk.mutations[0];
+check("the key survives the round trip", JSON.stringify(one.mutationKey) === JSON.stringify(KEY));
+check("the variables survive it", one.state.variables?.id === "row-1");
+// THE REASON setMutationDefaults EXISTS. If this ever comes back true, the
+// defaults are redundant; while it is false they are the only way to resume.
+check("the request function does NOT survive it", one.mutationFn === undefined);
+check("defaults are found by key", typeof pausedClient().getMutationDefaults(KEY).mutationFn === "function");
+check("a key we know nothing about gets no request",
+  pausedClient().getMutationDefaults(["finance", "import"]).mutationFn === undefined);
+// A mutation from an older build has no key at all; looking its defaults up must
+// return nothing rather than throw, or the restore takes the whole launch down.
+check("a keyless mutation looks up to nothing, and doesn't throw",
+  JSON.stringify(pausedClient().getMutationDefaults(undefined)) === "{}");
+
+// The relaunch: a fresh client, the defaults, and the blob off the disk.
+{
+  const replayed = [];
+  const fresh = new QueryClient();
+  fresh.setMutationDefaults(KEY, { mutationFn: (v) => { replayed.push(v); return Promise.resolve(); } });
+  hydrate(fresh, JSON.parse(JSON.stringify(disk)));
+  const restored = fresh.getMutationCache().getAll();
+  check("the write comes back paused", restored.length === 1 && restored[0].state.isPaused === true);
+  check("…with a request again, from the defaults", typeof restored[0].options.mutationFn === "function");
+  onlineManager.setOnline(true);
+  await fresh.resumePausedMutations();
+  check("resuming sends the request with the variables it was made with",
+    replayed.length === 1 && replayed[0].id === "row-1" && replayed[0].checked === true,
+    JSON.stringify(replayed));
+  onlineManager.setOnline(false);
+}
+
+// ── 7f. the replay is ordered, and the scope is what orders it ───────────────
+// Grocery writes send ABSOLUTE values, so two of them queued against the same row
+// in one dead zone (type milk, tap +, tap +) race on the way out and the last one
+// to answer wins — which can be the oldest thing you meant. That is the reverting
+// lie again, arriving through the outbox itself. The pair below is the proof the
+// hydrate scope earns its place: without it the writes land backwards.
+{
+  const queued = new QueryClient();
+  queued.setMutationDefaults(KEY, { mutationFn: () => Promise.resolve() });
+  for (const v of [{ item: "2x Milk", ms: 25 }, { item: "3x Milk", ms: 0 }]) {
+    queued.getMutationCache()
+      .build(queued, { mutationKey: KEY, mutationFn: () => Promise.resolve() })
+      .execute(v).catch(() => {});
+  }
+  await new Promise((r) => setTimeout(r, 10));
+  const twoDeep = JSON.parse(JSON.stringify(dehydrate(queued, { shouldDehydrateMutation: (x) => x.state.isPaused })));
+  check("both writes are on the disk", twoDeep.mutations.length === 2);
+
+  const drain = async (hydrateOptions) => {
+    const landed = [];
+    const client = new QueryClient();
+    client.setMutationDefaults(KEY, {
+      mutationFn: (v) => new Promise((r) => setTimeout(() => { landed.push(v.item); r(null); }, v.ms)),
+    });
+    hydrate(client, JSON.parse(JSON.stringify(twoDeep)), hydrateOptions);
+    onlineManager.setOnline(true);
+    await client.resumePausedMutations();
+    onlineManager.setOnline(false);
+    return landed.join(",");
+  };
+  const scoped = await drain({ defaultOptions: { mutations: { scope: { id: "br-outbox" } } } });
+  check("a shared scope replays them in the order they were made",
+    scoped === "2x Milk,3x Milk", scoped);
+  // If this ever passes, resumePausedMutations has started serialising on its own
+  // and the scope is redundant — but until then, removing it silently reorders
+  // every queued write against a row.
+  const loose = await drain(undefined);
+  check("without the scope they do land backwards, which is why it is set",
+    loose === "3x Milk,2x Milk",
+    `got "${loose}" — resumePausedMutations may no longer run them in parallel`);
+}
+onlineManager.setOnline(true);
 
 console.log(failed ? `\nGROCERY SMOKE FAILED (${failed})` : "\nGROCERY SMOKE PASS");
 process.exit(failed ? 1 : 0);

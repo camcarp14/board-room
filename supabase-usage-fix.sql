@@ -18,6 +18,17 @@
 -- SCHEMA. Board Room's tables live in `boardroom`, not `public` — the client
 -- sets db.schema (src/lib/supabase.js) and the functions send Accept-Profile /
 -- Content-Profile headers. Everything below is qualified accordingly.
+--
+-- WHY THIS FILE IS STILL AT THE REPOSITORY ROOT and not in supabase/migrations/
+-- with the other 32 tables: SystemsPage.jsx:228 tells the user to "Run
+-- supabase-usage-fix.sql in the Supabase SQL editor", BY THIS FILENAME, when the
+-- usage_summary aggregate is missing. An error message that names a file which no
+-- longer exists is worse than the missing aggregate it is trying to explain. So
+-- this stays put and stays the file you run.
+-- supabase/migrations/0004_usage_log.sql is the schema RECORD for this table —
+-- the create and the index only, copied from below so the migrations directory
+-- covers all 32 tables. The policies, the grants and the aggregate live here and
+-- nowhere else. If you change the table shape, change both.
 -- ═══════════════════════════════════════════════════════════════════════════
 
 create schema if not exists boardroom;

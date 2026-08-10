@@ -1,6 +1,109 @@
 import { supabase } from "../lib/supabase.js";
 import { todayISO } from "../lib/dates.js";
 
+// ─── writes: supabase-js does not reject when a write fails ──────────────────
+// This is the thing to know before touching anything below it.
+// `await supabase.from("t").insert(row)` RESOLVES on a PostgREST rejection, on
+// an RLS denial, and on a 500 — it settles with { data: null, error: {…} } and
+// execution carries straight on. It only rejects if fetch itself blows up.
+//
+// So the `try { await … } catch {}` that used to wrap saveMessage, saveSeatNote,
+// saveSetting and saveFindings was not caution. It was an empty catch around a
+// call that could not throw, sitting exactly where the one meaningful piece of
+// information — `.error` — was being dropped on the floor. Every failed write
+// through those four was invisible: no throw, no log, nothing on screen.
+//
+// saveSetting is the one that cost real things. app_settings is not a bag of
+// preferences: navigation (the tab bar), finance_rules, budgets, grocery_stores,
+// brief_order, notes_order, ponder_items and the dream boards all persist
+// through it, and App's updateSetting paints the new value into React state
+// before the write leaves the browser. A refused upsert therefore left the app
+// showing a budget, a board or a tab layout the database had never accepted,
+// still looking saved, right up until the next reload quietly handed back the
+// old value.
+//
+// write() is the only path those four take out of the browser now. It awaits,
+// reads .error, and throws it. The throw is the point, and it is also why
+// reported() exists directly below.
+async function write(query, what) {
+  const { error } = await query;
+  if (!error) return;
+  // PostgREST errors are plain objects, not Errors — no stack, and `.message` is
+  // often the only readable field. Wrapping means every caller can treat a
+  // failure the same way, and that the message names what didn't save.
+  const e = new Error(error.message || `Couldn't save ${what}.`);
+  e.code = error.code || null;
+  e.details = error.details || null;
+  e.what = what;
+  throw e;
+}
+
+// ─── failed writes, and who gets told ────────────────────────────────────────
+// Returning a failure only helps when somebody looks at it, and the callers of
+// these four writes are exactly the places that structurally cannot. Chat sends
+// its messages fire-and-forget. The grocery staples tally writes from inside a
+// TanStack mutationFn that must not roll back deletes which already landed. The
+// auditor awaits with no catch and would hang its own spinner forever on a
+// throw. So a failure is filed here as well as returned, and the app shell
+// subscribes and shows the count.
+//
+// ONE ENTRY PER KEY. Dragging tabs into a new order fires saveSetting on every
+// drop; twelve failures of the same write are one thing wrong, not twelve, and
+// the newest attempt replaces the older one so a retry sends what you last
+// meant. A later write to the same key that SUCCEEDS clears the entry, which is
+// what lets the chip disappear on its own instead of needing to be dismissed.
+const failures = new Map();
+const failureListeners = new Set();
+const announce = () => { for (const fn of failureListeners) fn(); };
+// Chat messages and auditor batches get a fresh key each time rather than one
+// per table: two messages that both failed are two things lost, and coalescing
+// them would retry only the last one.
+let writeSeq = 0;
+
+export const writeFailures = {
+  subscribe(fn) { failureListeners.add(fn); return () => { failureListeners.delete(fn); }; },
+  list() { return [...failures.values()]; },
+  clear(key) { if (failures.delete(key)) announce(); },
+  clearAll() { if (failures.size) { failures.clear(); announce(); } },
+  /**
+   * Re-run every recorded write. Each retry goes back through reported(), so it
+   * clears its own entry on success and refreshes it on failure — a partial
+   * recovery leaves exactly what is still broken on screen and nothing else.
+   * Never rejects: the retry button behind this has no catch.
+   */
+  async retryAll() {
+    for (const f of [...failures.values()]) await f.retry();
+    return failures.size;
+  },
+};
+
+/**
+ * Run one write and report the outcome without letting it escape.
+ *
+ * Returns { ok: true } or { ok: false, error } and files a failure under `key`
+ * for the shell to show. Callers that genuinely have a catch — and something
+ * better to say than a chip in the top bar — pass { strict: true } and get
+ * write()'s throw straight through instead. That is the opt-in, and the default
+ * has to be the quiet one: a settings save that crashes the tab it was saved
+ * from is not an improvement on one that lied about saving.
+ */
+async function reported(key, label, run, { strict = false } = {}) {
+  if (strict) {
+    await run(); // throws on failure — the caller asked for that
+    writeFailures.clear(key);
+    return { ok: true };
+  }
+  try {
+    await run();
+    writeFailures.clear(key);
+    return { ok: true };
+  } catch (error) {
+    failures.set(key, { key, label, error, at: Date.now(), retry: () => reported(key, label, run) });
+    announce();
+    return { ok: false, error };
+  }
+}
+
 // ─── db — Supabase-backed memory layer (unchanged contract) ──────────────────
 export const db = {
   async uid() {
@@ -16,8 +119,9 @@ export const db = {
     if (error) throw error;
     return (data || []).reverse().map(r => ({ role: r.role, content: r.content, consulted: r.consulted_seats || [], ts: new Date(r.created_at).getTime(), source: r.source }));
   },
-  async saveMessage({ role, content, consulted = [] }) {
-    try { await supabase.from("chat_messages").insert({ role, content, consulted_seats: consulted }); } catch {}
+  async saveMessage({ role, content, consulted = [] }, opts) {
+    return reported(`chat:${++writeSeq}`, "chat message", () =>
+      write(supabase.from("chat_messages").insert({ role, content, consulted_seats: consulted }), "the chat message"), opts);
   },
   async clearChat() {
     // RLS (auth.uid() = user_id) already scopes this to the signed-in
@@ -33,10 +137,17 @@ export const db = {
     (data || []).forEach(r => { out[r.seat_key] = r.notes; });
     return out;
   },
-  async saveSeatNote(seatKey, notes) {
-    const user_id = await db.uid();
-    if (!user_id) return;
-    try { await supabase.from("seat_notes").upsert({ user_id, seat_key: seatKey, notes, updated_at: new Date().toISOString() }, { onConflict: "user_id,seat_key" }); } catch {}
+  async saveSeatNote(seatKey, notes, opts) {
+    // The signed-in check lives INSIDE the runner so a retry re-reads the
+    // session — which is the right answer when the reason a write failed was an
+    // expired token. It also throws rather than returning early: text the user
+    // typed into a seat did not reach the database, and "not signed in" is a
+    // reason for that, not an excuse to call it a no-op.
+    return reported(`seat_note:${seatKey}`, `${seatKey} seat notes`, async () => {
+      const user_id = await db.uid();
+      if (!user_id) throw new Error("Not signed in");
+      await write(supabase.from("seat_notes").upsert({ user_id, seat_key: seatKey, notes, updated_at: new Date().toISOString() }, { onConflict: "user_id,seat_key" }), "the seat notes");
+    }, opts);
   },
   async loadSettings() {
     const { data, error } = await supabase.from("app_settings").select("setting_key,setting_value");
@@ -48,10 +159,15 @@ export const db = {
     (data || []).forEach(r => { out[r.setting_key] = r.setting_value; });
     return out;
   },
-  async saveSetting(key, value) {
-    const user_id = await db.uid();
-    if (!user_id) return;
-    try { await supabase.from("app_settings").upsert({ user_id, setting_key: key, setting_value: value, updated_at: new Date().toISOString() }, { onConflict: "user_id,setting_key" }); } catch {}
+  async saveSetting(key, value, opts) {
+    // Keyed on the setting, so a rapid burst — a tab drag, a slider — collapses
+    // to one pending failure carrying the last value, and the label is the
+    // setting's own name so the chip can say which one it was.
+    return reported(`setting:${key}`, key.replace(/_/g, " "), async () => {
+      const user_id = await db.uid();
+      if (!user_id) throw new Error("Not signed in");
+      await write(supabase.from("app_settings").upsert({ user_id, setting_key: key, setting_value: value, updated_at: new Date().toISOString() }, { onConflict: "user_id,setting_key" }), `the ${key} setting`);
+    }, opts);
   },
   async loadFindings(limit = 40) {
     const { data, error } = await supabase.from("auditor_findings")
@@ -60,9 +176,10 @@ export const db = {
     if (error) return [];
     return (data || []).map(r => ({ ...r, ts: new Date(r.created_at).getTime() }));
   },
-  async saveFindings(rows) {
-    if (!rows || !rows.length) return;
-    try { await supabase.from("auditor_findings").insert(rows.map(r => ({ property: r.property, severity: r.severity, area: r.area || null, finding: r.finding, suggestion: r.suggestion }))); } catch {}
+  async saveFindings(rows, opts) {
+    if (!rows || !rows.length) return { ok: true };
+    return reported(`findings:${++writeSeq}`, "auditor findings", () =>
+      write(supabase.from("auditor_findings").insert(rows.map(r => ({ property: r.property, severity: r.severity, area: r.area || null, finding: r.finding, suggestion: r.suggestion }))), "the auditor findings"), opts);
   },
   async loadNotes() {
     // Try the upgraded schema first; fall back cleanly if the pinned/color

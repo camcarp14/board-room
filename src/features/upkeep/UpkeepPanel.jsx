@@ -11,8 +11,15 @@ import { useUpkeep, useSaveUpkeepItem, useDeleteUpkeepItem, useMarkUpkeepDone } 
 // ─── Upkeep — recurring maintenance with a memory ─────────────────────────────
 // Oil change, AC filter, anything on a cadence. One tap logs a completion and
 // the clock restarts. Due/overdue items also surface on the Brief's Docket.
+// This said `public.` until the schema record landed, and the client reads
+// `boardroom` — so running it built a table the app could never see, leaving
+// this very card on screen with nothing to explain itself. Authoritative shape:
+// supabase/migrations/0009_upkeep_items.sql.
 const UPKEEP_SETUP_SQL = `-- Board Room · Upkeep — one-time setup
-create table if not exists public.upkeep_items (
+create schema if not exists boardroom;
+grant usage on schema boardroom to anon, authenticated;
+
+create table if not exists boardroom.upkeep_items (
   id uuid primary key,
   user_id uuid not null references auth.users(id) on delete cascade,
   name text not null,
@@ -22,10 +29,14 @@ create table if not exists public.upkeep_items (
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
 );
-alter table public.upkeep_items enable row level security;
-drop policy if exists "upkeep own rows" on public.upkeep_items;
-create policy "upkeep own rows" on public.upkeep_items
-  for all using (auth.uid() = user_id) with check (auth.uid() = user_id);`;
+alter table boardroom.upkeep_items enable row level security;
+drop policy if exists "upkeep own rows" on boardroom.upkeep_items;
+create policy "upkeep own rows" on boardroom.upkeep_items
+  for all using (auth.uid() = user_id) with check (auth.uid() = user_id);
+
+-- A custom schema grants nothing by default: without this the table exists,
+-- the policy is right, and every read still comes back empty.
+grant select, insert, update, delete on boardroom.upkeep_items to authenticated;`;
 
 const UPKEEP_INTERVALS = [
   { key: 30, label: "Monthly" }, { key: 91, label: "3 months" },
