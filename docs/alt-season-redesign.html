@@ -1,0 +1,621 @@
+<title>Four Layers Before a Ticker</title>
+<style>
+:root {
+  --bg: #F2F1EB; --surface: #FFFFFF; --surface-2: #F6F5F0;
+  --ink: #1D1C18; --sub: #716E64; --faint: #A3A099;
+  --line: rgba(29,28,24,0.08); --line-strong: rgba(29,28,24,0.16);
+  --accent: #8A6A1E; --accent-hi: #A5822A; --on-accent: #FFFFFF;
+  --green: #278A4C; --red: #C93B32; --amber: #B36514; --blue: #3568D4; --btc: #F7931A;
+  --shadow-card: 0 1px 1px rgba(26,22,14,0.03), 0 6px 24px rgba(26,22,14,0.05);
+  --font-body: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  --font-mono: ui-monospace, "SF Mono", "Cascadia Mono", Menlo, Consolas, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #000000; --surface: #1C1C1E; --surface-2: #2A2A2D;
+    --ink: #F3F2EE; --sub: #A8A69F; --faint: #6E6C66;
+    --line: rgba(243,242,238,0.09); --line-strong: rgba(243,242,238,0.18);
+    --accent: #D9B45C; --accent-hi: #EACC80; --on-accent: #1A1403;
+    --green: #34A56E; --red: #E05548; --amber: #BC7F24; --blue: #4C82E8; --btc: #F7931A;
+    --shadow-card: 0 1px 1px rgba(0,0,0,0.3), 0 6px 24px rgba(0,0,0,0.35);
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #000000; --surface: #1C1C1E; --surface-2: #2A2A2D;
+  --ink: #F3F2EE; --sub: #A8A69F; --faint: #6E6C66;
+  --line: rgba(243,242,238,0.09); --line-strong: rgba(243,242,238,0.18);
+  --accent: #D9B45C; --accent-hi: #EACC80; --on-accent: #1A1403;
+  --green: #34A56E; --red: #E05548; --amber: #BC7F24; --blue: #4C82E8; --btc: #F7931A;
+  --shadow-card: 0 1px 1px rgba(0,0,0,0.3), 0 6px 24px rgba(0,0,0,0.35);
+}
+
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--ink); font-family: var(--font-body); font-size: 15px; line-height: 1.5; -webkit-font-smoothing: antialiased; }
+.wrap { max-width: 1040px; margin: 0 auto; padding: 48px 20px 96px; display: flex; flex-direction: column; gap: 44px; }
+
+.t-ltitle { font-size: 32px; line-height: 1.15; font-weight: 700; letter-spacing: -0.022em; margin: 0; text-wrap: balance; }
+.t-title2 { font-size: 21px; line-height: 1.25; font-weight: 700; letter-spacing: -0.015em; margin: 0; text-wrap: balance; }
+.t-head { font-size: 17px; line-height: 1.3; font-weight: 600; letter-spacing: -0.01em; margin: 0; }
+.t-call { font-size: 13.5px; line-height: 1.45; color: var(--sub); }
+.t-foot { font-size: 12.5px; line-height: 1.4; color: var(--sub); }
+.t-label { font-size: 12px; line-height: 1; font-weight: 600; letter-spacing: 0.05em; text-transform: uppercase; color: var(--sub); margin: 0; }
+.num { font-family: var(--font-mono); font-variant-numeric: tabular-nums; font-weight: 500; }
+p { margin: 0; }
+strong { font-weight: 600; color: var(--ink); }
+.up { color: var(--green); } .down { color: var(--red); } .warn { color: var(--amber); }
+ul, ol { margin: 0; padding-left: 20px; display: flex; flex-direction: column; gap: 8px; }
+li::marker { color: var(--faint); }
+code { font-family: var(--font-mono); font-size: 0.87em; background: var(--surface-2); padding: 1px 5px; border-radius: 5px; }
+hr { border: none; border-top: 1px solid var(--line); margin: 0; }
+
+header { display: flex; flex-direction: column; gap: 14px; }
+.eyebrow { display: flex; align-items: center; gap: 8px; }
+.eyebrow .dot { width: 6px; height: 6px; border-radius: 50%; background: var(--accent); flex: none; }
+.lede { font-size: 17px; line-height: 1.5; color: var(--sub); max-width: 64ch; }
+.lede em { color: var(--ink); font-style: normal; font-weight: 600; }
+
+/* ── layer sections: mockup beside rationale ──────────────────────────────── */
+.layer { display: grid; grid-template-columns: 390px 1fr; gap: 32px; align-items: start; }
+@media (max-width: 900px) { .layer { grid-template-columns: 1fr; gap: 20px; } }
+.rationale { display: flex; flex-direction: column; gap: 14px; max-width: 58ch; }
+.rationale h3 { margin: 0; }
+
+/* ── the phone frame — the app's own ground, so mockups read as the app ───── */
+.phone { background: var(--bg); border-radius: 20px; padding: 14px; display: flex; flex-direction: column; gap: 10px; box-shadow: 0 0 0 1px var(--line-strong); }
+.phone.tight { gap: 8px; }
+.appcard { background: var(--surface); border-radius: 16px; padding: 16px; box-shadow: var(--shadow-card); display: flex; flex-direction: column; gap: 12px; }
+.appcard.pad-sm { padding: 13px 14px; }
+
+/* ── L1 · cycle dial ──────────────────────────────────────────────────────── */
+.dial-track { position: relative; height: 34px; border-radius: 9px; overflow: hidden; display: flex; gap: 2px; }
+.dial-track i { flex: 1; background: var(--surface-2); display: flex; align-items: center; justify-content: center; font-size: 10.5px; font-weight: 600; letter-spacing: 0.04em; text-transform: uppercase; color: var(--faint); font-style: normal; }
+.dial-track i.on { background: color-mix(in srgb, var(--accent) 16%, var(--surface-2)); color: var(--accent); }
+.dial-mark { position: relative; height: 14px; }
+.dial-mark span { position: absolute; top: 0; transform: translateX(-50%); display: flex; flex-direction: column; align-items: center; gap: 3px; }
+.dial-mark b { width: 2px; height: 7px; background: var(--accent); border-radius: 1px; display: block; }
+.dial-mark em { font-style: normal; font-size: 10.5px; color: var(--accent); font-weight: 600; white-space: nowrap; font-family: var(--font-mono); }
+.drift { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--sub); }
+.drift .arrow { color: var(--green); font-weight: 700; }
+
+/* ── L2 · capital ladder ──────────────────────────────────────────────────── */
+.rung { display: grid; grid-template-columns: 62px 1fr 52px; align-items: center; gap: 10px; }
+.rung .name { font-size: 12.5px; font-weight: 600; color: var(--sub); }
+.rung.lit .name { color: var(--ink); }
+.rung .track { height: 20px; background: var(--surface-2); border-radius: 5px; position: relative; overflow: hidden; }
+.rung .fill { position: absolute; top: 0; bottom: 0; border-radius: 5px; }
+.rung .fill.pos { background: color-mix(in srgb, var(--green) 55%, transparent); left: 50%; }
+.rung .fill.neg { background: color-mix(in srgb, var(--red) 45%, transparent); right: 50%; }
+.rung.lit .fill.pos { background: var(--accent); }
+.rung .zero { position: absolute; left: 50%; top: 0; bottom: 0; width: 1px; background: var(--line-strong); }
+.rung .val { font-family: var(--font-mono); font-variant-numeric: tabular-nums; font-size: 12.5px; text-align: right; font-weight: 500; }
+.ladder-note { display: flex; align-items: center; gap: 7px; font-size: 12px; color: var(--sub); }
+.ladder-note .dot { width: 6px; height: 6px; border-radius: 50%; background: var(--accent); flex: none; }
+.twoup { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+@media (max-width: 560px) { .twoup { grid-template-columns: 1fr; } }
+.mini-cap { font-size: 11px; font-weight: 600; letter-spacing: 0.04em; text-transform: uppercase; color: var(--faint); }
+
+/* ── L3 · narrative tiles ─────────────────────────────────────────────────── */
+.tiles { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.tile { background: var(--surface-2); border-radius: 11px; padding: 11px 12px; display: flex; flex-direction: column; gap: 5px; }
+.tile.lead { background: color-mix(in srgb, var(--accent) 12%, var(--surface-2)); }
+.tile .nm { font-size: 12.5px; font-weight: 600; }
+.tile .pc { font-family: var(--font-mono); font-variant-numeric: tabular-nums; font-size: 16px; font-weight: 600; }
+.tile .br { font-size: 10.5px; color: var(--sub); }
+.tile svg { display: block; width: 100%; height: 20px; }
+
+/* ── L4 · coin rows ───────────────────────────────────────────────────────── */
+.crow { display: flex; align-items: center; gap: 11px; padding: 10px 0; border-bottom: 1px solid var(--line); }
+.crow:last-child { border-bottom: none; }
+.crow .sym { font-size: 13.5px; font-weight: 600; width: 46px; flex: none; }
+.crow .mid { flex: 1; display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.crow .read { font-size: 11.5px; color: var(--sub); }
+.crow .rt { display: flex; flex-direction: column; align-items: flex-end; gap: 2px; flex: none; }
+.crow .own { font-family: var(--font-mono); font-variant-numeric: tabular-nums; font-size: 13.5px; font-weight: 600; }
+.exc { display: inline-flex; align-self: flex-start; align-items: center; gap: 4px; padding: 2px 7px; border-radius: 999px; font-size: 10.5px; font-weight: 600; font-family: var(--font-mono); }
+.exc.good { background: color-mix(in srgb, var(--green) 14%, transparent); color: var(--green); }
+.exc.bad { background: color-mix(in srgb, var(--amber) 16%, transparent); color: var(--amber); }
+.exc.cool { background: color-mix(in srgb, var(--blue) 13%, transparent); color: var(--blue); }
+
+/* ── L5 · book rows ───────────────────────────────────────────────────────── */
+.brow { display: flex; align-items: center; gap: 11px; padding: 11px 0; border-bottom: 1px solid var(--line); }
+.brow:last-child { border-bottom: none; }
+.brow .sym { font-size: 13.5px; font-weight: 600; width: 44px; flex: none; }
+.brow .lad { flex: 1; display: flex; flex-direction: column; gap: 5px; min-width: 0; }
+.brow .rungs { display: flex; gap: 3px; height: 6px; }
+.brow .rungs u { flex: 1; border-radius: 2px; background: var(--surface-2); }
+.brow .rungs u.done { background: var(--accent); }
+.brow .rungs u.next { background: color-mix(in srgb, var(--accent) 34%, transparent); }
+.brow .next-lbl { font-size: 11px; color: var(--sub); }
+.brow .mult { font-family: var(--font-mono); font-variant-numeric: tabular-nums; font-size: 15px; font-weight: 600; flex: none; }
+
+/* ── chips + callouts ─────────────────────────────────────────────────────── */
+.chip { display: inline-flex; align-items: center; gap: 5px; padding: 3px 9px; border-radius: 999px; font-size: 11.5px; font-weight: 600; background: var(--surface-2); color: var(--sub); white-space: nowrap; }
+.chip.free { background: color-mix(in srgb, var(--green) 13%, transparent); color: var(--green); }
+.chip.cheap { background: color-mix(in srgb, var(--blue) 12%, transparent); color: var(--blue); }
+.chip.work { background: color-mix(in srgb, var(--amber) 15%, transparent); color: var(--amber); }
+.callout { background: var(--surface); border-radius: 16px; padding: 22px; box-shadow: var(--shadow-card); display: flex; flex-direction: column; gap: 11px; border-left: 3px solid var(--accent); }
+.card { background: var(--surface); border-radius: 16px; padding: 22px; box-shadow: var(--shadow-card); display: flex; flex-direction: column; gap: 14px; }
+.card > p, .card > ul { max-width: 64ch; }
+section { display: flex; flex-direction: column; gap: 18px; }
+.hgroup { display: flex; align-items: baseline; gap: 11px; flex-wrap: wrap; }
+.scroll { overflow-x: auto; margin: 0 -22px; padding: 0 22px; }
+table { border-collapse: collapse; width: 100%; font-size: 13.5px; min-width: 460px; }
+th { text-align: left; font-size: 11.5px; font-weight: 600; letter-spacing: 0.04em; text-transform: uppercase; color: var(--sub); padding: 0 12px 8px 0; border-bottom: 1px solid var(--line-strong); white-space: nowrap; }
+td { padding: 10px 12px 10px 0; border-bottom: 1px solid var(--line); vertical-align: top; }
+tr:last-child td { border-bottom: none; }
+th:last-child, td:last-child { padding-right: 0; }
+td.n { font-family: var(--font-mono); font-variant-numeric: tabular-nums; white-space: nowrap; }
+footer { color: var(--faint); font-size: 12.5px; line-height: 1.5; max-width: 64ch; }
+</style>
+
+<div class="wrap">
+
+<header>
+  <div class="eyebrow"><span class="dot"></span><span class="t-label">Board Room · Markets · Alt Season · Design</span></div>
+  <h1 class="t-ltitle">Four layers before a ticker</h1>
+  <p class="lede">
+    The tab has five surfaces and four of them are lists of coins. Every good
+    idea already in there — the phase sentences, the entry sections, the stage
+    clauses — is <em>per-coin</em> interpretation. Nothing sits above the
+    individual name. So the fix isn't a better list. It's three interpretive
+    layers stacked on top, each narrowing the next, so that
+    <em>a ticker never appears until it has already been explained</em>.
+  </p>
+</header>
+
+<!-- ═══ the two failures, named ════════════════════════════════════════════ -->
+<section>
+  <h2 class="t-label">Your two complaints are one design problem</h2>
+  <div class="twoup">
+    <div class="card">
+      <h3 class="t-head">"So many coins to keep track of"</h3>
+      <p class="t-call">
+        There is no aggregation layer. Every surface is <span class="num">N=1</span>
+        rows — Movers alone renders six windows × twelve coins = <strong>72 coin
+        slots</strong> with no relationship between any of them. Aggregation is the
+        entire job of layers 1–3 below.
+      </p>
+    </div>
+    <div class="card">
+      <h3 class="t-head">"So many random reasons a coin moves"</h3>
+      <p class="t-call">
+        Nothing distinguishes a coin up 15% because <em>its whole sector is up
+        14%</em> — rotation, which persists and is tradeable — from one up 15% on a
+        listing, an unlock or a tweet, which does not. On screen today those two
+        rows are identical. One number fixes it, and it's in layer 4.
+      </p>
+    </div>
+  </div>
+</section>
+
+<hr>
+
+<!-- ═══ LAYER 1 ════════════════════════════════════════════════════════════ -->
+<section>
+  <div class="hgroup">
+    <h2 class="t-title2">Layer 1 — Where are we?</h2>
+    <span class="chip free">≈free · data already published</span>
+  </div>
+
+  <div class="layer">
+    <div class="phone">
+      <div class="appcard">
+        <div style="display:flex;justify-content:space-between;align-items:baseline">
+          <span class="t-label">The cycle</span>
+          <span class="num" style="font-size:12px;color:var(--faint)">31/100</span>
+        </div>
+        <div class="dial-track">
+          <i class="on">Accumulate</i><i>Rotate</i><i>Distribute</i>
+        </div>
+        <div class="dial-mark"><span style="left:26%"><b></b><em>you are here</em></span></div>
+        <div style="display:flex;flex-direction:column;gap:5px">
+          <span style="font-size:15px;font-weight:600">Nothing is bid. Buy the tranche, ignore the board.</span>
+          <div class="drift">
+            <span class="arrow">↗</span>
+            <span>Up 6 pts in 30 days — first drift toward Rotate since March</span>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="rationale">
+      <h3 class="t-head">A score is not a read. A position on a known arc is.</h3>
+      <p class="t-call">
+        <code>39/100 · Bitcoin only</code> requires the reader to hold a five-rung
+        ladder in their head to mean anything. Nobody does that at a glance. The
+        same number placed on a three-phase arc is instantly legible, because the
+        arc <em>is</em> the story you already know: accumulate, rotate, distribute.
+      </p>
+      <p class="t-call">
+        The load-bearing addition is the <strong>drift line</strong>. Where we are
+        matters far less than which way we're moving — a score of 31 rising is a
+        completely different instruction than 31 falling, and today the tab cannot
+        tell you which one you're looking at. You already store
+        <code>domHistory</code> daily; storing the season score the same way makes
+        this a subtraction.
+      </p>
+      <p class="t-call">
+        One sentence, one instruction, sized as the biggest text on the card. The
+        <code>PHASE_READ</code> strings you already wrote are exactly right — they're
+        just currently the smallest thing on screen instead of the largest.
+      </p>
+    </div>
+  </div>
+</section>
+
+<hr>
+
+<!-- ═══ LAYER 2 ════════════════════════════════════════════════════════════ -->
+<section>
+  <div class="hgroup">
+    <h2 class="t-title2">Layer 2 — What's rotating?</h2>
+    <span class="chip free">≈free · <code>tierOf()</code> already exists</span>
+  </div>
+
+  <div class="layer">
+    <div class="phone">
+      <div class="appcard">
+        <span class="t-label">Capital ladder · 30d</span>
+        <div style="display:flex;flex-direction:column;gap:7px">
+          <div class="rung lit"><span class="name">Bitcoin</span><span class="track"><span class="zero"></span><span class="fill pos" style="width:11%"></span></span><span class="val up">+4.2%</span></div>
+          <div class="rung"><span class="name">Ethereum</span><span class="track"><span class="zero"></span><span class="fill pos" style="width:5%"></span></span><span class="val up">+1.8%</span></div>
+          <div class="rung"><span class="name">Large</span><span class="track"><span class="zero"></span><span class="fill neg" style="width:8%"></span></span><span class="val down">−3.1%</span></div>
+          <div class="rung"><span class="name">Mid</span><span class="track"><span class="zero"></span><span class="fill neg" style="width:21%"></span></span><span class="val down">−8.4%</span></div>
+          <div class="rung"><span class="name">Small</span><span class="track"><span class="zero"></span><span class="fill neg" style="width:36%"></span></span><span class="val down">−14.2%</span></div>
+          <div class="rung"><span class="name">Micro</span><span class="track"><span class="zero"></span><span class="fill neg" style="width:48%"></span></span><span class="val down">−21.6%</span></div>
+        </div>
+        <div class="ladder-note"><span class="dot"></span><span>Flow stops at Bitcoin. Risk is being sold, not rotated.</span></div>
+      </div>
+
+      <div class="appcard pad-sm">
+        <span class="mini-cap">The same card, mid-rotation</span>
+        <div style="display:flex;flex-direction:column;gap:7px">
+          <div class="rung"><span class="name">Bitcoin</span><span class="track"><span class="zero"></span><span class="fill pos" style="width:18%"></span></span><span class="val up">+18%</span></div>
+          <div class="rung"><span class="name">Ethereum</span><span class="track"><span class="zero"></span><span class="fill pos" style="width:31%"></span></span><span class="val up">+31%</span></div>
+          <div class="rung lit"><span class="name">Large</span><span class="track"><span class="zero"></span><span class="fill pos" style="width:44%"></span></span><span class="val up">+44%</span></div>
+          <div class="rung"><span class="name">Mid</span><span class="track"><span class="zero"></span><span class="fill pos" style="width:38%"></span></span><span class="val up">+38%</span></div>
+          <div class="rung"><span class="name">Small</span><span class="track"><span class="zero"></span><span class="fill pos" style="width:12%"></span></span><span class="val up">+12%</span></div>
+          <div class="rung"><span class="name">Micro</span><span class="track"><span class="zero"></span><span class="fill neg" style="width:4%"></span></span><span class="val down">−2%</span></div>
+        </div>
+        <div class="ladder-note"><span class="dot"></span><span>Flow has reached large caps. Mid is next — that's the setup.</span></div>
+      </div>
+    </div>
+
+    <div class="rationale">
+      <h3 class="t-head">Rotation is a picture, not a percentage</h3>
+      <p class="t-call">
+        Alt season is capital walking down the risk curve in a fixed order: Bitcoin
+        → Ethereum → large → mid → small → micro. Drawn as six bars, "where is the
+        money" becomes a shape you read in under a second, and the shape moves down
+        the card over weeks.
+      </p>
+      <p class="t-call">
+        <strong>This is the "get ahead of it" surface.</strong> When the lit rung is
+        Large, the next rung is Mid — not as a prediction but as the mechanical
+        order flow takes. That is a week or two of warning, and it is warning that
+        no per-coin screener can give you, because it is a fact about the market's
+        structure rather than about any chart.
+      </p>
+      <p class="t-call">
+        Nearly free to build: <code>tierOf()</code> already buckets every row into
+        <code>major/mid/small/micro</code> at screen time. Take the <em>median</em>
+        30d return per bucket — median, not mean, so one 400% micro-cap can't light
+        a rung that isn't lit — and split BTC and ETH out as their own rungs.
+      </p>
+      <div class="callout" style="padding:16px">
+        <p class="t-call" style="color:var(--ink)">
+          Median per bucket is also the honest alt-season indicator. It's what the
+          public "Altcoin Season Index" is trying to approximate with a single
+          number, except you'd have the whole curve instead of a scalar.
+        </p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<hr>
+
+<!-- ═══ LAYER 3 ════════════════════════════════════════════════════════════ -->
+<section>
+  <div class="hgroup">
+    <h2 class="t-title2">Layer 3 — Which narrative?</h2>
+    <span class="chip cheap">one keyless call</span>
+  </div>
+
+  <div class="layer">
+    <div class="phone">
+      <div class="appcard">
+        <div style="display:flex;justify-content:space-between;align-items:baseline">
+          <span class="t-label">Narratives · 30d</span>
+          <span style="font-size:11.5px;color:var(--faint)">12 tracked</span>
+        </div>
+        <div class="tiles">
+          <div class="tile lead">
+            <span class="nm">Prediction mkts</span>
+            <span class="pc up">+22.4%</span>
+            <svg viewBox="0 0 60 20" preserveAspectRatio="none" aria-hidden="true"><polyline points="0,17 10,16 20,13 30,14 40,8 50,5 60,2" fill="none" stroke="currentColor" stroke-width="1.5" style="color:var(--green)"/></svg>
+            <span class="br">9 of 11 names lifting</span>
+          </div>
+          <div class="tile lead">
+            <span class="nm">RWA</span>
+            <span class="pc up">+9.1%</span>
+            <svg viewBox="0 0 60 20" preserveAspectRatio="none" aria-hidden="true"><polyline points="0,15 10,14 20,15 30,11 40,10 50,7 60,6" fill="none" stroke="currentColor" stroke-width="1.5" style="color:var(--green)"/></svg>
+            <span class="br">7 of 14 names lifting</span>
+          </div>
+          <div class="tile">
+            <span class="nm">AI agents</span>
+            <span class="pc down">−6.8%</span>
+            <svg viewBox="0 0 60 20" preserveAspectRatio="none" aria-hidden="true"><polyline points="0,6 10,8 20,7 30,11 40,13 50,12 60,15" fill="none" stroke="currentColor" stroke-width="1.5" style="color:var(--red)"/></svg>
+            <span class="br">2 of 19 names lifting</span>
+          </div>
+          <div class="tile">
+            <span class="nm">Restaking</span>
+            <span class="pc down">−11.3%</span>
+            <svg viewBox="0 0 60 20" preserveAspectRatio="none" aria-hidden="true"><polyline points="0,4 10,6 20,9 30,10 40,14 50,15 60,17" fill="none" stroke="currentColor" stroke-width="1.5" style="color:var(--red)"/></svg>
+            <span class="br">1 of 8 names lifting</span>
+          </div>
+          <div class="tile">
+            <span class="nm">Gaming</span>
+            <span class="pc down">−18.7%</span>
+            <svg viewBox="0 0 60 20" preserveAspectRatio="none" aria-hidden="true"><polyline points="0,3 10,5 20,8 30,9 40,13 50,16 60,18" fill="none" stroke="currentColor" stroke-width="1.5" style="color:var(--red)"/></svg>
+            <span class="br">0 of 22 names lifting</span>
+          </div>
+          <div class="tile">
+            <span class="nm">Memes</span>
+            <span class="pc down">−24.2%</span>
+            <svg viewBox="0 0 60 20" preserveAspectRatio="none" aria-hidden="true"><polyline points="0,2 10,4 20,7 30,11 40,12 50,17 60,19" fill="none" stroke="currentColor" stroke-width="1.5" style="color:var(--red)"/></svg>
+            <span class="br">1 of 26 names lifting</span>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="rationale">
+      <h3 class="t-head">This is the actual answer to "too many coins"</h3>
+      <p class="t-call">
+        There are twelve or so live narratives at any moment, not fourteen hundred
+        coins. Two or three of them produce nearly all the outsized winners in a
+        cycle, and the names inside one move <em>as a cohort</em>, together, before
+        any individual chart looks interesting. Ranking cohorts is therefore both a
+        smaller problem and an earlier signal.
+      </p>
+      <p class="t-call">
+        The second line on each tile is the one that matters:
+        <strong>breadth within the cohort</strong>. "9 of 11 names lifting" is a
+        real bid. "1 of 26" with a positive headline number is one coin dragging an
+        average, which is the most common way a sector screen lies to you. Nothing
+        on the tab currently distinguishes those.
+      </p>
+      <p class="t-call">
+        <code>/coins/categories</code> — one keyless call, same tier as the three
+        the cron already makes. Tapping a tile filters everything below it to that
+        cohort, which is the only route to a ticker on this screen.
+      </p>
+    </div>
+  </div>
+</section>
+
+<hr>
+
+<!-- ═══ LAYER 4 ════════════════════════════════════════════════════════════ -->
+<section>
+  <div class="hgroup">
+    <h2 class="t-title2">Layer 4 — Which coin, and is the move real?</h2>
+    <span class="chip cheap">one subtraction</span>
+  </div>
+
+  <div class="layer">
+    <div class="phone">
+      <div class="appcard">
+        <div style="display:flex;justify-content:space-between;align-items:baseline">
+          <span class="t-label">Prediction mkts</span>
+          <span style="font-size:11.5px;color:var(--accent);font-weight:600">cohort +22.4%</span>
+        </div>
+        <div>
+          <div class="crow">
+            <span class="sym">POLY</span>
+            <span class="mid">
+              <span class="exc good">+8.1 vs cohort</span>
+              <span class="read">Leading its group — this is rotation</span>
+            </span>
+            <span class="rt"><span class="own up">+30.5%</span></span>
+          </div>
+          <div class="crow">
+            <span class="sym">KLSI</span>
+            <span class="mid">
+              <span class="exc cool">−17.9 vs cohort</span>
+              <span class="read">Lagging a bidding group — often the better entry</span>
+            </span>
+            <span class="rt"><span class="own up">+4.5%</span></span>
+          </div>
+          <div class="crow">
+            <span class="sym">AZUR</span>
+            <span class="mid">
+              <span class="exc bad">+41.6 vs cohort</span>
+              <span class="read">Alone — news, listing or unlock. Won't persist</span>
+            </span>
+            <span class="rt"><span class="own up">+64.0%</span></span>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="rationale">
+      <h3 class="t-head">One number separates rotation from noise</h3>
+      <p class="t-call">
+        <strong>Cohort excess</strong> — the coin's 7d return minus its narrative's
+        7d return. It is a subtraction against a number layer 3 already computed,
+        and it turns the unanswerable question ("why is this up?") into three
+        readable cases:
+      </p>
+      <ul>
+        <li><strong>Leading a bidding cohort</strong> — rotation. Persists, and it's what you want to own.</li>
+        <li><strong>Lagging a bidding cohort</strong> — the laggard trade. Frequently the better entry, and completely invisible on the tab today.</li>
+        <li><strong>Way ahead of a flat cohort</strong> — idiosyncratic. A listing, an unlock, a tweet. Loud, untradeable, and exactly the row that currently looks most attractive.</li>
+      </ul>
+      <p class="t-call">
+        That third case is the direct fix for "random reasons a coin goes up or
+        down." You cannot enumerate the reasons — but you can measure whether the
+        reason was <em>shared</em>, and shared is the only kind that lasts long
+        enough to trade.
+      </p>
+      <p class="t-call">
+        Note what the row no longer carries: no <span class="num">0–100</span> score.
+        A composite of eight weighted parts is not interpretable at a glance and
+        never was. The score keeps doing its real job — ranking and gating — inside
+        the engine, and the sheet still shows the full <code>parts[]</code> breakdown
+        for anyone who taps in.
+      </p>
+    </div>
+  </div>
+</section>
+
+<hr>
+
+<!-- ═══ LAYER 5 ════════════════════════════════════════════════════════════ -->
+<section>
+  <div class="hgroup">
+    <h2 class="t-title2">Layer 5 — What do I do about it?</h2>
+    <span class="chip work">new table</span>
+  </div>
+
+  <div class="layer">
+    <div class="phone">
+      <div class="appcard">
+        <div style="display:flex;justify-content:space-between;align-items:baseline">
+          <span class="t-label">The book</span>
+          <span class="num" style="font-size:12px;color:var(--sub)">$512 → $1,847</span>
+        </div>
+        <div>
+          <div class="brow">
+            <span class="sym">SOL</span>
+            <span class="lad">
+              <span class="rungs"><u class="done"></u><u class="done"></u><u class="next"></u><u></u><u></u></span>
+              <span class="next-lbl">Next: sell 25% at <span class="num">8×</span> — <span class="num">$604</span>, 31% away</span>
+            </span>
+            <span class="mult up">6.1×</span>
+          </div>
+          <div class="brow">
+            <span class="sym">ETH</span>
+            <span class="lad">
+              <span class="rungs"><u class="done"></u><u class="next"></u><u></u><u></u><u></u></span>
+              <span class="next-lbl">Next: sell 20% at <span class="num">5×</span> — <span class="num">$9,380</span>, 42% away</span>
+            </span>
+            <span class="mult up">3.5×</span>
+          </div>
+          <div class="brow">
+            <span class="sym">TAO</span>
+            <span class="lad">
+              <span class="rungs"><u></u><u></u><u></u><u></u><u></u></span>
+              <span class="next-lbl">Next: sell 20% at <span class="num">3×</span> — <span class="num">$741</span>, 2.4× away</span>
+            </span>
+            <span class="mult">1.2×</span>
+          </div>
+        </div>
+        <div class="ladder-note"><span class="dot"></span><span>Regime override armed — fires at score 70 + greed 80.</span></div>
+      </div>
+    </div>
+
+    <div class="rationale">
+      <h3 class="t-head">The strategy's decisive half currently isn't in the app at all</h3>
+      <p class="t-call">
+        <code>alt_flags</code> grades the screener's ideas beautifully. Nothing
+        anywhere tracks <em>yours</em>. Given that the exit ladder is the part that
+        decides whether this ends at $1,200 or $5,000, it's strange that it's the
+        one piece of the plan with no pixels.
+      </p>
+      <p class="t-call">
+        Five pips per position, filled as rungs print. The row states the next
+        action in full — <em>sell 25% at 8×, which is $604, 31% away</em> — because
+        a rung you have to compute is a rung you'll skip in the exact moment you
+        most need it, which is the middle of a vertical green candle.
+      </p>
+      <p class="t-call">
+        The footer line is the regime override from the strategy note, armed and
+        visible. All three of its inputs are fields the engine already publishes:
+        <code>season.score</code>, <code>fearGreed</code>, <code>domTrend</code>.
+      </p>
+    </div>
+  </div>
+</section>
+
+<hr>
+
+<!-- ═══ assembly ═══════════════════════════════════════════════════════════ -->
+<section>
+  <h2 class="t-title2">The tab, assembled</h2>
+  <p class="t-call" style="max-width:64ch">
+    Layers 1 and 2 fit above the fold on a phone with zero taps — that's the whole
+    design target. Everything below is progressive disclosure, and the two heaviest
+    coin surfaces get demoted rather than deleted.
+  </p>
+
+  <div class="card">
+    <div class="scroll">
+      <table>
+        <thead><tr><th>Position</th><th>Surface</th><th>Answers</th><th>State</th></tr></thead>
+        <tbody>
+          <tr><td class="n">1</td><td><strong>Cycle dial</strong></td><td>Where are we, and which way are we moving</td><td>Always open</td></tr>
+          <tr><td class="n">2</td><td><strong>Capital ladder</strong></td><td>Which rung of the risk curve is being bid</td><td>Always open</td></tr>
+          <tr><td class="n">3</td><td><strong>The book</strong></td><td>What I hold and what my next action is</td><td>Open when non-empty</td></tr>
+          <tr><td class="n">4</td><td><strong>Narratives</strong></td><td>Which theme is bidding — the route to any ticker</td><td>Always open</td></tr>
+          <tr><td class="n">5</td><td><strong>Flags</strong></td><td>Which specific setups, with cohort excess added</td><td>Collapsed unless <code>entry</code> rows exist</td></tr>
+          <tr><td class="n">6</td><td>Movers</td><td>—</td><td><strong>Folded into the narrative drill-down</strong></td></tr>
+          <tr><td class="n">7</td><td>Board · Record</td><td>Evidence and receipts</td><td>Collapsed, bottom</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p class="t-foot">
+      Movers is the biggest single subtraction: six windows × twelve coins is 72
+      slots that generate the exact overload you described, and every one of them
+      is better read as "which cohort is moving" one layer up.
+    </p>
+  </div>
+
+  <div class="callout">
+    <h3 class="t-head">The rule that keeps it honest</h3>
+    <p class="t-call">
+      <strong>No ticker appears on this tab without the layer above it on screen.</strong>
+      A coin row is always inside a cohort context, and a cohort is always inside a
+      regime context. That single constraint is what stops it drifting back into a
+      list — and it's a rule you can actually enforce in review, unlike "make it
+      less overwhelming."
+    </p>
+  </div>
+</section>
+
+<!-- ═══ build order ════════════════════════════════════════════════════════ -->
+<section>
+  <h2 class="t-label">What each layer costs</h2>
+  <div class="card">
+    <div class="scroll">
+      <table>
+        <thead><tr><th>Layer</th><th>New data</th><th>Where it goes</th><th>Cost</th></tr></thead>
+        <tbody>
+          <tr><td><strong>1 · Cycle dial</strong></td><td>Season score history</td><td>Store alongside <code>domHistory</code> in the state payload — same daily merge</td><td><span class="chip free">S</span></td></tr>
+          <tr><td><strong>2 · Capital ladder</strong></td><td>None</td><td>Median 30d per <code>tierOf()</code> bucket in <code>runPass</code>, published on the payload</td><td><span class="chip free">S</span></td></tr>
+          <tr><td><strong>3 · Narratives</strong></td><td><code>/coins/categories</code></td><td>Fourth keyless fetch in the existing <code>Promise.allSettled</code></td><td><span class="chip cheap">M</span></td></tr>
+          <tr><td><strong>4 · Cohort excess</strong></td><td>Coin → category map</td><td>Subtraction at screen time once layer 3 exists</td><td><span class="chip cheap">M</span></td></tr>
+          <tr><td><strong>5 · The book</strong></td><td>New table</td><td><code>alt_positions</code> — <code>alt_flags</code>'s shape plus a rung column</td><td><span class="chip work">L</span></td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p class="t-foot">
+      Layers 1 and 2 are the ones that change how the tab <em>reads</em>, and
+      neither needs a new data source. They're the right thing to build first, and
+      they're both an afternoon.
+    </p>
+  </div>
+</section>
+
+<hr>
+
+<footer>
+  Mockups are rendered in SESSION — Porcelain and Graphite tokens, type scale and
+  card treatment per <code>DESIGN.md</code> §2–3, so they render here the way they
+  would render in the app. Numbers are illustrative of the 15 Aug 2026 tape.
+  Component references are to <code>src/ui/kit.jsx</code> and
+  <code>src/pages/markets/AltSeasonPanel.jsx</code>.
+</footer>
+
+</div>
