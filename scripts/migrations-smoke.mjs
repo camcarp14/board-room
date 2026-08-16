@@ -146,10 +146,11 @@ check("every table the code reaches has a migration", missing.length === 0, miss
 const orphans = [...declared.keys()].filter((t) => !wanted.includes(t)).sort();
 check("no migration describes a table nothing reads", orphans.length === 0, orphans.join(", "));
 
-// 33 is not a magic number, it is the count that was true when this was last
+// 34 is not a magic number, it is the count that was true when this was last
 // touched. If it moves, the number here should move WITH a file, not instead of
-// one. It went 32 → 33 when crash telemetry added client_errors.
-check("the inventory is the 33 tables this app uses", wanted.length === 33, String(wanted.length));
+// one. It went 32 → 33 when crash telemetry added client_errors, and 33 → 34
+// when the Alt Season tab grew a book of its own (alt_positions).
+check("the inventory is the 34 tables this app uses", wanted.length === 34, String(wanted.length));
 
 // One file per table, named after it — a file that creates two tables hides one
 // of them from anyone reading the directory listing.

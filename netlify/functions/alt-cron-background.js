@@ -48,6 +48,15 @@ const MARKETS_URL =
 const MIN_UNIVERSE = 200;
 const GLOBAL_URL = "https://api.coingecko.com/api/v3/global";
 const FNG_URL = "https://api.alternative.me/fng/?limit=1";
+// Every category CoinGecko knows, with ids and caps. Read for TWO reasons: it
+// is how the authored NARRATIVES list below is validated against reality (a
+// slug that has drifted resolves to nothing and says so, instead of silently
+// contributing an empty cohort forever), and it supplies the cap used to rank
+// them. The per-cohort RETURNS do not come from here — see cohortRead.
+const CATEGORIES_URL = "https://api.coingecko.com/api/v3/coins/categories";
+const categoryMarketsUrl = (id) =>
+  "https://api.coingecko.com/api/v3/coins/markets?vs_currency=usd&order=market_cap_desc&per_page=100&page=1&sparkline=false" +
+  `&price_change_percentage=7d%2C30d&category=${encodeURIComponent(id)}`;
 
 const FETCH_TIMEOUT_MS = 8000;
 const HOUR = 3600 * 1000;
@@ -59,6 +68,18 @@ const DOM_CAP = 2000;
 const BOARD_SIZE = 60;
 const SPARK_POINTS = 28;
 const BASELINE_TOLERANCE_MS = 45 * 60 * 1000; // a snapshot within ±45min "is" the window
+// The season score's own history, kept exactly like domHistory (one sample per
+// UTC day, last write wins) and for exactly the same reason: CoinGecko has no
+// endpoint for "what was the regime a month ago", so if this pass does not
+// write the number down, the question is unanswerable forever.
+const SCORE_KEEP_DAYS = 90;
+const SCORE_CAP = 400;
+// How many authored narratives get their own /coins/markets call. Each is one
+// keyless request; the pass already makes three, and a background invocation
+// has fifteen minutes. Twelve is the point past which the tiles stop fitting a
+// phone and start being another list to scan.
+const COHORT_MAX = 12;
+const COHORT_FETCH_SPACING_MS = 1200; // serialized — see fetchCohorts
 
 const json = (code, body) => ({
   statusCode: code,
@@ -88,6 +109,13 @@ function str(v) {
 
 function num(x) {
   return Number.isFinite(x) ? x : null;
+}
+
+// One decimal, or null. Percentages that reach the client are rounded HERE and
+// not at render time, so the number the ladder was judged by and the number on
+// screen are the same number — the same rule the board already follows.
+function r1(n) {
+  return Number.isFinite(n) ? Math.round(n * 10) / 10 : null;
 }
 
 function pct(x, d = 1) {
@@ -572,6 +600,131 @@ function screenUniverse(universe, ctx = {}) {
   return out;
 }
 
+/* ═══ step 3b — the capital ladder ══════════════════════════════════════════
+ *
+ * WHERE ON THE RISK CURVE THE MONEY CURRENTLY IS, as six rungs. The board
+ * answers "which coin"; the season score answers "is this a market to be in";
+ * neither answers the question that actually precedes both — has capital
+ * reached the part of the market I am shopping in yet.
+ *
+ * Alt season is not an event, it is capital walking DOWN the risk curve in a
+ * fixed order: Bitcoin, then Ethereum, then large caps, then mid, then small,
+ * then micro. That order is mechanical rather than predictive, which is what
+ * makes this the one surface on the tab that can see ahead: when the lit rung
+ * is 'major', the next rung to light is 'mid', and that is a week or two of
+ * warning no per-coin screener can produce, because it is a fact about the
+ * market's structure and not about any chart.
+ *
+ * THE MEDIAN, NOT THE MEAN, and it is the whole reason this is trustworthy.
+ * One micro-cap up 400% drags a bucket mean into positive territory on its own
+ * and lights a rung that nothing is actually bidding — which is precisely the
+ * lie the Movers card tells six times over. A median needs half the bucket to
+ * move before it moves.
+ *
+ * BTC and ETH get their own rungs rather than sitting inside 'major', because
+ * the entire question is whether flow has left them yet. Folding them into the
+ * large-cap bucket would hide the transition this exists to show.
+ */
+
+// Ordered top-of-curve first — the order flow travels, and the order the rungs
+// are drawn in. `tier` is the tierOf() bucket a rung collects, or null for the
+// two that are a single named coin.
+const LADDER_RUNGS = [
+  { key: "btc", label: "Bitcoin", tier: null, symbol: "BTC" },
+  { key: "eth", label: "Ethereum", tier: null, symbol: "ETH" },
+  { key: "major", label: "Large", tier: "major", symbol: null },
+  { key: "mid", label: "Mid", tier: "mid", symbol: null },
+  { key: "small", label: "Small", tier: "small", symbol: null },
+  { key: "micro", label: "Micro", tier: "micro", symbol: null },
+];
+// A bucket thinner than this has no median worth publishing. The top 250 gives
+// 'micro' only a handful of rows, and a "median" over two coins is those two
+// coins wearing a statistic's clothes.
+const LADDER_MIN_ROWS = 4;
+
+function median(xs) {
+  const a = (Array.isArray(xs) ? xs : []).filter(Number.isFinite).sort((x, y) => x - y);
+  if (!a.length) return null;
+  const m = a.length >> 1;
+  return a.length % 2 ? a[m] : (a[m - 1] + a[m]) / 2;
+}
+
+/**
+ * @param universe normalized rows (the whole fetched set, not the board)
+ * @returns { rungs: [{key,label,chg30d,chg7d,n}], leadKey, leadLabel, nextLabel, read }
+ *          — rungs always has all six entries, in curve order, with null
+ *          returns where the bucket was too thin to measure.
+ */
+function capitalLadder(universe) {
+  const rows = Array.isArray(universe) ? universe.filter(Boolean) : [];
+  const bucket = new Map(LADDER_RUNGS.map((r) => [r.key, { d30: [], d7: [] }]));
+
+  for (const r of rows) {
+    const sym = String(r.symbol ?? "").toUpperCase();
+    let key = null;
+    if (sym === "BTC") key = "btc";
+    else if (sym === "ETH") key = "eth";
+    // Exclusions apply to the BUCKETS only. A wrapped BTC in the 'major'
+    // bucket is Bitcoin's return counted a second time, one rung too low —
+    // which is exactly the direction that would fake a rotation.
+    else if (!isExcluded(r)) key = tierOf(r.mcap);
+    if (!key || !bucket.has(key)) continue;
+    const b = bucket.get(key);
+    if (Number.isFinite(r.chg30d)) b.d30.push(r.chg30d);
+    if (Number.isFinite(r.chg7d)) b.d7.push(r.chg7d);
+  }
+
+  const rungs = LADDER_RUNGS.map((r) => {
+    const b = bucket.get(r.key);
+    // BTC and ETH are one row each, so the thinness floor cannot apply to
+    // them — their "median" is that row's return, which is the true number.
+    const floor = r.symbol ? 1 : LADDER_MIN_ROWS;
+    const n = b.d30.length;
+    return {
+      key: r.key, label: r.label, n,
+      chg30d: n >= floor ? r1(median(b.d30)) : null,
+      chg7d: b.d7.length >= floor ? r1(median(b.d7)) : null,
+    };
+  });
+
+  // The lit rung is the strongest MEASURED one over 30 days. Ties break toward
+  // the top of the curve: with two rungs equal, the conservative read is that
+  // flow has only reached the higher one.
+  let lead = null;
+  for (const r of rungs) {
+    if (r.chg30d == null) continue;
+    if (!lead || r.chg30d > lead.chg30d) lead = r;
+  }
+
+  const out = { rungs, leadKey: lead ? lead.key : null, leadLabel: lead ? lead.label : null, nextLabel: null, read: null };
+  if (!lead) {
+    out.read = "Not enough measured returns to place the flow on the curve.";
+    return out;
+  }
+
+  const idx = rungs.findIndex((r) => r.key === lead.key);
+  const next = rungs.slice(idx + 1).find((r) => r.chg30d != null) || null;
+  out.nextLabel = next ? next.label : null;
+
+  // NOTHING LEADING IS NOT THE SAME AS SOMETHING LEADING WEAKLY. When even the
+  // best rung is negative over 30 days there is no rotation to describe — risk
+  // is being sold across the whole curve, and saying "flow has reached X"
+  // about a rung that is down 3% would be the tab's single most misleading
+  // sentence.
+  if (lead.chg30d <= 0) {
+    out.read = `Nothing is bid — even ${lead.label.toLowerCase()} is negative over 30 days. Risk is being sold, not rotated.`;
+    return out;
+  }
+  if (lead.key === "btc") {
+    out.read = "Flow stops at Bitcoin. Alts are funding it, not following it.";
+  } else if (!next) {
+    out.read = `Flow has reached ${lead.label.toLowerCase()} — the far end of the curve. This is late, not early.`;
+  } else {
+    out.read = `Flow has reached ${lead.label.toLowerCase()}. ${next.label} is next on the curve.`;
+  }
+  return out;
+}
+
 /* ═══ step 4 — the season read (ported from pentagon season.js, adapted) ═════
  *
  * Is capital moving into alts at all? Breadth carries 60 of the 100 points
@@ -647,6 +800,11 @@ function seasonRead({ universe = null, btcRow = null, ethRow = null, fearGreed =
     fearGreed: fg ? fg.value : null,
     ethBtc7d: ethBtc ? ethBtc.chg7dPct : null,
     domTrend: dom.trend,
+    // The SPAN, not just the direction. The regime override in
+    // src/lib/altLadder.js needs "falling for 60+ days", and a trend with no
+    // measured span cannot answer that — seven samples inside six days is a
+    // real "falling" and is not what the override is asking about.
+    domSpanDays: dom.spanDays ?? null,
     measured: { earned: 0, of: 0 },
   });
 
@@ -712,6 +870,11 @@ function seasonRead({ universe = null, btcRow = null, ethRow = null, fearGreed =
     fearGreed: fg ? fg.value : null,
     ethBtc7d: ethBtc ? ethBtc.chg7dPct : null,
     domTrend: dom.trend,
+    // The SPAN, not just the direction. The regime override in
+    // src/lib/altLadder.js needs "falling for 60+ days", and a trend with no
+    // measured span cannot answer that — seven samples inside six days is a
+    // real "falling" and is not what the override is asking about.
+    domSpanDays: dom.spanDays ?? null,
     measured: { earned, of },
   };
 }
@@ -800,6 +963,71 @@ function domTrendOf(domHistory, facts = []) {
   return { trend, changePts: change, samples: window.length, spanDays };
 }
 
+/* ═══ step 4b — the score's own drift ════════════════════════════════════════
+ *
+ * WHICH WAY THE REGIME IS MOVING, which turns out to matter more than where it
+ * is. A season score of 31 rising is an accumulation window opening; a 31
+ * falling is a market still breaking. They are the same number and opposite
+ * instructions, and until this existed the tab could not tell them apart.
+ *
+ * Same storage discipline as domHistory, for the same reason — nobody sells a
+ * "what was the alt regime last month" endpoint, so a pass that does not write
+ * the number down loses it permanently. One sample per UTC day, last write
+ * wins, so the final pass of a day settles it and completed days compare
+ * cleanly. UTC deliberately: a local-zone day duplicates or skips a row across
+ * a DST shift.
+ *
+ * Unlike dominance this series has NO durable second copy — alt_snapshots has
+ * columns for dominance and fear/greed but not for the composite score, which
+ * is derived rather than fetched. It rides in the payload alone, and the
+ * payload write is already guarded by prevReadFailed for exactly this class of
+ * loss.
+ */
+function mergeScoreSample(history, t, score) {
+  if (!Number.isFinite(t) || !Number.isFinite(score)) return Array.isArray(history) ? history : [];
+  const day = new Date(t).toISOString().slice(0, 10);
+  const kept = (Array.isArray(history) ? history : []).filter((s) =>
+    s && Number.isFinite(s.t) && Number.isFinite(s.v) &&
+    new Date(s.t).toISOString().slice(0, 10) !== day &&
+    t - s.t <= SCORE_KEEP_DAYS * DAY);
+  kept.push({ t, v: score });
+  kept.sort((a, b) => a.t - b.t);
+  return kept.slice(-SCORE_CAP);
+}
+
+const SCORE_DRIFT_WINDOW_DAYS = 30;
+const SCORE_DRIFT_MIN_SAMPLES = 5;
+const SCORE_FLAT_PTS = 3; // the composite wobbles a couple of points on noise
+
+/**
+ * The 30-day change in the regime score, measured the same way domTrendOf
+ * measures dominance: anchored to the NEWEST sample and bounded by DATES, not
+ * by a sample count — after a cron gap "the last 30 samples" reaches back
+ * months and would be labelled a 30-day move.
+ *
+ * spanDays is reported because a 6-point drift is a real signal over a month
+ * and noise over four days, and the reader has no other way to tell which one
+ * is on screen.
+ */
+function scoreDriftOf(history, facts = []) {
+  const rows = (Array.isArray(history) ? history : [])
+    .filter((s) => s && Number.isFinite(s.t) && Number.isFinite(s.v))
+    .sort((a, b) => a.t - b.t);
+  const empty = { direction: null, changePts: null, samples: rows.length, spanDays: null, from: null };
+  if (!rows.length) return empty;
+  const newest = rows[rows.length - 1].t;
+  const window = rows.filter((s) => s.t > newest - SCORE_DRIFT_WINDOW_DAYS * DAY);
+  if (window.length < SCORE_DRIFT_MIN_SAMPLES) {
+    facts.push(`${window.length} of ${SCORE_DRIFT_MIN_SAMPLES} daily regime samples stored — which way the tape is drifting stays unknown until then`);
+    return { ...empty, samples: window.length };
+  }
+  const first = window[0], last = window[window.length - 1];
+  const change = last.v - first.v;
+  const spanDays = Math.max(0, Math.round((last.t - first.t) / DAY));
+  const direction = change > SCORE_FLAT_PTS ? "rising" : change < -SCORE_FLAT_PTS ? "falling" : "flat";
+  return { direction, changePts: r1(change), samples: window.length, spanDays, from: r1(first.v) };
+}
+
 /**
  * ETH/BTC as the PAIR's return, not the difference of two percentages —
  * ETH +120% against BTC +60% is +37.5% on the pair, not +60%. The subtraction
@@ -840,6 +1068,151 @@ function normFearGreed(fearGreed, facts = []) {
 function listOf(xs) {
   if (xs.length <= 1) return xs.join("");
   return `${xs.slice(0, -1).join(", ")} and ${xs[xs.length - 1]}`;
+}
+
+/* ═══ step 4c — narratives ═══════════════════════════════════════════════════
+ *
+ * THE ANSWER TO "THERE ARE TOO MANY COINS". There are not fourteen hundred
+ * independent assets; there are a dozen or so live narratives, and the names
+ * inside one move as a cohort — together, and before any individual chart
+ * looks interesting. Ranking cohorts is both a far smaller problem and an
+ * earlier signal than ranking coins, and it is the only thing on this tab that
+ * a per-coin screener structurally cannot produce.
+ *
+ * It also supplies the input for the read that fixes the OTHER complaint: a
+ * coin up 15% because its whole sector is up 14% is rotation, which persists
+ * and can be traded; a coin up 15% alone is a listing, an unlock or a tweet,
+ * which does not and cannot. The two are indistinguishable on a board sorted by
+ * return, and telling them apart is a subtraction once a cohort return exists.
+ * alt-scan does that subtraction against the LIVE price — see cohortExcess
+ * there for why it cannot live here.
+ *
+ * THE LIST IS AUTHORED, and has to be. CoinGecko publishes hundreds of
+ * categories, most of them ecosystem tags ("solana-ecosystem") that overlap
+ * everything and describe nothing about what is being bid. These are the
+ * narratives that actually take flows, in rough priority order — the order also
+ * breaks membership ties, since a coin can carry many categories and needs
+ * exactly one cohort for its excess to mean anything.
+ *
+ * SLUGS DRIFT, AND A DRIFTED SLUG MUST NOT ROT SILENTLY. Every id here is
+ * validated against /coins/categories before it is fetched: one that no longer
+ * resolves is dropped and NAMED in the pass's errors, rather than contributing
+ * an empty cohort forever that nobody can tell apart from a quiet sector.
+ */
+const NARRATIVES = [
+  { id: "artificial-intelligence", label: "AI" },
+  { id: "ai-agents", label: "AI agents" },
+  { id: "real-world-assets-rwa", label: "RWA" },
+  { id: "depin", label: "DePIN" },
+  { id: "prediction-markets", label: "Prediction mkts" },
+  { id: "layer-2", label: "L2s" },
+  { id: "layer-1", label: "L1s" },
+  { id: "decentralized-finance-defi", label: "DeFi" },
+  { id: "liquid-staking-tokens", label: "Liquid staking" },
+  { id: "restaking", label: "Restaking" },
+  { id: "gaming", label: "Gaming" },
+  { id: "meme-token", label: "Memes" },
+  { id: "privacy-coins", label: "Privacy" },
+  { id: "oracle", label: "Oracles" },
+];
+
+// A cohort thinner than this is not a narrative, it is a handful of coins —
+// and a median over three rows moves on one of them.
+const COHORT_MIN_ROWS = 4;
+
+/**
+ * The category index → Map(id → { name, mcap }). Only used to validate the
+ * authored slugs and to rank them; the returns published per cohort are ours.
+ */
+function parseCategoryIndex(rows) {
+  const out = new Map();
+  if (!Array.isArray(rows)) return out;
+  for (const r of rows) {
+    const id = str(r && r.id);
+    if (!id) continue;
+    out.set(id, { name: str(r.name) || id, mcap: fin(r.market_cap) });
+  }
+  return out;
+}
+
+/**
+ * One cohort's numbers, from that category's own /coins/markets page.
+ *
+ * MEDIAN, and a LIQUIDITY FLOOR on membership — the same two defences the
+ * capital ladder uses, for the same reason. Every category has a long tail of
+ * dust that has not traded in a week; counted, it drags both the median and the
+ * breadth denominator toward whatever the dust did, which is usually nothing.
+ * THIN_VOL_USD is the floor the screener already applies to individual coins.
+ *
+ * `lifting` is the count positive over 7 days, and it is the number that stops
+ * a cohort lying: "9 of 11 lifting" is a bid, while "1 of 26" alongside a green
+ * headline is one coin dragging an average — the most common way a sector
+ * screen misleads, and invisible without the denominator beside it.
+ */
+function cohortStats(id, label, name, rows, mcap) {
+  const members = (Array.isArray(rows) ? rows : [])
+    .map(parseMarketsRow)
+    .filter((r) => r && !isExcluded(r) && Number.isFinite(r.vol24h) && r.vol24h >= THIN_VOL_USD);
+  const d7 = [], d30 = [];
+  let lifting = 0, measured = 0;
+  for (const r of members) {
+    if (Number.isFinite(r.chg7d)) { d7.push(r.chg7d); measured++; if (r.chg7d > 0) lifting++; }
+    if (Number.isFinite(r.chg30d)) d30.push(r.chg30d);
+  }
+  if (measured < COHORT_MIN_ROWS) return null;
+  return {
+    id, label, name: name || label, mcap: fin(mcap),
+    chg7d: r1(median(d7)),
+    chg30d: d30.length >= COHORT_MIN_ROWS ? r1(median(d30)) : null,
+    lifting, n: measured,
+    // Membership rides along so the coin→cohort map can be built without a
+    // second pass over the fetched pages.
+    memberIds: members.map((r) => r.id).filter(Boolean),
+  };
+}
+
+/**
+ * Assemble the narrative read from already-fetched pages.
+ *
+ * @param index    Map(id → {name, mcap}) from parseCategoryIndex
+ * @param pages    Map(id → raw /coins/markets rows)
+ * @returns { cohorts, coinCohort, leadId, read }
+ */
+function cohortRead(index, pages) {
+  const cohorts = [];
+  // Authored order is priority order, and it decides the coin→cohort tie —
+  // first list wins, so a coin tagged both 'ai-agents' and 'meme-token' is
+  // filed under the narrative nearer the top of NARRATIVES. Deterministic, and
+  // deterministic is the whole requirement: a coin that changed cohort between
+  // passes would change its excess without its price moving.
+  for (const n of NARRATIVES) {
+    const meta = (index && index.get(n.id)) || null;
+    const rows = pages && pages.get(n.id);
+    if (!rows) continue;
+    const c = cohortStats(n.id, n.label, meta && meta.name, rows, meta && meta.mcap);
+    if (c) cohorts.push(c);
+  }
+
+  const coinCohort = {};
+  for (const c of cohorts) {
+    for (const cid of c.memberIds) if (!(cid in coinCohort)) coinCohort[cid] = c.id;
+    delete c.memberIds; // the map is the published form; the list was scaffolding
+  }
+
+  // Ranked by the 30-day read, which is the rotation horizon — a cohort that
+  // led for one day is noise, and 7d is already on the tile for anyone reading
+  // more closely.
+  cohorts.sort((a, b) =>
+    (b.chg30d ?? b.chg7d ?? -Infinity) - (a.chg30d ?? a.chg7d ?? -Infinity) ||
+    String(a.label).localeCompare(String(b.label)));
+
+  const lead = cohorts.find((c) => (c.chg30d ?? c.chg7d) != null) || null;
+  let read = null;
+  if (!lead) read = "No narrative has enough measured names to rank.";
+  else if ((lead.chg30d ?? lead.chg7d) <= 0) read = "No narrative is bid — every cohort is negative over 30 days.";
+  else read = `${lead.label} leads — ${lead.lifting} of ${lead.n} names lifting.`;
+
+  return { cohorts, coinCohort, leadId: lead ? lead.id : null, read };
 }
 
 /* ═══ step 5 — price targets ═════════════════════════════════════════════════
@@ -1158,6 +1531,58 @@ function settledError(res) {
   return String((res.reason && res.reason.message) || res.reason || "unknown error");
 }
 
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+/**
+ * Fetch the category index and one markets page per surviving narrative.
+ *
+ * SERIALIZED, WITH SPACING, AND THAT IS DELIBERATE. Everything else in this
+ * pass fires in parallel because it is three calls; this is up to thirteen
+ * against a keyless free tier that answers a burst with 429s. A background
+ * invocation has fifteen minutes and this costs about fifteen seconds of it,
+ * which is the cheapest possible price for not being rate-limited out of the
+ * three calls the rest of the tab depends on.
+ *
+ * EVERY FAILURE IS PARTIAL. A dead index means no narratives this pass and
+ * nothing else changes; a single category that 404s or times out is dropped
+ * and named, and the other eleven publish. Nothing here can abort the pass —
+ * see this file's header for why that rule is absolute.
+ */
+async function fetchCohorts(errors) {
+  let index = null;
+  try {
+    index = parseCategoryIndex(await fetchJson(CATEGORIES_URL));
+  } catch (e) {
+    errors.push(`categories index: ${(e && e.message) || e}`);
+    return { index: new Map(), pages: new Map() };
+  }
+
+  // Validate the authored slugs against what CoinGecko actually publishes, then
+  // take the biggest COHORT_MAX by cap. Ranking by cap rather than by list
+  // order means the twelve that get fetched are the twelve that hold real
+  // money, and the list can grow past twelve without changing the call budget.
+  const resolved = NARRATIVES.filter((n) => index.has(n.id));
+  const missing = NARRATIVES.filter((n) => !index.has(n.id)).map((n) => n.id);
+  if (missing.length) errors.push(`categories not found upstream (slug drift?): ${missing.join(", ")}`);
+
+  const picked = resolved
+    .map((n) => ({ n, mcap: (index.get(n.id) || {}).mcap ?? 0 }))
+    .sort((a, b) => (b.mcap ?? 0) - (a.mcap ?? 0))
+    .slice(0, COHORT_MAX)
+    .map((x) => x.n);
+
+  const pages = new Map();
+  for (let i = 0; i < picked.length; i++) {
+    if (i > 0) await sleep(COHORT_FETCH_SPACING_MS);
+    try {
+      pages.set(picked[i].id, await fetchJson(categoryMarketsUrl(picked[i].id)));
+    } catch (e) {
+      errors.push(`category ${picked[i].id}: ${(e && e.message) || e}`);
+    }
+  }
+  return { index, pages };
+}
+
 // One dominance sample per UTC day, last write wins — the cron's last pass of
 // a UTC day settles the day, so completed days are comparable hour-to-hour.
 // UTC on purpose: a local-zone day duplicates or skips a row on DST shifts,
@@ -1319,6 +1744,15 @@ async function runPass() {
     errors.push(`markets: ${mktRes.status === "fulfilled" ? "malformed payload" : settledError(mktRes)}`);
   }
 
+  // ── narratives, AFTER the three calls above and never alongside them. The
+  // board, the season score and the snapshot all depend on that markets page;
+  // this depends on nothing and nothing depends on it. Firing thirteen extra
+  // requests into the same rate-limit budget BEFORE the critical path resolves
+  // is how a nice-to-have card takes the whole tab down for an hour. ──
+  const { index: catIndex, pages: catPages } = await fetchCohorts(errors);
+  const narratives = cohortRead(catIndex, catPages);
+  counts.cohorts = narratives.cohorts.length;
+
   const configured = !!(process.env.SUPABASE_URL && process.env.SUPABASE_SERVICE_ROLE_KEY);
   const db = configured
     ? createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SERVICE_ROLE_KEY, {
@@ -1359,9 +1793,15 @@ async function runPass() {
   }
   if (global) domHistory = mergeDomSample(domHistory, now, global.btcDominance);
 
+  // ── the score's own daily series, carried in the payload the way domHistory
+  // is. Merged AFTER the season read below (it needs this pass's score), so
+  // only the prior series is loaded here. ──
+  let scoreHistory = Array.isArray(prevPayload && prevPayload.scoreHistory) ? prevPayload.scoreHistory : [];
+
   // ── the math (needs the universe; everything else degrades around it) ──
   let season = null;
   let eligible = null;
+  let ladder = null;
   if (universe && universe.length) {
     const btcRow = universe.find((r) => r.symbol === "BTC") || null;
     const ethRow = universe.find((r) => r.symbol === "ETH") || null;
@@ -1369,7 +1809,15 @@ async function runPass() {
     eligible = screenUniverse(universe, { btcRow, ethRow, season, now });
     for (const row of eligible) row.targets = targetsFor(row);
     counts.eligible = eligible.length;
+    // The ladder reads the WHOLE fetched universe, not `eligible` — it is a
+    // measurement of the market, and screening it first would compute the
+    // median return of the coins that scored well, which is a different and
+    // much less honest number.
+    ladder = capitalLadder(universe);
+    counts.ladderLead = ladder.leadKey || "none";
+    if (season && season.score != null) scoreHistory = mergeScoreSample(scoreHistory, now, season.score);
   }
+  const scoreDrift = scoreDriftOf(scoreHistory);
 
   // ── snapshot: written whenever EITHER feed resolved. The two columns serve
   // different consumers — prices feed the 4h/12h baselines, dominance feeds
@@ -1529,6 +1977,20 @@ async function runPass() {
       sparkRef,
       readyIn,
       domHistory,
+      // ── the three interpretive layers, published beside the board rather
+      // than derived from it. Each answers a question that sits ABOVE the
+      // individual coin, which is the whole reason the tab needed them: the
+      // ladder says which part of the risk curve is bid, the narratives say
+      // which theme is, and the drift says which way the regime is travelling.
+      ladder,
+      scoreHistory,
+      scoreDrift,
+      cohorts: narratives.cohorts,
+      cohortRead: { leadId: narratives.leadId, read: narratives.read },
+      // coinId → cohortId. alt-scan needs this to compute each row's excess
+      // against its own cohort at LIVE prices; publishing the map rather than
+      // the excess is what keeps that subtraction on the live side.
+      coinCohort: narratives.coinCohort,
     };
     const up = await db.from("alt_state").upsert({ id: "latest", updated_at: nowIso, payload });
     if (up.error) errors.push(`alt_state upsert: ${up.error.message}`);
@@ -1538,6 +2000,7 @@ async function runPass() {
   console.log(
     `[alt-cron-background] universe=${counts.universe} eligible=${counts.eligible} board=${counts.board} ` +
     `sparkRef4h=${counts.sparkRef4h} gate=${counts.gate || "n/a"} ` +
+    `ladder=${counts.ladderLead || "n/a"} cohorts=${counts.cohorts ?? 0} ` +
     `flags +${counts.flagsInserted} ~${counts.flagsUpdated} closed=${counts.flagsClosed} ` +
     `snapshot=${counts.snapshotWritten} state=${counts.stateWritten} ` +
     `season=${season && season.score != null ? `${season.score}/${season.phase}` : "none"}` +
@@ -1590,3 +2053,10 @@ exports.transitionFlags = transitionFlags;
 exports.gateFor = gateFor;
 exports.PHASE_GATE = PHASE_GATE;
 exports.domTrendOf = domTrendOf;
+exports.capitalLadder = capitalLadder;
+exports.mergeScoreSample = mergeScoreSample;
+exports.scoreDriftOf = scoreDriftOf;
+exports.parseCategoryIndex = parseCategoryIndex;
+exports.cohortStats = cohortStats;
+exports.cohortRead = cohortRead;
+exports.NARRATIVES = NARRATIVES;

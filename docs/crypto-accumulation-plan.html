@@ -1,0 +1,680 @@
+<title>Five Hundred to Five Thousand</title>
+<style>
+/* ─── SESSION tokens, mapped to the artifact host's three theme states ────────
+   Porcelain is the complete palette on bare :root. Graphite redefines only the
+   tokens, once behind prefers-color-scheme (guarded so an explicit light choice
+   still wins) and once behind the explicit dark stamp. Nothing below this block
+   declares a colour literal. */
+:root {
+  --bg: #F2F1EB;
+  --surface: #FFFFFF;
+  --surface-2: #F6F5F0;
+  --ink: #1D1C18;
+  --sub: #716E64;
+  --faint: #A3A099;
+  --line: rgba(29, 28, 24, 0.08);
+  --line-strong: rgba(29, 28, 24, 0.16);
+  --accent: #8A6A1E;
+  --accent-hi: #A5822A;
+  --on-accent: #FFFFFF;
+  --green: #278A4C;
+  --red: #C93B32;
+  --amber: #B36514;
+  --blue: #3568D4;
+  --btc: #F7931A;
+  --shadow-card: 0 1px 1px rgba(26, 22, 14, 0.03), 0 6px 24px rgba(26, 22, 14, 0.05);
+
+  --font-body: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  --font-mono: ui-monospace, "SF Mono", "Cascadia Mono", Menlo, Consolas, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #000000;
+    --surface: #1C1C1E;
+    --surface-2: #2A2A2D;
+    --ink: #F3F2EE;
+    --sub: #A8A69F;
+    --faint: #6E6C66;
+    --line: rgba(243, 242, 238, 0.09);
+    --line-strong: rgba(243, 242, 238, 0.18);
+    --accent: #D9B45C;
+    --accent-hi: #EACC80;
+    --on-accent: #1A1403;
+    --green: #34A56E;
+    --red: #E05548;
+    --amber: #BC7F24;
+    --blue: #4C82E8;
+    --btc: #F7931A;
+    --shadow-card: 0 1px 1px rgba(0, 0, 0, 0.3), 0 6px 24px rgba(0, 0, 0, 0.35);
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #000000;
+  --surface: #1C1C1E;
+  --surface-2: #2A2A2D;
+  --ink: #F3F2EE;
+  --sub: #A8A69F;
+  --faint: #6E6C66;
+  --line: rgba(243, 242, 238, 0.09);
+  --line-strong: rgba(243, 242, 238, 0.18);
+  --accent: #D9B45C;
+  --accent-hi: #EACC80;
+  --on-accent: #1A1403;
+  --green: #34A56E;
+  --red: #E05548;
+  --amber: #BC7F24;
+  --blue: #4C82E8;
+  --btc: #F7931A;
+  --shadow-card: 0 1px 1px rgba(0, 0, 0, 0.3), 0 6px 24px rgba(0, 0, 0, 0.35);
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--ink);
+  font-family: var(--font-body);
+  font-size: 15px;
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+}
+
+.wrap {
+  max-width: 760px;
+  margin: 0 auto;
+  padding: 48px 20px 96px;
+  display: flex;
+  flex-direction: column;
+  gap: 40px;
+}
+
+/* ── type scale, lifted from DESIGN.md §2 ─────────────────────────────────── */
+.t-ltitle { font-size: 32px; line-height: 1.15; font-weight: 700; letter-spacing: -0.022em; margin: 0; text-wrap: balance; }
+.t-title2 { font-size: 21px; line-height: 1.25; font-weight: 700; letter-spacing: -0.015em; margin: 0; text-wrap: balance; }
+.t-head   { font-size: 17px; line-height: 1.3; font-weight: 600; letter-spacing: -0.01em; margin: 0; }
+.t-call   { font-size: 13.5px; line-height: 1.45; color: var(--sub); }
+.t-foot   { font-size: 12.5px; line-height: 1.4; color: var(--sub); }
+.t-label  { font-size: 12px; line-height: 1; font-weight: 600; letter-spacing: 0.05em; text-transform: uppercase; color: var(--sub); margin: 0; }
+.num      { font-family: var(--font-mono); font-variant-numeric: tabular-nums; font-weight: 500; }
+
+p { margin: 0; }
+strong { font-weight: 600; color: var(--ink); }
+.up { color: var(--green); }
+.down { color: var(--red); }
+.warn { color: var(--amber); }
+
+/* ── header ───────────────────────────────────────────────────────────────── */
+header { display: flex; flex-direction: column; gap: 14px; }
+.eyebrow { display: flex; align-items: center; gap: 8px; }
+.eyebrow .dot { width: 6px; height: 6px; border-radius: 50%; background: var(--accent); flex: none; }
+.lede { font-size: 17px; line-height: 1.5; color: var(--sub); max-width: 62ch; }
+.lede em { color: var(--ink); font-style: normal; font-weight: 600; }
+
+/* ── cards: tone + shadow, never borders (DESIGN.md §1.2) ─────────────────── */
+section { display: flex; flex-direction: column; gap: 16px; }
+.card {
+  background: var(--surface);
+  border-radius: 16px;
+  padding: 22px;
+  box-shadow: var(--shadow-card);
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+.card > p, .card > ul, .card > ol { max-width: 64ch; }
+.well {
+  background: var(--surface-2);
+  border-radius: 12px;
+  padding: 14px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+/* ── the tape strip ───────────────────────────────────────────────────────── */
+.tape { display: grid; grid-template-columns: repeat(3, 1fr); gap: 1px; background: var(--line); border-radius: 16px; overflow: hidden; box-shadow: var(--shadow-card); }
+.tape div { background: var(--surface); padding: 16px; display: flex; flex-direction: column; gap: 3px; }
+.tape .k { font-size: 11.5px; font-weight: 500; color: var(--sub); }
+.tape .v { font-size: 19px; }
+.tape .d { font-size: 12px; }
+@media (max-width: 560px) { .tape { grid-template-columns: repeat(2, 1fr); } }
+
+/* ── allocation bar ───────────────────────────────────────────────────────── */
+.alloc-bar { display: flex; height: 40px; border-radius: 10px; overflow: hidden; gap: 2px; }
+.alloc-bar span { display: flex; align-items: center; justify-content: center; font-family: var(--font-mono); font-variant-numeric: tabular-nums; font-size: 12px; font-weight: 600; color: var(--on-accent); }
+.seg-1 { background: var(--accent); flex: 50; }
+.seg-2 { background: var(--accent-hi); flex: 30; }
+.seg-3 { background: var(--faint); flex: 20; }
+
+/* ── tables ───────────────────────────────────────────────────────────────── */
+.scroll { overflow-x: auto; margin: 0 -22px; padding: 0 22px; }
+table { border-collapse: collapse; width: 100%; font-size: 13.5px; min-width: 420px; }
+th {
+  text-align: left; font-size: 11.5px; font-weight: 600; letter-spacing: 0.04em;
+  text-transform: uppercase; color: var(--sub); padding: 0 12px 8px 0;
+  border-bottom: 1px solid var(--line-strong); white-space: nowrap;
+}
+td { padding: 10px 12px 10px 0; border-bottom: 1px solid var(--line); vertical-align: top; }
+tr:last-child td { border-bottom: none; }
+th:last-child, td:last-child { padding-right: 0; }
+td.n { font-family: var(--font-mono); font-variant-numeric: tabular-nums; white-space: nowrap; }
+
+/* ── lists ────────────────────────────────────────────────────────────────── */
+ul, ol { margin: 0; padding-left: 20px; display: flex; flex-direction: column; gap: 9px; }
+li::marker { color: var(--faint); }
+
+/* ── the phase ladder — a real sequence, so it gets real numbering ────────── */
+.phases { display: flex; flex-direction: column; gap: 2px; }
+.phase {
+  background: var(--surface); padding: 18px 22px; display: flex; gap: 16px;
+  box-shadow: var(--shadow-card);
+}
+.phase:first-child { border-radius: 16px 16px 4px 4px; }
+.phase:last-child { border-radius: 4px 4px 16px 16px; }
+.phase .idx { font-family: var(--font-mono); font-size: 12px; font-weight: 600; color: var(--faint); padding-top: 3px; flex: none; }
+.phase.now .idx { color: var(--accent); }
+.phase .body { display: flex; flex-direction: column; gap: 5px; min-width: 0; }
+.phase .when { font-size: 12px; color: var(--sub); font-family: var(--font-mono); }
+
+/* ── chips ────────────────────────────────────────────────────────────────── */
+.chip {
+  display: inline-flex; align-items: center; gap: 5px; padding: 3px 9px;
+  border-radius: 999px; font-size: 11.5px; font-weight: 600;
+  background: var(--surface-2); color: var(--sub); white-space: nowrap;
+}
+.chip.live { background: color-mix(in srgb, var(--accent) 14%, transparent); color: var(--accent); }
+.chip.hot { background: color-mix(in srgb, var(--red) 12%, transparent); color: var(--red); }
+.chip.mid { background: color-mix(in srgb, var(--amber) 14%, transparent); color: var(--amber); }
+
+/* ── build list ───────────────────────────────────────────────────────────── */
+.build { display: flex; flex-direction: column; gap: 2px; }
+.build-row { background: var(--surface); padding: 18px 22px; box-shadow: var(--shadow-card); display: flex; flex-direction: column; gap: 7px; }
+.build-row:first-child { border-radius: 16px 16px 4px 4px; }
+.build-row:last-child { border-radius: 4px 4px 16px 16px; }
+.build-row .top { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; }
+.build-row code, .card code, li code {
+  font-family: var(--font-mono); font-size: 0.88em;
+  background: var(--surface-2); padding: 1px 5px; border-radius: 5px; color: var(--ink);
+}
+
+/* ── callout: the one place the accent buys something loud ────────────────── */
+.callout {
+  background: var(--surface); border-radius: 16px; padding: 22px;
+  box-shadow: var(--shadow-card); display: flex; flex-direction: column; gap: 10px;
+  border-left: 3px solid var(--accent);
+}
+
+footer { color: var(--faint); font-size: 12.5px; line-height: 1.5; max-width: 64ch; }
+hr { border: none; border-top: 1px solid var(--line); margin: 0; }
+</style>
+
+<div class="wrap">
+
+<header>
+  <div class="eyebrow">
+    <span class="dot"></span>
+    <span class="t-label">Board Room · Markets · Strategy note</span>
+  </div>
+  <h1 class="t-ltitle">Five hundred to five thousand</h1>
+  <p class="lede">
+    You are asking how to catch alt season. The more useful answer is that
+    <em>alt season is not the hard part</em> — being positioned before it, and
+    selling into it, is. Right now the tape is roughly ten months into a bear
+    market, which is the best entry environment you will get and the worst
+    environment for the tool you built to find entries.
+  </p>
+</header>
+
+<!-- ═══ 1 · the tape ═══════════════════════════════════════════════════════ -->
+<section>
+  <h2 class="t-label">Where the tape actually is — 15 Aug 2026</h2>
+  <div class="tape">
+    <div>
+      <span class="k">Bitcoin</span>
+      <span class="v num">$64k</span>
+      <span class="d num down">−49% from ATH</span>
+    </div>
+    <div>
+      <span class="k">Ethereum</span>
+      <span class="v num">$1,876</span>
+      <span class="d num down">−62% from ATH</span>
+    </div>
+    <div>
+      <span class="k">Solana</span>
+      <span class="v num">$75</span>
+      <span class="d num down">−74% from ATH</span>
+    </div>
+    <div>
+      <span class="k">BTC dominance</span>
+      <span class="v num">56%</span>
+      <span class="d">Bitcoin still leading</span>
+    </div>
+    <div>
+      <span class="k">Altcoin season index</span>
+      <span class="v num">~30</span>
+      <span class="d">75 confirms alt season</span>
+    </div>
+    <div>
+      <span class="k">Alts at/near all-time low</span>
+      <span class="v num">&gt;40%</span>
+      <span class="d warn">worse than 2022</span>
+    </div>
+  </div>
+  <p class="t-call">
+    Peak was October 2025 at $126k. The consensus bottom zone is $56–68k, and
+    price is inside it — which is not the same as it being over. More than 40% of
+    altcoins sitting at all-time lows is a deeper washout than the last bear
+    market produced, and most of those names are never coming back.
+  </p>
+</section>
+
+<!-- ═══ 2 · why the tab can't do it ════════════════════════════════════════ -->
+<section>
+  <h2 class="t-label">Why the Alt Season tab isn't catching these early</h2>
+  <p>
+    It isn't broken. I read the engine — <code>alt-cron-background.js</code> is
+    genuinely well-built, and the graded flag log is more honest than most paid
+    products. But there are four structural reasons it cannot answer the question
+    you are actually asking.
+  </p>
+
+  <div class="card">
+    <div class="top" style="display:flex;align-items:baseline;gap:10px;flex-wrap:wrap">
+      <h3 class="t-head">The universe is capped at the top 250 by market cap</h3>
+      <span class="chip hot">root cause</span>
+    </div>
+    <p class="t-call">
+      <code>MARKETS_URL</code> requests <code>per_page=250&amp;page=1</code>. The coins
+      that "come out of nowhere and become the new names" enter from rank 400–1500.
+      By the time one is inside the top 250, it has already done the 5–10x you
+      wanted to catch. The screener is structurally incapable of seeing the thing
+      you built it to find — everything else it does well is downstream of a
+      universe that excludes the answer.
+    </p>
+  </div>
+
+  <div class="card">
+    <h3 class="t-head">It is a chase-detector, and it knows it</h3>
+    <p class="t-call">
+      <code>bandOf</code> needs <code>freshBreak</code> plus 24h acceleration plus
+      positive RS vs BTC. <code>flagTier</code> refuses to flag the <code>quiet</code>
+      band at all — deliberately, and the comment explains why (it produced 52 junk
+      flags). That is the right call for finding ignition. It means the tool fires
+      <em>as</em> a move starts, never before. "Ahead of time" was never in scope.
+    </p>
+  </div>
+
+  <div class="card">
+    <h3 class="t-head">It will be near-silent for the next 6–12 months</h3>
+    <p class="t-call">
+      <code>PHASE_GATE</code> ties the flag budget to the regime. At today's read the
+      tape is <code>btc_only</code> or <code>risk_off</code> — a cap of 3–5 open flags
+      against a score floor of 74–78. That is correct behaviour for a chase-detector
+      in a bear market, and it is exactly the wrong behaviour for someone trying to
+      accumulate. The quietness is a feature that is currently working against you.
+    </p>
+  </div>
+
+  <div class="card">
+    <h3 class="t-head">The season score describes the past, it doesn't lead it</h3>
+    <p class="t-call">
+      Breadth carries 60 of the 100 points, and breadth is "what already happened
+      over the last 7 and 30 days." Fear &amp; greed is coincident. Dominance is
+      measured as a 30-day <em>level</em> change. By the time that score prints
+      <code>alt_season</code>, the first 60% of the move is behind you. The genuinely
+      leading legs in there — ETH/BTC 7d and 30d — are worth 5 points each.
+    </p>
+  </div>
+</section>
+
+<!-- ═══ 3 · the reframe ════════════════════════════════════════════════════ -->
+<section>
+  <h2 class="t-label">The reframe — you are in the wrong phase for signals</h2>
+  <p>
+    There are only three jobs across a full cycle, and each one wants a different
+    tool. The mistake is running the phase-two tool during phase one and concluding
+    the tool is bad.
+  </p>
+
+  <div class="phases">
+    <div class="phase now">
+      <span class="idx">01</span>
+      <div class="body">
+        <div style="display:flex;align-items:baseline;gap:10px;flex-wrap:wrap">
+          <h3 class="t-head">Accumulate</h3>
+          <span class="chip live">you are here</span>
+        </div>
+        <span class="when">now → bottom confirmation, likely 3–9 months</span>
+        <p class="t-call">
+          Nothing is running, so there is nothing to chase. The job is buying
+          survivors cheaply and sizing so you can sit through another −40%. Screening
+          for breakouts here returns noise. Screening for <em>survival</em> returns
+          the shortlist.
+        </p>
+      </div>
+    </div>
+    <div class="phase">
+      <span class="idx">02</span>
+      <div class="body">
+        <h3 class="t-head">Rotate</h3>
+        <span class="when">dominance rolls over → alt season proper</span>
+        <p class="t-call">
+          Capital moves down the risk curve in a fixed order: BTC → ETH → large
+          alts → mid-caps → small caps and memes. This is where your existing
+          screener becomes the best tool you own — its flag log, targets and entry
+          reads are built for exactly this tape.
+        </p>
+      </div>
+    </div>
+    <div class="phase">
+      <span class="idx">03</span>
+      <div class="body">
+        <h3 class="t-head">Distribute</h3>
+        <span class="when">euphoria — the phase that decides your number</span>
+        <p class="t-call">
+          Everyone catches some of a bull market. Almost nobody sells it. This is
+          the only phase where the difference between $1,200 and $5,000 is actually
+          determined, and it is determined by rules written in advance — which is
+          why the ladder below matters more than any pick.
+        </p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ═══ 4 · the plan ═══════════════════════════════════════════════════════ -->
+<section>
+  <h2 class="t-label">The $500, allocated</h2>
+  <p>
+    You cannot reach 10x on a book that is mostly Bitcoin — BTC at 5x turns $500
+    into $2,500 and stops. You also cannot reach it on twelve micro-caps, because
+    you will not survive the drawdowns. The structure that works is a barbell: a
+    core that reliably captures the beta, and a tail sized so that one winner
+    carries the book and the losers cannot hurt you.
+  </p>
+
+  <div class="alloc-bar" role="img" aria-label="50% core, 30% survivors, 20% asymmetric">
+    <span class="seg-1">CORE 50%</span>
+    <span class="seg-2">SURVIVORS 30%</span>
+    <span class="seg-3">TAIL 20%</span>
+  </div>
+
+  <div class="card">
+    <div class="scroll">
+      <table>
+        <thead>
+          <tr>
+            <th>Sleeve</th>
+            <th>Size</th>
+            <th>How many</th>
+            <th>What qualifies</th>
+            <th>Realistic at cycle top</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><strong>Core</strong></td>
+            <td class="n">$250</td>
+            <td class="n">2 × $125</td>
+            <td>ETH and SOL. Deep liquidity, ETF bids, near-zero chance of going to zero. This is your floor, not your upside.</td>
+            <td class="n">$1,250–2,000</td>
+          </tr>
+          <tr>
+            <td><strong>Survivors</strong></td>
+            <td class="n">$150</td>
+            <td class="n">4 × $37</td>
+            <td>Top-150 cap, down 75–90%, still doing &gt;$20M daily volume, still shipping, no large unlock cliff ahead.</td>
+            <td class="n">$600–1,800</td>
+          </tr>
+          <tr>
+            <td><strong>Tail</strong></td>
+            <td class="n">$100</td>
+            <td class="n">8 × $12</td>
+            <td>Sub-$300M cap in an emerging narrative, volume that held up through the washout. Assume 5–6 go to zero.</td>
+            <td class="n">$0–2,500</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+    <p class="t-foot">
+      Fourteen positions is the ceiling, not a target. Below ~$12 a position the
+      fees and the attention cost exceed the diversification benefit.
+    </p>
+  </div>
+
+  <div class="callout">
+    <h3 class="t-head">The answer to "there are too many coins"</h3>
+    <p class="t-call">
+      Stop tracking coins. Track <strong>narratives</strong>. At any moment there are
+      roughly 8–12 live ones — AI agents, DePIN, RWA, L2s, gaming, privacy, memes,
+      restaking. Two or three of them produce nearly all of the outsized winners in
+      a given cycle, and the coins inside a narrative move as a cohort, together,
+      before any individual chart looks interesting. That turns an intractable
+      problem — rank 1,400 coins — into a tractable one: pick 3–4 narratives, own
+      the two most liquid names in each. It is also computable, which is build
+      item #2 below.
+    </p>
+  </div>
+</section>
+
+<!-- ═══ 5 · how to buy ═════════════════════════════════════════════════════ -->
+<section>
+  <h2 class="t-label">How to actually get in</h2>
+  <div class="card">
+    <ul>
+      <li>
+        <strong>Split the core, place the tail.</strong> Buy ETH and SOL as six
+        monthly tranches of about $42 each — you do not know where the bottom is, and
+        averaging removes the need to. Buy the Survivors and Tail sleeves as
+        <em>single entries on capitulation days</em> (a −12% day across the market),
+        not on a schedule. Those are the days the illiquid names give you a price.
+      </li>
+      <li>
+        <strong>Use a pro venue.</strong> On $500, the retail Coinbase app's
+        ~1.5–2.5% spread-plus-fee is a real tax; Coinbase Advanced, Kraken Pro or
+        equivalent charge ~0.25–0.4% on maker orders. That is the difference between
+        ~$12 and ~$3 on entry — and it compounds on every rotation you make later.
+      </li>
+      <li>
+        <strong>Self-custody the core once it's built.</strong> A hardware wallet
+        for the ETH/SOL sleeve. You are planning to hold through a full cycle;
+        exchanges have a poor record of surviving one.
+      </li>
+      <li>
+        <strong>Write the thesis down per position, in one line.</strong> If you
+        cannot say why you own it in a sentence, you will not hold it through the
+        −60% that happens even in the winners, and you will not know when it breaks.
+      </li>
+    </ul>
+  </div>
+</section>
+
+<!-- ═══ 6 · the ladder ═════════════════════════════════════════════════════ -->
+<section>
+  <h2 class="t-label">The exit ladder — this is the part that decides the number</h2>
+  <p>
+    Everything above is ordinary. This is where almost everyone loses the trade:
+    they get the 10x on screen and give it back, because no rule ever told them to
+    sell. Set the ladder now, while you have no positions and no feelings about them.
+  </p>
+
+  <div class="card">
+    <div class="scroll">
+      <table>
+        <thead>
+          <tr>
+            <th>Position is up</th>
+            <th>Sell</th>
+            <th>Cumulative out</th>
+            <th>Why this rung</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr><td class="n">3×</td><td class="n">20%</td><td class="n">20%</td><td>Takes 60% of your original cost off the table. The psychological unlock — the rest is now playing with the market's money.</td></tr>
+          <tr><td class="n">5×</td><td class="n">20%</td><td class="n">40%</td><td>Original cost fully recovered, twice over. Everything from here is profit you cannot lose to zero.</td></tr>
+          <tr><td class="n">8×</td><td class="n">25%</td><td class="n">65%</td><td>Most alts that reach 8× do not reach 15×. This is the rung that banks the realistic case.</td></tr>
+          <tr><td class="n">15×</td><td class="n">20%</td><td class="n">85%</td><td>You are now in the outcome that carries the whole book. Bank most of it.</td></tr>
+          <tr><td class="n">—</td><td class="n">15%</td><td class="n">100%</td><td>Let the last slice run behind a 35% trailing stop. This is the piece that catches a 50×, and it can only cost you 15% of one position.</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p class="t-foot">
+      One additional rule, and it is not optional: <strong>never add to a position
+      that is already up 5×</strong>. That is the single most common way a 10× book
+      becomes a 2× book.
+    </p>
+  </div>
+
+  <div class="card">
+    <h3 class="t-head">The regime override — sell regardless of rung</h3>
+    <p class="t-call">
+      Your own engine can already call the top, and it is the most valuable thing on
+      the tab that you currently are not acting on. When <strong>all three</strong>
+      of these are true at once, sell 50% of everything, ladder position irrelevant:
+    </p>
+    <ul>
+      <li>Season score prints <code>alt_season</code> — <span class="num">≥70</span> on the published scale</li>
+      <li>Fear &amp; greed <span class="num">≥80</span> (extreme greed, sustained more than a week)</li>
+      <li>BTC dominance falling for <span class="num">60+</span> days and the <code>domTrend</code> leg pinned at <code>falling</code></li>
+    </ul>
+    <p class="t-call">
+      That combination is late-stage euphoria. It has marked the distribution zone
+      in every prior cycle, and it is roughly the last three weeks in which the exit
+      liquidity actually exists.
+    </p>
+  </div>
+</section>
+
+<!-- ═══ 7 · odds ═══════════════════════════════════════════════════════════ -->
+<section>
+  <h2 class="t-label">What $5,000 actually requires</h2>
+  <div class="card">
+    <p>
+      Straight answer, because sizing decisions depend on it. Run the sleeves above
+      through a cycle expansion comparable to 2022→2025 and the median lands around
+      <strong class="num">$2,500–3,500</strong>. Hitting <strong class="num">$5,000</strong>
+      needs the Tail sleeve to produce at least one genuine 30× — which is the
+      <em>designed</em> outcome of that sleeve, not a fluke, but it is roughly a
+      60–70th-percentile result rather than a base case.
+    </p>
+    <div class="well">
+      <p class="t-call" style="color:var(--ink)">
+        And that is all <em>conditional on a cycle expansion happening at all</em>.
+        Over any 18–30 month window that is perhaps a coin flip. The left tail —
+        no expansion, or picks that don't survive — is <span class="num">$300–800</span>,
+        and it is a real outcome, not a disclaimer.
+      </p>
+    </div>
+    <p class="t-call">
+      Two implications worth taking seriously. First, the timeline is
+      <strong>18–30 months</strong>, not months — you said you don't need it
+      overnight, and that is the single biggest edge you have here. Second, $500
+      that must become $5,000 is a different instruction than $500 you can afford
+      to lose; the plan above assumes the latter, and no honest version of this
+      plan assumes the former.
+    </p>
+  </div>
+</section>
+
+<!-- ═══ 8 · build list ═════════════════════════════════════════════════════ -->
+<section>
+  <h2 class="t-label">What to change in the Markets tab, in order</h2>
+  <p>
+    Each of these is scoped against the code as it stands, ordered by how much it
+    moves the thing you actually asked for.
+  </p>
+
+  <div class="build">
+    <div class="build-row">
+      <div class="top">
+        <h3 class="t-head">1 · Widen the universe and track rank velocity</h3>
+        <span class="chip hot">highest value</span>
+      </div>
+      <p class="t-call">
+        Fetch pages 1–4 of <code>/coins/markets</code> instead of page 1 — top 1000,
+        still keyless, still four calls inside the background function's 15-minute
+        budget. Then store <code>rank</code> alongside price in the
+        <code>alt_snapshots</code> prices map, which already writes hourly. A coin
+        climbing rank 600 → 300 over 30 days is the strongest early tell that exists
+        for a future leader, it is computable from data you are one column away from
+        already having, and nothing else on the tab can see it.
+      </p>
+    </div>
+
+    <div class="build-row">
+      <div class="top">
+        <h3 class="t-head">2 · Add narrative cohorts</h3>
+        <span class="chip hot">highest value</span>
+      </div>
+      <p class="t-call">
+        <code>/coins/categories</code> is one keyless call returning every category's
+        market cap and 24h change. Ranking those by 7d and 30d change answers "which
+        narrative is bidding" — the leading indicator that per-coin screening
+        structurally cannot produce, because coins in a cohort move together before
+        any single chart looks interesting. This is the direct fix for "there are too
+        many coins to track."
+      </p>
+    </div>
+
+    <div class="build-row">
+      <div class="top">
+        <h3 class="t-head">3 · Add an Accumulation mode to the screener</h3>
+        <span class="chip mid">this cycle phase</span>
+      </div>
+      <p class="t-call">
+        A second scoring function beside <code>screenCoin</code>, ranking on the
+        inverse criteria: depth of drawdown from ATH, base width (a <em>narrow</em>
+        7d range, not a breakout), volume floor holding up rather than collapsing,
+        and survivorship — still inside the top 300 after −85%. Gate it on the season
+        phase so the tab shows Accumulation in <code>risk_off</code>/<code>btc_only</code>
+        and the existing ignition board from <code>mixed</code> upward. That makes the
+        tab useful in the phase you are actually in.
+      </p>
+    </div>
+
+    <div class="build-row">
+      <div class="top">
+        <h3 class="t-head">4 · A positions and ladder layer</h3>
+        <span class="chip mid">converts plan to action</span>
+      </div>
+      <p class="t-call">
+        <code>alt_flags</code> grades the screener's ideas but nothing tracks
+        <em>yours</em> — what you hold, cost basis, which ladder rung is next, how far
+        price is from it. Given that the exit ladder is the part that determines
+        whether this ends at $5,000, it is strange that it is the one part of the
+        strategy with no representation in the app. Same table shape as
+        <code>alt_flags</code>, plus a rung column.
+      </p>
+    </div>
+
+    <div class="build-row">
+      <div class="top">
+        <h3 class="t-head">5 · Make the season score lead instead of follow</h3>
+        <span class="chip">refinement</span>
+      </div>
+      <p class="t-call">
+        Add stablecoin supply growth as a part — aggregate USDT + USDC market cap
+        rising is dry powder entering the system, and it leads breadth by weeks.
+        Raise the ETH/BTC legs above 5 points each; ETH/BTC turning up is the
+        canonical first domino of a rotation. And measure dominance as
+        rate-of-change rather than a 30-day level delta, so a sharp roll-over
+        registers before the level has travelled far enough to trip
+        <code>DOM_FLAT_PTS</code>.
+      </p>
+    </div>
+  </div>
+</section>
+
+<hr>
+
+<footer>
+  Analysis for your own decision-making, not financial advice — every number here
+  is an estimate about an unpredictable market, and the loss cases are as real as
+  the gain cases. Market data as of 15 August 2026 from CoinGecko, CoinMarketCap
+  and alternative.me. Engine references are to
+  <code>netlify/functions/alt-cron-background.js</code> and
+  <code>alt-scan.js</code> at the current commit.
+</footer>
+
+</div>

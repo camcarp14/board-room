@@ -1,10 +1,21 @@
 // ─── Alt Season — the monitor ────────────────────────────────────────────────
-// One column, checked one-handed on a phone: the regime score answers "is this
-// a market to be in", the flag radar answers "which coins, right now", the
-// movers answer "what's already going", and the board and record sit folded
-// underneath as the evidence and the receipts. The hourly cron did every piece
-// of math on this page — the panel only formats and never re-derives, so the
-// number here and the number the flag log was graded by are the same number.
+// One column, checked one-handed on a phone, and read top-down as four
+// questions that each narrow the next:
+//
+//   1. the cycle       where are we, and which way are we moving
+//   2. capital ladder  which rung of the risk curve is being bid
+//   3. the book        what I hold, and what my next action is
+//   4. narratives      which theme is bidding — and the only route to a ticker
+//   5. flags · board · record   the specific setups, then the evidence
+//
+// THE INVARIANT: no ticker appears on this tab without the layer above it on
+// screen. A coin row is always inside a cohort; a cohort is always inside a
+// regime. That is what stops this drifting back into five lists of coins, and
+// it is checkable in review in a way "make it less overwhelming" is not.
+//
+// The hourly cron did every piece of math on this page — the panel only formats
+// and never re-derives, so the number here and the number the flag log was
+// graded by are the same number.
 //
 // The 60s poll (useAltScan) overlays live prices server-side; `stale` fires
 // when EITHER half aged out — the screener pass is >2h old, or the live quote
@@ -13,30 +24,21 @@
 import { lazy, Suspense, useEffect, useState } from "react";
 import { T } from "../../theme.js";
 import { calendarDaysBetween } from "../../lib/dates.js";
-import { Card, CollapsibleCard, CellGroup, Cell, Button, PillRow, EmptyState, Dot, Delta } from "../../ui/kit.jsx";
+import { Card, CollapsibleCard, CellGroup, Cell, Button, EmptyState, Dot, Delta } from "../../ui/kit.jsx";
 import { IcChevronDown } from "../../ui/icons.jsx";
 import { StatusTag, CARD_STATES } from "../../ui/shared.jsx";
-import { NumTween, Sparkline } from "../../ui/primitives.jsx";
 import { callFnFull } from "../../lib/functions.js";
-import { useAltScan } from "../../data/altseason.js";
+import { useAltScan, useAltPositions } from "../../data/altseason.js";
 import AltCoinSheet, { TonePill, HIT_LABEL, STAGE_LABEL, MOTION_LABEL } from "./AltCoinSheet.jsx";
 import RecordCard from "./RecordCard.jsx";
+import { CycleDial, CapitalLadder, Narratives, CohortDrilldown, EXCESS_TONE } from "./AltLayers.jsx";
+import AltBookCard from "./AltBookCard.jsx";
 
 // Lazy — lightweight-charts stays in its own chunk until a chart is opened.
 const BtcChartModal = lazy(() => import("../../BtcChartModal.jsx"));
 
 /* ── tiny formatters — client-side duplicates of the server's (server math is
       never duplicated; formatting is fine to) ────────────────────────────── */
-// Sub-dollar prices get significant digits, not two decimals — "$0.00" is not
-// a price, and the levels on this tab are read straight off these strings.
-function px(x) {
-  if (!Number.isFinite(x)) return "—";
-  const a = Math.abs(x);
-  if (a >= 1000) return `$${Math.round(x).toLocaleString("en-US")}`;
-  if (a >= 1) return `$${(Math.round(x * 100) / 100).toFixed(2)}`;
-  if (a === 0) return "$0";
-  return `$${x.toPrecision(4).replace(/(\.\d*?)0+$/, "$1").replace(/\.$/, "")}`;
-}
 const fmtTime = (iso) => { const d = new Date(iso); return isNaN(d) ? "—" : d.toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" }); };
 // Accepts both stamp shapes: alt-scan ships ISO strings throughout, but a
 // number is legal input too (fixtures and future callers) — and the number
@@ -51,20 +53,33 @@ const rel = (stamp, now) => {
   return `${Math.round(m / 60)}h ago`;
 };
 
-const MOVER_WINDOWS = ["1h", "4h", "12h", "24h", "7d", "30d"];
 // Rows an open section shows before it asks. Ten is about a phone screen and a
 // half; past that a section is a database dump, not a list.
 const SECTION_PREVIEW = 10;
 
-// Regime dot tone by phase. majors_rotating rides with green — it's the
-// "get ready" reading, not a warning; mixed is the genuine coin-flip.
-const PHASE_TONE = { alt_season: T.green, majors_rotating: T.green, mixed: T.amber, btc_only: T.red, risk_off: T.red };
+/* ── WHERE THE MOVERS CARD WENT, because deleting a working card deserves a
+      reason in the file rather than in a commit message.
+
+   It was six windows × twelve coins — seventy-two coin slots with no
+   relationship between any of them, and it was the single largest contributor
+   to the overload this tab was rebuilt to remove. The appetite it served
+   ("what is actually moving") is real, so it was not dropped: it moved one
+   layer up, into Narratives → the cohort drill-down, where the same question is
+   answered WITH the context that makes an answer interpretable — whether the
+   name's whole group is moving too.
+
+   Nothing became unreachable. The Board card still holds every screened row,
+   and the cohort list ranks by 7d, which is the window the cohort median is
+   measured over and therefore the only window an excess can be read against.
+   The 4h/12h baselines the old card depended on are still computed and still
+   published; they simply no longer have a card of their own. */
 
 // What the regime means for what you do, in one sentence — the read, not the
 // number, because "39/100, Bitcoin only" left the entire "so what" to the
-// reader every single time. One LINE each. The three-line versions were written for a card that no
-// longer exists; in the strip a wrap eats the space the strip was built to
-// reclaim, so every one of these is held under ~50 characters.
+// reader every single time. These are now the LARGEST text on the dial rather
+// than the smallest on a strip, which is where they always belonged; the ~50
+// character ceiling stays, because two lines here pushes the ladder below the
+// fold on a phone and the fold is the whole design target.
 const PHASE_READ = {
   alt_season: "Alts are getting paid — setups here work more often than not.",
   majors_rotating: "Money's moving, majors first — alt setups are early.",
@@ -192,8 +207,8 @@ function FallbackRow({ detail, onRetry }) {
   );
 }
 
-// Skeleton mirrors the page it becomes — score card, radar rows, movers with
-// its pill strip — so nothing jumps when the payload lands.
+// Skeleton mirrors the page it becomes — the dial, the ladder's rungs, then the
+// narrative tiles — so nothing jumps when the payload lands.
 function PanelSkeleton() {
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 12, minWidth: 0 }}>
@@ -224,6 +239,10 @@ function PanelSkeleton() {
 export default function AltSeasonPanel({ isMobile }) {
   const q = useAltScan();
   const data = q.data;
+  // Separate query, separate clock — positions change when you change them, not
+  // every sixty seconds. See the note over useAltPositions for why they are
+  // joined at render instead of server-side.
+  const positionsQ = useAltPositions();
 
   // The board folds by default — it is 60 rows of evidence, one tap away. The
   // RECORD does not, any more: it used to be a grey sentence and a list of
@@ -236,7 +255,11 @@ export default function AltSeasonPanel({ isMobile }) {
     catch { return defaults; }
   });
   const [whyOpen, setWhyOpen] = useState(false);
-  const [win, setWin] = useState("24h");
+  // Which narrative is drilled into — the only route from this tab to a ticker.
+  // Not persisted: a cohort selection is a question you are asking right now,
+  // and restoring last week's filter on open would hide the board behind a
+  // choice nobody remembers making.
+  const [cohortId, setCohortId] = useState(null);
   // Which entry sections are open, and which have been asked to show their
   // whole tail. "Worth an entry now" opens itself; the other two are counts
   // until you want them.
@@ -284,7 +307,6 @@ export default function AltSeasonPanel({ isMobile }) {
 
   const season = data.season || null;
   const board = Array.isArray(data.board) ? data.board : [];
-  const movers = data.movers || null;
   // Igniting first, then score — the server sorts this way too, but the order
   // is a promise the radar makes, so it's kept here rather than assumed. The
   // entry sections below preserve it inside each bucket, so the best setup in
@@ -302,12 +324,26 @@ export default function AltSeasonPanel({ isMobile }) {
   // Flag episodes carry coinId (their own id embeds the flag day); board and
   // mover rows carry the coingecko id directly.
   const openCoin = (c) => setSel({ id: c.coinId || c.id, symbol: c.symbol, name: c.name });
-  // A mover outside the top-60 board has no screened row to show — the chart
-  // is the only depth we honestly have for it, so skip the sheet.
-  const openMover = (m) => (boardById.has(m.id) ? openCoin(m) : setChart({ id: m.id, symbol: m.symbol }));
 
-  const list = movers ? movers[win] : null;
-  const readyHours = movers?.readyIn?.[win] ?? null;
+  // ── the three layers above the coin ──
+  const ladder = data.ladder || null;
+  const cohorts = Array.isArray(data.cohorts) ? data.cohorts : [];
+  const cohortById = new Map(cohorts.map((c) => [c.id, c]));
+  const selectedCohort = cohortId ? cohortById.get(cohortId) || null : null;
+  // A cohort's members ON THE BOARD. The board is the top 60 by setup, so a
+  // cohort can be bid and still have nothing here — CohortDrilldown says so
+  // rather than rendering an empty list that reads as an error.
+  const cohortRows = selectedCohort ? board.filter((r) => r.cohort && r.cohort.id === selectedCohort.id) : [];
+
+  // Live price for a position: the board first (it carries the overlaid price),
+  // then any mover row, then nothing. Matching on coin_id and falling back to
+  // symbol is what lets a position added from memory — where coin_id is a guess
+  // off the symbol — still find its price.
+  const bySymbol = new Map(board.map((r) => [String(r.symbol || "").toUpperCase(), r]));
+  const priceOf = (p) => {
+    const row = boardById.get(p.coin_id) || bySymbol.get(String(p.symbol || "").toUpperCase());
+    return row && Number.isFinite(row.price) ? row.price : null;
+  };
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 12, minWidth: 0 }}>
@@ -319,47 +355,32 @@ export default function AltSeasonPanel({ isMobile }) {
         </Card>
       )}
 
-      {/* ── REGIME — a strip, not a card ──────────────────────────────────
-          It was a whole Card for one number you cannot act on: ~195px of the
-          first screen spent on the answer to a question you ask once a day.
-          The regime is CONTEXT, and the house rule says separation is by
-          surface — so dropping the surface is how you say "this is
-          background, not content". Two lines on the canvas, everything else
-          still one tap behind Why. */}
-      <div style={{ padding: "0 2px 2px" }}>
-        <div style={{ display: "flex", alignItems: "center", gap: 8, minHeight: 30, minWidth: 0 }}>
-          <Dot tone={PHASE_TONE[season?.phase] || T.faint} size={7} />
-          <span className="t-label" style={{ color: "var(--ink)", minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-            {season?.label || "No read"}
-          </span>
-          {season?.score != null && (
-            <span className="t-num" style={{ fontSize: 12.5, color: "var(--faint)", flex: "none", letterSpacing: "0.01em" }}>
-              <NumTween v={season.score} f={(n) => String(Math.round(n))} />
-              <span style={{ opacity: 0.55 }}>/100</span>
-            </span>
-          )}
-          <span style={{ marginLeft: "auto", display: "inline-flex", alignItems: "center", gap: 8, flex: "none" }}>
+      {/* ── LAYER 1 · WHERE ARE WE ────────────────────────────────────────
+          The regime was a two-line strip: correct as a piece of information
+          design when the regime was context for a page of coin lists, and
+          wrong once the regime became the thing the page is organised around.
+          `39/100 · Bitcoin only` asks the reader to hold a five-rung ladder in
+          their head; the same number on the accumulate/rotate/distribute arc
+          reads in one glance. The PHASE_READ sentences did not change — they
+          went from being the smallest text on screen to the largest, which was
+          always where they belonged. */}
+      <CycleDial
+        season={season}
+        drift={data.scoreDrift || null}
+        read={season?.score != null ? (PHASE_READ[season.phase] || "") : null}
+        trailing={
+          <>
             {staleTag && <StatusTag status={staleTag} />}
-            {/* No score, no Why — there is nothing behind it to show, and a
-                button that opens an empty table is worse than no button.
-                Quiet, not accent: accent is for active/primary by house rule,
-                and as the only coloured thing above the fold this was the
-                loudest element on a screen whose content is the rows. */}
             {season?.score != null && (
               <Button kind="plain" size="sm" onClick={() => setWhyOpen((v) => !v)}
                 style={{ height: 44, margin: "-11px -10px", padding: "0 10px", color: "var(--sub)", fontWeight: 500 }}>
                 {whyOpen ? "Hide" : "Why"}
               </Button>
             )}
-          </span>
-        </div>
-        <div className="t-cap" style={{ color: "var(--sub)", lineHeight: 1.5 }}>
-          {season?.score != null
-            ? (PHASE_READ[season.phase] || "")
-            : "The score publishes once the screener has breadth to measure — unmeasured parts are dropped, never guessed."}
-        </div>
-        {whyOpen && (
-          <div style={{ marginTop: 6 }}>
+          </>
+        }>
+        {whyOpen && season && (
+          <div style={{ paddingTop: 2 }}>
             {season.facts?.[0] && (
               <div className="t-foot" style={{ color: "var(--sub)", lineHeight: 1.5, paddingBottom: 2 }}>{season.facts[0]}</div>
             )}
@@ -373,7 +394,35 @@ export default function AltSeasonPanel({ isMobile }) {
             ))}
           </div>
         )}
-      </div>
+      </CycleDial>
+
+      {/* ── LAYER 2 · WHAT'S ROTATING ─────────────────────────────────────
+          The only surface here that can see ahead: when the lit rung is Large,
+          the next rung to light is Mid, because that is the order flow travels
+          rather than a prediction about any chart. */}
+      <CapitalLadder ladder={ladder} />
+
+      {/* ── LAYER 5 · WHAT DO I DO ABOUT IT ───────────────────────────────
+          Third, not last, and the placement is the argument: above the board
+          because your own next action outranks the screener's next idea. It
+          because your own next action outranks the screener's next idea.
+
+          Rendered even when empty, which is a deliberate trade: a permanently
+          empty card is a real cost, and it is smaller than the cost of the Add
+          affordance living somewhere you have to go looking for. The book is
+          the half of the plan that decides the number, and a tab that hides it
+          until it is already in use can never be the thing that gets it
+          started. */}
+      <AltBookCard
+        positions={positionsQ.data}
+        priceOf={priceOf}
+        season={season}
+        fearGreed={season?.fearGreed}
+        domTrend={season?.domTrend}
+        domSpanDays={data.season?.domSpanDays ?? null}
+        error={positionsQ.error}
+      />
+
 
       {/* ── FLAGS — sorted by whether it is time, not by tier ──────────────── */}
       {/* THE CARD IS A SHORTLIST, NOT A LEDGER. The screener's regime gate
@@ -456,6 +505,23 @@ export default function AltSeasonPanel({ isMobile }) {
                                   <span style={{ fontSize: 14, fontWeight: 600, letterSpacing: "0.04em", color: "var(--ink)" }}>{f.symbol}</span>
                                   {age && <span className="t-cap t-num" style={{ color: "var(--faint)" }}>{age}</span>}
                                   {mark && <span className="t-cap t-num" style={{ color: mark.tone, fontWeight: 600 }}>{mark.text}</span>}
+                                  {/* IS THE MOVE SHARED — the one number that
+                                      separates rotation from a listing or an
+                                      unlock, and the answer to "there are so
+                                      many random reasons a coin moves". Only
+                                      the two states worth acting on get ink:
+                                      'alone' is a warning the row cannot
+                                      otherwise carry, and 'lagging' marks the
+                                      entry that looks like nothing is
+                                      happening. 'leading', 'with' and
+                                      'sinking' are already legible from the
+                                      move itself and would just be noise
+                                      repeated in a second colour. */}
+                                  {f.cohort && (f.cohort.state === "alone" || f.cohort.state === "lagging") && (
+                                    <span className="t-cap t-num" style={{ color: EXCESS_TONE[f.cohort.state], fontWeight: 600 }}>
+                                      {f.cohort.state === "alone" ? "alone" : "laggard"}
+                                    </span>
+                                  )}
                                 </span>
                               }
                               sub={stageLine(f.move) || "—"}
@@ -488,54 +554,23 @@ export default function AltSeasonPanel({ isMobile }) {
         )}
       </CollapsibleCard>
 
-      {/* ── MOVERS — what's already going, by window ───────────────────────── */}
-      <Card pad="md">
-        <span className="t-head" style={{ display: "block", marginBottom: 3 }}>Movers</span>
-        {/* Says what this list is FOR, because it is the one card here that is
-            not a recommendation and reads exactly like one. */}
-        <div className="t-cap" style={{ color: "var(--faint)", marginBottom: 6, lineHeight: 1.5 }}>
-          Biggest gainers in the window — where the tape is hot, not entries.
-        </div>
-        <PillRow options={MOVER_WINDOWS} value={win} onChange={setWin} style={{ margin: "0 -16px 2px" }} />
-        {list == null ? (
-          // 4h/12h come from our own hourly snapshots, not CoinGecko — a fresh
-          // deploy has no baseline yet, and an honest wait beats a fake zero.
-          <div className="t-foot" style={{ color: "var(--sub)", padding: "10px 2px 4px", lineHeight: 1.5 }}>
-            Needs price history — {readyHours != null ? `ready in ~${Math.max(1, Math.ceil(readyHours))}h` : "the hourly snapshots are still building it"}.
-          </div>
-        ) : list.length === 0 ? (
-          <div className="t-foot" style={{ color: "var(--sub)", padding: "10px 2px 4px" }}>
-            Nothing eligible moved in this window.
-          </div>
-        ) : (
-          <CellGroup style={inCardGroup}>
-            {list.map((m, i) => (
-              <Cell key={m.id}
-                onClick={() => openMover(m)}
-                leading={<span className="t-cap t-num" style={{ color: "var(--faint)" }}>{i + 1}</span>}
-                title={m.symbol} titleStyle={{ fontSize: 14, fontWeight: 600 }}
-                // The stage where we have one, and the honest "Not screened"
-                // where we don't — which is also the reason tapping that row
-                // opens the chart instead of the sheet (see openMover).
-                sub={boardById.has(m.id) ? (stageLine(boardById.get(m.id).move, true) || m.name) : "Not screened"}
-                trailing={
-                  <span style={{ display: "inline-flex", alignItems: "center", gap: 10, flex: "none" }}>
-                    {m.spark?.length > 1 && (
-                      <span style={{ width: 52, flex: "none", display: "inline-flex" }} aria-hidden>
-                        <Sparkline points={m.spark} height={24} color={(m.pct ?? 0) >= 0 ? T.green : T.red} />
-                      </span>
-                    )}
-                    <span style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 2 }}>
-                      <span className="t-num" style={{ fontSize: 13.5, color: "var(--ink)" }}>{px(m.price)}</span>
-                      <Delta pct={m.pct} digits={1} />
-                    </span>
-                  </span>
-                }
-              />
-            ))}
-          </CellGroup>
-        )}
-      </Card>
+      {/* ── LAYER 3 · WHICH NARRATIVE ─────────────────────────────────────
+          The answer to "there are too many coins to keep track of": twelve
+          cohorts, not fourteen hundred names, and the names inside one move
+          together before any individual chart looks interesting. Tapping a
+          tile is the only route from this tab to a ticker. */}
+      <Narratives
+        cohorts={cohorts}
+        read={data.cohortRead?.read || null}
+        selected={cohortId}
+        onSelect={setCohortId}
+      />
+
+      {/* ── LAYER 4 · WHICH COIN, AND IS THE MOVE REAL ────────────────────
+          Only rendered with a cohort selected, which is the invariant made
+          structural rather than remembered: there is no code path that puts a
+          ticker on this card without its group's number in the header. */}
+      <CohortDrilldown cohort={selectedCohort} rows={cohortRows} onOpen={openCoin} />
 
       {/* ── BOARD — the full ranking, folded ───────────────────────────────── */}
       <CollapsibleCard {...coll("board")} title="Board" tight>

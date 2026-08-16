@@ -1,5 +1,6 @@
 import { supabase } from "../lib/supabase.js";
 import { todayISO } from "../lib/dates.js";
+import { averageIn } from "../lib/altLadder.js";
 
 // ─── writes: supabase-js does not reject when a write fails ──────────────────
 // This is the thing to know before touching anything below it.
@@ -1157,6 +1158,93 @@ export const db = {
       .in("id", ids).select();
     if (error) throw softDeleteError(error, "the tiles");
     return data || [];
+  },
+
+  /* ── alt positions — the book behind the Alt Season tab ──────────────────
+     The screener's own log (alt_flags) is written by the cron and read-only
+     here; this is the other table, the one holding what was actually bought.
+     See supabase/migrations/0035_alt_positions.sql for why cost basis is
+     averaged on write and why rungs_hit is a ratcheting count. */
+  async loadAltPositions() {
+    const { data, error } = await supabase.from("alt_positions")
+      .select("id,coin_id,symbol,name,sleeve,cost_basis,units,rungs_hit,opened_at,closed_at,notes")
+      .is("closed_at", null)
+      .order("opened_at", { ascending: false });
+    if (error) throw error;
+    // numeric comes back as a STRING from PostgREST, every time. Left alone it
+    // reaches ladderState, `price / "0.0034"` coerces to a number by luck, and
+    // then `rungs_hit` in a >= comparison silently stops ratcheting — the exact
+    // class of bug the cron's own fin() exists to prevent. Coerce at the edge.
+    return (data || []).map((r) => ({
+      ...r,
+      cost_basis: Number(r.cost_basis),
+      units: r.units == null ? null : Number(r.units),
+      rungs_hit: Number(r.rungs_hit) || 0,
+    }));
+  },
+
+  /** Create or replace a position outright. Averaging a tranche in is
+   *  addAltTranche — this one is for the first buy and for corrections. */
+  async saveAltPosition(pos) {
+    const user_id = await db.uid();
+    if (!user_id) throw new Error("Not signed in");
+    const now = new Date().toISOString();
+    const row = {
+      id: pos.id || crypto.randomUUID(),
+      user_id,
+      coin_id: pos.coin_id,
+      symbol: String(pos.symbol || "").toUpperCase(),
+      name: pos.name || null,
+      sleeve: pos.sleeve || "tail",
+      cost_basis: Number(pos.cost_basis),
+      units: pos.units == null ? null : Number(pos.units),
+      rungs_hit: Math.max(0, Math.round(Number(pos.rungs_hit) || 0)),
+      opened_at: pos.opened_at || now,
+      updated_at: now,
+    };
+    if (!Number.isFinite(row.cost_basis) || row.cost_basis <= 0) throw new Error("Cost basis has to be a price above zero");
+    const { data, error } = await supabase.from("alt_positions").upsert(row, { onConflict: "id" }).select().single();
+    if (error) throw error;
+    return data;
+  },
+
+  /** Add a tranche — the DCA path. The weighting is in altLadder.averageIn;
+   *  this only reads the current row and writes the merged one back. */
+  async addAltTranche(id, { price, units }) {
+    const { data: cur, error: readErr } = await supabase.from("alt_positions")
+      .select("cost_basis,units").eq("id", id).single();
+    if (readErr) throw readErr;
+    const merged = averageIn(
+      { cost_basis: Number(cur.cost_basis), units: cur.units == null ? null : Number(cur.units) },
+      price, units,
+    );
+    if (!merged) throw new Error("A tranche needs both a price and a unit count to average in");
+    const { data, error } = await supabase.from("alt_positions")
+      .update({ ...merged, updated_at: new Date().toISOString() })
+      .eq("id", id).select().single();
+    if (error) throw error;
+    return data;
+  },
+
+  /** Mark the next rung sold. RATCHETS — see the migration header. The guard is
+   *  `.eq("rungs_hit", from)`, so two taps on the same row (a double-tap on a
+   *  phone, or the same page open twice) advance the ladder once, not twice. */
+  async sellAltRung(id, from) {
+    const { data, error } = await supabase.from("alt_positions")
+      .update({ rungs_hit: from + 1, updated_at: new Date().toISOString() })
+      .eq("id", id).eq("rungs_hit", from).select();
+    if (error) throw error;
+    return (data || [])[0] || null;
+  },
+
+  /** Close a position. Kept, not deleted — the point of writing the ladder down
+   *  is being able to look back at whether it was followed. */
+  async closeAltPosition(id) {
+    const now = new Date().toISOString();
+    const { error } = await supabase.from("alt_positions")
+      .update({ closed_at: now, updated_at: now })
+      .eq("id", id).is("closed_at", null);
+    if (error) throw error;
   },
 };
 

@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { callFnFull } from "../lib/functions.js";
+import { db } from "./db.js";
 
 // ─── Markets tab feeds — the alt-season scan and the stock watchlist ─────────
 // Both queryFns throw on failure instead of resolving to an empty shape — same
@@ -32,6 +33,30 @@ export function useAltScan() {
     refetchOnWindowFocus: true,
   });
 }
+
+/* ── the book ────────────────────────────────────────────────────────────────
+   Deliberately NOT folded into useAltScan. That query polls every 60 seconds
+   against a Netlify function; positions are a handful of rows in Supabase that
+   only change when you change them, and putting them on the same clock would
+   re-read the table sixty times an hour to watch nothing happen. They are
+   joined in the panel, at render, against the live prices the scan already
+   carries — which is also what keeps the multiple on each row as fresh as the
+   board beside it without either query knowing about the other. */
+const POSITIONS_KEY = ["alt-positions"];
+
+export function useAltPositions() {
+  return useQuery({ queryKey: POSITIONS_KEY, queryFn: () => db.loadAltPositions() });
+}
+
+function usePositionMutation(mutationFn) {
+  const qc = useQueryClient();
+  return useMutation({ mutationFn, onSuccess: () => qc.invalidateQueries({ queryKey: POSITIONS_KEY }) });
+}
+
+export const useSaveAltPosition = () => usePositionMutation((pos) => db.saveAltPosition(pos));
+export const useAddAltTranche = () => usePositionMutation(({ id, price, units }) => db.addAltTranche(id, { price, units }));
+export const useSellAltRung = () => usePositionMutation(({ id, from }) => db.sellAltRung(id, from));
+export const useCloseAltPosition = () => usePositionMutation((id) => db.closeAltPosition(id));
 
 // Yahoo quotes via the markets function, which caches for five minutes —
 // polling any faster would only re-read the same server cache.
