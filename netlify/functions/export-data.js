@@ -49,7 +49,7 @@ const TABLES = [
   "workout_templates", "workout_sessions", "body_weight_log",
   "transactions", "plaid_items",
   "mini_skills", "mini_feed", "miner_samples",
-  "alt_state", "alt_flags", "alt_snapshots",
+  "alt_state", "alt_flags", "alt_snapshots", "alt_positions",
   "stock_state", "stock_flags", "stock_sessions",
   "upstream_runs", "upstream_run_events", "upstream_predictions", "upstream_tell_checks",
   // client_errors joined the record when crash telemetry landed. It belongs in the

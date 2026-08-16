@@ -725,6 +725,242 @@ try {
     check("an empty history is not a trend",
       domTrendOf([]).trend === null && domTrendOf(null).samples === 0);
   }
+
+  /* ─── 9. the capital ladder ────────────────────────────────────────────────
+     The surface that claims to see AHEAD, so its two failure modes both get
+     fixtures: a mean instead of a median (one 400% micro-cap lighting a rung
+     nothing is bidding) and a wrapper counted a rung below the coin it wraps
+     (Bitcoin's own return faking a rotation into large caps). ───────────── */
+  {
+    const { capitalLadder } = cron;
+    const coin = (symbol, mcap, chg30d, chg7d = 0, extra = {}) =>
+      ({ id: symbol.toLowerCase(), symbol, name: symbol, mcap, chg30d, chg7d, vol24h: 5e6, ...extra });
+    // Four rows per bucket — LADDER_MIN_ROWS — so every rung is measurable.
+    const bucket = (prefix, mcap, values) =>
+      values.map((v, i) => coin(`${prefix}${i}`, mcap, v));
+
+    const rotating = [
+      coin("BTC", 1.3e12, 18), coin("ETH", 2.3e11, 31),
+      ...bucket("L", 2e10, [44, 46, 42, 44]),
+      ...bucket("M", 3e9, [38, 36, 40, 38]),
+      ...bucket("S", 3e8, [12, 10, 14, 12]),
+      ...bucket("U", 5e7, [-2, -3, -1, -2]),
+    ];
+    const lad = capitalLadder(rotating);
+    check("the ladder lights the strongest measured rung",
+      lad.leadKey === "major", String(lad.leadKey));
+    check("...and names the rung flow reaches next, in curve order",
+      lad.nextLabel === "Mid", String(lad.nextLabel));
+    check("...and says so in a sentence rather than leaving it to be inferred",
+      /large.*Mid is next/i.test(lad.read || ""), lad.read);
+    check("every rung is published, measured or not",
+      lad.rungs.length === 6 && lad.rungs[0].key === "btc" && lad.rungs[5].key === "micro");
+
+    // THE MEDIAN TEST. Three rows going nowhere and one up 900%: the mean is
+    // +225% and would light micro over every other rung on the card.
+    const spike = [
+      coin("BTC", 1.3e12, 18), coin("ETH", 2.3e11, 12),
+      ...bucket("L", 2e10, [8, 7, 9, 8]),
+      ...bucket("M", 3e9, [3, 2, 4, 3]),
+      ...bucket("S", 3e8, [1, 0, 2, 1]),
+      ...bucket("U", 5e7, [0, -1, 1, 900]),
+    ];
+    const sp = capitalLadder(spike);
+    check("one 900% micro-cap does not light the micro rung",
+      sp.leadKey === "btc", `${sp.leadKey} @ ${JSON.stringify(sp.rungs.find((r) => r.key === "micro"))}`);
+    check("...because the rung is a median, not a mean",
+      sp.rungs.find((r) => r.key === "micro").chg30d === 0.5,
+      String(sp.rungs.find((r) => r.key === "micro").chg30d));
+
+    // A bucket under the floor is UNMEASURED, not zero — the distinction this
+    // codebase refuses to collapse anywhere else.
+    const thin = [coin("BTC", 1.3e12, 5), coin("ETH", 2.3e11, 4), ...bucket("L", 2e10, [3, 2])];
+    check("a bucket thinner than the floor reports null, never a confident zero",
+      capitalLadder(thin).rungs.find((r) => r.key === "major").chg30d === null);
+
+    // Wrappers in a bucket are the same coin's return counted twice, one rung
+    // too low — and it fakes rotation in exactly the direction that matters.
+    const wrapped = [
+      coin("BTC", 1.3e12, 40), coin("ETH", 2.3e11, 5),
+      coin("WBTC", 2e10, 40), coin("CBBTC", 2e10, 40), coin("LBTC", 2e10, 40), coin("TBTC", 2e10, 40),
+    ];
+    check("wrapped BTC never lights the large-cap rung with Bitcoin's own return",
+      capitalLadder(wrapped).rungs.find((r) => r.key === "major").chg30d === null,
+      String(capitalLadder(wrapped).rungs.find((r) => r.key === "major").chg30d));
+
+    // Everything negative is NOT a rotation into whatever fell least.
+    const bleeding = [
+      coin("BTC", 1.3e12, -4), coin("ETH", 2.3e11, -9),
+      ...bucket("L", 2e10, [-12, -11, -13, -12]),
+      ...bucket("M", 3e9, [-20, -19, -21, -20]),
+      ...bucket("S", 3e8, [-30, -29, -31, -30]),
+      ...bucket("U", 5e7, [-40, -39, -41, -40]),
+    ];
+    const bl = capitalLadder(bleeding);
+    check("a ladder that is negative all the way down never says flow 'reached' anything",
+      !/reached/i.test(bl.read) && /sold, not rotated/i.test(bl.read), bl.read);
+  }
+
+  /* ─── 10. the regime's own drift ───────────────────────────────────────── */
+  {
+    const { mergeScoreSample, scoreDriftOf } = cron;
+    const day = 86400000;
+    const now = Date.parse("2026-08-15T12:00:00Z");
+
+    let hist = [];
+    for (let i = 29; i >= 0; i--) hist = mergeScoreSample(hist, now - i * day, 25 + (29 - i) * 0.5);
+    check("one sample per UTC day, however many passes ran", hist.length === 30, String(hist.length));
+
+    // The load-bearing property: a later pass on the SAME day replaces the
+    // day's sample rather than appending a second one, so a 24-pass day cannot
+    // out-vote a quiet one in the window count.
+    const twice = mergeScoreSample(hist, now + 3600000, 99);
+    check("a second pass the same day replaces the day, never appends",
+      twice.length === 30 && twice[twice.length - 1].v === 99, String(twice.length));
+
+    const drift = scoreDriftOf(hist);
+    check("a rising regime is called rising", drift.direction === "rising", String(drift.direction));
+    check("...with the change measured end to end", near(drift.changePts, 14.5), String(drift.changePts));
+    check("...and the span measured, not assumed", drift.spanDays === 29, String(drift.spanDays));
+
+    const flat = scoreDriftOf(Array.from({ length: 10 }, (_, i) => ({ t: now - (9 - i) * day, v: 40 + (i % 2) })));
+    check("a wobble inside the noise band is 'flat', not a trend", flat.direction === "flat", String(flat.direction));
+
+    check("too few samples refuses to call a direction",
+      scoreDriftOf([{ t: now, v: 40 }, { t: now - day, v: 38 }]).direction === null);
+    check("an empty series is not a drift", scoreDriftOf([]).direction === null && scoreDriftOf(null).samples === 0);
+
+    // A null score must never enter the series as a zero — 0/100 is the most
+    // alarming reading on the scale, and it is the shape Number(null) produces.
+    check("an unpublished score is not merged as a zero",
+      mergeScoreSample([], now, null).length === 0 && mergeScoreSample([], now, undefined).length === 0);
+  }
+
+  /* ─── 11. cohorts, and the excess that reads them ──────────────────────── */
+  {
+    const { cohortStats, cohortRead, parseCategoryIndex } = cron;
+    const { cohortExcess } = mods["alt-scan"];
+    const raw = (id, chg7d, chg30d, vol = 5e6) =>
+      ({ id, symbol: id, name: id, current_price: 1, market_cap: 1e9, total_volume: vol,
+        price_change_percentage_7d_in_currency: chg7d, price_change_percentage_30d_in_currency: chg30d });
+
+    const c = cohortStats("x", "X", "X names", [raw("a", 10, 20), raw("b", -2, 5), raw("c", 6, 12), raw("d", 4, 9)], 1e10);
+    check("a cohort's return is the median of its members", c.chg7d === 5, String(c.chg7d));
+    check("...and breadth counts how many are actually lifting",
+      c.lifting === 3 && c.n === 4, `${c.lifting}/${c.n}`);
+
+    // Dust is the thing that makes a cohort lie: rows that have not traded drag
+    // both the median and the breadth denominator toward nothing.
+    const dusty = cohortStats("x", "X", "X", [
+      raw("a", 10, 20), raw("b", 12, 22), raw("c", 11, 21), raw("d", 9, 19),
+      raw("z1", 0, 0, 100), raw("z2", 0, 0, 100), raw("z3", 0, 0, 100),
+    ], 1e10);
+    check("untraded dust is excluded from both the median and the denominator",
+      dusty.n === 4 && dusty.chg7d === 10.5, `${dusty.n} @ ${dusty.chg7d}`);
+
+    check("a cohort under the floor is not published at all",
+      cohortStats("x", "X", "X", [raw("a", 10, 20), raw("b", 8, 18)], 1e10) === null);
+
+    // Membership ties break on the AUTHORED order, and determinism is the whole
+    // requirement: a coin that changed cohort between passes would change its
+    // excess without its price moving.
+    const index = parseCategoryIndex([
+      { id: "ai-agents", name: "AI Agents", market_cap: 5e9 },
+      { id: "meme-token", name: "Meme", market_cap: 9e9 },
+    ]);
+    const pages = new Map([
+      ["ai-agents", [raw("shared", 30, 40), raw("a1", 20, 30), raw("a2", 22, 32), raw("a3", 21, 31)]],
+      ["meme-token", [raw("shared", 30, 40), raw("m1", 1, 2), raw("m2", 2, 3), raw("m3", 0, 1)]],
+    ]);
+    const read = cohortRead(index, pages);
+    check("a coin in two cohorts lands in the one listed first", read.coinCohort.shared === "ai-agents", read.coinCohort.shared);
+    check("cohorts rank by the 30-day read", read.leadId === "ai-agents", String(read.leadId));
+    check("the lead is stated with its breadth, not just its number",
+      /AI agents leads — \d+ of \d+/.test(read.read), read.read);
+    check("membership scaffolding never reaches the payload",
+      read.cohorts.every((x) => x.memberIds === undefined));
+
+    // ── the excess: five states, and the two that matter are the two a board
+    // sorted by return can never show.
+    const bid = { id: "x", label: "X", chg7d: 20, lifting: 9, n: 11 };
+    const flatGrp = { id: "y", label: "Y", chg7d: 0.5, lifting: 2, n: 20 };
+    check("ahead of a bidding group is rotation",
+      cohortExcess(bid, 30).state === "leading", cohortExcess(bid, 30).state);
+    check("behind a bidding group is the laggard entry, not a dud",
+      cohortExcess(bid, 3).state === "lagging" && /better entry/.test(cohortExcess(bid, 3).read));
+    check("inside the noise band is 'moving with its group'",
+      cohortExcess(bid, 21).state === "with", cohortExcess(bid, 21).state);
+    check("far ahead of a group going nowhere is idiosyncratic",
+      cohortExcess(flatGrp, 45).state === "alone" && /listing or unlock/.test(cohortExcess(flatGrp, 45).read));
+    check("...but a few points ahead of a flat group is just a coin",
+      cohortExcess(flatGrp, 6).state === "quiet", cohortExcess(flatGrp, 6).state);
+    // The bug the fixture above caught: `bid = base > 0` made a +0.5% sector
+    // count as bought, so a coin up 45% against it read as rotation.
+    check("a barely-positive cohort is flat, not bid",
+      cohortExcess({ id: "y", label: "Y", chg7d: 0.5 }, 45).state === "alone");
+    check("...and a genuinely falling group says so rather than saying 'flat'",
+      /Falling with/.test(cohortExcess({ id: "y", label: "Y", chg7d: -14 }, -12).read));
+    check("the excess is POINTS, and it is the plain difference",
+      cohortExcess(bid, 30).excessPp === 10, String(cohortExcess(bid, 30).excessPp));
+    check("no cohort is no verdict, not a neutral one",
+      cohortExcess(null, 30) === null && cohortExcess({ id: "z", label: "Z", chg7d: null }, 30).state === "unknown");
+  }
+
+  /* ─── 12. the exit ladder ──────────────────────────────────────────────────
+     Pure and importable, so it is asserted directly rather than through a
+     bundle. The ladder decides the outcome the whole tab exists to serve, and
+     every rule in it is invisible on screen when it is wrong. ───────────── */
+  {
+    const { ALT_LADDER, ALT_TRAIL_PCT, ladderState, averageIn, regimeOverride } =
+      await import("../src/lib/altLadder.js");
+
+    const sold = ALT_LADDER.reduce((s, r) => s + r.sell, 0) + ALT_TRAIL_PCT;
+    check("the ladder sells exactly 100% of a position", sold === 100, String(sold));
+    check("the rungs ascend", ALT_LADDER.every((r, i) => i === 0 || r.mult > ALT_LADDER[i - 1].mult));
+
+    const pos = (basis, hit) => ({ cost_basis: basis, rungs_hit: hit });
+    const at3 = ladderState(pos(10, 0), 31);
+    check("the multiple is price over basis", at3.mult === 3.1, String(at3.mult));
+    check("...and the next rung is the first UNSOLD one", at3.next.mult === 3, String(at3.next && at3.next.mult));
+
+    // THE STATE THE SHAPE EXISTS TO REPRESENT: price is through a rung that has
+    // not been sold. Deriving rungs_hit from price would make this unrepresentable
+    // — the row would congratulate you on a ladder you never executed.
+    check("price through an unsold rung is 'due'", at3.due === true);
+    check("...and selling it advances the ladder rather than the price doing so",
+      ladderState(pos(10, 1), 31).due === false && ladderState(pos(10, 1), 31).next.mult === 5);
+
+    check("a target price is the basis times the rung", ladderState(pos(10, 1), 31).targetPrice === 50);
+    check("...and 'away' is measured from the live price",
+      near(ladderState(pos(10, 1), 40).awayPct, 25), String(ladderState(pos(10, 1), 40).awayPct));
+
+    const done = ladderState(pos(10, 4), 200);
+    check("every rung sold leaves the trailing slice, which has no target",
+      done.trailing === true && done.next === null && done.targetPrice === null);
+
+    check("a zero basis is a missing position, not a free one",
+      ladderState(pos(0, 0), 50).mult === null && ladderState(pos(null, 0), 50).next === null);
+
+    // WEIGHTED BY UNITS. $400 at $10 and $100 at $20 is a basis of $11.11; the
+    // arithmetic mean says $15 and moves every rung ~35% out of place.
+    const avg = averageIn({ cost_basis: 10, units: 40 }, 20, 5);
+    check("a tranche averages in by units, not by price", near(avg.cost_basis, 500 / 45), String(avg.cost_basis));
+    check("...and the units accumulate", avg.units === 45);
+    check("a first buy needs no prior basis", averageIn({ cost_basis: null, units: null }, 7, 3).cost_basis === 7);
+    check("a tranche with no unit count is refused, never guessed",
+      averageIn({ cost_basis: 10, units: 40 }, 20, null) === null &&
+      averageIn({ cost_basis: 10, units: 40 }, 20, 0) === null);
+
+    // ALL THREE LEGS, NOT ANY. Each fires alone several times a cycle.
+    const armed = regimeOverride({ score: 72, fearGreed: 84, domTrend: "falling", domSpanDays: 70 });
+    check("the override fires only with all three legs", armed.armed === true && armed.met === 3);
+    check("two of three is not the top",
+      regimeOverride({ score: 72, fearGreed: 84, domTrend: "falling", domSpanDays: 20 }).armed === false);
+    check("...and it still reports how close it is, so it isn't a switch nobody has seen move",
+      regimeOverride({ score: 72, fearGreed: 84, domTrend: "rising", domSpanDays: 90 }).met === 2);
+    check("missing inputs never arm it",
+      regimeOverride({}).armed === false && regimeOverride({ score: null, fearGreed: null }).met === 0);
+  }
 } catch (e) {
   failed++;
   console.error(`FAIL: smoke crashed — ${(e && e.stack) || e}`);

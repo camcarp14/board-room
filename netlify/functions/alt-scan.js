@@ -308,6 +308,94 @@ function moveRead(ctx, targets, price, episode) {
   }
 }
 
+/* ═══ the cohort read ════════════════════════════════════════════════════════
+ *
+ * IS THIS MOVE SHARED? — which is the only tractable version of "why is this
+ * coin up". You cannot enumerate the reasons a token moves; there are too many
+ * and most are unobservable. But you can measure whether the reason was shared
+ * with the rest of its narrative, and shared is the only kind that lasts long
+ * enough to be worth trading.
+ *
+ * The whole read is one subtraction — the coin's 7-day return minus its
+ * cohort's median 7-day return, in percentage POINTS — resolved against two
+ * facts: is the cohort itself bid, and is the coin ahead of it or behind it.
+ * That gives five states, and the two that matter most are the two the board
+ * could never show before:
+ *
+ *   lagging — the cohort is bid and this name has not moved yet. Frequently the
+ *             better entry of the two, and completely invisible on a board
+ *             sorted by return, where it looks like nothing is happening.
+ *   alone   — the cohort is going nowhere and this name is well ahead of it. A
+ *             listing, an unlock, a tweet. Loud, untradeable, and the row that
+ *             looks MOST attractive on a returns-sorted board.
+ *
+ * WHY THIS LIVES HERE AND NOT IN THE CRON, same as entryRead and moveRead: the
+ * cohort's median is the cron's and is consumed verbatim, but the coin's own
+ * 7-day return is live-overlaid on every read, so an excess computed hourly
+ * would drift from the number printed beside it on the same row. The cron
+ * publishes the map and the medians; the subtraction is the live half.
+ */
+// Within this many points of its cohort is "moving with the group" — a
+// percentage-point gap smaller than this is not a distinction anyone can act on.
+const EXCESS_NOISE_PP = 3;
+// How far ahead of a cohort that ISN'T bid a coin has to be before the move is
+// called idiosyncratic. Deliberately much wider than the noise band: calling a
+// move "alone" is an accusation, and a coin 4 points ahead of a flat sector is
+// just a coin.
+const ALONE_MIN_PP = 10;
+// WHAT COUNTS AS A BID COHORT, and `> 0` is not it. A cohort median of +0.5%
+// over seven days is a flat sector, and treating it as bid inverts the whole
+// read: a coin ripping 45% against it lands in the branch that says "leading
+// its group — this is rotation", which is the exact misdiagnosis this function
+// exists to prevent. The bug shipped in the first version and was caught by
+// scripts/altseason-smoke.mjs; the fixture pins it.
+const COHORT_BID_MIN_PCT = 2;
+// Below this the cohort isn't merely flat, it is being sold — same wording
+// distinction the ladder makes between "nothing is bid" and "risk is leaving".
+const COHORT_FALLING_PCT = -2;
+
+function cohortExcess(cohort, chg7d) {
+  if (!cohort) return null;
+  const base = num(cohort.chg7d);
+  const own = num(chg7d);
+  const view = {
+    id: cohort.id, label: cohort.label,
+    cohortChg7d: base, lifting: cohort.lifting ?? null, n: cohort.n ?? null,
+    excessPp: null, state: null, read: null,
+  };
+  // A cohort with no measured median still names the coin's narrative, which is
+  // worth showing on its own — it just cannot carry a verdict.
+  if (base == null || own == null) {
+    view.read = "No cohort read yet";
+    view.state = "unknown";
+    return view;
+  }
+
+  // POINTS, not percent: the difference of two percentages is not a percentage,
+  // and this file already keeps that distinction everywhere else.
+  const excess = r1(own - base);
+  view.excessPp = excess;
+
+  if (base >= COHORT_BID_MIN_PCT) {
+    if (excess >= EXCESS_NOISE_PP) { view.state = "leading"; view.read = "Leading its group — this is rotation"; }
+    else if (excess <= -EXCESS_NOISE_PP) { view.state = "lagging"; view.read = "Lagging a bidding group — often the better entry"; }
+    else { view.state = "with"; view.read = "Moving with its group"; }
+    return view;
+  }
+  if (excess >= ALONE_MIN_PP) {
+    view.state = "alone";
+    view.read = "Alone — news, listing or unlock. Won't persist";
+    return view;
+  }
+  // The group is flat or falling and this name is not meaningfully ahead of it.
+  // One state, two readings — "falling with its group" is a fact about the
+  // sector, "flat with its group" is the absence of one, and a row that said
+  // the first when the second was true would invent a downtrend.
+  view.state = "quiet";
+  view.read = base <= COHORT_FALLING_PCT ? "Falling with its group" : "Flat with its group";
+  return view;
+}
+
 // Target PRICES are the cron's and never move; the % distances are against the
 // live price, so "6% away" means six percent away now rather than at :00.
 function liveTargets(t, price) {
@@ -518,6 +606,15 @@ exports.handler = async (event) => {
     // Movers: live rows when we have them, else the stored board (60 coins
     // beats an empty tab). Always filtered to the cron's eligible set so a
     // stablecoin de-peg or a wrapper can't top the list.
+    // The cohort each board row belongs to, and the medians it is measured
+    // against. Both are the cron's; only the subtraction happens here.
+    const cohortById = new Map((Array.isArray(payload.cohorts) ? payload.cohorts : []).map((c) => [c.id, c]));
+    const coinCohort = (payload.coinCohort && typeof payload.coinCohort === "object") ? payload.coinCohort : {};
+    for (const row of board) {
+      const c = cohortById.get(coinCohort[row.id]) || null;
+      row.cohort = cohortExcess(c, row.chg7d);
+    }
+
     const eligible = new Set(Array.isArray(payload.eligibleIds) ? payload.eligibleIds : []);
     const universe = liveRows || board;
     const pool = universe.filter((r) => eligible.has(r.id) && r.price != null && (r.vol24h ?? 0) >= 5e5);
@@ -579,6 +676,10 @@ exports.handler = async (event) => {
         // far off its own high it has come back, which a board row alone
         // cannot say.
         v.move = moveRead(ctx, v.targets, v.lastPrice, v);
+        // Copied off the board row rather than recomputed: the episode and the
+        // board row are the same coin at the same live price, so a second
+        // computation could only ever disagree with the first.
+        v.cohort = ctx ? ctx.cohort || null : null;
         return v;
       })
       .sort((a, b) => (a.tier === b.tier ? (b.score || 0) - (a.score || 0) : a.tier === "igniting" ? -1 : 1));
@@ -595,6 +696,15 @@ exports.handler = async (event) => {
       stale: !liveRows || !(stateAgeMs < STATE_STALE_MS),
       season: payload.season || null,
       global: payload.global || null,
+      // The three layers that sit above the individual coin. Copied through
+      // untouched — they are the cron's readings of the market, not of a price,
+      // so unlike the entry/move/cohort reads there is nothing live about them.
+      // A payload written before they shipped has none of these, and every one
+      // of them is null-guarded on the client for exactly that hour.
+      ladder: payload.ladder || null,
+      scoreDrift: payload.scoreDrift || null,
+      cohorts: Array.isArray(payload.cohorts) ? payload.cohorts : [],
+      cohortRead: payload.cohortRead || null,
       board,
       movers,
       flags: { active, recent, stats: flagStats(allQ.data || []) },
@@ -619,5 +729,6 @@ exports.handler = async (event) => {
 // so it is the one piece that has to be pinned by fixtures.
 exports.entryRead = entryRead;
 exports.moveRead = moveRead;
+exports.cohortExcess = cohortExcess;
 exports.liveTargets = liveTargets;
 exports.flagStats = flagStats;
