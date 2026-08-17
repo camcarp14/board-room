@@ -152,6 +152,7 @@ async function harness() {
     ["ScoreCard", () => import("../src/pages/markets/ScoreCard.jsx")],
     ["kit", () => import("../src/ui/kit.jsx")],
     ["primitives", () => import("../src/ui/primitives.jsx")],
+    ["ErrorBoundary", () => import("../src/shell/ErrorBoundary.jsx")],
   ]) {
     try { M[name] = await load(); }
     catch (e) { failed++; console.error(`FAIL: ${name} did not even import\n      ${e.message}`); }
@@ -852,6 +853,71 @@ async function harness() {
     const quote = await kit(React.createElement(NumTween, { v: 174.32, f: px }));
     check("NumTween · the resting frame is the real quote, cents and all",
       text(quote) === "$174.32", `got ${JSON.stringify(text(quote))}`);
+  }
+
+  // ══ 10. the boundary's two cards — the crash, and the stale shell ══════════
+  // The boundary is the last surface in the app, and until now it had one card
+  // for two completely different situations. A component that threw is a fault to
+  // report; a page chunk that 404s is this document being older than the deploy
+  // (netlify.toml 404s /assets/* deliberately, sw.js purges the previous build) —
+  // nothing is broken and there is nothing to fix.
+  //
+  // Conflating them cost the second case its only working control. React.lazy
+  // caches a rejected import for the life of the document: once the payload is
+  // Rejected every later render re-throws the stored error without re-requesting
+  // anything, so "Try again" could not have worked, and it sat there as the first
+  // button on the card anyway. That is the specific thing checked below — not
+  // that the wording changed, but that the button which cannot work is gone.
+  //
+  // WHY THE INSTANCE IS DRIVEN BY HAND. renderToString does not run error
+  // boundaries at all — a throw during server rendering propagates straight out
+  // to the caller, so there is no way to reach these cards by rendering a child
+  // that throws. The state is therefore produced by the component's OWN
+  // getDerivedStateFromError and handed to its own render(); nothing about the
+  // card is fabricated, which is the same line the note above `stage` draws about
+  // query state. The reload half of this (componentDidCatch, the per-build gate)
+  // is a side effect with no markup, and lives in resilience-smoke.mjs.
+  if (M.ErrorBoundary) {
+    const { ErrorBoundary } = M.ErrorBoundary;
+    const card = (message) => {
+      const inst = new ErrorBoundary({ label: "Markets" });
+      inst.state = ErrorBoundary.getDerivedStateFromError(new Error(message));
+      return renderToString(inst.render());
+    };
+    const crash = card("Cannot read properties of undefined (reading 'map')");
+    const stale = card("Failed to fetch dynamically imported module: /assets/MarketsPage-a1b2c3.js");
+
+    // The headline is a SENTENCE, and it used to lose its noun: the generic word
+    // lived in the `|| "panel"` fallback, which App.jsx can never reach because it
+    // always passes the tab's name — so what shipped was "The Personal hit an
+    // error". Asserted with the label in place, since that is the only way it is
+    // ever mounted.
+    check("boundary · a real crash names the tab in a sentence, and asks for a screenshot",
+      text(crash).includes("The Markets tab hit an error") && text(crash).includes("send it over"),
+      `got ${JSON.stringify(text(crash).slice(0, 120))}`);
+    check("boundary · …and a boundary with no label still reads as English",
+      (() => {
+        const anon = new ErrorBoundary({});
+        anon.state = ErrorBoundary.getDerivedStateFromError(new Error("x is not a function"));
+        return text(renderToString(anon.render())).includes("This panel hit an error");
+      })());
+    check("boundary · …and still offers Try again, which for a render fault can work",
+      text(crash).includes("Try again") && text(crash).includes("Reload app"));
+
+    check("boundary · a stale shell is not reported as a fault in the panel",
+      !text(stale).includes("hit an error") && text(stale).includes("A newer version is live"),
+      `got ${JSON.stringify(text(stale).slice(0, 120))}`);
+    // THE ASSERTION THIS SECTION EXISTS FOR.
+    check("boundary · …and does not offer the button that cannot possibly work",
+      !text(stale).includes("Try again") && text(stale).includes("Reload app"),
+      `got ${JSON.stringify(text(stale))}`);
+    check("boundary · a stale shell does not ask for a bug report about a deploy",
+      !text(stale).includes("send it over") && text(stale).includes("nothing you've saved is affected"));
+    // Amber, not red: it is the app's own "served, but something is off" tone
+    // (STATE_META.stale in kit.jsx), and red over a working account would be the
+    // card overstating what happened.
+    check("boundary · the stale card wears amber, the crash card wears red",
+      stale.includes("--amber") && !stale.includes("--red") && crash.includes("--red"));
   }
 
   // ══ what this harness cannot reach ════════════════════════════════════════

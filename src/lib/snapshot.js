@@ -48,12 +48,39 @@ export function formatSnapshotForSeat(seatKey) {
   if (!lines.length) return general;
   return `${general}\n\nYour venture's live numbers (as of the last Brief refresh — treat as current):\n${lines.join("\n")}`;
 }
+// ─── nothing in this block may invent a reading ──────────────────────────────
+// What this function builds is not a card, it is the "Live site data … treat as
+// current, not something to caveat" paragraph pasted into the system prompt of
+// every seat and every convene. So a placeholder here does not render as an
+// em-dash a reader can discount — it is stated to a model as fact, and the model
+// reasons from it and says it back with confidence. Two of them were being
+// stated, and both are the same failure the panels are careful about everywhere
+// else: printing a number for a thing that was never measured.
 export function formatSnapshotForChat() {
   const parts = [];
   const b = siteSnapshot.btc;
-  if (b && b.price) parts.push(`Bitcoin: $${Math.round(b.price).toLocaleString()}, ${b.changePct >= 0 ? "+" : ""}${(b.changePct || 0).toFixed(1)}% 24h`);
+  if (b && b.price) {
+    // `b.changePct >= 0` is TRUE FOR NULL — null coerces to 0 — so an unknown 24h
+    // move took the "+" branch and `(null || 0).toFixed(1)` printed "0.0". The
+    // board was told bitcoin was exactly flat on the day, which is a claim, not a
+    // gap. The price is known on this path and the change may not be; they are
+    // reported separately now, and the unknown one is simply not reported.
+    const chg = typeof b.changePct === "number" && Number.isFinite(b.changePct) ? b.changePct : null;
+    parts.push(`Bitcoin: $${Math.round(b.price).toLocaleString()}`
+      + (chg == null ? " (24h change not available)" : `, ${chg >= 0 ? "+" : ""}${chg.toFixed(1)}% 24h`));
+  }
   const s = siteSnapshot.stocks;
-  if (s && (s.gold?.value ?? "—") !== "—") parts.push(`Markets: Gold ${s.gold.value}, NVDA ${s.nvda?.value}, MSTR ${s.mstr?.value}, STRC ${s.strc?.value}`);
+  if (s) {
+    // GOLD WAS THE GATE FOR ALL FOUR TICKERS. One `if` on gold's value, then a
+    // line that interpolated `s.nvda?.value` and two more with no test of their
+    // own — so a pass where gold resolved and NVDA did not sent the string
+    // "NVDA undefined" into the prompt. Each ticker now stands or falls on its
+    // own reading, and the line is dropped entirely when none of them has one.
+    const named = [["Gold", s.gold], ["NVDA", s.nvda], ["MSTR", s.mstr], ["STRC", s.strc]]
+      .filter(([, q]) => q && q.value != null && q.value !== "—" && q.value !== "")
+      .map(([name, q]) => `${name} ${q.value}`);
+    if (named.length) parts.push(`Markets: ${named.join(", ")}`);
+  }
   const w = siteSnapshot.wire;
   if (w && w.length) parts.push(`Recent wire headlines: ${w.slice(0, 3).map(x => x.text).join(" / ")}`);
   const ev = siteSnapshot.todayEvents;

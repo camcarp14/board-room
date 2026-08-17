@@ -86,8 +86,19 @@ export async function callFn(name, payload, extraHeaders) {
     });
     ok = res.ok;
     if (!ok) { detail = `HTTP ${res.status}`; throw new Error(detail); }
-    return await res.json();
+    const data = await res.json();
+    // `ok` IS NOT `res.ok`, IT IS "DID THE CALLER GET AN ANSWER". Those came apart
+    // on exactly one path and it was the quiet one: a 200 whose body is not JSON —
+    // a proxy's HTML error page, a truncated response over a handover — threw out
+    // of res.json() with `ok` already latched true. The caller received null and
+    // drew its error state; the usage log recorded a successful call. So the one
+    // record of what these functions actually do disagreed with the screen, in the
+    // direction that hides a problem. Reassigned after the parse, which is the
+    // first moment the answer is genuinely in hand.
+    ok = true;
+    return data;
   } catch (e) {
+    ok = false;
     if (!detail) detail = timedOut(e) ? `no answer in ${FN_TIMEOUT_MS / 1000}s` : "network error";
     return null;
   } finally {
@@ -105,8 +116,20 @@ export async function callFnFull(name, payload) {
       signal: timeoutSignal(FN_TIMEOUT_MS),
     });
     status = res.status; ok = res.ok;
-    data = await res.json().catch(() => null);
+    let unreadable = false;
+    data = await res.json().catch(() => { unreadable = true; return null; });
     if (!ok) detail = data?.error || `HTTP ${status}`;
+    // `ok` STAYS res.ok HERE, unlike callFn above, and the difference is the
+    // contract rather than an inconsistency: this helper's whole reason to exist
+    // is handing the UI the HTTP status alongside the body, and callers branch on
+    // `ok` meaning "the function answered". Flipping it for an unreadable body
+    // would change what a dozen call sites are reading.
+    //
+    // The log still must not be silent about it. A 200 that carried nothing
+    // parseable is a real event — it is what a proxy's HTML error page looks like
+    // from here — and a row saying only "ok" would leave no trace of the card that
+    // went blank because `data` came back null.
+    if (ok && unreadable) detail = "answered, body unreadable";
     return { ok, status, data };
   } catch (e) {
     detail = timedOut(e) ? `no answer in ${FN_TIMEOUT_MS / 1000}s` : "network error";

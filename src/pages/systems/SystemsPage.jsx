@@ -450,9 +450,22 @@ function UsageCard({ isMobile }) {
 // Model Control lived here: a per-layer model picker (Mind + Mini Me delegate)
 // over a cost estimate. It has been removed. Those two layers are the thinking
 // surfaces, and the thinking surfaces are gone from the app — the Mind tab was
-// retired (see the AssetsPage header) and Mini Me with it, so the picker was
-// steering runs that no longer happen and quoting an estimate for them. What is
-// left on this page is monitoring, so it should read as monitoring.
+// retired and Mini Me with it, so the picker was steering runs that no longer
+// happen and quoting an estimate for them. What is left on this page is
+// monitoring, so it should read as monitoring.
+//
+// THE MIND RETIREMENT, kept here because this is the last live file that leans on
+// it. It used to be told by the header of pages/assets/AssetsPage.jsx, which was
+// itself unrouted for a long time before it was deleted — App.jsx sends `assets`
+// and `systems` to the Brief, nothing imported the module, and the one named
+// import it still made (MinerPanel, from this file) had stopped resolving when
+// that re-export was removed, so the page could not have rendered if it had been
+// routed. What it recorded: Mind was first unrouted and then deleted outright —
+// the canvas, the genome, the seat pages and the Learn editor are all out of the
+// tree. The Supabase tables it wrote to are untouched, and the data still does
+// work: skills load from the database and still shape prompts (buildSkillsBlock),
+// and mini-worker still reads the compiled `mind_prompt` row. What is gone is
+// every editor for any of it.
 //
 // Deliberately NOT deleted from settings: `settings.models` and `settings.mini`
 // still hold whatever was last chosen, and the delegate still reads

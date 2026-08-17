@@ -184,7 +184,24 @@ export default function App() {
     if (refreshing || !supabase || !session?.user) return;
     setRefreshing(true);
     btc.refresh();
-    queryClient.invalidateQueries(); // one call refetches every cached query (Movies today; more as features migrate)
+    // ONE CALL REFETCHES EVERY CACHED QUERY, AND NOBODY WAS WAITING FOR IT.
+    // invalidateQueries returns a promise that settles when the refetches it
+    // triggered have settled; this line dropped it, so "refreshing" described only
+    // the three reads below — chat, seat notes and settings — while the calendar,
+    // notes, groceries, movies, birthdays, upkeep and every markets card were
+    // still in flight.
+    //
+    // That is a spinner that stops before the thing it is about has happened, and
+    // on the phone it is worse than cosmetic: MobileShell's pull-to-refresh gauge
+    // is documented to be up "for exactly as long as onRefresh's promise is
+    // unsettled", which is a promise this function was breaking on behalf of most
+    // of the app. Let go of the pull, watch the gauge retract, and read a card
+    // that was still a second away from updating — the gesture said "done" about
+    // work it had not waited for.
+    //
+    // Held rather than awaited HERE so it runs alongside the three reads instead
+    // of in front of them; both go into the settle below.
+    const queries = queryClient.invalidateQueries();
     setBriefRefreshSignal(Date.now()); // legacy per-page signal — retired as each card moves onto the query cache
     // THE STAMP IS THE FRESHNESS PILL, and it used to be set unconditionally
     // after a catch that swallowed everything — so a refresh with no signal, or
@@ -196,8 +213,17 @@ export default function App() {
     //
     // Per-slice, same as the initial load: a partial success is still progress
     // and should stamp, but a total failure must not.
+    // The query cache rides in the same settle. allSettled, so a query that
+    // rejects costs its own card an error state and nothing else — exactly the
+    // treatment the three reads beside it get, and the reason none of them is
+    // allowed to discard the others.
+    //
+    // It is deliberately NOT part of the stamp test below. The freshness pill
+    // speaks for the three slices this function reads itself; a query cache in
+    // which some cards refetched and some failed has no single answer to give it,
+    // and each of those cards already draws its own error state.
     const [chatR, notesR, setsR] = await Promise.allSettled([
-      db.loadChat(), db.loadSeatNotes(), db.loadSettings(),
+      db.loadChat(), db.loadSeatNotes(), db.loadSettings(), queries,
     ]);
     if (chatR.status === "fulfilled") setMessages(chatR.value);
     if (notesR.status === "fulfilled") setSeatNotes(notesR.value);
@@ -504,7 +530,14 @@ export default function App() {
     setPage(key);
     requestAnimationFrame(() => {
       const el = document.getElementById("page-scroll");
-      if (el && el.scrollTop > 0) el.scrollTo({ top: 0, behavior: "smooth" });
+      if (!el || el.scrollTop <= 0) return;
+      // Reduced motion reaches this one by hand. Every other animation in the app
+      // is CSS, so the block at the bottom of components.css cancels it — but a
+      // scroll animation asked for in JS is not a CSS animation and that block has
+      // no opinion about it, so this was the one moving thing left on screen for a
+      // user who asked for none. Jumping is the same arrival without the travel.
+      const still = window.matchMedia?.("(prefers-reduced-motion: reduce)")?.matches;
+      el.scrollTo({ top: 0, behavior: still ? "auto" : "smooth" });
     });
   };
 

@@ -314,7 +314,7 @@ export function Pill({ active, onClick, children, style, ...rest }) {
   return <button className={`pill${active ? " active" : ""}`} onClick={onClick} style={style} {...rest}>{children}</button>;
 }
 
-export function PillRow({ options, value, onChange, fmt = (o) => o.label ?? String(o), keyOf = (o) => o.key ?? String(o), style }) {
+export function PillRow({ options, value, onChange, fmt = (o) => o.label ?? String(o), keyOf = (o) => o.key ?? String(o), style, label }) {
   const rowRef = useRef(null);
   const mounted = useRef(false);
   // Keep the active pill centred in ITS OWN STRIP when the selection changes.
@@ -343,13 +343,44 @@ export function PillRow({ options, value, onChange, fmt = (o) => o.label ?? Stri
     const pillBox = el.getBoundingClientRect();
     const delta = (pillBox.left + pillBox.width / 2) - (rowBox.left + rowBox.width / 2);
     if (Math.abs(delta) < 1) return;
-    row.scrollBy({ left: delta, behavior: first ? "auto" : "smooth" });
+    // Reduced motion joins the mount pass in going instant. A scroll animation
+    // asked for in JS is not a CSS animation, so the block at the bottom of
+    // components.css — which cancels every other moving thing in the app — has no
+    // opinion about this one; it has to be read here or the strip keeps gliding
+    // for a user who asked for stillness.
+    const still = mq("(prefers-reduced-motion: reduce)");
+    row.scrollBy({ left: delta, behavior: first || still ? "auto" : "smooth" });
   }, [value]);
+  // ROLE="TABLIST" WAS HERE AND IT WAS A LIE THE WHOLE TIME.
+  //
+  // ARIA's tablist is a contract, not a label: its children must be role="tab",
+  // each carrying aria-selected, and each pointing at the tabpanel it controls.
+  // These were plain <button>s. So a screen reader was told "tab list, nine
+  // items" and then handed nine ordinary buttons — an invalid structure, and the
+  // cost was not merely pedantic: with no aria-selected and no aria-pressed
+  // anywhere, WHICH FILTER IS ACTIVE was carried by background colour and nothing
+  // else. On every one of the nine strips in this app (the sort order on Crypto,
+  // the mover window on Stocks, the month on Finances, the board on Dreams, the
+  // store on the grocery list, the kind on Creed, the exercise on Workout, the
+  // range on the BTC chart) a VoiceOver user could read the options and could not
+  // read the answer.
+  //
+  // The fix is the pattern the kit already had: Segmented is the same "pick one of
+  // N" control and it has always announced through aria-pressed on each option,
+  // with no role on the container. Matching it is both correct and one grammar
+  // instead of two. Real tab semantics were the other option and are the wrong
+  // ones — a tablist owes arrow-key roving focus and an aria-controls target, and
+  // these strips filter a list in place rather than swapping a panel.
+  //
+  // The container keeps a group role so the strip is still announced as one thing
+  // rather than as loose buttons in the page; `label` names it when the call site
+  // has a name worth saying.
   return (
-    <div className="pillrow" ref={rowRef} style={style} role="tablist">
+    <div className="pillrow" ref={rowRef} style={style} role="group" aria-label={label}>
       {options.map((o) => {
         const k = keyOf(o);
-        return <Pill key={k} active={value === k} onClick={() => onChange(k)}>{fmt(o)}</Pill>;
+        const active = value === k;
+        return <Pill key={k} active={active} aria-pressed={active} onClick={() => onChange(k)}>{fmt(o)}</Pill>;
       })}
     </div>
   );

@@ -452,8 +452,8 @@ src/
   pages/brief/BriefPage.jsx    (+ pieces it needs)
   pages/personal/PersonalPage.jsx  pages/personal/NotesPanel.jsx  pages/personal/CalendarPanel.jsx
   pages/board/BoardPage.jsx    (room, seats, mini me, modals)
-  pages/assets/AssetsPage.jsx
-  pages/systems/SystemsPage.jsx
+  pages/assets/properties.js   (AssetsPage.jsx is gone — unrouted, then deleted)
+  pages/systems/SystemsPage.jsx  (reached through Settings → Systems)
   WorkoutPanel.jsx  LearnPanel.jsx  features/*  (in place, restyled)
 ```
 
