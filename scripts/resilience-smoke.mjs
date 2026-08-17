@@ -202,7 +202,53 @@ const fakeStore = () => {
   check("no tickers at all drops the markets line entirely", !/Markets:/.test(formatSnapshotForChat()));
 }
 
-// ══ 5. the tree has no unreachable modules ═══════════════════════════════════
+// ══ 5. every outbound fetch on the server has a deadline ════════════════════
+// This repo already did this work once — one pass put AbortSignal.timeout on
+// every fetch in netlify/functions, on the stated grounds that a fetch with no
+// signal has no ceiling and a wedged connection does not fail, it never answers.
+// The pass walked netlify/functions/*.js, so netlify/lib/ was never visited, and
+// netlify/lib/upstream/store.js — the file through which EVERY Supabase read and
+// write the Upstream engine makes actually leaves the machine, including the
+// caller-identity gate — kept both of its fetches unbounded for the whole time.
+// upstream-run-background is a background function, so there is not even a
+// synchronous 26s platform cap to cut a hung call short.
+//
+// An invariant that has already been broken once by being a habit rather than a
+// check gets to be a check. Whole tree under netlify/, not just the functions
+// directory, because the directory is exactly what the first pass scoped to.
+{
+  const { readdirSync, statSync } = await import("node:fs");
+  const { join } = await import("node:path");
+  const files = [];
+  (function walk(d) {
+    for (const f of readdirSync(d)) {
+      const p = join(d, f);
+      if (statSync(p).isDirectory()) walk(p);
+      else if (p.endsWith(".js")) files.push(p);
+    }
+  })("netlify");
+  const naked = [];
+  for (const f of files) {
+    const s = readFileSync(f, "utf8");
+    // Count call sites, not the word: `fetch(` inside a comment or a string is
+    // not a request. Crude but conservative in the safe direction — a false
+    // positive here is a file someone has to look at, which is the cost of the
+    // check being worth having.
+    const calls = (s.match(/(?:^|[^.\w])fetch\s*\(/g) || []).length;
+    if (!calls) continue;
+    if (!/AbortSignal\.timeout|AbortController|signal:\s*\w/.test(s)) naked.push(f);
+  }
+  check("every file under netlify/ that fetches carries a deadline", naked.length === 0, naked.join(" "));
+  // The two in store.js specifically, since they are the ones this check was
+  // written for and a whole-file regex would go on passing if only one came back.
+  const store = readFileSync("netlify/lib/upstream/store.js", "utf8");
+  check("…including the Upstream engine's REST helper",
+    /fetch\(`\$\{c\.url\}\/rest\/v1\/\$\{path\}`, \{\s*\n\s*method,\s*\n\s*signal: AbortSignal\.timeout\(REST_TIMEOUT_MS\)/.test(store));
+  check("…and its caller-identity gate, which runs before anything else",
+    /fetch\(`\$\{c\.url\}\/auth\/v1\/user`, \{\s*\n\s*signal: AbortSignal\.timeout\(IDENTITY_TIMEOUT_MS\)/.test(store));
+}
+
+// ══ 6. the tree has no unreachable modules ═══════════════════════════════════
 // AssetsPage.jsx sat here for months: unrouted (App.jsx sends `assets` and
 // `systems` to the Brief), imported by nothing, and — the part that made it worth
 // a check rather than a shrug — carrying a named import of MinerPanel from

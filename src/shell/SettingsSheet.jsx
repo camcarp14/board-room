@@ -41,6 +41,25 @@ const MinerPanel = lazy(() => import("../pages/systems/MinerPanel.jsx").then(m =
 // phone is not a rollback — it is a Netlify dashboard login during whatever
 // went wrong.
 const DeployTab = lazy(() => import("../pages/systems/SystemsPage.jsx").then(m => ({ default: m.DeployTab })));
+// SupabaseTab was stranded in exactly the same way and did not get picked up
+// when Deploy was — same file, same cause (Assets left the nav and took the only
+// route to both), exported and mounted nowhere ever since.
+//
+// It matters for a reason that is written down elsewhere in this repo as a
+// design decision. src/data/db.js soft-deletes the two tables that used to lose
+// rows outright — dream tiles and Creed lines — and says the row "is destroyed
+// thirty days later by `purge deleted > 30d` in netlify/functions/db-admin.js …
+// a deliberate, counted act rather than a cron nobody watches". The console
+// below is the only thing in the app that issues that command, so with it
+// unrouted the deliberate act had nowhere to be performed from: soft-deleted
+// rows simply accumulated, and the sentence in db.js described a mechanism that
+// existed at both ends and nowhere in the middle. Same for the two prunes beside
+// it (auditor_findings, usage_log) and for backup chat_messages.
+//
+// The commands are allowlisted server-side and db-admin is owner-gated (the
+// functions smoke knocks on it three ways), so routing it changes what is
+// reachable, never what is permitted.
+const SupabaseTab = lazy(() => import("../pages/systems/SystemsPage.jsx").then(m => ({ default: m.SupabaseTab })));
 
 const SHEET_TABS = [{ key: "systems", label: "Systems" }, { key: "theme", label: "Theme" }, { key: "tabs", label: "Tabs" }];
 // Account sits with the systems panels rather than in Theme: your calendar feed
@@ -49,6 +68,11 @@ const SYS_TABS = [
   { key: "usage", label: "Usage" },
   { key: "status", label: "Status" },
   { key: "deploy", label: "Deploy" },
+  // Between Deploy and Miner rather than appended, so the strip keeps reading
+  // outward from the app: what it costs (Usage), whether it is up (Status), how
+  // it ships (Deploy), the database under it (Supabase), the machine beside it
+  // (Miner), and you (Account).
+  { key: "supabase", label: "Supabase" },
   { key: "miner", label: "Miner" },
   { key: "account", label: "Account" },
 ];
@@ -144,6 +168,7 @@ export function SettingsSheet({ onClose, session, theme, calUrl, onSaveCalUrl, i
               {sys === "usage" && <UsageTab isMobile={isMobile} />}
               {sys === "status" && <StatusTab checks={conn?.checks || {}} lastRun={conn?.lastRun} running={conn?.running} runAll={conn?.runAll} isMobile={isMobile} />}
               {sys === "deploy" && <DeployTab isMobile={isMobile} />}
+              {sys === "supabase" && <SupabaseTab />}
               {/* `active` gates the 5s poll — it stops the moment you leave. */}
               {sys === "miner" && <MinerPanel active isMobile={isMobile} />}
             </Suspense>

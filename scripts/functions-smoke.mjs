@@ -449,14 +449,32 @@ console.log(`\n${pass}/${fns.length} functions export a callable handler`);
   const present = new Set(fns.map((f) => basename(f, ".js")));
   const ghosts = [...listing.keys()].filter((n) => !present.has(n));
   if (ghosts.length) failures.push(["function inventory", `listed but no such file: ${ghosts.join(", ")}`]);
-  // readdirSync also hands back netlify/functions/_shared, which Netlify does not
-  // route (a leading underscore is excluded from the function build). It is a
-  // require-only helper, so it has no front door to name — but it is asserted to
-  // be the ONLY such entry, so a second directory of routable code cannot appear
-  // without this list noticing.
+  // _shared/ IS GONE, AND NOTHING MAY TAKE ITS PLACE.
+  //
+  // It held exactly one file, response.js, and that file was used by nobody. Four
+  // functions carry a comment saying they are "deliberately self-contained — no
+  // require of _shared/response", which is the whole story: its own docstring
+  // opened with "Drop this in as netlify/functions/_shared/response.js, then:
+  // const { json, error, methodGuard } = require('./_shared/response')" — the
+  // precise instruction this file's header says has caused three production
+  // outages. package.json declares "type":"module", so a required CJS helper's
+  // `module.exports` becomes the bundle's own exports and REPLACES the
+  // exports.handler the function assigned; the function deploys clean, reports no
+  // error, and 502s on every call.
+  //
+  // So the directory was a working example of the one mistake this suite exists
+  // to catch, sitting in the functions folder with usage instructions on it,
+  // costing nothing to follow and everything to ship. Deleted rather than
+  // rewritten in ESM, because the house pattern is stated a few lines up and is
+  // not "a better helper": inline what you need, self-contained, deliberately.
+  //
+  // The check is now "nothing but function entry points", which is stricter than
+  // what it replaced and is the point — a helper directory cannot come back by
+  // accident, only by someone editing this assertion and reading why.
   const others = readdirSync(FN_DIR).filter((e) => !e.endsWith(".js"));
-  if (others.length !== 1 || others[0] !== "_shared") {
-    failures.push(["function inventory", `unexpected non-.js entries in ${FN_DIR}: ${others.join(", ")} — only the unrouted _shared/ helper directory belongs here`]);
+  if (others.length) {
+    failures.push(["function inventory", `${FN_DIR} holds nothing but function entry points: found ${others.join(", ")}. `
+      + `A shared helper required from a function is how exports.handler gets clobbered under "type":"module" — inline what you need instead.`]);
   }
 
   // ── an open faucet on the model budget ────────────────────────────────────

@@ -962,19 +962,17 @@ export const db = {
     const total = typeof count === "number" ? count : null;
     return { rows, total, limit, capped: total != null ? rows.length < total : rows.length >= limit };
   },
-  /**
-   * The rows alone, for callers that have nowhere to put the cap state yet.
-   *
-   * Kept because useTransactions and everything under FinancesPanel take an
-   * array, and changing that return type from here would hand a `.map` an object
-   * in a live panel. A caller that can render the warning should move to
-   * readTransactions and say so on screen; until it does, this is the same read
-   * with the honesty thrown away, and that is a debt this comment is holding open
-   * rather than hiding.
-   */
-  async loadTransactions(limit = 5000) {
-    return (await db.readTransactions(limit)).rows;
-  },
+  /* loadTransactions IS GONE, AND THE DEBT ITS COMMENT WAS HOLDING OPEN IS PAID.
+     It returned readTransactions().rows — the same read with the cap state thrown
+     away — and said so, promising that "a caller that can render the warning
+     should move to readTransactions and say so on screen".
+     Every caller did: data/finances.js:useTransactions returns the whole envelope
+     and FinancesPanel draws `txCapped` from it. So what was left here was a
+     shorter spelling of the unsafe read, exported, with a docstring justifying it
+     by naming callers that no longer exist — and in a budgeting tool the thing it
+     drops is the difference between "$312 left in Dining" and "$312 left in
+     Dining, of the 5,000 most recent rows". Deleting it is what stops the next
+     reader taking it because it hands back a plain array. */
   async saveTransactions(rows) {
     const user_id = await db.uid();
     if (!user_id) throw new Error("Not signed in");

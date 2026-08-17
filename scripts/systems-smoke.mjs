@@ -137,8 +137,27 @@ const sysTabs = [...(sheet.match(/const SYS_TABS = \[([\s\S]*?)\n\];/)?.[1] || "
 // from SystemsPage.jsx and mounted nowhere since Assets left the nav — which
 // meant the one control you want during a bad deploy was reachable only from
 // the Netlify dashboard, on a laptop, during whatever went wrong.
-check("Systems holds Status, Usage, Deploy, Miner and Account",
-  sysTabs.slice().sort().join(",") === "account,deploy,miner,status,usage", sysTabs.join(","));
+// Supabase joined them the same way and for the same reason, one audit later:
+// SupabaseTab had been sitting in SystemsPage.jsx exported and mounted nowhere
+// since that same nav change, and it is the ONLY thing in the app that issues
+// `purge deleted > 30d` — the command src/data/db.js names as what finally
+// destroys a soft-deleted dream tile or Creed line, "a deliberate, counted act
+// rather than a cron nobody watches". Unrouted, that act had nowhere to be
+// performed from and the rows just accumulated.
+check("Systems holds Status, Usage, Deploy, Supabase, Miner and Account",
+  sysTabs.slice().sort().join(",") === "account,deploy,miner,status,supabase,usage", sysTabs.join(","));
+// The list and the mounts are one act — a key with no panel behind it renders a
+// tab that does nothing, which is the failure mode this whole section is about,
+// arriving from the other direction.
+for (const key of sysTabs.filter((k) => k !== "account")) {
+  check(`Systems → ${key} actually mounts a panel`,
+    new RegExp(`sys === "${key}" &&`).test(sheet), sysTabs.join(","));
+}
+// Deleted with AssetsPage's route: a second, exported list of these sub-tabs that
+// disagreed with the live one (no Account, and for a long while it was the only
+// one that still remembered Supabase).
+check("there is only one list of the Systems sub-tabs",
+  !/SYSTEMS_SUBTABS\s*=/.test(systems));
 check("the sheet lands on Systems → Usage",
   /useState\("systems"\)/.test(sheet) && /useState\("usage"\)/.test(sheet));
 // Landing on Systems makes this guard load-bearing rather than merely tidy: a
@@ -147,7 +166,7 @@ check("Usage is the first Systems panel", sysTabs[0] === "usage", sysTabs.join("
 
 // THE BUNDLE INVARIANT. Both halves matter: the panels must be lazy, and App
 // must reach the hook WITHOUT touching SystemsPage — either one alone fails.
-for (const panel of ["UsageTab", "StatusTab", "MinerPanel"]) {
+for (const panel of ["UsageTab", "StatusTab", "MinerPanel", "DeployTab", "SupabaseTab"]) {
   check(`${panel} is lazy-loaded, not statically imported`,
     new RegExp(`const ${panel} = lazy\\(`).test(sheet) && !new RegExp(`^import \\{[^}]*\\b${panel}\\b`, "m").test(sheet));
 }

@@ -2,6 +2,36 @@
 // Uses the service-role key, which bypasses RLS —
 // every row is stamped with the verified caller's user_id so client RLS reads work.
 
+// ─── the deadline every other outbound fetch in this repo already had ────────
+// Every fetch under netlify/functions carries AbortSignal.timeout — that was
+// done deliberately, in one pass, for a reason worth restating: a fetch with no
+// signal has no ceiling, and a wedged connection does not fail, it simply never
+// answers. That pass walked the .js files in the functions directory, and this
+// is not one of them; it is a LIBRARY under netlify/lib, so it was never
+// visited, and it is the file through which every Supabase read and write the
+// Upstream engine makes actually leaves the machine.
+//
+// (Written without a glob on purpose. scripts/spend-smoke.mjs strips block
+// comments before it reads this file, and a bare star-slash inside a line
+// comment opens one as far as that regex is concerned — the first draft of this
+// note silently swallowed the usage_log write below and failed the suite.)
+//
+// What that cost. upstream-run-background is a background function, so there is
+// no synchronous 26s cap to cut a hung call short — a stalled REST write would
+// hold the run open against the platform's own much longer ceiling, and the run's
+// rows (the dive, the synthesis, the verdict) are written through this same
+// helper, so the work would be finished and unrecorded. verifyUser is worse in a
+// smaller way: it is the caller-identity gate, the first thing the handler does,
+// so a stall there wedges the function before it has decided who is asking.
+//
+// The two numbers match what the equivalent calls in netlify/functions use —
+// 15s for the identity check (audit.js, calendar-events.js) and 30s for a REST
+// round trip (clarify-pipeline.js, auto-fix.js) — because they are the same calls
+// to the same host, and inventing new ones here would make this file the odd one
+// out a second time.
+const IDENTITY_TIMEOUT_MS = 15_000;
+const REST_TIMEOUT_MS = 30_000;
+
 function cfg() {
   const { SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY } = process.env;
   if (!SUPABASE_URL || !SUPABASE_SERVICE_ROLE_KEY) {
@@ -16,6 +46,7 @@ async function rest(path, { method = 'GET', body, prefer } = {}) {
   const c = cfg();
   const res = await fetch(`${c.url}/rest/v1/${path}`, {
     method,
+    signal: AbortSignal.timeout(REST_TIMEOUT_MS),
     headers: {
       apikey: c.key,
       Authorization: `Bearer ${c.key}`,
@@ -40,6 +71,7 @@ async function rest(path, { method = 'GET', body, prefer } = {}) {
 export async function verifyUser(accessToken) {
   const c = cfg();
   const res = await fetch(`${c.url}/auth/v1/user`, {
+    signal: AbortSignal.timeout(IDENTITY_TIMEOUT_MS),
     headers: { apikey: c.key, Authorization: `Bearer ${accessToken}` },
   });
   if (!res.ok) return null;

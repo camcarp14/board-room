@@ -30,13 +30,17 @@ export { pingFn } from "../../lib/functions.js";
 
 // Keys are stable (Summon and muscle memory point at them). Consumed by the
 // Assets page, which prepends its own "Properties" pill.
-export const SYSTEMS_SUBTABS = [
-  { key: "usage", label: "Usage" },
-  { key: "status", label: "Status" },
-  { key: "deploy", label: "Deploy" },
-  { key: "supabase", label: "Supabase" },
-  { key: "miner", label: "Miner" },
-];
+// SYSTEMS_SUBTABS lived here and is gone. It was the strip AssetsPage drew, and
+// when that page was deleted nothing imported it — which left a second list of
+// "the Systems sub-tabs" in the tree, exported, and already DISAGREEING with the
+// live one: it had no Account, and for a long while the live SYS_TABS had no
+// Supabase. Two lists that differ is not a duplicate, it is a question with two
+// answers, and the one a reader finds first is whichever file they opened.
+//
+// The live list is SYS_TABS in shell/SettingsSheet.jsx, beside the lazy imports
+// that mount each panel — which is the right place for it, because adding a
+// sub-tab and mounting its panel are the same act. scripts/systems-smoke.mjs
+// pins its contents.
 
 // Which build this device is actually running — timestamp AND short commit sha,
 // stamped into __BUILD__ at build time by vite.config.js. The timestamp alone

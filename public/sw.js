@@ -61,7 +61,16 @@
 // exactly the shape that dropped it, on every single deploy, silently. So the asset
 // store is no longer version-keyed (see ASSET_CACHE) and this deploy is the last one
 // that pays for the old name.
-const VERSION = "br-v35";
+// v36: the Supabase console is reachable again (Settings → Systems → Supabase).
+// The v6 note above, applied honestly rather than reflexively — this is a new
+// tab in a strip you check by LOOKING at it, so a stale shell reads exactly like
+// the tab was never added. Worth saying which of this deploy's changes did NOT
+// earn a bump, because "bump it every time" is how the note stops meaning
+// anything: the audit fixes shipped alongside it (deadlines on the Upstream
+// engine's fetches, a helper directory deleted, two dead lists removed) change
+// nothing you could see, and main.jsx's own build check already picks those up on
+// the next launch without help from here.
+const VERSION = "br-v36";
 // DELIBERATELY NOT VERSION-KEYED, and the reason it is safe is the filename: Vite
 // content-hashes everything under /assets/, so a URL here can only ever mean one
 // body. A changed file IS a changed URL, which is what makes an entry from four
