@@ -81,10 +81,29 @@ export async function callClaude({ system, messages, modelKey = "haiku", maxToke
   const t0 = Date.now();
   const model = MODEL_IDS[modelKey] || MODEL_IDS.haiku;
   try {
-    // Gate on DEV (compile-time constant) rather than hostname: production
-    // builds always use the server proxy, which lets esbuild dead-code-eliminate
-    // the direct branch — so VITE_ANTHROPIC_API_KEY is never inlined into the
-    // shipped bundle. Dev (incl. LAN/127.0.0.1 phone testing) hits the API direct.
+    // Gate on DEV (compile-time constant) rather than hostname: production builds
+    // always use the server proxy, and the constant is what lets the direct branch
+    // below be dropped from the shipped bundle. Dev (incl. LAN/127.0.0.1 phone
+    // testing) hits the API direct.
+    //
+    // THIS GATE IS NOT WHAT KEEPS THE KEY OUT OF THE BUNDLE, and this comment used
+    // to claim it was ("so VITE_ANTHROPIC_API_KEY is never inlined into the shipped
+    // bundle"). The claim was about the whole build and was only ever true of this
+    // file. src/lib/supabase.js exports the raw value at module scope, and
+    // src/pages/systems/connections.js reads it behind a RUNTIME hostname check —
+    // the alternative this note warns against — so the reference stays live and
+    // Vite inlines the literal. A normal build hides that, because the surviving
+    // read sits under a `!` and esbuild's minifier folds `!"non-empty"` to false and
+    // drops the string; build with --minify false and the key is in the entry chunk
+    // in plain text. On a public repo deployed to a public URL, that is a stack of
+    // coincidences standing where a guarantee should be.
+    //
+    // The guarantee now lives in vite.config.js, as a build-only define that
+    // substitutes the variable before any literal can be emitted — so it holds
+    // whatever the minifier does and whatever shape a future consumer reads the
+    // value in. scripts/key-exposure-smoke.mjs builds the app unminified with a
+    // canary in the environment and reads the bytes, because a define is exactly
+    // the kind of one-liner that gets believed instead of checked.
     const isDeployed = !import.meta.env.DEV;
     const url = isDeployed ? "/.netlify/functions/claude" : "https://api.anthropic.com/v1/messages";
     let headers;

@@ -151,7 +151,43 @@ export default defineConfig(({ mode, command }) => {
     // answerable from a screenshot. One string on purpose: every surface that
     // shows it prints it whole, so the sha can never drift away from its
     // timestamp or get dropped by a display that only knew about the old shape.
-    define: { __BUILD__: JSON.stringify(new Date().toISOString().slice(0, 16).replace("T", " ") + "Z · " + commitSha) },
+    define: {
+      __BUILD__: JSON.stringify(new Date().toISOString().slice(0, 16).replace("T", " ") + "Z · " + commitSha),
+      // ─── the Anthropic key can never become a literal in a shipped chunk ────
+      // src/lib/claude.js explains that production always goes through the
+      // /.netlify/functions/claude proxy, and says the gate is on DEV "rather
+      // than hostname" so esbuild can dead-code-eliminate the direct branch —
+      // "so VITE_ANTHROPIC_API_KEY is never inlined into the shipped bundle".
+      // That is the right intent and it was not what was happening.
+      //
+      // MEASURED, not reasoned about. Build with the variable set to a canary and
+      // read the output: minified, the canary is absent — but only because the one
+      // surviving reference (src/pages/systems/connections.js, `!ANTHROPIC_API_KEY`,
+      // which gates on the RUNTIME hostname check that claude.js's comment warns
+      // against) sits under a `!`, and esbuild folds `!"non-empty"` to false and
+      // drops the string. Build the same tree with --minify false and the literal
+      // is right there in the entry chunk:
+      //
+      //     const ANTHROPIC_API_KEY = "sk-ant-…";
+      //
+      // Rollup's own DCE does not remove it either — `const isDeployed = true`
+      // leaves the ternary standing unminified. So nothing structural was keeping
+      // the key out. What was keeping it out was a minifier optimisation plus the
+      // happy accident that every live consumer used the value in boolean
+      // position. This repo is a PUBLIC GitHub repo deployed to a PUBLIC URL, so
+      // the cost of that stack of coincidences failing is the owner's API key on
+      // the open internet.
+      //
+      // Replacing it at DEFINE time is the version that cannot fail: the
+      // substitution happens before a literal is ever emitted, so it holds
+      // whatever the minifier does, whatever rollup decides, and whatever shape a
+      // future consumer reads the value in. Build only — `vite dev` keeps the real
+      // key, which is the documented local workflow (direct calls from localhost,
+      // no proxy). Nothing in src/ changes: supabase.js still reads the same
+      // expression and still exports "" in production, exactly as it does today
+      // when the variable is simply unset.
+      ...(command === "build" ? { "import.meta.env.VITE_ANTHROPIC_API_KEY": '""' } : {}),
+    },
     // Respect an externally assigned port (preview harnesses set PORT); vite
     // otherwise ignores the env var and always grabs 5173.
     server: process.env.PORT ? { port: Number(process.env.PORT), strictPort: true } : undefined,

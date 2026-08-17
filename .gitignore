@@ -1,11 +1,20 @@
 
 node_modules/
 dist/
-.env
-.env.local
-.env.*.local
-# Holds the Supabase service-role key for scripts/miner-push.mjs.
-.env.miner
+# EVERY .env, then the two that are deliberately tracked. This used to name the
+# variants one at a time — .env, .env.local, .env.*.local, .env.miner — which
+# covers the files people actually create and misses the ones Vite ALSO loads:
+# a plain .env.production or .env.development would have been committed. On a
+# PUBLIC repo whose build inlines every VITE_ prefixed value into a public
+# bundle, that is the same hazard scripts/key-exposure-smoke.mjs exists for,
+# arriving one step earlier — before the build, in the diff.
+#
+# Deny-by-default with two exceptions is the shape that cannot be incomplete:
+# a new .env variant is ignored the day someone invents it, and adding a
+# deliberately-tracked one is an edit here rather than an omission.
+.env*
+!.env.preview
+!.env.miner.example
 
 # Scratch harness for rendering sheets at 390pt during design work.
 .preview/
