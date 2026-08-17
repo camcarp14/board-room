@@ -56,8 +56,21 @@ const check = (name, cond, detail = "") => {
 };
 
 // Distinctive enough that it cannot collide with anything the app legitimately
-// contains, and shaped like the real thing so the test exercises the real path.
-const CANARY = "sk-ant-canary-DO-NOT-SHIP-9f8e7d6c5b4a3210";
+// contains, and DELIBERATELY NOT SHAPED LIKE A REAL KEY.
+//
+// The first version of this was `sk-ant-canary-…`, on the reasoning that a
+// realistic shape exercises the real path. It does not — nothing here parses the
+// value, it is a string that either appears in a chunk or does not — and the
+// realism costs two things that are not worth buying. Netlify runs enhanced
+// secret scanning over a production build and FAILS the deploy on strings that
+// merely look like credentials, so a fake `sk-ant-…` sitting in the build
+// environment of the deploy gate is a plausible way to make the gate reject a
+// perfectly good commit. And a build log carrying something that reads as a live
+// Anthropic key is its own small alarm for whoever opens it next.
+//
+// A token that could not be mistaken for a credential tests exactly the same
+// thing. The value only has to be unique.
+const CANARY = "BOARDROOM__KEY_EXPOSURE_CANARY__NOT_A_CREDENTIAL__9f8e7d6c5b4a";
 const OUT = ".key-exposure-smoke.tmp";
 
 const readChunks = () => {
@@ -92,7 +105,11 @@ try {
   const entry = chunks.find((c) => /ANTHROPIC_API_KEY\s*=/.test(c.body));
   check("…and the binding is still there, holding an empty string",
     !!entry && /ANTHROPIC_API_KEY\s*=\s*""/.test(entry.body),
-    entry ? (entry.body.match(/ANTHROPIC_API_KEY\s*=\s*[^;,\n]{0,40}/) || [])[0] : "no binding found at all");
+    // The detail deliberately does NOT echo what it found. On the failing path
+    // the thing it found is the value of a build-environment variable, and a
+    // failure message is the one part of a smoke that is guaranteed to end up in
+    // a CI log, a deploy log, and a screenshot.
+    entry ? "the binding is present but does not hold an empty string" : "no binding found at all");
 
   // The direct-to-Anthropic path is a dev-only affordance. Its presence in a
   // shipped chunk would not leak the key by itself now, but it is the branch the
