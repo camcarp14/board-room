@@ -110,6 +110,12 @@ check("the tile counts what it can actually show",
 // search, arriving through a new door.
 check("…but the saved order is still merged against every note",
   /mergeOrder\(ids, sortedAll\)/.test(code(tile)));
+// Archiving is not deleting. Archiving the note you are editing on the Brief must
+// not take its editor down with whatever is typed in it — so the rescue that keeps
+// an open editor on screen searches the UNFILTERED list. Caught by writing this
+// check: the first version of the filter left it searching the filtered one.
+check("…and an open editor survives its own note being archived",
+  /const edited = sortedAll\.find\(n => n\.id === editing\.id\)/.test(code(tile)));
 
 // ── 7. the delete is soft, and degrades honestly ─────────────────────────────
 const db = code(read("src/data/db.js"));

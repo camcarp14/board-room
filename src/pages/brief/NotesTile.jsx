@@ -81,9 +81,16 @@ export function NotesTile({ isMobile, refreshSignal, onOpenNotes, collapsed, onT
   const sorted = homescreenNotes(sortedAll);
   // Keep the note being edited on screen even if a cache refresh reshuffles it
   // below the cap — the open editor must never vanish mid-thought.
+  //
+  // SEARCHED IN sortedAll, NOT sorted, and the difference is the whole promise.
+  // `sorted` is now archive-filtered, so archiving this very note — from the
+  // Notes tab, from another device, or from a refetch landing mid-edit — would
+  // take it out of the list the rescue searches and the editor would disappear
+  // with whatever was typed in it. Archiving is not deleting; the words are
+  // still there and the editor should stay up to finish them.
   let visible = showAll ? sorted : sorted.slice(0, LIST_CAP);
   if (editing && !visible.some(n => n.id === editing.id)) {
-    const edited = sorted.find(n => n.id === editing.id);
+    const edited = sortedAll.find(n => n.id === editing.id);
     if (edited) visible = [...visible, edited];
   }
 
