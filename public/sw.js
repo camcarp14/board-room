@@ -70,7 +70,12 @@
 // engine's fetches, a helper directory deleted, two dead lists removed) change
 // nothing you could see, and main.jsx's own build check already picks those up on
 // the next launch without help from here.
-const VERSION = "br-v36";
+// v37: Notes gets the shelf and the bin — an Archived chip, an Undo in the
+// header, a Recently deleted sheet, and seals that finally tint the card. The
+// v6 note above in its purest form: every one of those is verified by LOOKING
+// at the Notes tab, and three of the four are new controls that a stale shell
+// would simply not draw.
+const VERSION = "br-v37";
 // DELIBERATELY NOT VERSION-KEYED, and the reason it is safe is the filename: Vite
 // content-hashes everything under /assets/, so a URL here can only ever mean one
 // body. A changed file IS a changed URL, which is what makes an entry from four

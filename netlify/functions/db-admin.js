@@ -90,13 +90,21 @@ exports.handler = async (event) => {
       // very table the soft delete exists to protect, and one extra clause is
       // cheaper than being clever.
       //
-      // TWO TABLES, AND ONE FAILURE IS NOT BOTH. Each delete is counted on its
-      // own and a refusal stops the run and says so. A combined "done" over a
-      // DELETE that was rejected would be the console reporting a sweep it did
-      // not perform.
+      // THREE TABLES NOW, AND ONE FAILURE IS NOT ALL THREE. Each delete is
+      // counted on its own and a refusal stops the run and says so. A combined
+      // "done" over a DELETE that was rejected would be the console reporting a
+      // sweep it did not perform.
+      //
+      // personal_notes joined in 0036. Notes were the last table in the app
+      // still losing rows outright — the undo was a six-second toast holding
+      // them in memory — so they now write deleted_at like the other two, and
+      // this is the act that eventually means it. The order is oldest-feature
+      // first and does not matter; what matters is that a table with a
+      // deleted_at and no line here would keep its rows for ever while the app
+      // promised thirty days.
       const cutoff = new Date(Date.now() - 30 * 86400000).toISOString();
       const out = [];
-      for (const table of ["dream_items", "affirmations"]) {
+      for (const table of ["dream_items", "affirmations", "personal_notes"]) {
         const res = await rest(`${table}?deleted_at=lt.${cutoff}&deleted_at=not.is.null`, { method: "DELETE" });
         if (!res.ok) return json(502, { error: `${table}: ${await res.text().catch(() => `HTTP ${res.status}`)} — nothing further was purged. ${out.length ? out.join(" · ") : "Nothing was purged."}` });
         out.push(`${table}: ${res.headers.get("content-range")?.split("/")[1] || "0"}`);

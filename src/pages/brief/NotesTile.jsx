@@ -5,6 +5,7 @@ import { useState, useRef } from "react";
 import { CollapsibleCard, Button, Field, Spinner, EmptyState, Dot, useConfirm } from "../../ui/kit.jsx";
 import { IcNote, IcPin, IcPlus, IcChevronRight, IcTrash } from "../../ui/icons.jsx";
 import { NoteCardPreview, sealColor, continueListOnEnter, toggleBulletAtCaret } from "../../ui/shared.jsx";
+import { homescreenNotes, noteTint } from "../../lib/notes-shelf.js";
 import { SortableList } from "../../ui/SortableList.jsx";
 import { applyNotesOrder, orderOf } from "../../lib/notes-order.js";
 import { queryClient } from "../../lib/queryClient.js";
@@ -37,6 +38,11 @@ function mergeOrder(ids, full) {
   const seen = new Set(ids);
   return [...ids, ...orderOf(full || []).filter((id) => !seen.has(id))];
 }
+// …and `full` must stay the WHOLE note list, never the homescreen slice. The
+// archive filter above narrows what this tile draws; it must not narrow what the
+// saved order remembers, or archiving a note would drop every archived note to
+// the bottom of the Notes tab the next time you dragged a card here. Same
+// failure the docstring above describes for search, arriving through a new door.
 
 export function NotesTile({ isMobile, refreshSignal, onOpenNotes, collapsed, onToggle, settings, updateSetting }) {
   // refreshSignal is accepted but unused here — freshness comes from the
@@ -62,7 +68,17 @@ export function NotesTile({ isMobile, refreshSignal, onOpenNotes, collapsed, onT
   // migration, and it syncs across devices. Hold a note and drag to set it.
   const noteOrder = settings?.notes_order || null;
   const saveOrder = (ids) => updateSetting?.("notes_order", ids);
-  const sorted = applyNotesOrder(notes || [], noteOrder);
+  // ARCHIVED NOTES ARE NOT ON THE HOMESCREEN, and the filter goes here — before
+  // the order, before the cap, before the count — so every number and every row
+  // below is about the same set. Filtering later would leave "Show all 23" over
+  // a list of nine, which is the same lie as showing the archived ones.
+  // homescreenNotes also drops anything in the bin; loadNotes already excludes
+  // it, so that is a belt to a brace and costs a boolean.
+  // sortedAll is EVERY note in saved order, and it exists only to be handed to
+  // mergeOrder below — see the note on that function. `sorted` is what this tile
+  // draws.
+  const sortedAll = applyNotesOrder(notes || [], noteOrder);
+  const sorted = homescreenNotes(sortedAll);
   // Keep the note being edited on screen even if a cache refresh reshuffles it
   // below the cap — the open editor must never vanish mid-thought.
   let visible = showAll ? sorted : sorted.slice(0, LIST_CAP);
@@ -188,7 +204,7 @@ export function NotesTile({ isMobile, refreshSignal, onOpenNotes, collapsed, onT
             <SortableList
               items={visible}
               disabled={!!editing}
-              onReorder={(ids) => saveOrder(mergeOrder(ids, sorted))}
+              onReorder={(ids) => saveOrder(mergeOrder(ids, sortedAll))}
             >{(n, { dragging }) => editing?.id === n.id ? (
               <div key={n.id} style={{ background: "var(--surface-2)", borderRadius: 12, padding: 12, margin: "6px 0", display: "flex", flexDirection: "column", gap: 8 }}>
                 <Field className="on-well" value={editing.title} onChange={e => setEditing(ed => ({ ...ed, title: e.target.value }))}
@@ -217,7 +233,18 @@ export function NotesTile({ isMobile, refreshSignal, onOpenNotes, collapsed, onT
               <div key={n.id} onClick={() => setEditing({ id: n.id, title: n.title || "", body: n.body || "" })}
                 className="press hoverable" role="button" tabIndex={0}
                 onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); setEditing({ id: n.id, title: n.title || "", body: n.body || "" }); } }}
-                style={{ display: "flex", alignItems: "flex-start", gap: 10, padding: "10px 2px", minHeight: 44, borderTop: "0.5px solid var(--line)", cursor: dragging ? "grabbing" : "pointer", borderRadius: 6 }}>
+                style={{
+                  display: "flex", alignItems: "flex-start", gap: 10, minHeight: 44,
+                  cursor: dragging ? "grabbing" : "pointer",
+                  // A sealed note is tinted paper. The padding and radius grow with
+                  // the tint so the colour reads as the row's own material rather
+                  // than a stripe behind the text, and the hairline is dropped for
+                  // tinted rows — a border plus a fill is two separators doing one
+                  // job, and the tint already says where the row starts.
+                  ...(noteTint(n.color, sealColor)
+                    ? { background: noteTint(n.color, sealColor), padding: "10px 10px", borderRadius: 10, margin: "2px 0" }
+                    : { padding: "10px 2px", borderTop: "0.5px solid var(--line)", borderRadius: 6 }),
+                }}>
                 <span style={{ flex: "none", display: "inline-flex", paddingTop: 6 }}>
                   <Dot tone={sealColor(n.color) || "var(--ink-a18)"} />
                 </span>

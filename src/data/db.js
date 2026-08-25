@@ -424,6 +424,18 @@ const isMissingFunction = (e, name) =>
   (/could not find the function|function .* does not exist/i.test(e?.message || "") &&
     (e?.message || "").includes(name));
 
+// 0036's pair, asked about together because they arrive together and a read that
+// wants one wants both. Grouped alternation rather than passing "archived|
+// deleted_at" to isMissingColumn: that builds `column .*archived|deleted_at.*
+// does not exist`, where the | splits the WHOLE pattern and the second half
+// matches any message containing "deleted_at" followed by "does not exist" —
+// including errors about a different table. PGRST204 is here because PostgREST
+// answers it for an unknown column in a select before Postgres ever sees 42703.
+const isMissingShelf = (e) =>
+  /42703|PGRST204/.test(e?.code || "") ||
+  /column .*(?:archived|deleted_at).* does not exist/i.test(e?.message || "") ||
+  (/could not find the .*column/i.test(e?.message || "") && /archived|deleted_at/i.test(e?.message || ""));
+
 // ─── db — Supabase-backed memory layer (unchanged contract) ──────────────────
 export const db = {
   async uid() {
@@ -682,13 +694,31 @@ export const db = {
     return reported(`findings:${++writeSeq}`, "auditor findings", () =>
       write(supabase.from("auditor_findings").insert(rows.map(r => ({ property: r.property, severity: r.severity, area: r.area || null, finding: r.finding, suggestion: r.suggestion }))), "the auditor findings"), opts);
   },
+  // ─── notes: two column sets, and a fallback that has to cover both ────────
+  // 0008 added pinned/color; 0036 added archived/deleted_at. Both arrive in the
+  // SQL editor by hand while the code arrives on a deploy, so every reader here
+  // survives either one being absent and reports `legacy` so the panel can show
+  // its upgrade banner instead of an error. The probe order is newest-first:
+  // ask for everything, and step down one column set at a time.
+  //
+  // THE FILTER IS IN THE READ, not at the call sites. Both note surfaces read
+  // through loadNotes, and a deleted note that reappears on the Brief because
+  // one of them forgot to filter is exactly the failure src/lib/notes-shelf.js
+  // exists to prevent — this is the other half of it: the bin never arrives in
+  // the first place unless something asks for it.
   async loadNotes() {
-    // Try the upgraded schema first; fall back cleanly if the pinned/color
-    // columns haven't been added yet so notes keep working pre-migration.
+    const shelved = await supabase.from("personal_notes")
+      .select("id,title,body,pinned,color,archived,deleted_at,updated_at,created_at")
+      .is("deleted_at", null)
+      .order("updated_at", { ascending: false });
+    if (!shelved.error) return { rows: shelved.data || [], legacy: false };
+    if (!isMissingShelf(shelved.error)) throw shelved.error;
+    // 0036 not run yet. Everything below is the pre-0036 behaviour verbatim.
     const full = await supabase.from("personal_notes")
       .select("id,title,body,pinned,color,updated_at,created_at")
       .order("updated_at", { ascending: false });
-    if (!full.error) return { rows: full.data || [], legacy: false };
+    // legacy: "shelf" — the words and the seals work, the shelf and the bin do not.
+    if (!full.error) return { rows: full.data || [], legacy: "shelf" };
     if (!/column|pinned|color|42703/i.test(full.error.message || "")) throw full.error;
     const base = await supabase.from("personal_notes")
       .select("id,title,body,updated_at,created_at")
@@ -696,23 +726,85 @@ export const db = {
     if (base.error) throw base.error;
     return { rows: base.data || [], legacy: true };
   },
+  /** The bin. Read on demand — the Notes panel asks when you open Recently
+   *  deleted, so an ordinary launch never pays for rows nobody is looking at.
+   *  Returns [] rather than throwing when 0036 is absent: an empty bin is the
+   *  truth on a database that cannot mark anything deleted. */
+  async loadDeletedNotes(limit = 100) {
+    const { data, error } = await supabase.from("personal_notes")
+      .select("id,title,body,pinned,color,archived,deleted_at,updated_at,created_at")
+      .not("deleted_at", "is", null)
+      .order("deleted_at", { ascending: false }).limit(limit);
+    if (error) {
+      if (isMissingColumn(error, "deleted_at")) return [];
+      throw error;
+    }
+    return data || [];
+  },
   async saveNote(note) {
     const user_id = await db.uid();
     if (!user_id) throw new Error("Not signed in");
     const row = { id: note.id, user_id, title: note.title, body: note.body, updated_at: new Date().toISOString() };
     if (note.pinned !== undefined) row.pinned = note.pinned;
     if (note.color !== undefined) row.color = note.color;
+    // Sent only when the caller means it, like pinned/color above — an upsert
+    // writes the columns it carries, so an unconditional `archived: false` here
+    // would un-archive a note every time the editor autosaved a word.
+    if (note.archived !== undefined) row.archived = note.archived;
     const { data, error } = await supabase.from("personal_notes").upsert(row, { onConflict: "id" }).select().single();
     if (error) throw error;
     return data;
   },
-  async deleteNote(id) {
-    const { error } = await supabase.from("personal_notes").delete().eq("id", id);
-    if (error) throw error;
+  /**
+   * Delete notes — SOFT, and falling back to the hard delete when 0036 is not in
+   * yet. That fallback is the one thing here that differs from deleteAffirmation
+   * and deleteDreamItem, which throw instead, and the difference is argued in
+   * the migration header: there, writing deleted_at IS the delete and the only
+   * other version destroys the row, so refusing is the safe answer. Here the
+   * other version is what notes have always done, so refusing would break
+   * deleting to protect a column that does not exist. The panel's banner says
+   * which mode it is in.
+   *
+   * Returns { soft } so the caller knows which undo it has: a soft delete is
+   * undoable from the bin for thirty days, a hard one only from the rows still
+   * in memory, which is the six-second toast.
+   */
+  async deleteNotes(ids) {
+    const list = (Array.isArray(ids) ? ids : [ids]).filter(Boolean);
+    if (!list.length) return { soft: true };
+    const now = new Date().toISOString();
+    // `is deleted_at null` so deleting a note twice cannot push its thirty-day
+    // clock forward — deleted_at means when it was deleted. Same guard, same
+    // reason, as the two tables that had this first.
+    const soft = await supabase.from("personal_notes")
+      .update({ deleted_at: now }).in("id", list).is("deleted_at", null);
+    if (!soft.error) return { soft: true };
+    if (!isMissingShelf(soft.error)) throw soft.error;
+    const hard = await supabase.from("personal_notes").delete().in("id", list);
+    if (hard.error) throw hard.error;
+    return { soft: false };
   },
-  async bulkDeleteNotes(ids) {
-    if (!ids?.length) return;
-    const { error } = await supabase.from("personal_notes").delete().in("id", ids);
+  async deleteNote(id) { return db.deleteNotes([id]); },
+  async bulkDeleteNotes(ids) { return db.deleteNotes(ids); },
+  /** Out of the bin, back onto whichever shelf it was on. Clearing deleted_at is
+   *  the whole restore — `archived` was never touched by the delete, so a note
+   *  archived before it was deleted comes back archived. */
+  async undeleteNotes(ids) {
+    const list = (Array.isArray(ids) ? ids : [ids]).filter(Boolean);
+    if (!list.length) return [];
+    const { data, error } = await supabase.from("personal_notes")
+      .update({ deleted_at: null }).in("id", list).select();
+    if (error) throw error;
+    return data || [];
+  },
+  /** Destroy for good, from the bin only. `.not(deleted_at, is, null)` is the
+   *  safety catch: this is the one call in the notes path that cannot be undone,
+   *  and it must be unable to reach a live note even if handed its id. */
+  async purgeNotes(ids) {
+    const list = (Array.isArray(ids) ? ids : [ids]).filter(Boolean);
+    if (!list.length) return;
+    const { error } = await supabase.from("personal_notes")
+      .delete().in("id", list).not("deleted_at", "is", null);
     if (error) throw error;
   },
   async bulkUpdateNotes(ids, patch) {
@@ -727,10 +819,11 @@ export const db = {
     if (!rows?.length) return;
     const user_id = await db.uid();
     if (!user_id) throw new Error("Not signed in");
-    const clean = rows.map(({ id, title, body, pinned, color, created_at, updated_at }) => {
+    const clean = rows.map(({ id, title, body, pinned, color, archived, created_at, updated_at }) => {
       const r = { id, user_id, title, body, created_at, updated_at };
       if (pinned !== undefined) r.pinned = pinned;
       if (color !== undefined) r.color = color;
+      if (archived !== undefined) r.archived = archived;
       return r;
     });
     const { error } = await supabase.from("personal_notes").upsert(clean, { onConflict: "id" });
