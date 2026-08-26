@@ -3,7 +3,8 @@
 // one-line capture, tap any note to edit it in place, or jump to the full tab.
 import { useState, useRef } from "react";
 import { CollapsibleCard, Button, Field, Spinner, EmptyState, Dot, useConfirm } from "../../ui/kit.jsx";
-import { IcNote, IcPin, IcPlus, IcChevronRight, IcTrash } from "../../ui/icons.jsx";
+import { IcNote, IcPin, IcPlus, IcChevronRight, IcTrash, IcUndo } from "../../ui/icons.jsx";
+import { createTextHistory } from "../../lib/text-history.js";
 import { NoteCardPreview, sealColor, continueListOnEnter, toggleBulletAtCaret } from "../../ui/shared.jsx";
 import { homescreenNotes, noteTint } from "../../lib/notes-shelf.js";
 import { SortableList } from "../../ui/SortableList.jsx";
@@ -59,8 +60,43 @@ export function NotesTile({ isMobile, refreshSignal, onOpenNotes, collapsed, onT
   const [showAll, setShowAll] = useState(false);
   const [confirmEl, confirm] = useConfirm();
   const editBodyRef = useRef(null);
+  // The same undo the Notes tab's editor has, for the same reason — this field is
+  // controlled too, and applyEditBody below rewrites the whole value and moves the
+  // caret, which is what clears the browser's native stack. A quick edit from the
+  // Brief is exactly where you would fat-finger a selection and lose a paragraph.
+  // See src/lib/text-history.js.
+  const historyRef = useRef(null);
+  if (!historyRef.current) historyRef.current = createTextHistory({ title: "", body: "" });
+  const [histAt, setHistAt] = useState(0);
+  const editText = (next, field, caret) => {
+    const merged = { ...editing, ...next };
+    historyRef.current.push({ title: merged.title, body: merged.body }, { field, caret });
+    setEditing(merged);
+    setHistAt(n => n + 1);
+  };
+  const undoText = () => {
+    const entry = historyRef.current.undo();
+    if (!entry) return;
+    setEditing(ed => ({ ...ed, title: entry.title, body: entry.body }));
+    setHistAt(n => n + 1);
+    if (entry.field === "body") {
+      requestAnimationFrame(() => {
+        const el = editBodyRef.current;
+        if (!el) return;
+        el.focus();
+        try { el.setSelectionRange(entry.caret, entry.caret); } catch {}
+      });
+    }
+  };
+  // Opening a row seeds the stack with that row's saved text, so undo can reach
+  // the state you started from and never the previous row's words.
+  const beginEdit = (n) => {
+    historyRef.current.reset({ title: n.title || "", body: n.body || "" });
+    setHistAt(0);
+    setEditing({ id: n.id, title: n.title || "", body: n.body || "" });
+  };
   const applyEditBody = (next, caret) => {
-    setEditing(ed => ({ ...ed, body: next }));
+    editText({ body: next }, "body", caret);
     requestAnimationFrame(() => { try { editBodyRef.current?.setSelectionRange(caret, caret); } catch {} });
   };
 
@@ -214,15 +250,27 @@ export function NotesTile({ isMobile, refreshSignal, onOpenNotes, collapsed, onT
               onReorder={(ids) => saveOrder(mergeOrder(ids, sortedAll))}
             >{(n, { dragging }) => editing?.id === n.id ? (
               <div key={n.id} style={{ background: "var(--surface-2)", borderRadius: 12, padding: 12, margin: "6px 0", display: "flex", flexDirection: "column", gap: 8 }}>
-                <Field className="on-well" value={editing.title} onChange={e => setEditing(ed => ({ ...ed, title: e.target.value }))}
+                <Field className="on-well" value={editing.title} onChange={e => editText({ title: e.target.value }, "title", e.target.selectionStart)}
                   placeholder="Title (optional)" style={{ fontWeight: 600 }} />
                 {/* raw textarea (kit class): React 18 function components don't
                     forward refs, and the caret restore + bullet toggle need one */}
                 <textarea ref={editBodyRef} className="field on-well" value={editing.body} autoFocus rows={4}
-                  onChange={e => setEditing(ed => ({ ...ed, body: e.target.value }))}
+                  onChange={e => editText({ body: e.target.value }, "body", e.target.selectionStart)}
+                  onKeyDownCapture={e => {
+                    // ⌘Z on a desktop keyboard. The tile has no window-level
+                    // listener of its own (it is one card among many), so the
+                    // shortcut lives on the field it applies to.
+                    if (!(e.metaKey || e.ctrlKey) || e.key.toLowerCase() !== "z" || e.shiftKey) return;
+                    e.preventDefault(); undoText();
+                  }}
                   onKeyDown={e => continueListOnEnter(e, editing.body, applyEditBody)}
                   style={{ resize: "vertical", lineHeight: 1.55 }} />
                 <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                  <Button kind="quiet" title="Undo (⌘Z)" aria-label="Undo"
+                    disabled={!historyRef.current.canUndo()}
+                    onClick={undoText} style={{ padding: "0 12px", flex: "none" }}>
+                    <IcUndo size={15} />
+                  </Button>
                   <Button kind="quiet" title="Bullet list" style={{ padding: "0 12px", flex: "none" }}
                     onClick={() => { toggleBulletAtCaret(editBodyRef.current, editing.body, applyEditBody); editBodyRef.current?.focus(); }}>• List</Button>
                   <Button kind="tinted" disabled={savingEdit} onClick={saveEdit} style={{ flex: 1, minWidth: 88 }}>{savingEdit ? "Saving…" : "Save"}</Button>
@@ -237,9 +285,9 @@ export function NotesTile({ isMobile, refreshSignal, onOpenNotes, collapsed, onT
                 </div>
               </div>
             ) : (
-              <div key={n.id} onClick={() => setEditing({ id: n.id, title: n.title || "", body: n.body || "" })}
+              <div key={n.id} onClick={() => beginEdit(n)}
                 className="press hoverable" role="button" tabIndex={0}
-                onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); setEditing({ id: n.id, title: n.title || "", body: n.body || "" }); } }}
+                onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); beginEdit(n); } }}
                 style={{
                   display: "flex", alignItems: "flex-start", gap: 10, minHeight: 44,
                   cursor: dragging ? "grabbing" : "pointer",

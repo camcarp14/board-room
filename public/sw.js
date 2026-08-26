@@ -75,7 +75,11 @@
 // v6 note above in its purest form: every one of those is verified by LOOKING
 // at the Notes tab, and three of the four are new controls that a stale shell
 // would simply not draw.
-const VERSION = "br-v37";
+// v38: a real Undo inside the note editor — a button in both editors and ⌘Z
+// bound to a history the app keeps itself, because the controlled field and the
+// bullet helpers had already emptied the browser's own stack and the phone never
+// had one. A new button in a toolbar is the v6 note exactly.
+const VERSION = "br-v38";
 // DELIBERATELY NOT VERSION-KEYED, and the reason it is safe is the filename: Vite
 // content-hashes everything under /assets/, so a URL here can only ever mean one
 // body. A changed file IS a changed URL, which is what makes an entry from four

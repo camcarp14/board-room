@@ -169,6 +169,11 @@ export const IcClose = (p = {}) => <svg {...base({ weight: 2, ...p })}><line x1=
 export const IcCheck = (p = {}) => <svg {...base({ weight: 2.2, ...p })}><polyline points="5 12.5 10 17.5 19 6.5" /></svg>;
 export const IcSearch = (p = {}) => <svg {...base(p)}><circle cx="11" cy="11" r="6.5" /><line x1="15.8" y1="15.8" x2="20.5" y2="20.5" /></svg>;
 export const IcRefresh = (p = {}) => <svg {...base({ weight: 2, ...p })}><path d="M20 12a8 8 0 1 1-2.34-5.66" /><path d="M20 4v4.5h-4.5" /></svg>;
+// Undo / redo — a curved arrow doubling back on itself, mirrored for redo. Same
+// 24×24 grid and 1.8 stroke as everything else; the arrowhead is drawn as two
+// strokes rather than a filled marker so it inherits weight with the rest.
+export const IcUndo = (p = {}) => <svg {...base(p)}><path d="M4.5 9.5h10a5 5 0 0 1 0 10h-4" /><polyline points="8 5.5 4 9.5 8 13.5" /></svg>;
+export const IcRedo = (p = {}) => <svg {...base(p)}><path d="M19.5 9.5h-10a5 5 0 0 0 0 10h4" /><polyline points="16 5.5 20 9.5 16 13.5" /></svg>;
 export const IcSend = (p = {}) => <svg {...solid(p)}><path d="M12 3.5c.3 0 .6.1.8.3l6.4 6.4a1.1 1.1 0 0 1-1.6 1.6l-4.5-4.5V19a1.1 1.1 0 0 1-2.2 0V7.3l-4.5 4.5a1.1 1.1 0 0 1-1.6-1.6l6.4-6.4c.2-.2.5-.3.8-.3z" /></svg>;
 export const IcTrash = (p = {}) => <svg {...base(p)}><path d="M4.5 6.5h15" /><path d="M9 6V4.8c0-.7.6-1.3 1.3-1.3h3.4c.7 0 1.3.6 1.3 1.3V6" /><path d="M6.3 6.5 7 19c.05.8.7 1.5 1.5 1.5h7c.8 0 1.45-.7 1.5-1.5l.7-12.5" /><line x1="10" y1="10.5" x2="10" y2="16.5" /><line x1="14" y1="10.5" x2="14" y2="16.5" /></svg>;
 export const IcPencil = (p = {}) => <svg {...base(p)}><path d="M14.5 5 19 9.5 8.5 20H4v-4.5z" /><line x1="12.5" y1="7" x2="17" y2="11.5" /></svg>;

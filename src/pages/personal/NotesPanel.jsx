@@ -12,7 +12,8 @@ import { queryClient } from "../../lib/queryClient.js";
 import { useNotes } from "../../data/notes.js";
 import { NOTE_SEALS, sealColor, NoteCardPreview, continueListOnEnter, toggleBulletAtCaret } from "../../ui/shared.jsx";
 import { Card, SectionHeader, Button, Cell, Sheet, useConfirm, EmptyState, Dot, Pill } from "../../ui/kit.jsx";
-import { IcPin, IcTrash, IcCheck, IcNote, IcChevronLeft, IcSend, IcSeal, IcPlus, IcArchive, IcUnarchive, IcRefresh } from "../../ui/icons.jsx";
+import { IcPin, IcTrash, IcCheck, IcNote, IcChevronLeft, IcSend, IcSeal, IcPlus, IcArchive, IcUnarchive, IcRefresh, IcUndo, IcRedo } from "../../ui/icons.jsx";
+import { createTextHistory } from "../../lib/text-history.js";
 import { panelNotes, noteTint, deletedNotes, daysLeft, PURGE_AFTER_DAYS, TINT_PCT_STRONG } from "../../lib/notes-shelf.js";
 
 // The watch/Siri setup sheet is read once and then never again, and NotesPanel
@@ -91,8 +92,54 @@ export function NotesPanel({ isMobile, openSignal, settings, updateSetting }) {
   const oopsTimer = useRef(null);
   const skipNextAutosave = useRef(false);
   const editorBodyRef = useRef(null);
+  // ─── the editor's own undo ─────────────────────────────────────────────────
+  // The browser's is not available here — the field is controlled, and the bullet
+  // helpers rewrite the value and move the caret, which clears the native stack in
+  // every engine. On the phone there is no ⌘Z to fall back to either. The long
+  // version is at the top of src/lib/text-history.js.
+  //
+  // ONE FUNNEL. Every edit to the draft's TEXT goes through editText, so there is
+  // no route that changes the words without the history seeing it — a keystroke, a
+  // bullet toggle, a list continuation, the title field. The two non-text fields
+  // (pinned, color) deliberately do NOT: undoing a seal is not what ⌘Z means, and
+  // mixing them in would make an undo after typing silently change the colour.
+  const historyRef = useRef(null);
+  if (!historyRef.current) historyRef.current = createTextHistory({ title: "", body: "" });
+  const [histAt, setHistAt] = useState(0); // bumped so the buttons re-render enabled/disabled
+  //
+  // The push happens OUTSIDE the setDraft updater, reading `draft` from this
+  // render's closure. Inside, it would be a side effect in a reducer — React
+  // calls updaters twice under StrictMode, so every keystroke would push two
+  // entries in development and one in production, and the coalescing rules would
+  // be tuned against behaviour that only happens on the owner's machine. Every
+  // caller here is an event handler, so `draft` is the value on screen.
+  const editText = (next, field, caret) => {
+    const merged = { ...draft, ...next };
+    historyRef.current.push({ title: merged.title, body: merged.body }, { field, caret });
+    setDraft(merged);
+    setHistAt(n => n + 1);
+  };
+  // Put a history entry back on screen, caret included. `skipNextAutosave` is NOT
+  // set: an undo changes the words, and the words are what autosave exists to
+  // persist — leaving the restored text unsaved would make undo look like it
+  // worked until the next reload took it away again.
+  const applyHistory = (entry) => {
+    if (!entry) return;
+    setDraft(d => ({ ...d, title: entry.title, body: entry.body }));
+    setHistAt(n => n + 1);
+    if (entry.field === "body") {
+      requestAnimationFrame(() => {
+        const el = editorBodyRef.current;
+        if (!el) return;
+        el.focus();
+        try { el.setSelectionRange(entry.caret, entry.caret); } catch {}
+      });
+    }
+  };
+  const undoText = () => applyHistory(historyRef.current.undo());
+  const redoText = () => applyHistory(historyRef.current.redo());
   const applyEditorBody = (next, caret) => {
-    setDraft(d => ({ ...d, body: next }));
+    editText({ body: next }, "body", caret);
     // restore the caret after React re-renders (needed after programmatic mutation)
     requestAnimationFrame(() => { try { editorBodyRef.current?.setSelectionRange(caret, caret); } catch {} });
   };
@@ -251,6 +298,13 @@ export function NotesPanel({ isMobile, openSignal, settings, updateSetting }) {
       // is exactly the case that must not be skipped.
       setActiveId(id);
       setDraft({ title: "", body: t, pinned: false, color: null });
+      // Seed the undo stack here too. This path opens the editor with content
+      // already in it, and without a reset the history would still be holding
+      // whichever note was open last — so the first ⌘Z would paint a DIFFERENT
+      // note's words over this one. Seeded with the captured text, so undo starts
+      // from where this editing session started, the same rule openNote follows.
+      historyRef.current.reset({ title: "", body: t });
+      setHistAt(0);
       return;
     }
     setQuick("");
@@ -267,12 +321,19 @@ export function NotesPanel({ isMobile, openSignal, settings, updateSetting }) {
     skipNextAutosave.current = true;
     setActiveId(n.id);
     setDraft({ title: n.title || "", body: n.body || "", pinned: !!n.pinned, color: n.color || null });
+    // Seeded with what is SAVED, so the earliest thing undo can reach is the note
+    // as it was when you opened it — never a previous note's words, which is what
+    // a stack carried across opens would eventually paint.
+    historyRef.current.reset({ title: n.title || "", body: n.body || "" });
+    setHistAt(0);
     setSaveState("idle");
   };
   const newNote = () => {
     skipNextAutosave.current = true;
     setActiveId(crypto.randomUUID());
     setDraft({ title: "", body: "", pinned: false, color: null });
+    historyRef.current.reset({ title: "", body: "" });
+    setHistAt(0);
     setSaveState("idle");
   };
   const flushSave = () => {
@@ -306,11 +367,20 @@ export function NotesPanel({ isMobile, openSignal, settings, updateSetting }) {
     const onKey = (e) => {
       // a confirm/action sheet is up — Escape belongs to it, not the editor
       if (document.querySelector(".sheet-scrim")) return;
-      if (e.key === "Escape" || ((e.metaKey || e.ctrlKey) && e.key === "Enter")) closeEditor();
+      if (e.key === "Escape" || ((e.metaKey || e.ctrlKey) && e.key === "Enter")) { closeEditor(); return; }
+      // ⌘Z / ⌃Z, and ⇧⌘Z or ⌃Y to redo. preventDefault is not optional: without
+      // it the browser ALSO runs its own undo against whatever is left of the
+      // native stack, and the two disagree — you get our step plus a stray
+      // character the engine still remembered, which is worse than either alone.
+      const mod = e.metaKey || e.ctrlKey;
+      if (!mod) return;
+      const k = e.key.toLowerCase();
+      if (k === "z" && !e.shiftKey) { e.preventDefault(); undoText(); }
+      else if ((k === "z" && e.shiftKey) || k === "y") { e.preventDefault(); redoText(); }
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [activeId, draft, saveState]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [activeId, draft, saveState, histAt]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // ─── single + bulk operations ───
   // The message tells the truth about which undo you are getting, and it can
@@ -476,6 +546,26 @@ export function NotesPanel({ isMobile, openSignal, settings, updateSetting }) {
                 as "put this away" then "throw this away", which is the order you
                 want them considered in. It acts on the saved note, so it is only
                 offered once there is one to act on. */}
+            {/* THE UNDO BUTTON, and on a phone it is the only one there is — iOS's
+                shake-to-undo and the keyboard's undo key both read the native
+                stack, which a controlled field and the bullet helpers have
+                already emptied. Disabled rather than hidden when there is
+                nothing to undo, so its place in the row does not move as you
+                type. Redo only appears once there is something to redo: a
+                permanently-dead second button teaches you not to trust the
+                first one. */}
+            <button className="icon-btn" onClick={undoText} disabled={!historyRef.current.canUndo()}
+              aria-label="Undo" title="Undo (⌘Z)"
+              style={{ width: 36, height: 36, opacity: historyRef.current.canUndo() ? 1 : 0.35 }}>
+              <IcUndo size={17} />
+            </button>
+            {historyRef.current.canRedo() && (
+              <button className="icon-btn" onClick={redoText}
+                aria-label="Redo" title="Redo (⇧⌘Z)"
+                style={{ width: 36, height: 36 }}>
+                <IcRedo size={17} />
+              </button>
+            )}
             {!legacy && activeNote && (
               <Button kind="quiet" size="sm" onClick={() => setArchived([activeNote.id], !activeNote.archived)}
                 title={activeNote.archived ? "Put back on the Brief" : "Keep the note, take it off the Brief"}>
@@ -491,7 +581,7 @@ export function NotesPanel({ isMobile, openSignal, settings, updateSetting }) {
           <input
             className="field"
             value={draft.title}
-            onChange={e => setDraft(d => ({ ...d, title: e.target.value }))}
+            onChange={e => editText({ title: e.target.value }, "title", e.target.selectionStart)}
             placeholder="Untitled note"
             style={{ fontSize: 16, fontWeight: 600, marginBottom: 8, ...(draft.color ? { boxShadow: `inset 3px 0 0 ${sealColor(draft.color)}` } : {}) }}
           />
@@ -499,7 +589,7 @@ export function NotesPanel({ isMobile, openSignal, settings, updateSetting }) {
             className="field"
             ref={editorBodyRef}
             value={draft.body}
-            onChange={e => setDraft(d => ({ ...d, body: e.target.value }))}
+            onChange={e => editText({ body: e.target.value }, "body", e.target.selectionStart)}
             onKeyDown={e => continueListOnEnter(e, draft.body, applyEditorBody)}
             placeholder="Start typing — this saves automatically. Start a line with “- ” for a list."
             rows={isMobile ? 14 : 18}
