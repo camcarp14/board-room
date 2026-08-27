@@ -68,6 +68,8 @@ function ChordsMode({ rootPc, tuning, isMobile }) {
             sub="Every voicing this app draws has been checked against the notes it actually sounds, and there isn't a verified one for this chord in this tuning yet." />
         ) : (
           <Grid min={isMobile ? 118 : 140} gap={12}>
+            {/* If ANY shape in this grid has a name of its own, every box reserves
+                the band for one, so the nuts stay on a line. */}
             {voicings.slice(0, 8).map((v) => (
               <div key={v.id} style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 4 }}>
                 {/* Named only when the name is NOT the card's own title — an
@@ -78,6 +80,7 @@ function ChordsMode({ rootPc, tuning, isMobile }) {
                   showIntervals={showIntervals} tuning={tuning} size={isMobile ? 112 : 128}
                   onClick={() => play(v)}
                   label={voicingName(v, { flats }) !== name ? voicingName(v, { flats }) : null}
+                  labelSpace={voicings.slice(0, 8).some((o) => voicingName(o, { flats }) !== name)}
                   sub={v.shapeName || (v.tags?.includes("campfire") ? "campfire" : v.open ? "open" : null)} />
                 <button type="button" onClick={() => play(v)} className="sec-link"
                   style={{ background: "none", border: "none", cursor: "pointer", fontSize: 12 }}>Play</button>
@@ -373,7 +376,7 @@ function TrainMode({ tuning, isMobile }) {
               const chosen = reverseResult?.picked === pc;
               const correct = reverseResult && pc === reverse.answerPc;
               return (
-                <button key={pc} type="button" disabled={!!reverseResult}
+                <button key={pc} type="button" disabled={!!reverseResult} aria-label={`Answer ${n}`}
                   onClick={async () => {
                     setReverseResult({ picked: pc, ok: pc === reverse.answerPc });
                     await unlock();

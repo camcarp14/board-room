@@ -57,6 +57,10 @@ export const DEFAULT_PITCH_OPTS = {
 // prints a note over silence is a tuner nobody can trust when it matters.
 export function detectPitch(buf, sampleRate, opts = {}) {
   const o = { ...DEFAULT_PITCH_OPTS, ...opts };
+  // Total in its argument: a caller with nothing to analyse gets "I cannot tell"
+  // rather than a TypeError. The tuner's read loop runs on every animation frame
+  // and one throw there takes the whole sheet down mid-tune.
+  if (!buf || typeof buf.length !== "number") return null;
   const n = buf.length;
   if (!n || !(sampleRate > 0)) return null;
 
@@ -79,7 +83,17 @@ export function detectPitch(buf, sampleRate, opts = {}) {
   if (rms < o.minRms) return null;
 
   const minTau = Math.max(2, Math.floor(sampleRate / o.maxHz));
-  const maxTau = Math.min(n - 1, Math.ceil(sampleRate / o.minHz));
+  // A LAG NEEDS ENOUGH OVERLAP TO MEAN ANYTHING, and n − 1 is not it. The NSDF at
+  // lag τ correlates n − τ samples, so a lag near the window's own length is
+  // computed from a handful of them and is dominated by whatever noise happens to
+  // line up: handed 1024 samples of a low E — a note whose period is 535 of them —
+  // the detector found a spurious peak and reported 75.7 Hz, a confident answer a
+  // semitone and a half flat. Two and a half periods is the floor; below that the
+  // honest answer is that the window is too short, and the range check at the
+  // bottom turns "no peak I can trust" into null rather than into a guess. The
+  // tuner's own window is 8192 samples, so this never binds there — it binds on
+  // any other caller, which is exactly who it is for.
+  const maxTau = Math.min(Math.floor(n / 2.5), Math.ceil(sampleRate / o.minHz));
   if (maxTau <= minTau) return null;
 
   // NSDF over the lag range. The O(n·τ) loop is the honest one — an FFT-based

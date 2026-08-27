@@ -90,7 +90,15 @@ export function Fretboard({
 
   return (
     <div ref={scroller} style={{ overflowX: "auto", overflowY: "hidden", WebkitOverflowScrolling: "touch", ...style }}>
-      <svg viewBox={`0 0 ${W} ${H}`} width={W} height={H} role="img" aria-label={ariaLabel} style={{ display: "block" }}>
+      {/* role="img" ONLY WHEN IT IS ONE. A neck you can tap is not an image, and
+          announcing it as one hides seventy-two controls from a screen reader
+          while promising a description that does not exist. When it is
+          interactive the tap cells become real buttons with real names, which
+          also makes them keyboard-reachable — and the Reverse Finder drill next
+          door is the same test as a plain button grid for anyone who would
+          rather not tab through a fretboard. */}
+      <svg viewBox={`0 0 ${W} ${H}`} width={W} height={H}
+        role={onFret || onDot ? "group" : "img"} aria-label={ariaLabel} style={{ display: "block" }}>
         {/* the board */}
         <rect x={xs[0]} y={padTop - 5} width={W - xs[0] - 10} height={gridH + 10} rx={3} fill="var(--surface-2)" />
         {/* frets */}
@@ -128,6 +136,9 @@ export function Fretboard({
             <rect key={`t${s}:${f}`} x={f === fromFret ? OPEN_X - 11 : xs[f - fromFret - 1]}
               y={y(s) - stepY / 2} width={f === fromFret ? 22 : widths[f - fromFret - 1]} height={stepY}
               fill="transparent" style={{ cursor: "pointer" }}
+              role="button" tabIndex={0}
+              aria-label={`String ${strings - s}, ${f === 0 ? "open" : `fret ${f}`} — ${pcName(mod12(midiAt(s, f, tuning, capo)))}`}
+              onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); onFret({ string: s, fret: f, midi: midiAt(s, f, tuning, capo) }); } }}
               onClick={() => onFret({ string: s, fret: f, midi: midiAt(s, f, tuning, capo) })} />
           )))}
         {/* the dots */}
@@ -139,6 +150,11 @@ export function Fretboard({
           const txt = textOf(d);
           return (
             <g key={`${d.string}:${d.fret}`} onClick={onDot ? () => onDot(d) : undefined}
+              {...(onDot ? {
+                role: "button", tabIndex: 0,
+                "aria-label": `${pcName(d.pc)}, string ${strings - d.string} fret ${d.fret}`,
+                onKeyDown: (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); onDot(d); } },
+              } : {})}
               style={{ cursor: onDot ? "pointer" : undefined }}>
               {isHi && <circle cx={cx} cy={cy} r={r + 4} fill="none" stroke="var(--accent)" strokeWidth={2} opacity={0.7} />}
               <circle cx={cx} cy={cy} r={r} fill={toneOf(d)} opacity={d.dim ? 0.32 : 1} />

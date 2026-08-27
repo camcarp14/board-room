@@ -91,7 +91,12 @@ export function loadActiveSession() {
     const ok = a && typeof a === "object"
       && typeof a.day === "string" && Number.isFinite(a.startedAt)
       && Array.isArray(a.results) && a.results.every(itemOk)
-      && Number.isFinite(a.blockIndex);
+      && Number.isFinite(a.blockIndex)
+      // The frozen plan has to be there and has to have the block the index
+      // points at, or the runner resumes into `undefined` and renders nothing
+      // with no way out but clearing storage by hand.
+      && a.plan && Array.isArray(a.plan.blocks) && a.plan.blocks.length > a.blockIndex
+      && a.plan.blocks.every((b) => b && typeof b.kind === "string" && Number.isFinite(b.seconds));
     if (!ok) { if (a != null) clearActiveSession(); return null; }
     // Older than three hours is not a session you are still in; it is one you
     // walked away from. Offered as "save what you did" rather than resumed.

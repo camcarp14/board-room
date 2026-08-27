@@ -27,7 +27,7 @@ const STRINGS = 6;
 export function ChordDiagram({
   frets, fingers = null, barre = null, rootPc = null,
   size = 132, showIntervals = false, tuning = STANDARD,
-  label = null, sub = null, tone = null, muted = false, onClick = null, style,
+  label = null, labelSpace = false, sub = null, tone = null, muted = false, onClick = null, style,
 }) {
   if (!Array.isArray(frets) || frets.length !== STRINGS) return null;
   const played = frets.filter((f) => Number.isFinite(f) && f > 0);
@@ -45,7 +45,11 @@ export function ChordDiagram({
   // the row of ○ and × above the nut — legible in neither direction. The label
   // band is reserved first and the marker row hangs off the nut, so adding a name
   // moves the whole diagram down rather than colliding with it.
-  const labelH = label ? size * 0.19 : 0;
+  // `labelSpace` reserves the band without printing anything in it. A grid where
+  // some shapes are named (C/G) and some are not (plain C) otherwise sits its
+  // diagrams at two different heights, and a row of chord boxes with their nuts
+  // on different lines reads as a rendering fault rather than as a distinction.
+  const labelH = label || labelSpace ? size * 0.19 : 0;
   const W = size, padX = size * 0.14;
   const padTop = labelH + size * 0.135;
   const padBottom = size * 0.06;

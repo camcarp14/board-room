@@ -347,6 +347,36 @@ for (const off of [-20, -7, 7, 20]) {
 }
 
 check("silence is not a note", detectPitch(new Float32Array(4096), SR) === null);
+// A WINDOW TOO SHORT FOR THE NOTE MUST REFUSE, NOT GUESS. 1024 samples is under
+// two periods of the low E, the correlation at that lag is computed from a
+// handful of samples, and before the overlap floor the detector answered 75.7 Hz
+// — a semitone and a half flat, with full confidence.
+check("a window too short for the note says so rather than guessing",
+  detectPitch(tone(82.41, 1024), SR) === null,
+  JSON.stringify(detectPitch(tone(82.41, 1024), SR)));
+check("…and a window that IS long enough still answers",
+  (() => { const r = detectPitch(tone(82.41, 4096), SR); return r && Math.abs(cents(r.hz, 82.41)) < 2; })());
+check("detectPitch is total — null, empty and NaN in, null out",
+  detectPitch(null, SR) === null && detectPitch(undefined, SR) === null
+  && detectPitch(new Float32Array(0), SR) === null
+  && detectPitch(new Float32Array([NaN, NaN, NaN, NaN]), SR) === null);
+// 44.1 and 48 kHz are both real; a detector tuned to one of them is a detector
+// that is wrong on half the devices it runs on.
+check("the detector is exact at 48 kHz as well as 44.1",
+  [82.41, 110, 329.63, 659.26].every((hz) => {
+    const b = new Float32Array(4096);
+    for (let i = 0; i < b.length; i++) { let v = 0; [1, 0.6, 0.35, 0.2].forEach((a, k) => { v += a * Math.sin((2 * Math.PI * hz * (k + 1) * i) / 48000); }); b[i] = v * 0.18; }
+    const r = detectPitch(b, 48000);
+    return r && Math.abs(cents(r.hz, hz)) < 3;
+  }));
+// Two strings ringing at once has no single right answer, and a tuner that picks
+// one anyway is a tuner that tells you a perfectly tuned string is flat.
+check("two strings at once is refused rather than resolved",
+  (() => {
+    const b = new Float32Array(4096);
+    for (let i = 0; i < b.length; i++) b[i] = 0.15 * (Math.sin((2 * Math.PI * 82.41 * i) / SR) + Math.sin((2 * Math.PI * 123.47 * i) / SR));
+    return detectPitch(b, SR) === null;
+  })());
 const noise = new Float32Array(4096);
 { let s = 7; for (let i = 0; i < noise.length; i++) { s ^= s << 13; s >>>= 0; s ^= s >> 17; s ^= s << 5; s >>>= 0; noise[i] = ((s / 4294967296) * 2 - 1) * 0.3; } }
 check("noise is not a note", detectPitch(noise, SR) === null);

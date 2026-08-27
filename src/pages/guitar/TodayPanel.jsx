@@ -328,12 +328,23 @@ export function TodayPanel({ isMobile, settings, updateSetting, onOpenTuner, onO
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [minutes]);
 
+  // THE PLAN IS FROZEN WHEN THE SESSION STARTS, and the runner reads the frozen
+  // copy rather than the live one. `plan` is recomputed from the skill table, and
+  // the skill table refetches — so a background invalidation ten minutes into a
+  // session could hand the runner a different block list, with different items,
+  // at whatever index it happened to be on. It is also what makes the session
+  // survive a reload: the checkpoint carries the plan it was running, not a
+  // recipe for building a new one.
   const start = () => {
-    setActive({ day: today, startedAt: Date.now(), blockIndex: 0, remaining: plan.blocks[0]?.seconds ?? 0, results: [], note: "", plan: plan.blocks.map((b) => b.kind) });
+    setActive({
+      day: today, startedAt: Date.now(), blockIndex: 0,
+      remaining: plan.blocks[0]?.seconds ?? 0, results: [], note: "",
+      plan: { focus: plan.focus, minutes: plan.minutes, seconds: plan.seconds, schedule: plan.schedule, blocks: plan.blocks },
+    });
   };
 
   const finish = async (a) => {
-    const { session, skills: updated } = completeSession({ day: a.day, focus: plan.focus }, a.results, skillRows);
+    const { session, skills: updated } = completeSession({ day: a.day, focus: a.plan?.focus || plan.focus }, a.results, skillRows);
     // The minutes logged are the minutes ELAPSED, not the minutes planned. A
     // session you cut short at eight minutes is an eight-minute session, and a
     // streak built out of intentions is not worth having.
@@ -397,7 +408,7 @@ export function TodayPanel({ isMobile, settings, updateSetting, onOpenTuner, onO
       )}
 
       {active && !active.stale ? (
-        <BlockRunner plan={plan} active={active} songs={songs}
+        <BlockRunner plan={active.plan || plan} active={active} songs={songs}
           onUpdate={setActive} onFinish={finish} onAbandon={abandon} />
       ) : (
         <>

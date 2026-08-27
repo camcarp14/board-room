@@ -73,7 +73,7 @@ function OMCRunner({ onClose, isMobile, pairs, onResult }) {
 
         {state === "running" ? (
           <>
-            <button type="button" onClick={() => setCount((c) => c + 1)}
+            <button type="button" onClick={() => setCount((c) => c + 1)} aria-label={`Count a change — ${count} so far`}
               style={{
                 border: "none", cursor: "pointer", borderRadius: "var(--r-card)", padding: "34px 12px",
                 background: "var(--accent-a12)", color: "var(--accent)",
@@ -127,11 +127,21 @@ function OMCRunner({ onClose, isMobile, pairs, onResult }) {
 // The metronome plays two bars and goes silent for two. You keep playing, and
 // tap on every beat one. When the click comes back, the difference between where
 // your taps landed and where the beats actually were is the measurement.
+// Sixteen bars: four silent stretches of two, which is enough taps for an
+// average that means something and short enough that nobody gives up halfway.
+const BARS = 16;
 function DriftRunner({ onClose, isMobile }) {
   const [bpm, setBpm] = useState(80);
   const [state, setState] = useState("idle");
   const [result, setResult] = useState(null);
   const [taps, setTaps] = useState(0);
+  // THE MUTE HAS TO BE STATE, NOT A REF READ DURING RENDER. The drill's whole
+  // instruction — "silent, keep going" — was drawn from mRef.current.muted, which
+  // the metronome flips inside its own beat handler. Nothing re-rendered when it
+  // did, so the panel sat on whichever value it happened to paint first and the
+  // one cue the drill exists to give never appeared.
+  const [muted, setMuted] = useState(false);
+  const [bar, setBar] = useState(0);
   const mRef = useRef(null);
   const clicks = useRef([]);
   const hits = useRef([]);
@@ -140,16 +150,20 @@ function DriftRunner({ onClose, isMobile }) {
 
   const start = async () => {
     if (!(await unlock())) return;
-    clicks.current = []; hits.current = []; setTaps(0); setResult(null);
+    clicks.current = []; hits.current = []; setTaps(0); setResult(null); setMuted(false); setBar(0);
     const m = createMetronome({
       bpm, beatsPerBar: 4, subdivision: 1,
       onBeat: (ev) => {
         // Every downbeat is recorded whether it SOUNDED or not — the silent ones
         // are the whole measurement, and a scheduler that only remembered the
         // audible beats would have nothing to compare the silent bars against.
-        if (ev.inBar === 0) clicks.current.push(ev.time);
-        if (ev.inBar === 0) m.setMuted(Math.floor(ev.bar / 2) % 2 === 1);
-        if (ev.bar >= 16) { m.stop(); finish(); }
+        if (ev.inBar !== 0) return;
+        clicks.current.push(ev.time);
+        const silent = Math.floor(ev.bar / 2) % 2 === 1;
+        m.setMuted(silent);
+        setMuted(silent);
+        setBar(ev.bar);
+        if (ev.bar >= BARS) { m.stop(); finish(); }
       },
     });
     mRef.current = m;
@@ -196,15 +210,17 @@ function DriftRunner({ onClose, isMobile }) {
 
         {state === "running" && (
           <>
-            <button type="button" onClick={tap}
+            <button type="button" onClick={tap} aria-label={`Tap on beat one — ${taps} so far`}
               style={{
                 border: "none", cursor: "pointer", borderRadius: "var(--r-card)", padding: "40px 12px",
-                background: mRef.current?.muted ? "var(--amber-a08)" : "var(--accent-a12)",
-                color: mRef.current?.muted ? "var(--amber)" : "var(--accent)",
+                background: muted ? "var(--amber-a08)" : "var(--accent-a12)",
+                color: muted ? "var(--amber)" : "var(--accent)",
               }}>
-              <div className="t-title1">{mRef.current?.muted ? "Silent — keep going" : "Click"}</div>
+              <div className="t-title1">{muted ? "Silent — keep going" : "Click"}</div>
               <div className="t-num" style={{ fontSize: 40, fontWeight: 700, marginTop: 6 }}>{taps}</div>
-              <div className="t-cap" style={{ color: "var(--sub)", marginTop: 4 }}>tap on every beat one</div>
+              <div className="t-cap" style={{ color: "var(--sub)", marginTop: 4 }}>
+                tap on every beat one · bar {bar + 1} of {BARS}
+              </div>
             </button>
             <Button kind="quiet" full onClick={stop}>Stop and measure</Button>
           </>
@@ -253,18 +269,22 @@ function EarRunner({ onClose, isMobile }) {
   const [prompt, setPrompt] = useState(null);
   const [answer, setAnswer] = useState(null);
   const [history, setHistory] = useState([]);
+  // Same class of bug as the mute above: the button said "Drone on" for ever
+  // because whether the drone was playing lived in a ref nothing re-rendered on.
+  const [droning, setDroning] = useState(false);
   const stopDrone = useRef(null);
 
   const degrees = DEGREE_TIERS[tier];
   const recent = history.slice(-20);
   const acc = recent.length >= 5 ? Math.round((recent.filter(Boolean).length / recent.length) * 100) : null;
 
-  useEffect(() => () => stopDrone.current?.(), []);
+  useEffect(() => () => { stopDrone.current?.(); stopDrone.current = null; }, []);
 
   const startDrone = async () => {
     await unlock();
     stopDrone.current?.();
     stopDrone.current = playDrone(tonic - 12, { gain: 0.16 });
+    setDroning(true);
   };
 
   const next = async () => {
@@ -303,8 +323,9 @@ function EarRunner({ onClose, isMobile }) {
           <span className="t-foot" style={{ color: "var(--faint)" }}>
             {degrees.length} degrees{acc != null ? ` · ${acc}% over ${recent.length}` : ""}
           </span>
-          <Button kind="quiet" size="sm" onClick={() => { if (stopDrone.current) { stopDrone.current(); stopDrone.current = null; } else startDrone(); }}>
-            {stopDrone.current ? "Drone off" : "Drone on"}
+          <Button kind="quiet" size="sm"
+            onClick={() => { if (stopDrone.current) { stopDrone.current(); stopDrone.current = null; setDroning(false); } else startDrone(); }}>
+            {droning ? "Drone off" : "Drone on"}
           </Button>
         </div>
 
@@ -314,6 +335,7 @@ function EarRunner({ onClose, isMobile }) {
             const correct = answer != null && d === prompt;
             return (
               <button key={d} type="button" disabled={prompt == null || answer != null} onClick={() => guess(d)}
+                aria-label={`Scale degree ${DEGREE_NAMES[d]}`}
                 style={{
                   minHeight: 62, border: "none", borderRadius: "var(--r-ctl)", cursor: prompt == null || answer != null ? "default" : "pointer",
                   background: correct ? "var(--green-a06)" : chosen ? "var(--red-a32)" : "var(--surface-2)",
