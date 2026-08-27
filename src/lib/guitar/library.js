@@ -360,6 +360,14 @@ export const cuesFor = (kind) => CUE_CARDS.filter((c) => c.applies.includes(kind
 // These are the common simplified readings — what a competent player would busk.
 // They are a starting point and every one of them is editable; the point of the
 // Songs tab is your repertoire, not this list.
+//
+// `key` IS THE SOUNDING KEY, NEVER THE SHAPES. With a capo those are different
+// answers, and getting it wrong is the quiet kind of wrong: Riptide was filed in
+// C because the shapes are Am–G–C, when a capo at the first fret puts it in D♭,
+// and Jolene was filed in A minor when Dolly plays it at the fourth fret in C♯
+// minor. Both would have sent you looking for the wrong scale to solo over.
+// scripts/guitar-smoke.mjs now checks every row: the stated tonic has to appear
+// among the chart's chord roots AFTER the capo is applied.
 const song = (id, title, artist, o) => ({ id, title, artist, capo: 0, difficulty: 2, ...o });
 export const SONGS = [
   song("horse", "A Horse with No Name", "America", { key: "Em", bpm: 122, difficulty: 1, strum: "lighter",
@@ -395,18 +403,21 @@ export const SONGS = [
     sections: [["Intro/Verse", "Em7 | G | Em7 | A7sus4"], ["Turn", "G | C | D | Am | G"]] }),
   song("good_riddance", "Good Riddance (Time of Your Life)", "Green Day", { key: "G", bpm: 94, difficulty: 3, strum: "d_du",
     sections: [["Verse", "G | Cadd9 | D | D"], ["Chorus", "Em | D | C | G"]] }),
-  song("riptide", "Riptide", "Vance Joy", { key: "C", bpm: 102, difficulty: 2, capo: 1, strum: "syncopated",
-    sections: [["Verse", "Am | G | C | C"], ["Chorus", "Am | G | C | C | F"]] }),
+  song("riptide", "Riptide", "Vance Joy", { key: "Db", bpm: 102, difficulty: 2, capo: 1, strum: "syncopated",
+    sections: [["Verse", "Am | G | C | C"], ["Chorus", "Am | G | C | C | F"]],
+    note: "Capo 1. Shapes are Am–G–C; it sounds in D♭ (B♭ minor)." }),
   song("im_yours", "I'm Yours", "Jason Mraz", { key: "B", bpm: 76, difficulty: 3, capo: 4, strum: "syncopated",
-    sections: [["All of it", "G | D | Em | C"]] }),
+    sections: [["All of it", "G | D | Em | C"]],
+    note: "Capo 4. Shapes are G–D–Em–C; it sounds in B. Four chords, the whole song." }),
   song("perfect", "Perfect", "Ed Sheeran", { key: "Ab", bpm: 64, difficulty: 3, capo: 1, strum: "quarters",
     sections: [["Verse", "G | Em | C | D"], ["Chorus", "G | Em | C | D"]], note: "Capo 1, 6/8 feel — count it in twos." }),
   song("hallelujah", "Hallelujah", "Leonard Cohen", { key: "C", bpm: 60, difficulty: 3, strum: "quarters",
     sections: [["Verse", "C | Am | C | Am"], ["Turn", "F | G | C | G"], ["Chorus", "F | Am | F | C G | C"]] }),
   song("house_rising", "The House of the Rising Sun", "The Animals", { key: "Am", bpm: 76, difficulty: 3, strum: "shuffle",
     sections: [["Verse", "Am | C | D | F | Am | C | E | E"], ["Turn", "Am | C | D | F | Am | E | Am | E"]], note: "6/8. Arpeggiate it rather than strumming." }),
-  song("jolene", "Jolene", "Dolly Parton", { key: "Am", bpm: 110, difficulty: 2, capo: 4, strum: "d_du",
-    sections: [["Verse", "Am | C G | Am | Am"], ["Chorus", "Am | C G | Am | Am"]] }),
+  song("jolene", "Jolene", "Dolly Parton", { key: "C#m", bpm: 110, difficulty: 2, capo: 4, strum: "d_du",
+    sections: [["Verse", "Am | C G | Am | Am"], ["Chorus", "Am | C G | Am | Am"]],
+    note: "Capo 4. Shapes are Am–C–G; it sounds in C♯ minor, which is where Dolly plays it." }),
   song("hurt", "Hurt", "Johnny Cash", { key: "Am", bpm: 84, difficulty: 2, strum: "quarters",
     sections: [["Verse", "Am | C | D | Am"], ["Chorus", "C | D | G | G"]] }),
   song("country_roads", "Take Me Home, Country Roads", "John Denver", { key: "A", bpm: 84, difficulty: 2, strum: "d_du",
@@ -418,7 +429,8 @@ export const SONGS = [
   song("losing_religion", "Losing My Religion", "R.E.M.", { key: "Am", bpm: 126, difficulty: 3, strum: "eighths_du",
     sections: [["Verse", "F Dm | G Am | Am"], ["Chorus", "Am | Em | Am | Em | Dm | G | Am"]] }),
   song("boulevard", "Boulevard of Broken Dreams", "Green Day", { key: "Fm", bpm: 84, difficulty: 3, capo: 1, strum: "eighths",
-    sections: [["Verse", "Em | G | D | A"], ["Chorus", "C | G | D | Em | C | G | D | D"]] }),
+    sections: [["Verse", "Em | G | D | A"], ["Chorus", "C | G | D | Em | C | G | D | D"]],
+    note: "Capo 1. Shapes are Em–G–D–A; it sounds in F minor." }),
   song("nothing_else", "Nothing Else Matters", "Metallica", { key: "Em", bpm: 70, difficulty: 4, strum: "quarters",
     sections: [["Verse", "Em | D | C | G"], ["Chorus", "Am | Em | C | D | Em"]], note: "Fingerpicked. Level 6 material, but the chords are level 2." }),
   song("dust_in_wind", "Dust in the Wind", "Kansas", { key: "C", bpm: 90, difficulty: 5, strum: "quarters",

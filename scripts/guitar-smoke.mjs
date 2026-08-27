@@ -709,6 +709,28 @@ check("every song chart parses into bars",
 check("every song's strum and progression reference something real",
   SONGS.every((s) => (!s.strum || STRUM_PATTERNS.some((p) => p.key === s.strum)) && (!s.progression || !!progressionByKey(s.progression))));
 check("song ids are unique", new Set(SONGS.map((s) => s.id)).size === SONGS.length);
+// THE STATED KEY IS THE SOUNDING KEY, AND A CAPO IS WHERE THAT GOES WRONG. Two
+// rows shipped filed under the key of their SHAPES: Riptide as C when a capo at
+// the first fret puts it in D♭, Jolene as A minor when the fourth fret puts it in
+// C♯ minor. Nothing about that is visible from the chart — it is visible from the
+// arithmetic. The tonic has to appear among the chord roots once the capo is on;
+// it is a weak invariant (the tonic is not always the first chord) and it caught
+// both.
+{
+  const keyBad = [];
+  for (const s of SONGS) {
+    const m = String(s.key || "").match(/^([A-G][#b♯♭]?)(m?)$/);
+    if (!m) { keyBad.push(`${s.id}: unreadable key "${s.key}"`); continue; }
+    const tonic = parseNote(m[1]);
+    const roots = new Set();
+    for (const sym of chartChords(s.sections)) { const p = parseChord(sym); if (p) roots.add(mod12(p.rootPc + (s.capo || 0))); }
+    if (!roots.has(tonic)) keyBad.push(`${s.id}: ${s.key} capo ${s.capo || 0}, sounds ${[...roots].sort((a, b) => a - b).map((p) => pcName(p)).join(",")}`);
+  }
+  check("every song's stated key survives its own capo", keyBad.length === 0, keyBad.join(" | "));
+}
+check("a capo is stated in the note whenever there is one",
+  SONGS.filter((s) => s.capo > 0).every((s) => /capo/i.test(s.note || "")),
+  SONGS.filter((s) => s.capo > 0 && !/capo/i.test(s.note || "")).map((s) => s.id).join(","));
 check("benchmarks are labelled as guidance, with ascending thresholds",
   BENCHMARKS.omc.every((b, i) => i === 0 || b.n > BENCHMARKS.omc[i - 1].n));
 // WHAT DAY ONE IS ALLOWED TO ASK OF YOU. Both halves of this shipped as bugs:
