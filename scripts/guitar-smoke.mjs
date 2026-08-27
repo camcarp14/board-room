@@ -140,6 +140,52 @@ check("capo round-trips for every root and every fret",
   Array.from({ length: 12 }, (_, pc) => pc).every((pc) =>
     [0, 1, 2, 3, 4, 5, 6, 7].every((capo) => shapePcForSounding(soundingPc(pc, capo), capo) === pc)));
 
+// ── ONE READER FOR CHORD SUFFIXES ────────────────────────────────────────────
+// numeralToChord used to carry its own ladder of substring tests, and a second
+// ladder is a second set of holes: "maj9" fell past /maj7|M7|Δ/ and was claimed
+// by /9/, so Imaj9 came back as a DOMINANT ninth — one note different, silently.
+// It now hands the suffix to parseChord, which is the function whose own header
+// says this design exists to prevent exactly that.
+{
+  const wrong = [];
+  const WANT = {
+    Imaj9: "maj9", IM9: "maj9", V7b9: "7b9", "V7#9": "7s9", V13: "13",
+    im11: "m11", ii7b5: "m7b5", I5: "5", V7sus4: "7sus4", "vii°": "dim",
+    ii: "min", V: "maj", IV: "maj", vi: "min", bVII: "maj", Iadd9: "add9", "V+": "aug",
+  };
+  for (const [num, want] of Object.entries(WANT)) {
+    const r = numeralToChord(num, 0, {});
+    const got = r ? r.quality : "null";
+    if (got !== want) wrong.push(`${num} -> ${got}, want ${want}`);
+  }
+  check("a roman numeral resolves to the chord its suffix names", wrong.length === 0, wrong.slice(0, 4).join(" | "));
+  check("a suffix nothing can read is null, not a guess", numeralToChord("Vqqq", 0, {}) === null);
+
+  // The two degrees where the diatonic triad is diminished. keyChords knew;
+  // the bare numeral did not, so numeralToChord("vii") in C gave B minor — whose
+  // F♯ is not in C major. Two functions in one file disagreeing about the same
+  // degree of the same key is worse than either convention on its own.
+  const clash = [];
+  for (let pc = 0; pc < 12; pc++) {
+    for (const minor of [false, true]) {
+      const num = minor ? "ii" : "vii";
+      const n = numeralToChord(num, pc, { minor });
+      const inKey = new Set(scalePcs(pc, minor ? "minor" : "major"));
+      if (chordPcs(n.rootPc, n.quality).some((x) => !inKey.has(x))) {
+        clash.push(`${pcName(pc)}${minor ? "m" : ""} ${num} -> ${pcName(n.rootPc)}${n.quality}`);
+      }
+    }
+  }
+  check("…and a bare numeral agrees with keyChords about its own key", clash.length === 0, clash.slice(0, 3).join(" | "));
+
+  // Every numeral the library actually ships, in every key.
+  const dead = [];
+  for (const p of PROGRESSIONS) for (let pc = 0; pc < 12; pc++) for (const num of p.bars) {
+    if (!numeralToChord(num, pc, { minor: !!p.minor })) dead.push(`${p.key} "${num}" @${pcName(pc)}`);
+  }
+  check("every numeral in every shipped progression resolves in all twelve keys", dead.length === 0, dead.slice(0, 3).join(" | "));
+}
+
 // ══ 2. the chord library ════════════════════════════════════════════════════
 console.log("\n── the chord library ──");
 check("the library is not empty", VOICINGS.length > 40, String(VOICINGS.length));
@@ -234,6 +280,65 @@ check("parseTuning keeps every string in its own octave",
   && JSON.stringify(parseTuning("EADGBE")) === JSON.stringify(STANDARD)
   && parseTuning("D A D G A") === null);
 
+// ── THE PICTURE THE APP DRAWS OF EACH CHORD ──────────────────────────────────
+// Every panel draws lookupChord(sym).voicings[0] as THE shape of that chord — the
+// song chart strip, the practice card and the change drill all do. So this list
+// is the app's answer to "what does an F look like", and it was wrong for every
+// barre chord the curriculum teaches: F opened as a C-shape barre at the fifth
+// fret, Creep's B at the NINTH under its own note saying "barre it at 2", Bm at
+// the seventh. Two causes, both in fretboard.js — the C and G movable shapes did
+// not declare they were barres, and voicingDifficulty had no term for where on
+// the neck a shape sits.
+//
+// The right answer for each of these is stated by the curriculum itself (level
+// 3's prose for the F's, each song's own note for the rest), so it can be pinned
+// rather than argued about. voicingDifficulty's weights were solved against this
+// exact list; pinning it is what stops the next tweak from quietly undoing it.
+{
+  const TAUGHT = {
+    F: "xx3211", B: "x24442", Bm: "x24432", Cm: "x35543", Bb: "x13331", "F#m": "244222",
+    C: "x32010", G: "320003", D: "xx0232", Am: "x02210", E: "022100", A: "x02220",
+    Em: "022000", Dm: "xx0231", Fmaj7: "xx3210", Bm7: "x20202", C7: "x32310",
+    G7: "320001", E7: "020100", A7: "x02020",
+  };
+  const wrong = [];
+  for (const [sym, want] of Object.entries(TAUGHT)) {
+    const v = lookupChord(sym)?.voicings?.[0];
+    const got = v ? v.frets.map((f) => (f == null ? "x" : f)).join("") : "none";
+    if (got !== want) wrong.push(`${sym}: ${got} not ${want}`);
+  }
+  check("every chord opens on the shape the curriculum teaches", wrong.length === 0, wrong.slice(0, 5).join(" | "));
+
+  // The two mechanisms behind it, asserted directly so a regression says which.
+  check("a movable shape that needs an index bar declares it",
+    MOVABLE.filter((m) => ["C_maj", "G_maj", "E_maj", "A_maj", "E_min", "A_min"].includes(m.key))
+      .every((m) => m.barre === 0));
+  check("the same shape costs more the further up the neck it sits",
+    voicingDifficulty([1, 3, 3, 2, 1, 1], { barre: { fret: 1, from: 0, to: 5 } })
+    < voicingDifficulty([8, 10, 10, 9, 8, 8], { barre: { fret: 8, from: 0, to: 5 } }));
+  check("a two-string mini-barre costs less than a six-string one",
+    voicingDifficulty([null, null, 3, 2, 1, 1], { barre: { fret: 1, from: 4, to: 5 } })
+    < voicingDifficulty([1, 3, 3, 2, 1, 1], { barre: { fret: 1, from: 0, to: 5 } }));
+
+  // A finger is one finger. This is the check that would have caught the C7 that
+  // asked the index for fret 2 and fret 1 at the same time — the existing
+  // fingering checks are per-string, so nothing compared two strings.
+  const impossible = [];
+  for (const v of VOICINGS) {
+    const byFinger = new Map();
+    v.frets.forEach((f, i) => {
+      const fi = v.fingers?.[i];
+      if (!Number.isFinite(f) || f <= 0 || !Number.isFinite(fi) || fi <= 0) return;
+      if (!byFinger.has(fi)) byFinger.set(fi, new Set());
+      byFinger.get(fi).add(f);
+    });
+    for (const [fi, frets] of byFinger) {
+      if (frets.size > 1) impossible.push(`${v.label || `${v.rootPc}:${v.quality}`} ${v.frets.map((f) => (f == null ? "x" : f)).join("")}: finger ${fi} on frets ${[...frets].join(" & ")}`);
+    }
+  }
+  check("no voicing asks one finger to be on two frets at once", impossible.length === 0, impossible.slice(0, 3).join(" | "));
+}
+
 // ══ 3. the neck ═════════════════════════════════════════════════════════════
 console.log("\n── the neck ──");
 for (const t of TUNINGS) {
@@ -304,6 +409,69 @@ check("nearestString: the A is the A, not a sharp E", nearestString(110)?.string
 check("nearestString: nowhere near anything comes back null", nearestString(1000) === null && nearestString(0) === null);
 check("nearestString: every open string finds itself",
   STANDARD.every((m, i) => nearestString(midiToFreq(m))?.string === i));
+
+// ── THE NECK IS CORRECT IN EVERY TUNING, WHICH IS WHAT THE PANEL PROMISES ────
+// FretboardPanel's header says "the neck is correct in every key, every tuning
+// and every scale this app knows about". Two of the four tools held that; two did
+// not, because a stored fret offset is a fact about STANDARD tuning's string
+// intervals and re-rooting it elsewhere produces a different chord, or no chord.
+// In drop D — where only the sixth string moves — A minor pentatonic box 1 came
+// out containing F♯ and B, and in open G not one of the six C-major diagrams
+// offered sounded a C major triad.
+{
+  const SCALEKEYS = ["minor_pent", "major_pent"];
+  const bad = [];
+  for (const t of TUNINGS) {
+    // every pentatonic box, every root, every scale
+    let dots = 0;
+    for (let pc = 0; pc < 12; pc++) for (const sk of SCALEKEYS) for (let b = 0; b < 5; b++) {
+      const want = new Set(scalePcs(pc, sk));
+      for (const d of pentatonicBox(pc, b, { scaleKey: sk, tuning: t.midi }).dots) {
+        dots++;
+        if (!want.has(d.pc)) bad.push(`${t.key} ${pcName(pc)} ${sk} box${b + 1}: ${pcName(d.pc)} is not in the scale`);
+      }
+    }
+    if (dots < 900) bad.push(`${t.key}: only ${dots} dots across 120 boxes`);
+  }
+  check("every pentatonic box, in every tuning, contains only notes of its scale",
+    bad.length === 0, bad.slice(0, 3).join(" | "));
+
+  // …and in standard tuning it is the hand-written table, dot for dot. This is
+  // what stops "derive it from the pitch" from quietly becoming a different shape.
+  const drift = [];
+  for (let pc = 0; pc < 12; pc++) for (const sk of SCALEKEYS) for (let b = 0; b < 5; b++) {
+    const box = PENTATONIC_BOXES[sk][b];
+    let rootFret = mod12(pc - 4);
+    const lowest = Math.min(...box.map((x) => Math.min(...x)));
+    while (rootFret + lowest < 0) rootFret += 12;
+    const tabled = new Set();
+    box.forEach((offs, st) => offs.forEach((o) => { const f = rootFret + o; if (f <= 22) tabled.add(`${st}:${f}`); }));
+    const derived = new Set(pentatonicBox(pc, b, { scaleKey: sk }).dots.map((d) => `${d.string}:${d.fret}`));
+    if (tabled.size !== derived.size || [...tabled].some((x) => !derived.has(x))) {
+      drift.push(`${pcName(pc)} ${sk} box${b + 1}`);
+    }
+  }
+  check("and in standard tuning it is the hand-written table, dot for dot", drift.length === 0, drift.slice(0, 3).join(" | "));
+
+  // Every chord the app will draw, in every tuning, actually spells that chord.
+  const lies = [], missing = [];
+  const COMMON = ["C", "G", "D", "A", "E", "Am", "Em", "Dm", "F", "Bm", "C7", "G7", "Am7", "Cmaj7", "Bb"];
+  for (const t of TUNINGS) {
+    for (const sym of COMMON) {
+      const p = parseChord(sym);
+      const vs = voicingsFor(p.rootPc, p.quality, { tuning: t.midi });
+      if (!vs.length) { missing.push(`${t.key}: no ${sym}`); continue; }
+      for (const v of vs) {
+        const r = verifyVoicing(v.frets, p.rootPc, p.quality, { tuning: t.midi, omits: v.omits });
+        if (!r.ok || !r.bassOk) lies.push(`${t.key} ${sym} ${v.frets.map((f) => (f == null ? "x" : f)).join("")}`);
+      }
+    }
+  }
+  check("every chord shape offered, in every tuning, spells the chord it is labelled",
+    lies.length === 0, lies.slice(0, 4).join(" | "));
+  check("…and every common chord has at least one shape in every tuning",
+    missing.length === 0, missing.slice(0, 4).join(" | "));
+}
 
 // ══ 4. pitch detection ══════════════════════════════════════════════════════
 console.log("\n── pitch detection ──");
@@ -673,6 +841,39 @@ check("and a pattern that says it does not, does not",
       const w = buildBacking({ sections: s0.sections, strum: s0.strum || "d_du", capo: s0.capo });
       const o = buildBacking({ sections: s0.sections, strum: s0.strum || "d_du", capo: 0 });
       return w.strums[0].chord.midi[0] - o.strums[0].chord.midi[0] === s0.capo; })());
+}
+
+// ── THE HAND MOTION THE ANIMATION DRAWS ──────────────────────────────────────
+// Silent steps exist ONLY so the animation can draw the whole travel of the
+// strumming hand — this file's neighbour says draw the hits alone and D-DU-UDU
+// is a riddle. They were all stamped `down`, so seven of the twelve patterns
+// drew a hand travelling downward on consecutive passes; "quarters", the first
+// pattern anybody meets, showed eight downstrokes in a row. And the 12/8 shuffle
+// was written "D-D" a beat, which is two downstrokes a third of a beat apart
+// with no upstroke between them — a motion no hand makes.
+{
+  const impossible = [];
+  for (const p of STRUM_PATTERNS) {
+    const t = strumTimeline([{ bar: 0, beats: 4 }], p.key, { swing: p.swing || 0 });
+    let lastPlayed = null;
+    for (const x of t) {
+      if (!x.silent) { lastPlayed = x.down; continue; }
+      // Consecutive silent passes SHARE a direction — that is the hand mid-travel,
+      // and it is what 12/8 looks like. What cannot happen is a pass travelling
+      // the same way as the stroke it is recovering from.
+      if (lastPlayed !== null && x.down === lastPlayed) {
+        impossible.push(`${p.key}: silent pass travels ${x.down ? "down" : "up"} straight after a ${lastPlayed ? "down" : "up"} stroke`);
+      }
+    }
+  }
+  check("no pattern draws a hand a person could not make", impossible.length === 0, [...new Set(impossible)].slice(0, 3).join(" | "));
+  check("a twelve-step pattern strikes on the beat and on the 'a', not twice down",
+    (() => { const sh = STRUM_PATTERNS.find((p) => p.key === "shuffle");
+      const t = strumTimeline([{ bar: 0, beats: 4 }], "shuffle", {}).filter((x) => !x.silent);
+      return sh.sub === 12 && t.length === 8 && t.filter((x) => !x.down).length === 4; })());
+  check("a compound-time song is charted on a compound grid",
+    SONGS.filter((s) => /12\/8|6\/8|compound|in twos/i.test(s.note || "")).every((s) => strumByKey(s.strum || "d_du").sub % 3 === 0),
+    SONGS.filter((s) => /12\/8|6\/8|compound|in twos/i.test(s.note || "") && strumByKey(s.strum || "d_du").sub % 3 !== 0).map((s) => s.id).join(", "));
 }
 
 check("swing splits the pair at 2:1 when full",

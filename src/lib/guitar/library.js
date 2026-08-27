@@ -49,7 +49,13 @@ export const STRUM_PATTERNS = [
   { key: "lighter", name: "D · D-U · U-D", pattern: "D-DU-UD-", sub: 8, swing: 0, difficulty: 5, feel: "Lighter cousin", songs: ["A Horse with No Name", "Bad Moon Rising"] },
   { key: "syncopated", name: "Syncopated", pattern: "DU-UDU-U", sub: 8, swing: 0, difficulty: 6, feel: "Pushes the beat", songs: ["Riptide", "I'm Yours"] },
   { key: "swung_eighths", name: "Swung eighths", pattern: "D-DU-UDU", sub: 8, swing: 0.9, difficulty: 6, feel: "Blues/jazz lilt", songs: ["Ain't No Sunshine", "Fly Me to the Moon"] },
-  { key: "shuffle", name: "Shuffle (12/8)", pattern: "D-DD-DD-DD-D", sub: 12, swing: 0, difficulty: 7, feel: "Triplet swing", songs: ["Folsom Prison Blues"] },
+  // "D-U" a beat, not "D-D". The stroke letter IS the direction the moving hand
+  // is travelling (see the note at the top of this list), and a hand cannot make
+  // two downstrokes a third of a beat apart with no upstroke between them. The
+  // rhythm was right — beat and "a" sound, the middle triplet does not — and only
+  // the directions were impossible.
+  { key: "twelve_eight", name: "12/8 ballad", pattern: "D--D--D--D--", sub: 12, swing: 0, difficulty: 3, feel: "Slow 6/8 or 12/8", songs: ["Perfect", "Hallelujah"] },
+  { key: "shuffle", name: "Shuffle (12/8)", pattern: "D-UD-UD-UD-U", sub: 12, swing: 0, difficulty: 7, feel: "Triplet swing", songs: ["Folsom Prison Blues"] },
   { key: "backbeat", name: "Percussive backbeat", pattern: "D-x-D-x-", sub: 8, swing: 0, difficulty: 7, feel: "Slap on 2 and 4", songs: ["Use Somebody"] },
   { key: "funk16", name: "Sixteenth funk", pattern: "DUxUDUxUDUxUDUxU", sub: 16, swing: 0, difficulty: 9, feel: "Constant sixteenths", songs: ["Superstition"] },
 ];
@@ -439,9 +445,9 @@ export const SONGS = [
   song("im_yours", "I'm Yours", "Jason Mraz", { key: "B", bpm: 76, difficulty: 3, capo: 4, strum: "syncopated",
     sections: [["All of it", "G | D | Em | C"]],
     note: "Capo 4. Shapes are G–D–Em–C; it sounds in B. Four chords, the whole song." }),
-  song("perfect", "Perfect", "Ed Sheeran", { key: "Ab", bpm: 64, difficulty: 3, capo: 1, strum: "quarters",
+  song("perfect", "Perfect", "Ed Sheeran", { key: "Ab", bpm: 64, difficulty: 3, capo: 1, strum: "twelve_eight",
     sections: [["Verse", "G | Em | C | D"], ["Chorus", "G | Em | C | D"]], note: "Capo 1, 6/8 feel — count it in twos." }),
-  song("hallelujah", "Hallelujah", "Leonard Cohen", { key: "C", bpm: 60, difficulty: 3, strum: "quarters",
+  song("hallelujah", "Hallelujah", "Leonard Cohen", { key: "C", bpm: 60, difficulty: 3, strum: "twelve_eight",
     sections: [["Verse", "C | Am | C | Am"], ["Turn", "F | G | C | G"], ["Chorus", "F | Am | F | C G | C"]] }),
   song("house_rising", "The House of the Rising Sun", "The Animals", { key: "Am", bpm: 76, difficulty: 3, strum: "shuffle",
     sections: [["Verse", "Am | C | D | F | Am | C | E | E"], ["Turn", "Am | C | D | F | Am | E | Am | E"]], note: "6/8. Arpeggiate it rather than strumming." }),
@@ -461,7 +467,7 @@ export const SONGS = [
   song("boulevard", "Boulevard of Broken Dreams", "Green Day", { key: "Fm", bpm: 84, difficulty: 3, capo: 1, strum: "eighths",
     sections: [["Verse", "Em | G | D | A"], ["Chorus", "C | G | D | Em | C | G | D | D"]],
     note: "Capo 1. Shapes are Em–G–D–A; it sounds in F minor." }),
-  song("nothing_else", "Nothing Else Matters", "Metallica", { key: "Em", bpm: 70, difficulty: 4, strum: "quarters",
+  song("nothing_else", "Nothing Else Matters", "Metallica", { key: "Em", bpm: 70, difficulty: 4, strum: "twelve_eight",
     sections: [["Verse", "Em | D | C | G"], ["Chorus", "Am | Em | C | D | Em"]], note: "Fingerpicked. Level 6 material, but the chords are level 2." }),
   song("dust_in_wind", "Dust in the Wind", "Kansas", { key: "C", bpm: 90, difficulty: 5, strum: "quarters",
     sections: [["Verse", "C | Cmaj7 | Cadd9 | C | Am | Asus2 | Am | Asus2"], ["Turn", "G | D/F# | Am | Am"]], note: "Travis picking. The chord shapes are easy; the right hand is the work." }),

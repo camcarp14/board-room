@@ -292,22 +292,43 @@ export function numeralToChord(numeral, tonicPc, { minor = false } = {}) {
   const rootPc = mod12(tonicPc + base + acc);
   const upper = m[2] === m[2].toUpperCase();
   const suffix = m[3];
-  // The numeral's case carries the triad quality; a suffix overrides or extends
-  // it. ORDER IS LOAD-BEARING — every test below is a substring search, and
-  // "7sus4" contains "7", "maj7" contains "7", and "m7♭5" contains both "7" and
-  // "5". Most specific first, or V7sus4 comes out as a plain V7.
+  // ── THE SUFFIX IS A CHORD SUFFIX, SO parseChord READS IT ───────────────────
+  // This used to be a second ladder of substring tests, and a second ladder is a
+  // second set of holes. Every test is a substring search, so "maj9" fell past
+  // /maj7|M7|Δ/ and was claimed by /9/ — Imaj9 came back as a DOMINANT ninth,
+  // one note different, silently. So did V7♭9 and V7♯9 (the alteration dropped),
+  // V13 and im11 (bare triads), and ii7♭5 (a plain m7) — which is the exact
+  // failure parseChord's own header says the design exists to prevent. One
+  // function got it right and its sibling in the same file did not.
+  //
+  // Now there is one reader. The numeral's CASE still carries the triad quality
+  // when there is no suffix, and supplies the "m" when a lowercase numeral takes
+  // one; everything after that is parseChord's job.
   let quality = upper ? "maj" : "min";
   if (/°|dim/.test(suffix)) quality = /7/.test(suffix) ? "dim7" : "dim";
   else if (/ø/.test(suffix)) quality = "m7b5";
-  else if (/7sus4?/.test(suffix)) quality = "7sus4";
-  else if (/maj7|M7|Δ/.test(suffix)) quality = "maj7";
-  else if (/add9/.test(suffix)) quality = upper ? "add9" : "madd9";
-  else if (/sus2/.test(suffix)) quality = "sus2";
-  else if (/sus4?/.test(suffix)) quality = "sus4";
-  else if (/9/.test(suffix)) quality = upper ? "9" : "m9";
-  else if (/7/.test(suffix)) quality = upper ? "7" : "m7";
-  else if (/6/.test(suffix)) quality = upper ? "6" : "m6";
-  else if (/\+|aug/.test(suffix)) quality = "aug";
+  else if (suffix) {
+    // A lowercase numeral means minor, so its suffix needs the m unless it
+    // already carries one (im11) or the suffix is itself a quality word (isus4).
+    const needsM = !upper && !/^(m|min|-|maj|M|Δ|sus|add|aug|\+|dim|°|ø|6|69|5)/.test(suffix);
+    const body = needsM ? `m${suffix}` : suffix;
+    const p = parseChord(`${SHARP_NAMES[mod12(rootPc)]}${body}`);
+    // A suffix nothing can read is not a chord to guess at — that guess is the
+    // whole bug above.
+    if (!p || p.rootPc !== mod12(rootPc)) return null;
+    quality = p.quality;
+  } else if (!upper || true) {
+    // ── AND A BARE NUMERAL AGREES WITH keyChords ─────────────────────────────
+    // Two degrees of the diatonic set are DIMINISHED — vii in major, ii in minor
+    // — and keyChords knows it while a bare lowercase numeral did not, so
+    // numeralToChord("vii") in C gave B minor, whose F♯ is not in C major. Two
+    // functions in one file disagreeing about the same degree of the same key is
+    // worse than either convention on its own. The rest is untouched: V in a
+    // minor key is still major, which is what everybody actually plays.
+    const d = mod12(base + acc);
+    const diatonicDim = minor ? d === 2 : d === 11;
+    if (diatonicDim && !upper) quality = "dim";
+  }
   return { rootPc, quality, numeral: numeral.trim() };
 }
 

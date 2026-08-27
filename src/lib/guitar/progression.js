@@ -11,7 +11,7 @@
 // lines of data — and unlike a library of recordings, every one of them is in
 // whatever key and at whatever tempo you need.
 
-import { mod12, numeralToChord, chordName, keyUsesFlats, parseChord, parseStrum } from "./theory.js";
+import { mod12, numeralToChord, chordName, keyUsesFlats, parseChord, parseStrum, chordByKey } from "./theory.js";
 import { voicingMidi, STANDARD } from "./fretboard.js";
 import { voicingsFor, lookupChord } from "./chords.js";
 import { progressionByKey, strumByKey, parseBars } from "./library.js";
@@ -153,6 +153,9 @@ export function strumTimeline(events, patternKey, { swing = 0, beatsPerBar = 4 }
   }
   const totalSteps = Math.round(acc * perBeat);
   let bi = 0;
+  // The direction of the last stroke that actually hit the strings. A pattern
+  // that opens on a silent step has the hand coming down into it.
+  let lastPlayedDown = false;
   {
     for (let stepIndex = 0; stepIndex < totalSteps; stepIndex++) {
       const i = stepIndex;
@@ -180,12 +183,29 @@ export function strumTimeline(events, patternKey, { swing = 0, beatsPerBar = 4 }
       while (bi < bounds.length - 1 && swung >= bounds[bi].to - 1e-9) bi++;
       const ev = bounds[bi]?.ev;
       if (!ev) break;
+      // WHICH WAY THE HAND IS TRAVELLING ON A PASS IT DOES NOT PLAY. A sounded
+      // step is whatever the pattern writes; a silent one is the hand on its way
+      // back from the last stroke it made — so it travels OPPOSITE to that. This
+      // was a flat `D`, so seven of the eleven patterns drew a hand travelling
+      // downward on consecutive passes, "quarters" — the first pattern anybody
+      // meets — showing eight downstrokes in a row. Which defeats the one thing
+      // the silent steps are emitted for: the note sixty lines up says draw the
+      // hits alone and D-DU-UDU is a riddle, draw the hand and it is obvious.
+      //
+      // Opposite-of-the-last-stroke rather than index parity, because parity is
+      // only right when the hand's unit is the subdivision. It is not in 12/8: a
+      // ballad plays one stroke a dotted-quarter and the hand is rising across
+      // BOTH silent triplets, which parity would draw as up-then-down.
+      const isSilent = s.stroke === "-";
+      const handDown = !lastPlayedDown;
+      const down = isSilent ? handDown : s.stroke !== "U";
+      if (!isSilent) lastPlayedDown = down;
       out.push({
         beat: swung,
-        stroke: s.stroke === "-" ? "D" : s.stroke,   // the hand is still moving; see above
-        silent: s.stroke === "-",
+        stroke: isSilent ? (down ? "D" : "U") : s.stroke,
+        silent: isSilent,
         muted: s.stroke === "x",
-        down: s.stroke !== "U",
+        down,
         chord: ev,
         bar: ev.bar,
       });
@@ -197,24 +217,67 @@ export function strumTimeline(events, patternKey, { swing = 0, beatsPerBar = 4 }
 // The bass note under each chord. Root on beat one, root-and-fifth alternating,
 // or a walk into the next chord — the third is what makes a backing track sound
 // like a band rather than a metronome with chords on it.
+// The bass note under a chord, in the octave the guitar is playing in. `rootPc`
+// is the chord's own root; a slash chord's written bass (`bassPc`) wins, because
+// that is the entire point of writing one.
+function noteUnder(pc, lowest) {
+  // Nearest note of that pitch class at or below the voicing's own bottom, so
+  // the bass never crosses above the chord it is holding up.
+  const d = mod12(mod12(lowest) - mod12(pc));
+  return lowest - d;
+}
+// What beat one plays: a slash chord's WRITTEN bass, otherwise the chord's root.
+function rootUnder(ev, lowest) {
+  return noteUnder(ev.voicing?.bassPc ?? ev.bassPc ?? ev.rootPc ?? mod12(lowest), lowest);
+}
+
+// The fifth this quality actually has, in semitones above the root. Null-safe:
+// an unknown quality falls back to the perfect fifth, which is what it was.
+function fifthAbove(quality) {
+  const steps = chordByKey(quality)?.steps;
+  if (!Array.isArray(steps)) return 7;
+  const fifth = steps.find((i) => i === 6 || i === 7 || i === 8);
+  return fifth ?? 12;                     // no fifth in the chord — the octave, not an invention
+}
+
 export function bassLine(events, { style = "root", beatsPerBar = 4, tuning = STANDARD } = {}) {
   const out = [];
   let beat = 0;
   for (let i = 0; i < events.length; i++) {
     const ev = events[i];
     const span = ev.beats ?? beatsPerBar;
-    const rootMidi = ev.midi?.length ? Math.min(...ev.midi) : null;
-    if (rootMidi == null) { beat += span; continue; }
+    // THE ROOT IS THE CHORD'S ROOT, NOT THE LOWEST NOTE SOUNDING. Those are the
+    // same thing only in root position, and a bass player under a slash chord
+    // plays the written bass, not the root — but a bass player under a plain
+    // chord plays the ROOT, whatever inversion the guitar happens to be in.
+    // Taking min(midi) meant the bass followed the guitarist's voicing around.
+    const lowest = ev.midi?.length ? Math.min(...ev.midi) : null;
+    if (lowest == null) { beat += span; continue; }
+    const rootMidi = rootUnder(ev, lowest);
     if (style === "root") {
       out.push({ beat, midi: rootMidi, chord: ev });
     } else if (style === "root_fifth") {
       out.push({ beat, midi: rootMidi, chord: ev });
-      if (span >= 4) out.push({ beat: beat + span / 2, midi: rootMidi + 7, chord: ev });
+      // THE FIFTH COMES FROM THE CHORD, NOT FROM +7. A blind perfect fifth is
+      // wrong for every altered-fifth quality there is: dim, dim7 and m7♭5 have
+      // a ♭5 and aug has a ♯5, so this played a natural E under the A half-
+      // diminished in Autumn Leaves — the one note that chord is defined by not
+      // having. Where a chord has no fifth at all, the octave is the honest
+      // alternative; inventing one is not.
+      // AND MEASURED FROM THE CHORD'S ROOT, NOT FROM WHAT BEAT ONE PLAYED. Under
+      // a slash chord those differ: D/F♯ puts F♯ on beat one, and a fifth above
+      // F♯ is C♯ — not a note in D major. A bass player answers the written bass
+      // with a chord tone, so beat three takes the fifth of the CHORD.
+      if (span >= 4) {
+        const chordRoot = ev.rootPc != null ? noteUnder(ev.rootPc, lowest) : rootMidi;
+        out.push({ beat: beat + span / 2, midi: chordRoot + fifthAbove(ev.quality), chord: ev });
+      }
     } else if (style === "walk") {
       // One note a beat, stepping toward the next chord's root — the last note
       // before a change is always a semitone or tone away from where it is going.
       const next = events[i + 1];
-      const target = next?.midi?.length ? Math.min(...next.midi) : rootMidi;
+      const nextLow = next?.midi?.length ? Math.min(...next.midi) : null;
+      const target = nextLow == null ? rootMidi : rootUnder(next, nextLow);
       const n = Math.max(1, Math.round(span));
       for (let k = 0; k < n; k++) {
         const t = n === 1 ? 0 : k / (n - 1);

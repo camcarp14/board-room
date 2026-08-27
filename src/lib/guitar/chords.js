@@ -25,7 +25,7 @@
 // its merits rather than through an exception.
 
 import { mod12, chordName, parseChord } from "./theory.js";
-import { verifyVoicing, voicingDifficulty, MOVABLE, movableByKey, placeShape, STANDARD } from "./fretboard.js";
+import { verifyVoicing, voicingDifficulty, MOVABLE, movableByKey, placeShape, searchVoicings, STANDARD } from "./fretboard.js";
 
 // A barre spanning every string from `from` to the top, at `fret`.
 const bar = (fret, from = 0, to = 5) => ({ fret, from, to });
@@ -75,7 +75,16 @@ export const VOICINGS = [
   V(0, "maj7", [null, 3, 2, 0, 0, 0], [null, 3, 2, 0, 0, 0], { tags: ["open"] }),
   // The dropped fifth this file's header is about. C–E–B♭–C–E.
   V(0, "7", [null, 3, 2, 3, 1, 0], [null, 3, 2, 4, 1, 0], { tags: ["open", "blues"], label: "C7" }),
-  V(0, "7", [null, 3, 2, 3, 1, 3], [null, 2, 1, 3, 1, 4], { tags: ["blues"], label: "C7 (with the 5th)" }),
+  // WAS x32313 WITH FINGER 1 ON TWO DIFFERENT FRETS — one index at fret 2 on the
+  // D string and fret 1 on the B string at the same time. Not a hard shape, an
+  // impossible one, and it sorted second in the C7 list at difficulty 4, below
+  // the F barre. The notes were right (C E B♭ C G); the only grip that plays them
+  // is a ring-finger double-stop arched over a held B string, which is not the
+  // beginner blues shape this row was filed as. Replaced with the A-shape C7,
+  // which has the same fifth, is one of the most-played dominant grips there is,
+  // and can be fingered: index bars the third fret, ring and pinky take the fifth.
+  V(0, "7", [null, 3, 5, 3, 5, null], [null, 1, 3, 1, 4, null],
+    { barre: bar(3, 1, 3), tags: ["blues", "movable"], label: "C7 (with the 5th)" }),
   // The campfire Cadd9: fingers 3 and 4 stay planted on the third fret through
   // Cadd9 → G → Em7 → Dsus4, which is why this voicing and not x32030.
   V(0, "add9", [null, 3, 2, 0, 3, 3], [null, 2, 1, 0, 3, 4], { tags: ["core", "open", "campfire"] }),
@@ -157,8 +166,19 @@ export const voicingId = (v) => `${v.rootPc}:${v.quality}:${v.frets.map((f) => (
 // easiest first, so the list a beginner sees opens with something playable.
 export function voicingsFor(rootPc, quality, { tuning = STANDARD, maxFret = 12, includeMovable = true } = {}) {
   const pc = mod12(rootPc);
-  const out = VOICINGS.filter((v) => v.rootPc === pc && v.quality === quality)
-    .map((v) => ({ ...v, id: voicingId(v), source: "library", difficulty: voicingDifficulty(v.frets, { barre: v.barre?.fret ?? null }) }));
+  // A SLASH CHORD IS NOT A VOICING OF THE PLAIN CHORD, and filtering on
+  // root+quality alone returned it as one. D/F♯ (200232) came back as an
+  // ordinary D — and it WINS the voice-leading score, by 0.08 of a fret, because
+  // progression.centreOf averages only fretted notes. So every plain D in the app
+  // was played as D/F♯: the tonic of the song starting on its third, with a
+  // six-string shape drawn under the letter "D" while a beginner is being taught
+  // the open one. Eighteen of the thirty-seven songs. Seven Nation Army played
+  // its riff on the wrong note.
+  //
+  // Ask for D/F♯ by name and you still get it — parseChord sets bassPc and
+  // lookupChord passes it through. This only says that you have to ask.
+  const out = VOICINGS.filter((v) => v.rootPc === pc && v.quality === quality && v.bassPc == null)
+    .map((v) => ({ ...v, id: voicingId(v), source: "library", difficulty: voicingDifficulty(v.frets, { barre: v.barre }) }));
   if (includeMovable) {
     for (const shape of MOVABLE) {
       if (shape.quality !== quality) continue;
@@ -182,7 +202,52 @@ export function voicingsFor(rootPc, quality, { tuning = STANDARD, maxFret = 12, 
       });
     }
   }
-  return out.sort((a, b) => a.difficulty - b.difficulty);
+  // ── AND IT HAS TO BE TRUE ON THE NECK IT WILL BE DRAWN ON ──────────────────
+  // Every shape above is a fret offset, and a fret offset is only a chord if the
+  // strings under it are tuned the way they were when it was written down. In
+  // open G the six C-major diagrams this returned included not one that sounded a
+  // C major triad — under an empty state that promises only verified shapes. So
+  // each candidate goes through the same gate the table's own rows pass, against
+  // the tuning actually in use, and anything the neck does not really make is
+  // dropped. In standard tuning nothing is dropped, which is the point.
+  const verified = out.filter((v) => {
+    const r = verifyVoicing(v.frets, pc, quality, { tuning, omits: v.omits });
+    return r.ok && r.bassOk;
+  });
+  // A tuning the table has never seen gets shapes found on it instead — see
+  // fretboard.searchVoicings. Dropping the wrong ones and offering nothing would
+  // be honest but useless, and the neck really does make these.
+  //
+  // ONLY WHEN THERE IS NOTHING, though. Topping up a thin list looked helpful and
+  // was not: Cm in standard tuning has two verified shapes, so a "< 3" trigger
+  // searched anyway and found an easy three-string x310xx that outranked the
+  // Am-shape barre the curriculum teaches. A found shape is the least curated
+  // thing here — it is what the neck permits, not what anyone chose — so it fills
+  // a gap and never competes.
+  if (verified.length === 0) {
+    const searched = searchVoicings(pc, quality, { tuning, maxFret, limit: 6 });
+    for (const f of searched) {
+      const key = f.frets.map((x) => (x == null ? "x" : x)).join("-");
+      if (verified.some((v) => v.frets.map((x) => (x == null ? "x" : x)).join("-") === key)) continue;
+      verified.push({
+        rootPc: pc, quality, frets: f.frets, fingers: null, barre: null, label: null,
+        bassPc: null, omits: null, why: null, tags: ["found"],
+        open: f.frets.some((x) => x === 0),
+        id: voicingId({ rootPc: pc, quality, frets: f.frets }),
+        source: "found", difficulty: f.difficulty,
+      });
+    }
+  }
+
+  // A HAND-CHOSEN SHAPE WINS A NEAR TIE. This file's own header says the
+  // tabulated shapes come first "because they are the ones a human chose" — and
+  // then sorting on difficulty alone threw that away: the generated D-shape F at
+  // the third fret scored one below the mini-F, so the app's picture of "F" for a
+  // beginner was a four-finger shape with both bass strings muted, while the two
+  // F's the curriculum actually teaches sat underneath it. A generated placement
+  // carries a point of doubt; it has to be a clear point easier, not a hair.
+  const rank = (v) => v.difficulty + (v.source === "library" ? 0 : v.source === "found" ? 2 : 1);
+  return verified.sort((a, b) => rank(a) - rank(b));
 }
 
 // "Am7" → its voicings. The path from anything the user typed to something
@@ -195,7 +260,7 @@ export function lookupChord(symbol, opts) {
   // A slash chord asks for a specific bass; prefer a shape that has it.
   if (parsed.bassPc != null) {
     const withBass = VOICINGS.filter((v) => v.rootPc === parsed.rootPc && v.quality === parsed.quality && v.bassPc === parsed.bassPc)
-      .map((v) => ({ ...v, id: voicingId(v), source: "library", difficulty: voicingDifficulty(v.frets, { barre: v.barre?.fret ?? null }) }));
+      .map((v) => ({ ...v, id: voicingId(v), source: "library", difficulty: voicingDifficulty(v.frets, { barre: v.barre }) }));
     if (withBass.length) return { ...parsed, voicings: [...withBass, ...list] };
   }
   return { ...parsed, voicings: list };

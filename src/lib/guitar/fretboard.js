@@ -124,6 +124,74 @@ export function bassMidi(frets, tuning = STANDARD, capo = 0) {
 //
 // `missingCore` is the half of `missing` that decides the chord's identity — see
 // the note on it below. The root and the fifth may go; nothing else may.
+// ─── shapes for a neck this table has never seen ─────────────────────────────
+// EVERY STORED SHAPE IS A FACT ABOUT STANDARD TUNING. The 65 tabulated voicings
+// and the movable CAGED shapes are fret offsets, and a fret offset only means a
+// chord if the strings underneath it are tuned the way they were when somebody
+// wrote it down. Re-rooting them in DADGAD or open G does not transpose them —
+// it produces a different chord, or no chord. Measured: of 65 voicings, 23 stop
+// spelling their chord in drop D, 62 in DADGAD, 65 in open E. Ask for a C major
+// in open G and the app offered six diagrams, not one of which sounds a C major
+// triad, under an empty state that promises it only shows verified ones.
+//
+// So for any neck that is not standard, the shapes are SEARCHED rather than
+// recalled. For each four-fret window, each string may be muted, played open, or
+// fretted inside the window — but only at a fret whose pitch is in the chord, so
+// the candidate set per string is two or three, not thirteen. Everything that
+// survives goes through verifyVoicing, which is the same gate the tabulated rows
+// pass. Nothing is invented: a shape is offered only if the neck really makes it.
+export function searchVoicings(rootPc, quality, {
+  tuning = STANDARD, maxFret = 12, limit = 6, bassPc = null, maxSpan = 4,
+} = {}) {
+  const pcs = new Set(chordPcs(rootPc, quality));
+  if (!pcs.size) return [];
+  const strings = tuning.length;
+  const wantBass = bassPc == null ? mod12(rootPc) : mod12(bassPc);
+  const seen = new Set();
+  const found = [];
+
+  for (let base = 0; base + maxSpan - 1 <= maxFret; base++) {
+    // What each string may do in this window. `null` is muted; 0 is the open
+    // string, which is available in every window and is what makes an open
+    // tuning's own shapes findable at all.
+    const options = [];
+    for (let st = 0; st < strings; st++) {
+      const opts = [null];
+      if (pcs.has(mod12(tuning[st]))) opts.push(0);
+      for (let f = Math.max(1, base); f < base + maxSpan; f++) {
+        if (f <= maxFret && pcs.has(mod12(tuning[st] + f))) opts.push(f);
+      }
+      options.push(opts);
+    }
+    // Depth-first over the strings. The tree is narrow — two or three branches a
+    // string — so this is a few hundred leaves per window, not thirteen to the six.
+    const frets = new Array(strings).fill(null);
+    const walk = (st) => {
+      if (found.length >= limit * 8) return;            // plenty to rank; stop early
+      if (st === strings) {
+        const sounding = frets.filter((f) => f != null).length;
+        if (sounding < 3) return;
+        // No hole in the middle: a muted string between two sounding ones is a
+        // grip almost nobody can actually damp cleanly.
+        const first = frets.findIndex((f) => f != null);
+        const last = strings - 1 - [...frets].reverse().findIndex((f) => f != null);
+        for (let i = first; i <= last; i++) if (frets[i] == null) return;
+        const key = frets.map((f) => (f == null ? "x" : f)).join("-");
+        if (seen.has(key)) return;
+        const v = verifyVoicing(frets, rootPc, quality, { tuning, bassPc, maxSpan: maxSpan + 1 });
+        if (!v.ok || !v.bassOk) return;
+        seen.add(key);
+        found.push({ frets: [...frets], difficulty: voicingDifficulty(frets, { barre: null }) });
+        return;
+      }
+      for (const f of options[st]) { frets[st] = f; walk(st + 1); }
+      frets[st] = null;
+    };
+    walk(0);
+  }
+  return found.sort((a, b) => a.difficulty - b.difficulty).slice(0, limit);
+}
+
 export function verifyVoicing(frets, rootPc, quality, { tuning = STANDARD, bassPc = null, maxSpan = 5, omits = [] } = {}) {
   const sounded = voicingPcs(frets, tuning);
   const want = chordPcs(rootPc, quality);
@@ -173,16 +241,55 @@ export function verifyVoicing(frets, rootPc, quality, { tuning = STANDARD, bassP
 // How hard a shape is to hold, on a scale the UI can sort by. Not a claim about
 // anyone's hands — a stated heuristic, so the chord library can put open C before
 // barre F♯m7♭5 without someone hand-ranking two hundred shapes.
+// `barre` may be a fret number or the whole { fret, from, to } — HOW MANY STRINGS
+// IT COVERS IS PART OF HOW HARD IT IS, and treating every barre alike scored the
+// two-string mini-F exactly the same as the six-string full barre next to it.
 export function voicingDifficulty(frets, { barre = null } = {}) {
   const fretted = (Array.isArray(frets) ? frets : []).filter((f) => Number.isFinite(f) && f > 0);
   if (!fretted.length) return 0;                       // all open — Em, E5
   const span = Math.max(...fretted) - Math.min(...fretted);
+  const barStrings = barre && typeof barre === "object" && Number.isFinite(barre.from) && Number.isFinite(barre.to)
+    ? Math.max(1, barre.to - barre.from + 1)
+    : (barre ? 6 : 0);                                 // a bare fret number means "assume the worst"
   const fingers = barre ? 1 + fretted.filter((f) => f > Math.min(...fretted)).length : fretted.length;
   const muted = (Array.isArray(frets) ? frets : []).filter((f) => f == null).length;
+  // WHERE ON THE NECK, which this had no term for at all — the same shape cost
+  // exactly the same at the first fret and the twelfth. Nothing stopped the
+  // beginner's chord picker from opening at the ninth, and for the five barre
+  // chords the curriculum actually teaches (F, B, Bm, Cm, B♭) that is what it
+  // did. First position is free; every four frets up is worth about one more
+  // finger, which is roughly what reaching and holding it costs.
+  const position = Math.min(12, Math.min(...fretted));
   // Weights, stated: a barre is the single biggest step up for a beginner, a
   // stretch past three frets is the next, an inner mute (a string you have to
   // deaden mid-chord) is worth about as much as one more finger.
-  return (barre ? 3 : 0) + Math.max(0, span - 1) + Math.max(0, fingers - 2) + (muted > 1 ? 1 : 0);
+  // ── THE WEIGHTS, AND WHERE THEY CAME FROM ──────────────────────────────────
+  // Not guessed. Every panel draws voicings[0] as THE picture of a chord, so the
+  // ordering this produces is the app's answer to "what does an F look like" —
+  // and with no position term at all it answered with a C-shape barre at the
+  // fifth fret, drew Creep's B at the ninth under a note that says "barre it at
+  // 2", and drew Bm at the seventh. So the weights were SOLVED: a sweep over the
+  // twenty chords whose right answer the curriculum states outright (level 3's
+  // prose for the F's, each song's own note for the rest) picked the set that
+  // reproduces all twenty. scripts/guitar-smoke.mjs pins the same twenty, so a
+  // future weight change has to keep answering them correctly or fail.
+  //
+  //   barre      1.5 flat, plus 0.1 a string — a two-string mini-barre is most of
+  //              a normal finger; a six-string one is the wall every beginner hits
+  //   span       1 a fret past the first — the stretch
+  //   fingers    0.75 each past two
+  //   mutes      0.5 each past one — a string you have to deaden mid-chord
+  //   position   0.25 a fret up the neck — reaching it, and finding it at all
+  //
+  // This number is a SORT KEY and is never shown. It does not need to be an
+  // integer and it does not need to mean anything on its own; it needs to put the
+  // right shape first.
+  const barreCost = barre ? 1.5 + barStrings * 0.1 : 0;
+  return barreCost
+    + Math.max(0, span - 1)
+    + Math.max(0, fingers - 2) * 0.75
+    + Math.max(0, muted - 1) * 0.5
+    + position * 0.25;
 }
 
 // ─── movable shapes (the CAGED spine) ────────────────────────────────────────
@@ -210,8 +317,15 @@ export const MOVABLE = [
   // offset 0, which is the whole reason `rootOffset` exists — the C shape's root
   // is three frets above its own lowest note, so placing it by its bottom fret
   // puts every chord a minor third out.
-  { key: "C_maj", name: "C shape", quality: "maj", rootString: 1, rootOffset: 3, offsets: [null, 3, 2, 0, 1, 0] },
-  { key: "G_maj", name: "G shape", quality: "maj", rootString: 0, rootOffset: 3, offsets: [3, 2, 0, 0, 0, 3] },
+  // THE C AND G SHAPES ARE BARRES, AND SAYING SO IS LOAD-BEARING. Placed above
+  // the nut their offset-0 notes need an index bar — chords.SHAPE_FINGERS already
+  // puts finger 1 on several strings for both. Without the flag placeShape
+  // returned barre: null, voicingDifficulty's +3 never fired, and the C-shape F
+  // at the fifth fret scored EASIER than the F barre at the first: the app drew a
+  // five-fret-span C-shape barre as its picture of "F" for a beginner, and drew
+  // Creep's B at the ninth fret under a note that says "barre it at 2".
+  { key: "C_maj", name: "C shape", quality: "maj", rootString: 1, rootOffset: 3, offsets: [null, 3, 2, 0, 1, 0], barre: 0 },
+  { key: "G_maj", name: "G shape", quality: "maj", rootString: 0, rootOffset: 3, offsets: [3, 2, 0, 0, 0, 3], barre: 0 },
   { key: "D_maj", name: "D shape", quality: "maj", rootString: 2, rootOffset: 0, offsets: [null, null, 0, 2, 3, 2] },
   { key: "D_min", name: "Dm shape", quality: "min", rootString: 2, rootOffset: 0, offsets: [null, null, 0, 2, 3, 1] },
 ];
@@ -321,12 +435,30 @@ export function pentatonicBox(rootPc, boxIndex, { scaleKey = "minor_pent", tunin
   // then run off the bottom; shift the whole set up an octave when it would.
   const lowest = Math.min(...box.map((s) => Math.min(...s)));
   while (rootFret + lowest < 0) rootFret += 12;
+
+  // ── THE TABLE IS A FACT ABOUT STANDARD TUNING, SO THE WINDOW IS TAKEN FROM IT
+  //    AND THE NOTES ARE TAKEN FROM THE NECK ────────────────────────────────────
+  // The offsets are per-string distances measured against standard tuning's
+  // string intervals, and re-rooting them without touching the offsets does not
+  // transpose a box, it breaks it: in drop D — where only the sixth string moves
+  // — A minor pentatonic box 1 came out containing F♯ and B. 238 of 720 dots off
+  // the scale in drop D and drop C, 215 in open D and open E.
+  //
+  // scaleMap and threeNotePerString next door do not have this problem because
+  // they compute the fret from the PITCH. So does this now: the table decides the
+  // fret window each string sits in — which is what a "box" actually is, the
+  // shape of the position under the hand — and which notes fall in that window is
+  // read off the tuning. In standard tuning the answer is identical to the table,
+  // dot for dot, which is the check that keeps this honest.
+  const wanted = new Set(scalePcs(rootPc, scaleKey));
   const dots = [];
   for (let s = 0; s < box.length && s < tuning.length; s++) {
-    for (const off of box[s]) {
-      const fret = rootFret + off;
-      if (fret > maxFret) continue;
+    const offs = box[s];
+    const lo = rootFret + Math.min(...offs);
+    const hi = rootFret + Math.max(...offs);
+    for (let fret = Math.max(0, lo); fret <= hi && fret <= maxFret; fret++) {
       const pc = pcAt(s, fret, tuning, 0);
+      if (!wanted.has(pc)) continue;
       dots.push({ string: s, fret, pc, degree: degreeOf(pc, rootPc), root: pc === mod12(rootPc), midi: midiAt(s, fret, tuning) });
     }
   }
