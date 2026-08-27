@@ -308,7 +308,19 @@ export function TodayPanel({ isMobile, settings, updateSetting, onOpenTuner, onO
   const owned = songs.filter((s) => s.status === "owned").length;
   // Strength is DECAYED before the gate reads it — a level does not stay unlocked
   // on the strength of work done last spring.
-  const lvl = levelState(Object.fromEntries(skills.map((s) => [s.id, { strength: currentStrength(s, today) }])), { songsOwned: owned });
+  // The highest level ever reached, kept in settings, so a fortnight off cannot
+  // demote you — and cannot shrink the practice pool back to three items and
+  // strand everything that just fell out of it. See the note on `floor` in
+  // library.js; the simulation that found this is in the commit message.
+  const lvl = levelState(
+    Object.fromEntries(skills.map((s) => [s.id, { strength: currentStrength(s, today) }])),
+    { songsOwned: owned, floor: Number(gs.level) || 0 });
+  useEffect(() => {
+    if (settings == null) return;
+    if (lvl.computed.n <= (Number(gs.level) || 0)) return;
+    updateSetting?.("guitar", { ...gs, level: lvl.computed.n });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [lvl.computed.n, settings]);
   // Only what this level has actually reached, and no tools — see the note on
   // schedulableSkills. Without it, day one opens with "Transcribe by ear".
   const pool = useMemo(() => {

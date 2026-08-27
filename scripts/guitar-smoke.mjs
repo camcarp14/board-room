@@ -553,7 +553,21 @@ check("decay is monotonic and bounded", (() => {
 // THE FIXED POINT. Without a floor, √(1−s/100) is zero at 100, so a perfect skill
 // would decay by exactly nothing, never come due, and vanish from the app while
 // reading as mastered.
-check("even a perfect skill comes back", decayStrength(100, 30) < 90 && nextReviewDays(100) <= 30);
+// Nothing is permanent, however well consolidated. The floor on the decay rate is
+// what stops √(1 − s/100) parking a perfect skill at 100 for ever, where it would
+// never come due and would vanish from the app while reading as mastered.
+check("even a perfect skill comes back", decayStrength(100, 60, 0) < 90 && nextReviewDays(100, 0) <= 60);
+check("…and a heavily consolidated one comes back later than a new one",
+  nextReviewDays(90, 60) > nextReviewDays(90, 0));
+check("consolidation slows decay but never stops it",
+  decayStrength(80, 30, 100) > decayStrength(80, 30, 0) && decayStrength(80, 200, 100) < 80);
+// The learning curve: a rep is worth a fraction of what is left, so the first is
+// worth ten times the fiftieth and nothing can be crammed past its asymptote.
+check("a rep is worth more when you know less",
+  applyResult({ id: "x", strength: 0 }, { rating: "clean", day: "2026-08-27" }).strength
+  > 4 * applyResult({ id: "x", strength: 90, lastPracticed: "2026-08-27" }, { rating: "clean", day: "2026-08-27" }).strength - 90 * 4);
+check("no number of clean reps reaches 100",
+  (() => { let r = { id: "x", strength: 0, sessions: 0, history: [] }; for (let i = 0; i < 200; i++) r = applyResult(r, { rating: "clean", day: "2026-08-27" }); return r.strength < 100; })());
 check("review intervals agree with the decay curve",
   [70, 80, 90, 95].every((s) => {
     const d = nextReviewDays(s);
@@ -655,14 +669,25 @@ console.log("\n── the schedule ──");
   check("nothing goes unpractised for more than 45 days",
     [...appearances.values()].every((days) => days.every((d, i) => i === 0 || d - days[i - 1] <= 45)),
     (() => { let worst = 0; for (const ds of appearances.values()) for (let i = 1; i < ds.length; i++) worst = Math.max(worst, ds[i] - ds[i - 1]); return `worst gap ${worst}d`; })());
-  check("every skill in the pool gets practised at least once in six months",
-    appearances.size >= 20, `${appearances.size} of 24`);
-  check("at least eight distinct items appear in any fourteen-day window",
+  // NOT "everything gets touched" — that was the bug, not the goal. Sixteen items
+  // rotated three at a time is one contact per five sessions, which is slower than
+  // the decay and is why nothing could ever consolidate. What has to be true is
+  // that the working set MOVES: things enter it, reach the bar, and make room.
+  check("six months admits well past one working set",
+    appearances.size >= 12, `${appearances.size} of 24`);
+  check("never more than a working set of part-learned items in flight",
+    sessionsRun.every((p, d) => {
+      const inFlight = p.picks.filter((x) => (x.sessions ?? 0) > 0 && x.strengthNow < 80).length;
+      return inFlight <= 5;
+    }));
+  check("no single item dominates a fortnight",
     (() => {
       for (let start = 0; start + 14 <= 180; start += 7) {
-        const seen = new Set();
-        for (let d = start; d < start + 14; d++) for (const p of sessionsRun[d].picks) seen.add(p.id);
-        if (seen.size < 8) return false;
+        const counts = new Map();
+        let n = 0;
+        for (let d = start; d < start + 14; d++) for (const p of sessionsRun[d].picks) { counts.set(p.id, (counts.get(p.id) || 0) + 1); n++; }
+        if (n && Math.max(...counts.values()) / n > 0.5) return false;
+        if (counts.size < 3) return false;
       }
       return true;
     })());
@@ -774,6 +799,50 @@ check("once the fretboard is unlocked the sharpen block alternates",
 
 check("levelState starts at level 0 and does not throw on an empty account",
   levelState({}).level.n === 0 && Array.isArray(levelState({}).all));
+// A LEVEL IS SOMETHING YOU REACHED. Without the floor the gate reads decayed
+// strength, a fortnight off demotes you, the pool shrinks back to three items,
+// and everything that just fell out of it decays further with no way back. An
+// eighteen-month simulation oscillated 0-1-0 for the whole run and finished
+// having touched 16 of 65 skills.
+check("a level once reached is never taken away",
+  levelState({}, { floor: 4 }).level.n === 4 && levelState({}, { floor: 4 }).computed.n === 0);
+check("the floor cannot invent a level past the end",
+  levelState({}, { floor: 99 }).level.n === LEVELS.length - 1 && levelState({}, { floor: -3 }).level.n === 0);
+check("the computed level is still reported, so a slip can be shown without a demotion",
+  levelState({}, { floor: 3 }).computed.n === 0);
+{
+  // Eighteen months, five days a week, 75% clean — the learner must actually move.
+  let rows = [], day = "2026-01-01", last = null, owned = 0, seed = 7, floor = 0;
+  const rnd = () => { seed = (seed * 1103515245 + 12345) & 0x7fffffff; return seed / 0x7fffffff; };
+  for (let d = 0; d < 540; d++) {
+    const byId = new Map(rows.map((r) => [r.id, r]));
+    const all = SKILLS.map((s) => ({ ...s, ...(byId.get(s.id) || { strength: 0, sessions: 0, minutes: 0, history: [] }) }));
+    const lv = levelState(Object.fromEntries(all.map((s) => [s.id, { strength: currentStrength(s, day) }])), { songsOwned: owned, floor });
+    floor = Math.max(floor, lv.computed.n);
+    if (d % 7 < 5) {
+      const eligible = new Set(schedulableSkills(lv.level.n).map((s) => s.id));
+      const plan = buildSession(all.filter((s) => eligible.has(s.id)), { minutes: 25, today: day, lastSession: last, songs: [{ id: "s", status: "learning" }] });
+      const results = plan.picks.map((p) => ({ id: p.id, name: p.name, rating: rnd() < 0.75 ? "clean" : rnd() < 0.7 ? "shaky" : "rough", seconds: 150 }));
+      const done = completeSession({ day, focus: plan.focus }, results, rows);
+      rows = done.skills; last = done.session;
+      if (d % 20 === 0) owned++;
+    }
+    day = addDays(day, 1);
+  }
+  check("eighteen months of practice reaches at least level 3", floor >= 3, `reached ${floor}`);
+  // Not "most of the curriculum" — the curriculum runs to year seven, and reaching
+  // level 3 in eighteen months is exactly what the timeline in the research says
+  // (barre chords, months 6–12). What has to be true is that everything admitted
+  // ended up ACTUALLY LEARNED rather than half-started.
+  check("…and everything it started, it finished",
+    rows.filter((r) => r.sessions > 0).length >= 15
+    && rows.filter((r) => r.sessions > 2).every((r) => currentStrength(r, day) >= 60),
+    `${rows.filter((r) => r.sessions > 0).length} started, weakest ${Math.min(...rows.filter((r) => r.sessions > 2).map((r) => Math.round(currentStrength(r, day))))}`);
+  check("…with nothing abandoned for longer than six weeks",
+    rows.filter((r) => r.sessions > 0).every((r) => (daysBetween(r.lastPracticed, day) ?? 0) <= 45),
+    String(Math.max(...rows.filter((r) => r.sessions > 0).map((r) => daysBetween(r.lastPracticed, day) ?? 0))));
+}
+
 check("levelState advances when the gate is met",
   levelState(Object.fromEntries(SKILLS.map((s) => [s.id, { strength: 95 }])), { songsOwned: 50 }).level.n > 0);
 

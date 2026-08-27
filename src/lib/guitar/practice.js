@@ -71,9 +71,23 @@ export const DECAY_RATE = 3.5;
 // plays anything so well that a year away costs nothing. A third of a point a day
 // is the slowest this model will admit to, which puts an untouched perfect skill
 // back in the queue inside a month.
-export const DECAY_FLOOR = 0.35;
-export const dailyDecay = (s) => Math.max(DECAY_FLOOR, DECAY_RATE * Math.sqrt(Math.max(0, 1 - s / 100)));
-export function decayStrength(strength, days) {
+export const DECAY_FLOOR = 0.2;
+// CONSOLIDATION IS THE SECOND VARIABLE, and leaving it out made the whole model
+// wrong in a way only a long simulation could show. With decay a function of
+// strength alone, a skill you had practised eighty times decayed exactly as fast
+// as one you met on Tuesday — 3.4 points a day down at the bottom of the curve —
+// so a rep worth +8 was gone inside three days and nothing could ever accumulate.
+// Eighteen simulated months of five-days-a-week practice finished with every
+// skill at a strength of 0 and 8, and the learner still on level 1.
+//
+// Sessions are the proxy for consolidation, because they are what the model has:
+// something you have returned to twenty times is held differently from something
+// you have seen once, whatever today's strength happens to be. Halving the rate
+// by about ten sessions is the shape, not a measurement, and it is written here
+// rather than buried so it can be argued with.
+export const dailyDecay = (s, sessions = 0) =>
+  Math.max(DECAY_FLOOR, (DECAY_RATE * Math.sqrt(Math.max(0, 1 - s / 100))) / (1 + Math.max(0, sessions) / 10));
+export function decayStrength(strength, days, sessions = 0) {
   const s = Math.max(0, Math.min(100, Number(strength) || 0));
   const n = Math.max(0, Math.round(Number(days) || 0));
   if (!n) return s;
@@ -82,7 +96,7 @@ export function decayStrength(strength, days) {
   // deletes a skill that would really have flattened out on the way down.
   let cur = s;
   for (let i = 0; i < Math.min(n, 400); i++) {
-    cur = Math.max(0, cur - dailyDecay(cur));
+    cur = Math.max(0, cur - dailyDecay(cur, sessions));
     if (cur <= 0) return 0;
   }
   return Math.round(cur * 10) / 10;
@@ -90,7 +104,7 @@ export function decayStrength(strength, days) {
 
 // The strength an item is at NOW, given when it was last touched.
 export const currentStrength = (skill, today) =>
-  decayStrength(skill?.strength ?? 0, daysBetween(skill?.lastPracticed, today) ?? 0);
+  decayStrength(skill?.strength ?? 0, daysBetween(skill?.lastPracticed, today) ?? 0, skill?.sessions ?? 0);
 
 // The bands are LABELS ONLY. What each one is called is a judgement about how it
 // feels to play; how long until it comes back is arithmetic, and the two are kept
@@ -110,28 +124,43 @@ export const bandFor = (strength) => REVIEW_BANDS.find((b) => strength <= b.max)
 // a rep is a victory lap. Capped at 30 days because a practice tool that says
 // "see you in three months" is one you have already stopped using.
 export const REVIEW_TARGET = 65;
-export function nextReviewDays(strength) {
+export function nextReviewDays(strength, sessions = 0) {
   let cur = Math.max(0, Math.min(100, Number(strength) || 0));
   if (cur <= REVIEW_TARGET) return 1;
   let d = 0;
-  while (cur > REVIEW_TARGET && d < 30) { cur -= dailyDecay(cur); d++; }
+  while (cur > REVIEW_TARGET && d < 60) { cur -= dailyDecay(cur, sessions); d++; }
   return Math.max(1, d);
 }
-export const dueDay = (skill) => (skill?.lastPracticed ? addDays(skill.lastPracticed, nextReviewDays(skill.strength ?? 0)) : null);
+export const dueDay = (skill) => (skill?.lastPracticed ? addDays(skill.lastPracticed, nextReviewDays(skill.strength ?? 0, skill.sessions ?? 0)) : null);
 
 // What a session does to an item. Three outcomes, and the negative one is not
 // "you failed" — it is the specific case of playing BELOW a tempo you had already
 // reached, which is the signature of something that was crammed rather than
 // learned, and the schedule should notice.
-export const RATING_DELTA = { clean: 8, shaky: 3, rough: -2 };
+// A REP IS WORTH A FRACTION OF WHAT IS LEFT TO LEARN, not a flat number of
+// points, because that is the shape of every learning curve ever measured: the
+// first session with E minor takes you from nothing to "I can place it", and the
+// hundredth moves you almost not at all.
+//
+// A flat +8 was the other half of the bug the consolidation term above records.
+// It made the first rep worth as little as the fiftieth, which — against a decay
+// of 3.4 a day at the bottom of the curve — meant a beginner could never get off
+// the floor: eight points, gone in three days, for ever. As a fraction of the
+// gap, a clean first rep is worth 18 and a clean rep at strength 90 is worth 1.8,
+// which is both realistic and self-limiting (nothing can be crammed to 100).
+export const RATING_GAIN = { clean: 0.18, shaky: 0.07, rough: -0.04 };
+// Kept as an export because the panels print "a clean rep is worth more than a
+// shaky one" and it is the fraction, not a point value, that says so.
+export const RATING_DELTA = RATING_GAIN;
 export function applyResult(skill, { rating = "shaky", bpm = null, day, seconds = 0 } = {}) {
   const base = { id: skill?.id, strength: 0, sessions: 0, minutes: 0, bestBpm: null, ceilingBpm: null, history: [], ...skill };
   const decayed = currentStrength(base, day);
-  let delta = RATING_DELTA[rating] ?? 0;
+  let rate = RATING_GAIN[rating] ?? 0;
   // The regression case: clean, but slower than this item has already been
   // played. Worth less than a clean rep at tempo and worth more than nothing.
-  if (rating === "clean" && bpm != null && base.bestBpm != null && bpm < base.bestBpm * 0.9) delta = 3;
-  if (rating === "rough" && base.bestBpm != null && bpm != null && bpm < base.bestBpm * 0.8) delta = -5;
+  if (rating === "clean" && bpm != null && base.bestBpm != null && bpm < base.bestBpm * 0.9) rate = RATING_GAIN.shaky;
+  if (rating === "rough" && base.bestBpm != null && bpm != null && bpm < base.bestBpm * 0.8) rate = RATING_GAIN.rough * 2.5;
+  const delta = rate >= 0 ? (100 - decayed) * rate : decayed * rate;
   const history = [...(base.history || []), { day, rating, bpm: bpm ?? null }].slice(-20);
   return {
     ...base,
@@ -285,6 +314,11 @@ export function weeklyMinutes(sessions, { today, weeks = 12 } = {}) {
 // Shares, not minutes, so the same shape survives a ten-minute session and a
 // fifty-minute one. Drills are capped: past about 60% drill the documented churn
 // gets worse, and a session with no music in it is a session that stops happening.
+// How many things may be part-learned at once. Three picks a session against a
+// working set of five means every item in flight is touched most sessions, which
+// is the cadence the decay model needs to be climbable.
+export const WORKING_SET = 5;
+
 export const BLOCK_SHARES = [
   { kind: "warmup", share: 0.12, min: 120, title: "Warm-up" },
   { kind: "sharpen", share: 0.20, min: 180, title: "Ear & fretboard" },
@@ -322,8 +356,29 @@ export function dueItems(skills, today) {
 //   · every block has a positive duration, and they add up to the time asked for.
 export function buildSession(skills, { minutes = 25, today, lastSession = null, songs = [], seed = 0 } = {}) {
   const total = Math.max(5, Math.min(120, Math.round(minutes))) * 60;
-  const pool = dueItems(skills, today);
+  const ranked = dueItems(skills, today);
   const lastIds = new Set((lastSession?.items || []).map((i) => i.id));
+
+  // ── THE WORKING SET, and the reason the whole program hinged on it ──────────
+  // A level's pool is sixteen skills; a session holds three. Ranked purely by how
+  // overdue it is, every never-practised item scores the same maximum, so the
+  // scheduler rotated all sixteen — one touch each per five sessions — and
+  // nothing could accumulate faster than it decayed. Eighteen simulated months
+  // finished with every skill between 0 and 8 and the learner still on level 1.
+  //
+  // A teacher does not do that. You work on THREE THINGS until they stick and
+  // then you add a fourth. So a brand-new item is admitted only while there is
+  // room in the working set — items already started and not yet solid — and
+  // everything already in flight keeps its place. It is the same rule as the
+  // three-songs-in-Learning cap in the Songs tab, one level down, and for the
+  // same reason: a pile of half-learned things is the documented failure.
+  const SOLID = 80;
+  const started = ranked.filter((s) => (s.sessions ?? 0) > 0);
+  const inFlight = started.filter((s) => s.strengthNow < SOLID);
+  const admitRoom = Math.max(0, WORKING_SET - inFlight.length);
+  const freshAdmitted = ranked.filter((s) => (s.sessions ?? 0) === 0).slice(0, admitRoom);
+  const admittedIds = new Set([...started, ...freshAdmitted].map((s) => s.id));
+  const pool = ranked.filter((s) => admittedIds.has(s.id));
 
   // Skill picks: the most overdue first, but never repeating what opened the last
   // session, and capped at two items still in acquisition.

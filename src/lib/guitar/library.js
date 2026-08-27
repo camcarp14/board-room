@@ -248,9 +248,24 @@ export function schedulableSkills(levelN, all = SKILLS) {
 }
 
 // Where you are in the program: the highest level whose gate is met, plus what
-// stands between you and the next one. Reads DECAYED strength, so a level does
-// not stay unlocked on the strength of work you did last spring.
-export function levelState(skillStates, { songsOwned = 0, strengthOf } = {}) {
+// stands between you and the next one.
+//
+// `floor` IS WHAT STOPS THE PROGRAM EATING ITSELF, and it took an eighteen-month
+// simulation to see why it has to exist. The gate reads DECAYED strength, which
+// is right for "what should I practise" and catastrophic for "what have I
+// reached": three weeks without touching Em drops the level-0 gate, the level
+// drops with it, the pool shrinks from sixteen skills back to three — and the
+// thirteen skills that just fell out of it are now unpractised, so they decay
+// further and the level cannot climb back. The simulated learner oscillated 0-1-0
+// for a year and a half and finished having touched sixteen of sixty-five skills.
+//
+// A LEVEL IS SOMETHING YOU REACHED, NOT SOMETHING YOU ARE HOLDING. You do not
+// un-clear level 1 because you had a fortnight off. So the caller passes the
+// highest level ever reached and the answer never goes below it; what decays is
+// the individual skill, which is what the scheduler reads, and that is where
+// forgetting belongs. `computed` is still returned so the panel can say "this one
+// has slipped" without demoting anything.
+export function levelState(skillStates, { songsOwned = 0, strengthOf, floor = 0 } = {}) {
   const strength = strengthOf || ((id) => skillStates?.[id]?.strength ?? 0);
   const met = (lvl) => {
     const g = lvl.gate || {};
@@ -259,14 +274,16 @@ export function levelState(skillStates, { songsOwned = 0, strengthOf } = {}) {
     const songsShort = Math.max(0, (g.songs ?? 0) - songsOwned);
     return { ok: !short.length && !songsShort, short, songsShort };
   };
-  let current = LEVELS[0];
+  let computed = LEVELS[0];
   for (const lvl of LEVELS) {
     if (lvl.key === "finger") continue;               // the parallel track never gates the spine
-    if (met(lvl).ok) current = LEVELS[Math.min(LEVELS.length - 1, LEVELS.indexOf(lvl) + 1)];
-    else { current = lvl; break; }
+    if (met(lvl).ok) computed = LEVELS[Math.min(LEVELS.length - 1, LEVELS.indexOf(lvl) + 1)];
+    else { computed = lvl; break; }
   }
+  const n = Math.max(computed.n, Math.max(0, Math.min(LEVELS.length - 1, Math.round(Number(floor) || 0))));
+  const current = LEVELS.find((l) => l.n === n) || LEVELS[0];
   const status = met(current);
-  return { level: current, ...status, all: LEVELS.map((l) => ({ level: l, ...met(l) })) };
+  return { level: current, computed, reached: n, ...status, all: LEVELS.map((l) => ({ level: l, ...met(l) })) };
 }
 
 // ─── drills ──────────────────────────────────────────────────────────────────
