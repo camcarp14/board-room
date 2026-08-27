@@ -48,7 +48,7 @@ export const STRUM_PATTERNS = [
   { key: "old_faithful", name: "Old faithful", pattern: "D-DU-UDU", sub: 8, swing: 0, difficulty: 5, feel: "The folk/pop default", songs: ["Wonderwall", "Wish You Were Here"] },
   { key: "lighter", name: "D · D-U · U-D", pattern: "D-DU-UD-", sub: 8, swing: 0, difficulty: 5, feel: "Lighter cousin", songs: ["A Horse with No Name", "Bad Moon Rising"] },
   { key: "syncopated", name: "Syncopated", pattern: "DU-UDU-U", sub: 8, swing: 0, difficulty: 6, feel: "Pushes the beat", songs: ["Riptide", "I'm Yours"] },
-  { key: "swung_eighths", name: "Swung eighths", pattern: "D-DU-UDU", sub: 8, swing: 0.9, difficulty: 6, feel: "Blues/jazz lilt", songs: ["Ain't No Sunshine"] },
+  { key: "swung_eighths", name: "Swung eighths", pattern: "D-DU-UDU", sub: 8, swing: 0.9, difficulty: 6, feel: "Blues/jazz lilt", songs: ["Ain't No Sunshine", "Fly Me to the Moon"] },
   { key: "shuffle", name: "Shuffle (12/8)", pattern: "D-DD-DD-DD-D", sub: 12, swing: 0, difficulty: 7, feel: "Triplet swing", songs: ["Folsom Prison Blues"] },
   { key: "backbeat", name: "Percussive backbeat", pattern: "D-x-D-x-", sub: 8, swing: 0, difficulty: 7, feel: "Slap on 2 and 4", songs: ["Use Somebody"] },
   { key: "funk16", name: "Sixteenth funk", pattern: "DUxUDUxUDUxUDUxU", sub: 16, swing: 0, difficulty: 9, feel: "Constant sixteenths", songs: ["Superstition"] },

@@ -342,7 +342,11 @@ function TrainMode({ tuning, isMobile }) {
     });
     setReverseResult(null);
   };
-  useEffect(() => { if (drill === "reverse" && !reverse) newReverse(); /* eslint-disable-next-line */ }, [drill]);
+  // A FRESH QUESTION ON EVERY ARRIVAL, not only the first. Guarding on `!reverse`
+  // alone meant Reverse → Note Finder → Reverse came back to the question you had
+  // already answered, its answer still lit and all twelve buttons still disabled —
+  // a drill with no way to continue but switching tabs again.
+  useEffect(() => { if (drill === "reverse" && (!reverse || reverseResult)) newReverse(); /* eslint-disable-next-line */ }, [drill]);
 
   const dots = drill === "find"
     ? [
