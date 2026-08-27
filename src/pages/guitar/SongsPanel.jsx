@@ -216,6 +216,19 @@ export function SongsPanel({ isMobile, settings, updateSetting }) {
   const [playing, setPlaying] = useState(null); // { song, sections }
   const [toast, setToast] = useState(null);
 
+  // THE BACKING TRACK IS MEMOISED, AND THAT IS LOAD-BEARING, NOT TIDINESS.
+  // PlayerBar rebuilds its transport whenever the `backing` object identity
+  // changes — it has to, because a new timeline is a new song. Built inline in
+  // the JSX it was a NEW object on every render of this panel, and the shell
+  // re-renders every tab every 30 seconds to move the clock. So a song stopped
+  // dead half a minute in, the button still read Stop, and pressing it started
+  // the count-in over. Nothing logged, nothing threw.
+  const backing = useMemo(() => {
+    if (!playing) return null;
+    const strum = playing.song.strum || "d_du";
+    return buildBacking({ sections: playing.sections, strum, swing: strumByKey(strum).swing || 0, repeats: 1, tuning });
+  }, [playing, tuning]);
+
   const byStatus = useMemo(() => {
     const m = { learning: [], polishing: [], owned: [], library: [], shelved: [] };
     for (const s of songs) (m[s.status] || m.library).push(s);
@@ -363,11 +376,7 @@ export function SongsPanel({ isMobile, settings, updateSetting }) {
       {playing && (
         <PlayerBar
           title={playing.song.title}
-          backing={buildBacking({
-            sections: playing.sections, strum: playing.song.strum || "d_du",
-            swing: strumByKey(playing.song.strum || "d_du").key === "shuffle" ? 0 : 0,
-            repeats: 1, tuning,
-          })}
+          backing={backing}
           bpm={playing.song.bpm || 90}
           onClose={() => setPlaying(null)}
           isMobile={isMobile} />

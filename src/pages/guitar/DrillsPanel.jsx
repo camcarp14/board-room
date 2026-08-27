@@ -365,7 +365,7 @@ function JamSetup({ onClose, onPlay, isMobile }) {
   const [bpm, setBpm] = useState(90);
   const p = PROGRESSIONS.find((x) => x.key === prog);
   const backing = useMemo(
-    () => buildBacking({ progression: prog, tonicPc: tonic, strum, swing: strumByKey(strum).key === "shuffle" ? 0 : 0.55, bass: "root_fifth" }),
+    () => buildBacking({ progression: prog, tonicPc: tonic, strum, swing: strumByKey(strum).swing || 0, bass: "root_fifth" }),
     [prog, tonic, strum]);
   const scaleKey = p?.minor || /blues/.test(prog) ? "minor_pent" : "major_pent";
 

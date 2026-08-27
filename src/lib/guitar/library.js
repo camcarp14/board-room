@@ -28,17 +28,30 @@ import { mod12 } from "./theory.js";
 // passes of a continuously moving hand touch the strings. Draw the strokes only
 // and pattern 5 is a riddle; draw the hand and it is obvious. Anything rendering
 // these has to render the whole motion.
+//
+// `swing` IS A PROPERTY OF THE PATTERN, NOT A DECISION EACH SCREEN MAKES. It
+// lived as a ternary at two call sites once, and the two disagreed: the Jam
+// drill swung every straight pattern and left the shuffle straight, while the
+// song player had a `? 0 : 0` that could not swing anything. Both read as
+// deliberate. A pattern is straight or it is not, that is a fact about the
+// pattern, and it belongs here where there is exactly one of it.
+//
+// The 12/8 shuffle is 0 for a reason that is easy to get backwards: it is
+// ALREADY written in triplets, so the grid does the swinging. Ask for swing on
+// top and every off-beat lands past the triplet — progression.strumTimeline
+// guards against it, but the number here should say the true thing anyway.
 export const STRUM_PATTERNS = [
-  { key: "quarters", name: "Quarter downs", pattern: "D-D-D-D-", sub: 8, difficulty: 1, feel: "Slow ballad", songs: ["Knockin' on Heaven's Door"] },
-  { key: "eighths", name: "Eighth downs", pattern: "DDDDDDDD", sub: 8, difficulty: 2, feel: "Driving, punk", songs: ["Blitzkrieg Bop"] },
-  { key: "eighths_du", name: "Down-up eighths", pattern: "DUDUDUDU", sub: 8, difficulty: 3, feel: "Busy, even", songs: ["Twist and Shout"] },
-  { key: "d_du", name: "D · D-U", pattern: "D-DUD-DU", sub: 8, difficulty: 4, feel: "All-purpose pop", songs: ["Free Fallin'", "Brown Eyed Girl"] },
-  { key: "old_faithful", name: "Old faithful", pattern: "D-DU-UDU", sub: 8, difficulty: 5, feel: "The folk/pop default", songs: ["Wonderwall", "Wish You Were Here"] },
-  { key: "lighter", name: "D · D-U · U-D", pattern: "D-DU-UD-", sub: 8, difficulty: 5, feel: "Lighter cousin", songs: ["A Horse with No Name", "Bad Moon Rising"] },
-  { key: "syncopated", name: "Syncopated", pattern: "DU-UDU-U", sub: 8, difficulty: 6, feel: "Pushes the beat", songs: ["Riptide", "I'm Yours"] },
-  { key: "shuffle", name: "Shuffle (12/8)", pattern: "D-DD-DD-DD-D", sub: 12, difficulty: 7, feel: "Triplet swing", songs: ["Folsom Prison Blues"] },
-  { key: "backbeat", name: "Percussive backbeat", pattern: "D-x-D-x-", sub: 8, difficulty: 7, feel: "Slap on 2 and 4", songs: ["Use Somebody"] },
-  { key: "funk16", name: "Sixteenth funk", pattern: "DUxUDUxUDUxUDUxU", sub: 16, difficulty: 9, feel: "Constant sixteenths", songs: ["Superstition"] },
+  { key: "quarters", name: "Quarter downs", pattern: "D-D-D-D-", sub: 8, swing: 0, difficulty: 1, feel: "Slow ballad", songs: ["Knockin' on Heaven's Door"] },
+  { key: "eighths", name: "Eighth downs", pattern: "DDDDDDDD", sub: 8, swing: 0, difficulty: 2, feel: "Driving, punk", songs: ["Blitzkrieg Bop"] },
+  { key: "eighths_du", name: "Down-up eighths", pattern: "DUDUDUDU", sub: 8, swing: 0, difficulty: 3, feel: "Busy, even", songs: ["Twist and Shout"] },
+  { key: "d_du", name: "D · D-U", pattern: "D-DUD-DU", sub: 8, swing: 0, difficulty: 4, feel: "All-purpose pop", songs: ["Free Fallin'", "Brown Eyed Girl"] },
+  { key: "old_faithful", name: "Old faithful", pattern: "D-DU-UDU", sub: 8, swing: 0, difficulty: 5, feel: "The folk/pop default", songs: ["Wonderwall", "Wish You Were Here"] },
+  { key: "lighter", name: "D · D-U · U-D", pattern: "D-DU-UD-", sub: 8, swing: 0, difficulty: 5, feel: "Lighter cousin", songs: ["A Horse with No Name", "Bad Moon Rising"] },
+  { key: "syncopated", name: "Syncopated", pattern: "DU-UDU-U", sub: 8, swing: 0, difficulty: 6, feel: "Pushes the beat", songs: ["Riptide", "I'm Yours"] },
+  { key: "swung_eighths", name: "Swung eighths", pattern: "D-DU-UDU", sub: 8, swing: 0.9, difficulty: 6, feel: "Blues/jazz lilt", songs: ["Ain't No Sunshine"] },
+  { key: "shuffle", name: "Shuffle (12/8)", pattern: "D-DD-DD-DD-D", sub: 12, swing: 0, difficulty: 7, feel: "Triplet swing", songs: ["Folsom Prison Blues"] },
+  { key: "backbeat", name: "Percussive backbeat", pattern: "D-x-D-x-", sub: 8, swing: 0, difficulty: 7, feel: "Slap on 2 and 4", songs: ["Use Somebody"] },
+  { key: "funk16", name: "Sixteenth funk", pattern: "DUxUDUxUDUxUDUxU", sub: 16, swing: 0, difficulty: 9, feel: "Constant sixteenths", songs: ["Superstition"] },
 ];
 export const strumByKey = (key) => STRUM_PATTERNS.find((p) => p.key === key) || STRUM_PATTERNS[0];
 

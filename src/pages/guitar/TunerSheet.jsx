@@ -78,6 +78,23 @@ export function TunerSheet({ onClose, settings, updateSetting, isMobile }) {
   // string is settled" ticks don't re-render the whole sheet.
   const settled = useRef({});
   const [settledTick, setSettledTick] = useState(0);
+  // Alive until the sheet unmounts. `createTuner` awaits getUserMedia, and the
+  // permission prompt can sit on screen for as long as the user leaves it there
+  // — long enough to close the sheet first. The old code assigned to tunerRef
+  // AFTER that await, so the assignment landed on a component that no longer
+  // existed and the unmount cleanup had already run against an empty ref: a live
+  // MediaStream, an AnalyserNode and an rAF loop, all unreachable, all running
+  // until the tab closed, with the browser's recording dot on the whole time.
+  const alive = useRef(true);
+  useEffect(() => () => { alive.current = false; }, []);
+  // The reading handler is built once and never rebuilt (createTuner takes it at
+  // construction), so it must not close over tuning/capo/a4 from the render it
+  // happened to be created in — change the tuning to Drop D mid-session and the
+  // strings would be measured against standard forever, quietly never going
+  // green. The ref is refreshed on every render, so the handler always reads
+  // today's values.
+  const cfg = useRef({ tuning, capo, a4 });
+  cfg.current = { tuning, capo, a4 };
 
   const start = async () => {
     if (tunerRef.current) return;
@@ -87,14 +104,19 @@ export function TunerSheet({ onClose, settings, updateSetting, isMobile }) {
       onReading: (r) => {
         setReading(r);
         if (!r) return;
-        const s = nearestString(r.hz, { tuning, capo, a4 });
+        const s = nearestString(r.hz, cfg.current);
         if (s && Math.abs(s.cents) <= IN_TUNE_CENTS) {
           if (!settled.current[s.string]) { settled.current = { ...settled.current, [s.string]: Date.now() }; setSettledTick((n) => n + 1); }
         }
       },
       onError: (e) => setState({ status: /denied|NotAllowed/i.test(e?.name || e?.message || "") ? "denied" : "unsupported", message: e?.message }),
     });
-    if (t) { tunerRef.current = t; setState({ status: "live" }); }
+    if (!t) return;
+    // Closed while the prompt was up: shut the microphone down instead of
+    // storing it, and do not touch state on a dead component.
+    if (!alive.current) { t.stop(); return; }
+    tunerRef.current = t;
+    setState({ status: "live" });
   };
 
   // The microphone is released the moment this sheet goes away. Without it the

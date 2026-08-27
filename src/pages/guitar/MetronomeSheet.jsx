@@ -61,6 +61,17 @@ export function MetronomeSheet({ onClose, settings, updateSetting, isMobile, ini
   // them so the order on the page matches the order they are needed in.
   const rampRef = useRef(ramp); rampRef.current = ramp;
   const dropRef = useRef(dropClick); dropRef.current = dropClick;
+  // THE TEMPO WE REMEMBER IS THE ONE YOU CHOSE. The ramp calls setBpm on every
+  // bar line, and the settings write below is keyed on bpm — so a session that
+  // climbed from 80 to 140 saved 140 as your tempo, and every later session
+  // opened there. You would have to notice it to get your tempo back, and the
+  // only symptom is a metronome that starts faster than you remember.
+  const chosen = useRef(bpm);
+  const pickBpm = (v) => setBpm((b) => {
+    const n = Math.max(30, Math.min(260, Math.round(typeof v === "function" ? v(b) : v)));
+    chosen.current = n;
+    return n;
+  });
 
   // One metronome for the life of the sheet. Rebuilding it on every tempo change
   // would restart the phase — and the phase is what the drills measure.
@@ -88,6 +99,11 @@ export function MetronomeSheet({ onClose, settings, updateSetting, isMobile, ini
 
   useEffect(() => { mRef.current?.setBpm(bpm); }, [bpm]);
   useEffect(() => { mRef.current?.setSubdivision(sub); }, [sub]);
+  // The meter reaches the transport too. It used to be taken once at construction
+  // and never again: picking 3 relit the beat lights in threes while the accent
+  // and the 2-and-4 mask went on falling every four beats, under a screen that
+  // said 3.
+  useEffect(() => { mRef.current?.setBeatsPerBar(meter); }, [meter]);
   useEffect(() => {
     // 2-and-4 is a per-beat mask over the bar. In anything but 4/4 it means
     // "the back half of the bar", which is the same idea and still useful.
@@ -116,13 +132,20 @@ export function MetronomeSheet({ onClose, settings, updateSetting, isMobile, ini
     const mid = gaps.length >> 1;
     const median = gaps.length % 2 ? gaps[mid] : (gaps[mid - 1] + gaps[mid]) / 2;
     const next = Math.round(60000 / median);
-    if (next >= 30 && next <= 260) setBpm(next);
+    if (next >= 30 && next <= 260) pickBpm(next);
   };
 
-  const save = () => { if (settings != null) updateSetting?.("guitar", { ...gs, bpm, meter, sub, twoFour }); };
-  useEffect(() => { const t = setTimeout(save, 900); return () => clearTimeout(t); /* eslint-disable-next-line */ }, [bpm, meter, sub, twoFour]);
+  // Debounced so dragging the slider is not two hundred writes, and FLUSHED on
+  // the way out: clearing the timer on unmount alone meant the last change you
+  // made before closing — the one you actually meant — was the one that never
+  // landed. The ref is how the unmount closure sees today's values instead of
+  // the ones from the render it was created in.
+  const save = () => { if (settings != null) updateSetting?.("guitar", { ...gs, bpm: chosen.current, meter, sub, twoFour }); };
+  const saveRef = useRef(save); saveRef.current = save;
+  useEffect(() => { const t = setTimeout(() => saveRef.current(), 900); return () => clearTimeout(t); }, [bpm, meter, sub, twoFour]);
+  useEffect(() => () => saveRef.current(), []);
 
-  const nudge = (d) => setBpm((b) => Math.max(30, Math.min(260, b + d)));
+  const nudge = (d) => pickBpm((b) => b + d);
 
   return (
     <Sheet title="Metronome" onClose={onClose} detent={isMobile ? "large" : "auto"}>
@@ -156,7 +179,7 @@ export function MetronomeSheet({ onClose, settings, updateSetting, isMobile, ini
           })}
         </div>
 
-        <input type="range" min={30} max={240} value={bpm} onChange={(e) => setBpm(Number(e.target.value))}
+        <input type="range" min={30} max={240} value={bpm} onChange={(e) => pickBpm(Number(e.target.value))}
           aria-label="Tempo" style={{ width: "100%", accentColor: "var(--accent)" }} />
 
         <div style={{ display: "flex", gap: 8 }}>

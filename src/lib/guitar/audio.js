@@ -21,7 +21,7 @@
 //     phone that gets hot. Every player returns a stop function and every stop
 //     function is idempotent.
 
-import { pluck, click, drone, normalize, detectPitch, medianHz, DEFAULT_PITCH_OPTS } from "./dsp.js";
+import { pluck, click, droneLoop, normalize, detectPitch, medianHz, beatsInWindow, DEFAULT_PITCH_OPTS } from "./dsp.js";
 import { midiToFreq } from "./theory.js";
 
 // ─── the context ─────────────────────────────────────────────────────────────
@@ -168,19 +168,24 @@ export function playStrum(midis, { at = 0, down = true, gain = 0.5, spread = 0.0
 }
 
 // A steady tone for ear training and for tuning against. Returns a stop().
-export function playDrone(midi, { gain = 0.22, seconds = 30 } = {}) {
+export function playDrone(midi, { gain = 0.22 } = {}) {
   const c = audioContext();
   if (!c) return () => {};
-  const data = drone(midiToFreq(midi), Math.min(seconds, 30), c.sampleRate, { gain: 1 });
+  // A HALF-SECOND BUFFER THAT IS A WHOLE NUMBER OF PERIODS, looped end to end.
+  // The previous version rendered thirty seconds and looped 0.2 s → 29.8 s. That
+  // span is not a whole number of cycles at any pitch, so the seam was a
+  // full-scale step: an audible click, once every 29.6 seconds, for as long as
+  // the drone played. It also cost 5 MB and 61 ms of synchronous main-thread
+  // render — which is exactly the kind of stall that used to turn into a burst
+  // of catch-up clicks in the transport next door. Period alignment fixes the
+  // click and the 5 MB at the same time, because the material repeats every
+  // period and a thirty-second copy of it was thirty seconds of the same wave.
+  const data = droneLoop(midiToFreq(midi), c.sampleRate, { gain: 1 });
   const buf = c.createBuffer(1, data.length, c.sampleRate);
   buf.copyToChannel(data, 0);
   const src = c.createBufferSource();
   src.buffer = buf;
   src.loop = true;
-  // Loop inside the ramps so the seam is in steady-state material rather than in
-  // the fade, which would tick once a cycle for as long as it played.
-  src.loopStart = 0.2;
-  src.loopEnd = Math.max(0.4, data.length / c.sampleRate - 0.2);
   const g = c.createGain();
   g.gain.value = 0;
   src.connect(g).connect(master);
@@ -213,48 +218,73 @@ export function playDrone(midi, { gain = 0.22, seconds = 30 } = {}) {
 // ignores it. Either way nothing about the display can pull the audio off time.
 const LOOKAHEAD_S = 0.12;
 const TICK_MS = 25;
+const clampBpm = (v, fallback) => (Number.isFinite(v) ? Math.max(20, Math.min(300, v)) : fallback);
+const clampInt = (v, fallback) => (Number.isFinite(v) ? Math.max(1, Math.round(v)) : fallback);
 
 export function createTransport({ bpm = 90, beatsPerBar = 4, subdivision = 1, onBeat = null, countIn = 0 } = {}) {
   const state = {
-    bpm: Math.max(20, Math.min(300, bpm)), beatsPerBar, subdivision: Math.max(1, Math.round(subdivision)),
+    // `Math.max(20, Math.min(300, NaN))` is NaN, and a transport with a NaN bpm
+    // reports running === true, plays nothing at all, and returns NaN from
+    // position() for ever. Every clamp in this file goes through a finite check
+    // first for that reason.
+    bpm: clampBpm(bpm, 90), beatsPerBar: clampInt(beatsPerBar, 4), subdivision: clampInt(subdivision, 1),
     running: false, startTime: 0, nextIndex: 0, timer: null, onBeat, countIn,
+    // Beats the clock ran past while the main thread was elsewhere. Not used to
+    // make a decision — it is here so "did we drop any" is answerable at all,
+    // which it was not when they were silently fired late instead.
+    starting: false, dropped: 0,
     // Everything scheduled ahead of the clock, so a stop can cancel it.
     pending: [],
   };
   const spb = () => 60 / state.bpm / state.subdivision;
 
+  // The window comes from dsp.beatsInWindow, which is pure and tested. This used
+  // to be a second copy of that loop with a different bound and different event
+  // fields, so the smoke test's scheduler section was asserting properties of
+  // code nothing called while the live loop quietly broke one of them.
   const schedule = () => {
     const c = audioContext();
     if (!c || !state.running) return;
-    const horizon = c.currentTime + LOOKAHEAD_S;
-    // Bounded: a tab that was asleep for an hour wakes with a horizon far past
-    // its next index, and an unbounded loop here would freeze the main thread
-    // while it queued three hundred thousand events.
-    let guard = 0;
-    while (state.startTime + state.nextIndex * spb() < horizon && guard++ < 256) {
-      const i = state.nextIndex++;
-      const time = state.startTime + i * spb();
-      const beat = Math.floor(i / state.subdivision);
-      const inBar = beat % state.beatsPerBar;
-      const ev = {
-        time, index: i, beat, bar: Math.floor(beat / state.beatsPerBar),
-        inBar, sub: i % state.subdivision,
-        accent: inBar === 0 && i % state.subdivision === 0,
-        onBeat: i % state.subdivision === 0,
-        countIn: beat < state.countIn,
-      };
+    const now = c.currentTime;
+    const { beats, nextIndex, dropped } = beatsInWindow(state, { now, lookahead: LOOKAHEAD_S, cap: 256 });
+    state.nextIndex = nextIndex;
+    state.dropped += dropped;
+    for (const ev of beats) {
+      // RE-TESTED EVERY EVENT, because onBeat can stop us. The drills end
+      // themselves from inside the callback (`if (ev.bar >= BARS) { m.stop();
+      // finish(); }`); without this the rest of the window was delivered anyway,
+      // re-running finish() on each and pushing phantom downbeats into the array
+      // the drift measurement is computed from.
+      if (!state.running) break;
       state.pending.push(ev);
       state.onBeat?.(ev);
     }
     // Anything already played leaves the list — it is only kept so a stop can
     // reason about what is still in flight.
-    const now = c.currentTime;
     state.pending = state.pending.filter((e) => e.time >= now - 0.5);
+  };
+
+  const begin = async (at) => {
+    if (!(await unlock())) return false;
+    const c = audioContext();
+    if (!c) return false;
+    // Another start may have finished while this one was awaiting the unlock.
+    if (state.running) return true;
+    // A short lead-in, so the first beat is scheduled rather than fired late.
+    state.startTime = at ?? c.currentTime + 0.08;
+    state.nextIndex = 0;
+    state.pending = [];
+    state.dropped = 0;
+    state.running = true;
+    schedule();
+    state.timer = setInterval(schedule, TICK_MS);
+    return true;
   };
 
   return {
     get bpm() { return state.bpm; },
     get running() { return state.running; },
+    get dropped() { return state.dropped; },
     get startTime() { return state.startTime; },
     // The musical position right now, for a UI that wants to draw a playhead.
     position() {
@@ -266,17 +296,20 @@ export function createTransport({ bpm = 90, beatsPerBar = 4, subdivision = 1, on
       return { index, beat, bar: Math.floor(beat / state.beatsPerBar) };
     },
     async start({ at = null } = {}) {
-      if (state.running) return true;
-      if (!(await unlock())) return false;
-      const c = audioContext();
-      // A short lead-in, so the first beat is scheduled rather than fired late.
-      state.startTime = at ?? c.currentTime + 0.08;
-      state.nextIndex = 0;
-      state.pending = [];
-      state.running = true;
-      schedule();
-      state.timer = setInterval(schedule, TICK_MS);
-      return true;
+      // BOTH GUARDS, AND THE SECOND ONE IS THE ONE THAT MATTERED. `running` is
+      // not set until after the await below, so two taps that straddle the very
+      // first `unlock()` — which is exactly when the button looks unresponsive
+      // and a phone user taps again — both got past a `running` check, both
+      // reset the clock, and both called setInterval. `state.timer` only
+      // remembers the second, so the first fires every 25 ms for the life of the
+      // page with no handle to stop it, and the downbeat is scheduled twice.
+      if (state.running || state.starting) return state.running;
+      state.starting = true;
+      try {
+        return await begin(at);
+      } finally {
+        state.starting = false;
+      }
     },
     stop() {
       if (!state.running) return;
@@ -285,20 +318,66 @@ export function createTransport({ bpm = 90, beatsPerBar = 4, subdivision = 1, on
       state.timer = null;
       state.pending = [];
     },
-    // Tempo changes keep the phase: the beat you are on stays where it is, and
-    // everything after it moves. Restarting the clock instead would put a hiccup
-    // in the middle of a take every time the tempo trainer stepped.
+      // A short lead-in, so the first beat is scheduled rather than fired late.
+    // ── THE TEMPO CHANGES AT THE FIRST BEAT WE HAVE NOT ALREADY COMMITTED ────
+    // Not at `currentTime`, which is what this used to do and which put one
+    // wrong-length beat in on every single change.
+    //
+    // The reason is the lookahead. Beats up to `nextIndex - 1` are already on the
+    // audio clock — that is the entire point of scheduling ahead — and they
+    // cannot be moved. Rebasing so the fractional index at `currentTime` is
+    // preserved therefore produced a seam that was neither the old period nor
+    // the new one but a blend of the two, weighted by however far into the
+    // lookahead we happened to be: 17 ms long on a 60→70 ramp step, 90 ms long
+    // on 60→240, and 240 ms SHORT on a 180→60 tap tempo — a beat a quarter
+    // shorter than it should be, which is an unmistakable stumble. The file's own
+    // standard three screens up is that the ear resolves about five.
+    //
+    // Anchoring to the committed frontier instead makes the seam exactly one new
+    // period, at every tempo pair, with nothing already scheduled disturbed. The
+    // cost is that the change lands up to one lookahead later than the call —
+    // 120 ms, which for a ramp that steps on bar lines is not observable, and
+    // which buys an exact grid on both sides of the seam.
     setBpm(next) {
       const c = audioContext();
-      const bpm = Math.max(20, Math.min(300, Math.round(next)));
-      if (!c || !state.running) { state.bpm = bpm; return; }
-      const elapsed = c.currentTime - state.startTime;
-      const played = elapsed / spb();
-      state.bpm = bpm;
-      state.startTime = c.currentTime - played * spb();
-      state.nextIndex = Math.max(state.nextIndex, Math.ceil(played));
+      const bpm = Math.round(next);
+      if (!Number.isFinite(bpm)) return;           // NaN in is a transport that never sounds again
+      const clamped = Math.max(20, Math.min(300, bpm));
+      if (!c || !state.running || state.nextIndex === 0) { state.bpm = clamped; return; }
+      const lastCommitted = state.startTime + (state.nextIndex - 1) * spb();
+      state.bpm = clamped;
+      // Put index `nextIndex` exactly one NEW period after the last committed
+      // beat, and derive startTime from that. Every earlier index keeps the time
+      // it was scheduled at; every later one is on the new grid, so every gap in
+      // the whole take is exactly one period of one tempo or the other and never
+      // a blend of the two.
+      //   startTime + nextIndex·spb₁ = lastCommitted + spb₁
+      state.startTime = lastCommitted - (state.nextIndex - 1) * spb();
     },
-    setSubdivision(n) { state.subdivision = Math.max(1, Math.round(n)); },
+    // SUBDIVISION REBASES THE CLOCK, exactly as setBpm does, and for exactly the
+    // same reason: `nextIndex` counts in units of spb, and spb is 60/bpm/sub. Set
+    // the subdivision without rebasing and every index already counted is
+    // silently reinterpreted — switching from quarters to sixteenths three
+    // minutes in made the horizon hundreds of indices wide, and the scheduler
+    // emitted eight hundred clicks all timestamped in the past, which a browser
+    // plays at once. Switching back left ten seconds of dead air with the button
+    // still reading Stop.
+    setSubdivision(n) {
+      const c = audioContext();
+      const sub = clampInt(n, state.subdivision);
+      if (!c || !state.running) { state.subdivision = sub; return; }
+      const elapsed = c.currentTime - state.startTime;
+      const beats = elapsed / (60 / state.bpm);          // musical position, subdivision-free
+      state.subdivision = sub;
+      state.startTime = c.currentTime - beats * (60 / state.bpm);
+      state.nextIndex = Math.max(0, Math.ceil(beats * sub));
+    },
+    // The meter is not a rate — it only decides where the bar lines and the
+    // accents fall — so it needs no rebase. It DID need to exist: the metronome
+    // took beatsPerBar once at construction, the sheet's meter buttons only ever
+    // called setPattern, and picking 3 left the accent landing every four beats
+    // under a screen that said 3/4.
+    setBeatsPerBar(n) { state.beatsPerBar = clampInt(n, state.beatsPerBar); },
     setOnBeat(fn) { state.onBeat = fn; },
   };
 }
@@ -311,6 +390,14 @@ export function createMetronome({ bpm = 90, beatsPerBar = 4, subdivision = 1, pa
   const t = createTransport({
     bpm, beatsPerBar, subdivision,
     onBeat: (ev) => {
+      // THE CALLER IS TOLD FIRST, AND THAT ORDERING IS THE WHOLE DRILL. Callers
+      // decide the mute FROM the beat they are handed — drop-the-click is
+      // literally `setMuted(floor(bar/2) % 2 === 1)` inside this callback. Click
+      // first and every such decision lands one beat late at both edges: a stray
+      // click one beat into the silence, and, far worse, no click on the downbeat
+      // where the click comes BACK, which is the single instant the drill exists
+      // to give you. Four of every ten downbeats were wrong.
+      onBeat?.(ev);
       const on = !pattern || pattern[ev.inBar % pattern.length];
       if (!mute && on) {
         const c = audioContext();
@@ -325,7 +412,6 @@ export function createMetronome({ bpm = 90, beatsPerBar = 4, subdivision = 1, pa
           src.onended = () => { try { src.disconnect(); g.disconnect(); } catch { /* already gone */ } };
         }
       }
-      onBeat?.(ev);
     },
   });
   // NOT `{ ...t }`. Spreading an object READS its getters and freezes the answers
@@ -341,6 +427,7 @@ export function createMetronome({ bpm = 90, beatsPerBar = 4, subdivision = 1, pa
     stop: () => t.stop(),
     setBpm: (n) => t.setBpm(n),
     setSubdivision: (n) => t.setSubdivision(n),
+    setBeatsPerBar: (n) => t.setBeatsPerBar(n),
     setOnBeat: (fn) => { onBeat = fn; },
     setPattern(p) { pattern = p; },
     // Drop-the-click: the drill needs the beats to keep COMING (the timeline
@@ -494,10 +581,28 @@ export async function createTuner({ onReading, onError, a4 = 440, smoothing = 5 
   source.connect(analyser);
   const buf = new Float32Array(analyser.fftSize);
   const recent = [];
-  let raf = 0, stopped = false;
+  let raf = 0, stopped = false, lastRun = 0;
+
+  // ── HOW OFTEN, AND WHY IT IS NOT EVERY FRAME ────────────────────────────────
+  // detectPitch is an O(n·τ) correlation over the full 8192-sample window: about
+  // six million inner iterations, measured at 2.4 ms on a fast core and 10.5 ms
+  // on a slow one. Run from every animation frame that is a third to two thirds
+  // of the main thread pinned for as long as the tuner is open, on the one screen
+  // in the tab a phone is most likely to be holding — and the stall it produces
+  // is precisely what the transport next door has to fast-forward past.
+  //
+  // 22 Hz is the right rate for what this actually is. A plucked string's pitch
+  // does not settle for about 200 ms; the reading is already a five-frame median
+  // over that settling. Sampling three times less often changes the needle's
+  // response by under 30 ms — below what anyone can see on a dial — and gives
+  // back two thirds of a core.
+  const PERIOD_MS = 45;
 
   const tick = () => {
     if (stopped) return;
+    const t = (typeof performance !== "undefined" ? performance.now() : Date.now());
+    if (t - lastRun < PERIOD_MS) { raf = requestAnimationFrame(tick); return; }
+    lastRun = t;
     analyser.getFloatTimeDomainData(buf);
     const hit = detectPitch(buf, c.sampleRate, { ...DEFAULT_PITCH_OPTS });
     if (hit) {

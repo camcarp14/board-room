@@ -136,6 +136,15 @@ function ScalesMode({ rootPc, tuning, isMobile }) {
     return [];
   }, [rootPc, scaleKey, view, tuning]);
 
+  // THE NECK IS AS LONG AS THE SHAPE ON IT. Pentatonic box 5 in D minor reaches
+  // the twenty-second fret; drawn on a board that stopped at fifteen, seven of
+  // its dots landed outside the coordinate table and SVG dropped them without a
+  // sound — Box 3 quietly showed eleven of its twelve notes and looked fine.
+  // The board scrolls, so a longer neck costs nothing but the scrollbar.
+  const toFret = useMemo(
+    () => Math.min(22, Math.max(15, ...dots.map((d) => d.fret + 1))),
+    [dots]);
+
   const views = [
     { key: "all", label: "Whole neck" },
     ...(isPent ? [1, 2, 3, 4, 5].map((n) => ({ key: `box${n}`, label: `Box ${n}` })) : []),
@@ -172,7 +181,7 @@ function ScalesMode({ rootPc, tuning, isMobile }) {
           <Button kind="tinted" size="sm" onClick={playScale}>Hear it</Button>
         </div>
         {views.length > 1 && <PillRow options={views} value={view} onChange={setView} label="Position" style={{ marginBottom: 10 }} />}
-        <Fretboard tuning={tuning} dots={dots} toFret={15} label="degree" height={isMobile ? 152 : 176}
+        <Fretboard tuning={tuning} dots={dots} toFret={toFret} label="degree" height={isMobile ? 152 : 176}
           onDot={async (d) => { await unlock(); playNote(d.midi, { gain: 0.6 }); }} />
         <div className="t-cap" style={{ color: "var(--faint)", marginTop: 8, lineHeight: 1.5 }}>
           Gold is the root. Blue is the third, green the fifth, purple the seventh — the notes that
@@ -262,7 +271,9 @@ function TrainMode({ tuning, isMobile }) {
   const [reverse, setReverse] = useState(null); // { string, fret, answerPc }
   const [reverseResult, setReverseResult] = useState(null);
   const timerRef = useRef(null);
+  const wrongTimer = useRef(null);
   const [elapsed, setElapsed] = useState(0);
+  useEffect(() => () => clearTimeout(wrongTimer.current), []);
 
   const answers = useMemo(() => positionsOfPc(target, { tuning, maxFret: 12 }), [target, tuning]);
   // Fret 12 is the octave of the open string; counting both would mean two taps
@@ -294,7 +305,15 @@ function TrainMode({ tuning, isMobile }) {
     if (drill === "reverse") return;
     if (!startedAt) setStartedAt(Date.now());
     const ok = mod12(midi) === mod12(target) && fret < 12;
-    if (!ok) { setWrong({ string, fret }); setTimeout(() => setWrong(null), 500); return; }
+    // One flash timer, replaced rather than stacked: two wrong taps in quick
+    // succession used to queue two clears, and the first one landing wiped the
+    // second dot after 200 ms instead of 500.
+    if (!ok) {
+      setWrong({ string, fret });
+      clearTimeout(wrongTimer.current);
+      wrongTimer.current = setTimeout(() => setWrong(null), 500);
+      return;
+    }
     const key = `${string}:${fret}`;
     if (found.includes(key)) return;
     const next = [...found, key];
@@ -307,10 +326,20 @@ function TrainMode({ tuning, isMobile }) {
     }
   };
 
+  // Never the square you just answered. Uniform picking over 72 squares means a
+  // repeat roughly one round in seventy-two, and the one time it happens it
+  // reads as the drill having frozen rather than as a coincidence — you tap the
+  // same answer, it goes green again, and there is nothing on screen to say a
+  // new question was asked.
   const newReverse = () => {
-    const s = Math.floor(Math.random() * tuning.length);
-    const f = Math.floor(Math.random() * 12);
-    setReverse({ string: s, fret: f, answerPc: mod12(midiAt(s, f, tuning)) });
+    setReverse((prev) => {
+      let s, f;
+      do {
+        s = Math.floor(Math.random() * tuning.length);
+        f = Math.floor(Math.random() * 12);
+      } while (prev && prev.string === s && prev.fret === f);
+      return { string: s, fret: f, answerPc: mod12(midiAt(s, f, tuning)) };
+    });
     setReverseResult(null);
   };
   useEffect(() => { if (drill === "reverse" && !reverse) newReverse(); /* eslint-disable-next-line */ }, [drill]);

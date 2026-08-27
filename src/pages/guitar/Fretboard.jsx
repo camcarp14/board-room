@@ -55,20 +55,35 @@ export function Fretboard({
   const stepY = gridH / (strings - 1);
   // Low string at the BOTTOM — index 0 is the low E, so it draws last.
   const y = (s) => padTop + (strings - 1 - s) * stepY;
-  const xMid = (f) => (f <= fromFret ? OPEN_X : (xs[f - fromFret - 1] + xs[f - fromFret]) / 2);
+  // CLAMPED, BECAUSE AN OUT-OF-RANGE FRET IS A BLANK NECK, NOT A WARNING. `xs`
+  // only has an entry per drawn fret, so xMid(20) on a fifteen-fret board read
+  // undefined, and `(undefined + undefined) / 2` is NaN. SVG discards an element
+  // with a NaN coordinate silently: the dot simply was not there, no error, no
+  // gap in the numbering, nothing to notice. Callers size the board to their
+  // dots (see the note in FretboardPanel's ScalesMode); this is the backstop
+  // that turns a caller's mistake into a visible pile-up at the edge rather than
+  // an invisible omission.
+  const xMid = (f) => {
+    const c = Math.max(fromFret, Math.min(toFret, f));
+    return c <= fromFret ? OPEN_X : (xs[c - fromFret - 1] + xs[c - fromFret]) / 2;
+  };
 
   const scroller = useRef(null);
+  // The lowest lit fret, or null when nothing is lit — NOT `dots.length && fret`,
+  // which collapses "no dots at all" and "the first dot is an open string" into
+  // the same 0 and so skips the scroll when a shape moves from the fifth fret to
+  // the nut.
+  const lowestDot = dots.length ? Math.min(...dots.map((d) => d.fret)) : null;
   // Bring the lit region into view when the dots move up the neck — without
   // scrollIntoView, which drags every scrollable ancestor with it (the note at
   // the top of MarketsPage.jsx is what that cost last time).
   useEffect(() => {
     const el = scroller.current;
-    if (!el || !dots.length) return;
-    const lowest = Math.min(...dots.map((d) => d.fret));
-    const target = Math.max(0, xMid(lowest) - 60);
+    if (!el || lowestDot == null) return;
+    const target = Math.max(0, xMid(lowestDot) - 60);
     if (Math.abs(el.scrollLeft - target) > 40) el.scrollLeft = target;
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [dots.length && dots[0]?.fret, toFret, fromFret]);
+  }, [lowestDot, toFret, fromFret]);
 
   const dotAt = new Map();
   for (const d of dots) dotAt.set(`${d.string}:${d.fret}`, d);

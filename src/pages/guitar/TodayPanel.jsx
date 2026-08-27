@@ -139,7 +139,12 @@ function BlockRunner({ plan, active, onUpdate, onFinish, onAbandon, songs }) {
   const cues = cuesFor(skill?.kind || block.kind).slice(0, 2);
   const chordSym = skill?.chord || (skill?.pair ? skill.pair[Math.min(1, itemIndex % 2)] : null);
   const chord = chordSym ? lookupChord(chordSym) : null;
-  const song = block.song || songs?.find((s) => s.id === block.song?.id) || null;
+  // The LIVE row wins, the frozen one is the fallback. The plan is frozen into
+  // the checkpoint when the session starts, so a song edited between blocks
+  // would otherwise show its old chart for the rest of the session. Written the
+  // other way round it read as a fallback and was dead code: with `block.song`
+  // truthy the find never ran, and with it falsy the find looked up `undefined`.
+  const song = (block.song && songs?.find((s) => s.id === block.song.id)) || block.song || null;
 
   return (
     <Card pad="lg" style={{ display: "flex", flexDirection: "column", gap: 14 }}>

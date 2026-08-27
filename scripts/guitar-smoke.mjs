@@ -45,7 +45,7 @@ import {
 } from "../src/lib/guitar/fretboard.js";
 import { VOICINGS, voicingsFor, lookupChord, checkVoicing, voicingName } from "../src/lib/guitar/chords.js";
 import {
-  detectPitch, medianHz, pluck, strum, click, drone, normalize, beatTimes, beatsInWindow, rampBpm,
+  detectPitch, medianHz, pluck, strum, click, drone, droneLoop, normalize, bandEnergy, beatsInWindow, rampBpm,
 } from "../src/lib/guitar/dsp.js";
 import {
   dayOf, daysBetween, addDays, decayStrength, dailyDecay, nextReviewDays, bandFor, REVIEW_TARGET,
@@ -404,6 +404,73 @@ check("a strum is longer than one note (the strings arrive in order)",
   strum([82.41, 110, 146.83], SR, { seconds: 1 }).length > pluck(82.41, 1, SR).length);
 check("nothing is generated for a nonsense pitch", pluck(0, 1, SR).every((v) => v === 0) && pluck(-5, 1, SR).every((v) => v === 0));
 check("a click is short and a drone is not", click(880, SR).length < SR * 0.1 && drone(220, 2, SR).length === SR * 2);
+// ── TWO STRINGS ARE NOT A NOTE ────────────────────────────────────────────────
+// A correlation detector answers "what period does this repeat at", which is not
+// "what note is this". B3 + E4 struck together — the two closest strings on the
+// guitar, and what a clumsy pick stroke does daily — are the 3rd and 4th
+// harmonics of 82.4 Hz, so the sum genuinely IS periodic there and the detector
+// reported the low E at clarity 1.00 while the low E was not being touched.
+// TunerSheet then ticked it permanently green. The octave rule cannot help: 82.4
+// is the right answer to the wrong question. bandEnergy is what separates them.
+{
+  const mix = (...bufs) => { const o = new Float32Array(8192); for (const b of bufs) for (let i = 0; i < 8192; i++) o[i] += b[i] || 0; return o; };
+  const P = (midi, amp = 1) => { const b = pluck(midiToFreq(midi), 0.4, SR, { sustain: 5 }); const o = new Float32Array(8192); for (let i = 0; i < 8192; i++) o[i] = (b[4000 + i] || 0) * amp; return o; };
+  const phantom = [];
+  for (const [a, b] of [[40, 45], [45, 50], [50, 55], [55, 59], [59, 64]]) {
+    for (const bal of [1, 0.85, 0.7]) {
+      const r = detectPitch(mix(P(a), P(b, bal)), SR);
+      if (!r) continue;                                     // "I cannot tell" is the honest answer
+      const got = Math.round(69 + 12 * Math.log2(r.hz / 440));
+      if (got !== a && got !== b) phantom.push(`${midiName(a)}+${midiName(b)} @${bal} -> ${r.hz.toFixed(1)}Hz`);
+    }
+  }
+  check("two strings at once never read as a third note that is not sounding", phantom.length === 0, phantom.join(" | "));
+
+  const missed = [];
+  for (let m = 40; m <= 76; m++) {
+    const r = detectPitch(P(m), SR);
+    if (!r) { missed.push(`${midiName(m)} silent`); continue; }
+    if (Math.abs(cents(r.hz, midiToFreq(m))) > 5) missed.push(`${midiName(m)} off`);
+  }
+  check("and a single string is still heard, everywhere on the neck", missed.length === 0, missed.join(" | "));
+  check("the gate can be switched off, which is how we know it is the gate",
+    (() => { const r = detectPitch(mix(P(59), P(64)), SR, { minFundamental: 0 }); return !!r && Math.abs(r.hz - 82.4) < 1; })());
+  check("a pure sine scores 1 at its own frequency and ~0 elsewhere",
+    (() => { const b = new Float32Array(4096); for (let i = 0; i < 4096; i++) b[i] = Math.sin(2 * Math.PI * 440 * i / SR);
+      return bandEnergy(b, 440, SR) > 0.98 && bandEnergy(b, 300, SR) < 0.05; })());
+}
+check("a window too short to hold the note refuses rather than guessing",
+  (() => { const b = pluck(82.41, 1, SR); const short = b.slice(0, 256); const r = detectPitch(short, SR); return r === null; })());
+
+// ── THE DRONE LOOPS WITHOUT A CLICK ──────────────────────────────────────────
+// The seam has to be a continuation of the wave, which means the buffer has to be
+// a whole number of periods. A 30-second render looped 0.2→29.8 s was not, so the
+// last sample before the seam and the first after it were at unrelated points in
+// the cycle: a full-scale step, once every 29.6 seconds, for as long as it played.
+// Measured against the wave's OWN slew, not against zero. The last sample of a
+// loop is one step before the wrap, so it is never equal to the first — the
+// question is whether the step across the seam is the size of an ordinary
+// sample-to-sample step (a continuation) or the size of the signal (a click).
+// The 30-second buffer this replaced scored 64× on that ratio; this scores 2.
+{
+  const bad = [];
+  for (let midi = 36; midi <= 60; midi++) {
+    for (const sr of [44100, 48000]) {
+      const b = droneLoop(midiToFreq(midi), sr);
+      let maxStep = 0;
+      for (let i = 1; i < b.length; i++) maxStep = Math.max(maxStep, Math.abs(b[i] - b[i - 1]));
+      const wrap = Math.abs(b[0] - b[b.length - 1]);
+      if (!(maxStep > 0 && wrap <= maxStep * 3)) bad.push(`${midiName(midi)}@${sr} wrap ${wrap.toFixed(5)} vs step ${maxStep.toFixed(5)}`);
+      if (!b.every(Number.isFinite)) bad.push(`${midiName(midi)}@${sr} not finite`);
+    }
+  }
+  check("the looped drone's seam is a continuation of the wave, not a step", bad.length === 0, bad.slice(0, 3).join(" | "));
+  check("and it is under a second of samples, not thirty", droneLoop(midiToFreq(45), 44100).length < 44100);
+}
+check("a zero-length drone is silent rather than NaN",
+  drone(110, 0, 44100).every(Number.isFinite) && drone(110, -1, 44100).every(Number.isFinite));
+check("normalize zeroes a NaN rather than laundering it through the clip gate",
+  (() => { const b = new Float32Array([0.5, NaN, -0.3]); normalize(b); return b.every(Number.isFinite) && b[1] === 0; })());
 check("normalize leaves a quiet buffer alone",
   (() => { const b = new Float32Array([0.1, -0.2, 0.3]); const before = b[2]; return normalize(b)[2] === before; })());
 check("normalize pulls a clipping buffer back under one",
@@ -414,35 +481,76 @@ console.log("\n── the clock ──");
 // EVERY BEAT IS COMPUTED FROM ITS INDEX. `t += 60/bpm` in a loop is fine for four
 // beats and audibly wrong after four hundred, and it is worse at tempi whose
 // period is not representable in binary.
-for (const bpm of [60, 63, 90, 120, 137, 187, 208]) {
-  const beats = beatTimes({ bpm, beats: 2000, startTime: 12.5 });
-  const spb = 60 / bpm;
-  const worst = beats.reduce((a, b) => Math.max(a, Math.abs(b.time - (12.5 + b.index * spb))), 0);
-  check(`${bpm} bpm: 2000 beats with no accumulated error`, worst < 1e-9, String(worst));
-}
-check("beatTimes accents only the first beat", beatTimes({ bpm: 90, beats: 8 }).filter((b) => b.accent).length === 1);
-check("subdivisions land between the beats",
-  (() => { const b = beatTimes({ bpm: 60, beats: 2, subdivision: 4 }); return b.length === 8 && near(b[1].time, 0.25, 1e-12) && b.filter((x) => x.onBeat).length === 2; })());
-check("a nonsense tempo produces nothing rather than infinity", beatTimes({ bpm: 0, beats: 4 }).length === 0);
-
-// The lookahead window: every beat emitted exactly once, in order, none skipped.
-{
-  const state = { startTime: 0, bpm: 100, subdivision: 4, nextIndex: 0 };
+// THIS IS THE FUNCTION THE APP RUNS. audio.createTransport calls it; it used to
+// carry a private copy of the same loop, so this whole section was asserting
+// properties of code nothing called — including "never a beat that has already
+// sounded", which the live copy broke under any main-thread stall.
+const drive = (state, { until = 20, step = 0.021, lookahead = 0.12, stallAt = null, stallFor = 0 } = {}) => {
   const seen = [];
-  let idx = 0;
-  for (let now = 0; now < 20; now += 0.021) {
-    const { beats, nextIndex } = beatsInWindow({ ...state, nextIndex: idx }, { now, lookahead: 0.12 });
-    seen.push(...beats);
-    idx = nextIndex;
+  let idx = state.nextIndex || 0, dropped = 0, now = 0;
+  while (now < until) {
+    const w = beatsInWindow({ ...state, nextIndex: idx }, { now, lookahead });
+    for (const b of w.beats) seen.push({ ...b, emittedAt: now });
+    idx = w.nextIndex; dropped += w.dropped;
+    now += (stallAt != null && now >= stallAt && now < stallAt + step ? stallFor : step);
   }
+  return { seen, dropped };
+};
+
+for (const bpm of [60, 63, 90, 120, 137, 187, 208]) {
+  const { seen } = drive({ startTime: 12.5, bpm, subdivision: 1 }, { until: 12.5 + 2000 * (60 / bpm), step: 0.021 });
+  const spb = 60 / bpm;
+  const worst = seen.reduce((a, b) => Math.max(a, Math.abs(b.time - (12.5 + b.index * spb))), 0);
+  check(`${bpm} bpm: ${seen.length} beats with no accumulated error`, worst < 1e-9 && seen.length > 1999, String(worst));
+}
+check("only the first subdivision of the bar's first beat is accented",
+  (() => { const { seen } = drive({ startTime: 0, bpm: 90, subdivision: 4, beatsPerBar: 4 }, { until: 8 });
+    return seen.filter((b) => b.accent).length === Math.floor(seen.length / 16) + (seen.length % 16 ? 1 : 0)
+      && seen.filter((b) => b.accent).every((b) => b.inBar === 0 && b.sub === 0); })());
+check("subdivisions land between the beats",
+  (() => { const { seen } = drive({ startTime: 0, bpm: 60, subdivision: 4 }, { until: 2 });
+    const first8 = seen.slice(0, 8);
+    return near(seen[1].time, 0.25, 1e-12) && first8.filter((x) => x.onBeat).length === 2 && first8.every((x, i) => near(x.time, i * 0.25, 1e-12)); })());
+check("a nonsense tempo produces nothing rather than infinity",
+  beatsInWindow({ startTime: 0, bpm: 0, subdivision: 1, nextIndex: 0 }, { now: 5 }).beats.length === 0);
+check("a nonsense start time produces nothing rather than NaN",
+  beatsInWindow({ startTime: NaN, bpm: 90, nextIndex: 0 }, { now: 5 }).beats.length === 0);
+check("the meter reaches the bar count and the accents",
+  (() => { const { seen } = drive({ startTime: 0, bpm: 240, subdivision: 1, beatsPerBar: 3 }, { until: 6 });
+    return seen.every((b) => b.inBar === b.index % 3 && b.bar === Math.floor(b.index / 3))
+      && seen.filter((b) => b.accent).length === Math.ceil(seen.length / 3); })());
+check("the count-in is flagged on the beats it covers and no others",
+  (() => { const { seen } = drive({ startTime: 0, bpm: 240, subdivision: 4, countIn: 4 }, { until: 4 });
+    return seen.every((b) => b.countIn === (b.beat < 4)); })());
+
+{
+  const { seen } = drive({ startTime: 0, bpm: 100, subdivision: 4 }, { until: 20 });
   check("the scheduler emits every beat exactly once, in order",
     seen.every((b, i) => b.index === i) && new Set(seen.map((b) => b.index)).size === seen.length,
     `${seen.length} events`);
   check("the scheduler never emits a beat that has already sounded",
     seen.every((b, i) => i === 0 || b.time > seen[i - 1].time));
+  check("the scheduler never hands the clock a time in the past",
+    seen.every((b) => b.time >= b.emittedAt), `worst ${Math.min(...seen.map((b) => b.time - b.emittedAt)).toFixed(6)}s`);
+}
+
+// A STALL IS DROPPED, NOT FIRED LATE. Web Audio plays a source scheduled in the
+// past immediately, so a scheduler that only asks "before the horizon?" hands
+// over every missed beat at one instant — five seconds backgrounded came back as
+// forty clicks at once. The beats that were missed stay missed; the grid does not
+// move, so the bar count and the phase survive the gap.
+for (const stall of [0.3, 1, 5, 60, 3600]) {
+  const { seen, dropped } = drive({ startTime: 0, bpm: 120, subdivision: 4 },
+    { until: stall + 6, stallAt: 2, stallFor: stall });
+  const late = seen.filter((b) => b.time < b.emittedAt - 1e-9);
+  check(`a ${stall}s stall drops the beats it missed rather than firing them late`,
+    late.length === 0 && dropped > 0 && seen.every((b, i) => i === 0 || b.index > seen[i - 1].index),
+    `${seen.length} emitted, ${dropped} dropped, ${late.length} late`);
 }
 check("a scheduler waking after an hour asleep is bounded",
   beatsInWindow({ startTime: 0, bpm: 120, subdivision: 4, nextIndex: 0 }, { now: 3600 }).beats.length <= 512);
+check("the bound is the caller's to set, and the transport sets 256",
+  beatsInWindow({ startTime: 0, bpm: 300, subdivision: 16, nextIndex: 0 }, { now: 0, lookahead: 3600, cap: 256 }).beats.length === 256);
 
 check("rampBpm climbs in steps and stops at the target",
   [0, 1, 2, 3, 4, 5, 40].map((b) => rampBpm({ from: 60, to: 80, step: 5, everyBars: 2 }, b)).join(",") === "60,60,65,65,70,70,80");
@@ -484,6 +592,25 @@ for (const pat of STRUM_PATTERNS) {
   check(`strum "${pat.name}": the dashes are marked silent, not dropped`,
     t.filter((s) => s.silent).length === (pat.pattern.match(/-/g) || []).length);
 }
+// SWING IS A PROPERTY OF THE PATTERN, held in one place. It used to be a ternary
+// at two call sites and the two disagreed: the Jam drill swung every straight
+// pattern and left the shuffle straight, the song player had a `? 0 : 0` that
+// could not swing anything, and both read as deliberate.
+check("every strum pattern declares its own feel",
+  STRUM_PATTERNS.every((p) => Number.isFinite(p.swing) && p.swing >= 0 && p.swing <= 1));
+check("a twelve-step pattern is never asked to swing — its grid already is",
+  STRUM_PATTERNS.filter((p) => p.sub % 3 === 0).every((p) => p.swing === 0));
+check("a pattern that says it swings actually comes out swung",
+  STRUM_PATTERNS.filter((p) => p.swing > 0).every((p) => {
+    const t = strumTimeline([{ bar: 0, beats: 4 }], p.key, { swing: p.swing });
+    const off = t.find((x) => x.beat % 1 > 0.01);
+    return off && off.beat % 1 > 0.5;                      // past the straight midpoint
+  }) && STRUM_PATTERNS.some((p) => p.swing > 0));
+check("and a pattern that says it does not, does not",
+  STRUM_PATTERNS.filter((p) => p.swing === 0 && p.sub === 8).every((p) => {
+    const t = strumTimeline([{ bar: 0, beats: 4 }], p.key, { swing: p.swing });
+    return t.every((x) => near((x.beat % 1) * 2 % 1, 0, 1e-9));   // on a straight eighth grid
+  }));
 check("swing splits the pair at 2:1 when full",
   (() => { const t = strumTimeline([{ bar: 0, beats: 4 }], "eighths_du", { swing: 1 }); return near(t[1].beat, 2 / 3, 1e-9); })());
 check("swing straight is dead straight",
@@ -629,6 +756,31 @@ check("drift is signed and named",
 check("a small error is not called a fault",
   measureDrift([0, 0.5, 1], [0.002, 0.503, 0.999]).tendency === "even");
 check("drift over nothing is null, not zero", measureDrift([], []) === null && measureDrift([0, 1], []) === null);
+
+// ── EVERY SCALE VIEW FITS THE BOARD THAT DRAWS IT ────────────────────────────
+// FretboardPanel sizes the neck from the dots (max(15, highest + 1), capped at
+// 22). A dot past `toFret` used to index off the x-coordinate table and come out
+// as cx="NaN", which SVG discards without a word: pentatonic box 5 in D minor
+// reaches fret 22 and quietly drew none of its top seven notes on a 15-fret
+// board, and box 3 showed eleven of its twelve and looked right.
+{
+  const over = [];
+  for (let pc = 0; pc < 12; pc++) {
+    for (const sk of ["minor_pent", "major_pent"]) {
+      for (let b = 0; b < 5; b++) {
+        const r = pentatonicBox(pc, b, { scaleKey: sk });
+        for (const d of r?.dots || []) if (d.fret > 22 || d.fret < 0) over.push(`${sk} pc${pc} box${b + 1} fret ${d.fret}`);
+      }
+    }
+    for (const sc of SCALES.filter((x) => x.steps.length === 7)) {
+      for (let p = 0; p < 7; p++) {
+        const r = threeNotePerString(pc, sc.key, p, {});
+        for (const d of r?.dots || []) if (d.fret > 22 || d.fret < 0) over.push(`${sc.key} pc${pc} pos${p + 1} fret ${d.fret}`);
+      }
+    }
+  }
+  check("no scale shape reaches past the longest neck the panel will draw", over.length === 0, over.slice(0, 3).join(" | "));
+}
 
 // ══ 8. the schedule, over six months ════════════════════════════════════════
 console.log("\n── the schedule ──");
