@@ -611,6 +611,70 @@ check("and a pattern that says it does not, does not",
     const t = strumTimeline([{ bar: 0, beats: 4 }], p.key, { swing: p.swing });
     return t.every((x) => near((x.beat % 1) * 2 % 1, 0, 1e-9));   // on a straight eighth grid
   }));
+// ── A THREE-CHORD BAR IS STILL A FOUR-BEAT BAR ───────────────────────────────
+// The timeline used to walk per chord — round(span · perBeat) steps each — which
+// is exact only when a chord's span lands on a whole number of steps. A bar of
+// three chords has span 4/3, so an eighth pattern got 3 steps per chord: NINE
+// strokes in a four-beat bar, at 1/3-beat offsets no eighth pattern has, with one
+// pattern step sounded twice. Bad Moon Rising, Seven Nation Army and Smoke on the
+// Water all have three-chord bars and all are difficulty 1–2.
+{
+  const off = [];
+  for (const song of SONGS) {
+    const b = buildBacking({ sections: song.sections, strum: song.strum || "d_du", repeats: 1 });
+    const pat = strumByKey(song.strum || "d_du");
+    const perBeat = pat.sub / 4;
+    const step = 1 / perBeat;
+    const counts = {};
+    for (const st of b.strums) {
+      const bar = Math.floor(st.beat / 4 + 1e-9);
+      counts[bar] = (counts[bar] || 0) + 1;
+      // every stroke on the pattern's own grid (swing is a separate check)
+      if (pat.swing === 0) {
+        const r = (st.beat / step) % 1;
+        if (Math.min(r, 1 - r) > 1e-6) { off.push(`${song.id} stroke at ${st.beat.toFixed(4)} off the ${pat.sub}ths grid`); break; }
+      }
+    }
+    const wrong = Object.entries(counts).filter(([, n]) => n !== pat.sub);
+    if (wrong.length) off.push(`${song.id}: bar(s) with ${[...new Set(wrong.map((w) => w[1]))].join("/")} strokes, want ${pat.sub}`);
+  }
+  check("every bar of every song gets exactly one pass of its pattern, on the grid", off.length === 0, off.slice(0, 4).join(" | "));
+  check("and the three-chord bars are the ones that used to be wrong",
+    SONGS.some((s) => (s.sections || []).some(([, line]) => line.split("|").some((bar) => bar.trim().split(/\s+/).filter(Boolean).length === 3))));
+}
+
+// ── A CAPO MOVES THE PITCH, NOT THE SHAPE ────────────────────────────────────
+// buildBacking took `capo`, stamped it on the result and never used it, so the
+// seven capoed songs played their backing in the wrong key while their own notes
+// told you to put the capo on.
+{
+  const bad = [];
+  for (const song of SONGS.filter((x) => x.capo > 0)) {
+    const open = buildBacking({ sections: song.sections, strum: song.strum || "d_du", repeats: 1, capo: 0 });
+    const withCapo = buildBacking({ sections: song.sections, strum: song.strum || "d_du", repeats: 1, capo: song.capo });
+    // every sounded note up by exactly the capo, and the shapes untouched
+    for (let i = 0; i < open.chords.length; i++) {
+      const a = open.chords[i].midi || [], b = withCapo.chords[i].midi || [];
+      if (a.length !== b.length || a.some((m, j) => b[j] - m !== song.capo)) { bad.push(`${song.id} chord ${i} not shifted by ${song.capo}`); break; }
+      if (JSON.stringify(open.chords[i].voicing?.frets) !== JSON.stringify(withCapo.chords[i].voicing?.frets)) { bad.push(`${song.id} chord ${i} SHAPE moved`); break; }
+    }
+    if (open.bass.some((n, i) => withCapo.bass[i].midi - n.midi !== song.capo)) bad.push(`${song.id} bass not shifted`);
+    // the tonic the chart claims is among the roots that actually sound
+    const tonic = parseChord(song.key);
+    if (tonic) {
+      const sounding = new Set(withCapo.chords.map((c) => (c.voicing ? (c.rootPc + song.capo) % 12 : null)).filter((x) => x != null));
+      if (!sounding.has(tonic.rootPc)) bad.push(`${song.id} sounds no ${song.key} — roots ${[...sounding].join(",")}`);
+    }
+  }
+  check("a capoed song sounds a capo higher, keeps its shapes, and lands in the key it claims",
+    bad.length === 0, bad.slice(0, 4).join(" | "));
+  check("and the strums carry the shift too, because they share the chord objects",
+    (() => { const s0 = SONGS.find((x) => x.capo > 0);
+      const w = buildBacking({ sections: s0.sections, strum: s0.strum || "d_du", capo: s0.capo });
+      const o = buildBacking({ sections: s0.sections, strum: s0.strum || "d_du", capo: 0 });
+      return w.strums[0].chord.midi[0] - o.strums[0].chord.midi[0] === s0.capo; })());
+}
+
 check("swing splits the pair at 2:1 when full",
   (() => { const t = strumTimeline([{ bar: 0, beats: 4 }], "eighths_du", { swing: 1 }); return near(t[1].beat, 2 / 3, 1e-9); })());
 check("swing straight is dead straight",

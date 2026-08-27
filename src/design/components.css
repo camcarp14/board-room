@@ -38,6 +38,18 @@ button:active:not(:disabled) { transform: scale(0.97); }
 [role="button"]:focus-visible,
 [tabindex]:not([tabindex="-1"]):focus-visible { outline: none; box-shadow: var(--focus-ring); }
 
+/* SVG NEEDS ITS OWN RING, AND THE RULE ABOVE IS WORSE THAN NOTHING WITHOUT IT.
+   --focus-ring is a two-layer box-shadow, and an SVG shape generates no CSS box,
+   so no engine paints it there — while `outline: none` DOES apply and strips the
+   ring the browser would have drawn. The result on the guitar fretboard was 72
+   silent tab stops on a blank neck: exactly what the rule above exists to
+   prevent. `outline` on SVG geometry is honoured in current Chrome, Firefox and
+   Safari, so that is what these get.
+   The `[tabindex]` in the selector is not decoration: without it this is (0,2,0)
+   against the (0,3,0) rule above and loses the cascade no matter where it sits
+   in the file — outline stayed `none` and the unpaintable box-shadow stayed on. */
+.fb-tap[tabindex]:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; box-shadow: none; }
+
 /* ── entrances — quiet, brief, only on arrival ─────────────────────────────── */
 .pagefade { animation: pagein var(--dur-3) var(--ease-out) both; }
 @keyframes pagein { from { opacity: 0; transform: translateY(5px); } to { opacity: 1; transform: none; } }

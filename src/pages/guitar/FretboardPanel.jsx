@@ -12,6 +12,7 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Card, SectionHeader, Button, Segmented, PillRow, CellGroup, Cell, EmptyState, Grid } from "../../ui/kit.jsx";
+import { IcGuitar } from "../../ui/icons.jsx";
 import { SHARP_NAMES, SCALES, CHORDS, scaleByKey, pcName, keyChords, keyUsesFlats, CIRCLE_OF_FIFTHS, mod12 } from "../../lib/guitar/theory.js";
 import {
   scaleMap, pentatonicBox, threeNotePerString, cagedPositions, tuningByKey,
@@ -59,12 +60,12 @@ function ChordsMode({ rootPc, tuning, isMobile }) {
         <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", gap: 10, marginBottom: 8 }}>
           <div className="t-title1">{name}</div>
           <button type="button" onClick={() => setShowIntervals((v) => !v)}
-            className="sec-link" style={{ background: "none", border: "none", cursor: "pointer" }}>
+            className="sec-link" style={{ padding: "12px 8px", margin: "-12px -8px" }}>
             {showIntervals ? "Hide intervals" : "Show intervals"}
           </button>
         </div>
         {voicings.length === 0 ? (
-          <EmptyState icon="🎸" title="No shape for that here"
+          <EmptyState icon={<IcGuitar size={24} />} title="No shape for that here"
             sub="Every voicing this app draws has been checked against the notes it actually sounds, and there isn't a verified one for this chord in this tuning yet." />
         ) : (
           <Grid min={isMobile ? 118 : 140} gap={12}>
@@ -82,8 +83,11 @@ function ChordsMode({ rootPc, tuning, isMobile }) {
                   label={voicingName(v, { flats }) !== name ? voicingName(v, { flats }) : null}
                   labelSpace={voicings.slice(0, 8).some((o) => voicingName(o, { flats }) !== name)}
                   sub={v.shapeName || (v.tags?.includes("campfire") ? "campfire" : v.open ? "open" : null)} />
+                {/* The house grows a standalone .sec-link with padding and a matching
+                    negative margin, so the tap target is ~44pt without the layout
+                    moving. The class already sets background/border/cursor. */}
                 <button type="button" onClick={() => play(v)} className="sec-link"
-                  style={{ background: "none", border: "none", cursor: "pointer", fontSize: 12 }}>Play</button>
+                  style={{ padding: "12px 8px", margin: "-6px -8px -8px" }}>Play</button>
               </div>
             ))}
           </Grid>
@@ -235,7 +239,7 @@ function CagedMode({ rootPc, tuning, isMobile }) {
             </div>
           </>
         ) : (
-          <EmptyState icon="🎸" title="Nothing fits on this neck" sub="Every CAGED position for this root would need a fret past the fifteenth." />
+          <EmptyState icon={<IcGuitar size={24} />} title="Nothing fits on this neck" sub="Every CAGED position for this root would need a fret past the fifteenth." />
         )}
       </Card>
 
@@ -303,7 +307,12 @@ function TrainMode({ tuning, isMobile }) {
 
   const tapFret = ({ string, fret, midi }) => {
     if (drill === "reverse") return;
-    if (!startedAt) setStartedAt(Date.now());
+    // NOT after the round is already finished. The clock start sat above the
+    // correctness check and above the already-found guard, so tapping a note you
+    // had just found — to hear it again — restarted the timer and rewrote the
+    // green banner to "All 6 in 0.3s", then 1.4s, then 2.6s, climbing. A number
+    // labelled as a measurement that is not one.
+    if (!startedAt && found.length < wanted.length) setStartedAt(Date.now());
     const ok = mod12(midi) === mod12(target) && fret < 12;
     // One flash timer, replaced rather than stacked: two wrong taps in quick
     // succession used to queue two clears, and the first one landing wiped the
@@ -379,7 +388,15 @@ function TrainMode({ tuning, isMobile }) {
             </div>
           </div>
           <div style={{ marginTop: 10 }}>
-            <Fretboard tuning={tuning} dots={dots} toFret={11} label="none" height={isMobile ? 150 : 174}
+            {/* TALLER HERE THAN ANYWHERE ELSE IN THE TAB, BECAUSE HERE THE NECK IS
+                AN INPUT. At 150px the six string lanes are 23px apart and a
+                mis-tap is scored as a wrong answer — the drill would be measuring
+                your fingertip, not your fretboard knowledge. 216 puts them at
+                ~36px. A six-string neck cannot reach 44pt a lane without being
+                360px tall or scrolling vertically, which is why this is a
+                deliberate trade rather than a miss: the real instrument's strings
+                are 7mm apart too. */}
+            <Fretboard tuning={tuning} dots={dots} toFret={11} label="none" height={isMobile ? 216 : 220}
               onFret={tapFret} showFretNumbers />
           </div>
           <div style={{ display: "flex", gap: 8, marginTop: 12 }}>
@@ -443,7 +460,11 @@ export function FretboardPanel({ isMobile, settings, updateSetting }) {
 
   const setRoot = (pc) => {
     setRootPc(pc);
-    if (settings != null) updateSetting?.("guitar", { ...gs, root: pc });
+    // `level` is carried explicitly and can only go up: every writer here spreads
+    // a settings object loaded once at sign-in, so a write from a second device —
+    // or from a screen opened before you levelled — would otherwise put the old
+    // level back. See the note in TodayPanel.
+    if (settings != null) updateSetting?.("guitar", { ...gs, root: pc, level: Number(gs.level) || 0 });
   };
 
   return (

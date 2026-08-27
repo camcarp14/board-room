@@ -11,6 +11,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { Sheet, Button, PillRow, EmptyState, Spinner } from "../../ui/kit.jsx";
+import { IcGuitar } from "../../ui/icons.jsx";
 
 import { TUNINGS, tuningByKey, stringLabels, nearestString } from "../../lib/guitar/fretboard.js";
 import { nearestNote } from "../../lib/guitar/theory.js";
@@ -68,7 +69,12 @@ export function TunerSheet({ onClose, settings, updateSetting, isMobile }) {
   const [tuningKey, setTuningKey] = useState(gs.tuning || "standard");
   const [a4] = useState(Number(gs.a4) > 0 ? Number(gs.a4) : 440);
   const tuning = tuningByKey(tuningKey).midi;
-  const capo = Number(gs.capo) || 0;
+  // Nothing in this app writes settings.guitar.capo — the tuner tunes open
+  // strings, and a capo does not change what an open string should be tuned to.
+  // The `· capo N` suffix that used to hang off the readout was therefore dead
+  // text that could never appear. Kept as a constant so nearestString's contract
+  // is still explicit about what it is being asked.
+  const capo = 0;
 
   const [state, setState] = useState({ status: "idle" }); // idle | asking | live | denied | unsupported
   const [reading, setReading] = useState(null);
@@ -134,7 +140,7 @@ export function TunerSheet({ onClose, settings, updateSetting, isMobile }) {
     setTuningKey(key);
     settled.current = {};
     setSettledTick((n) => n + 1);
-    if (settings != null) updateSetting?.("guitar", { ...gs, tuning: key });
+    if (settings != null) updateSetting?.("guitar", { ...gs, tuning: key, level: Number(gs.level) || 0 });
   };
 
   return (
@@ -176,11 +182,11 @@ export function TunerSheet({ onClose, settings, updateSetting, isMobile }) {
         ) : state.status === "asking" ? (
           <div style={{ display: "flex", justifyContent: "center", padding: "36px 0" }}><Spinner size={22} /></div>
         ) : state.status === "denied" ? (
-          <EmptyState icon="🎤" title="Microphone blocked"
+          <EmptyState icon={<IcGuitar size={24} />} title="Microphone blocked"
             sub="The tuner needs to hear the guitar. Allow the microphone for this site in your browser's settings, then reopen this sheet. Nothing is recorded or sent anywhere — the pitch is worked out on this device and thrown away."
             action={<Button kind="tinted" onClick={start}>Try again</Button>} />
         ) : state.status === "unsupported" ? (
-          <EmptyState icon="🎤" title="No microphone here"
+          <EmptyState icon={<IcGuitar size={24} />} title="No microphone here"
             sub={state.message || "This browser won't give the page a microphone. The reference tones below still work — tune by ear against them."}
             action={
               <div style={{ display: "flex", gap: 6, flexWrap: "wrap", justifyContent: "center" }}>
@@ -190,7 +196,7 @@ export function TunerSheet({ onClose, settings, updateSetting, isMobile }) {
               </div>
             } />
         ) : (
-          <EmptyState icon="🎸" title="Ready when you are"
+          <EmptyState icon={<IcGuitar size={24} />} title="Ready when you are"
             sub="Turn on the microphone and play one string at a time. The reading is worked out here on the device — no audio leaves it, and nothing is stored."
             action={<Button kind="primary" size="lg" onClick={start}>Turn on the microphone</Button>} />
         )}
@@ -201,7 +207,7 @@ export function TunerSheet({ onClose, settings, updateSetting, isMobile }) {
             fmt={(t) => t.name} keyOf={(t) => t.key} label="Tuning" />
           <div className="t-foot" style={{ color: "var(--faint)", marginTop: 8, fontFamily: "var(--font-mono)" }}>
             {tuningByKey(tuningKey).short}
-            {capo ? ` · capo ${capo}` : ""}
+            
             {a4 !== 440 ? ` · A4 = ${a4} Hz` : ""}
           </div>
         </div>

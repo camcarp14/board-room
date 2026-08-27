@@ -129,15 +129,33 @@ export function strumTimeline(events, patternKey, { swing = 0, beatsPerBar = 4 }
   if (!parsed) return [];
   const perBeat = parsed.perBar / beatsPerBar;
   const out = [];
-  let beat = 0;
+
+  // ── THE GRID IS ABSOLUTE, AND THE CHORD IS LOOKED UP UNDER IT ───────────────
+  // The strumming hand keeps a steady grid and the chords change underneath it.
+  // Walking per-chord instead — `steps = round(span · perBeat)` inside a loop over
+  // the events — is exact only when every chord's span lands on a whole number of
+  // steps, and a THREE-CHORD BAR does not: span is 4/3, so an eighth pattern got
+  // round(2.667) = 3 steps per chord, NINE strokes in a four-beat bar, at 1/3-beat
+  // offsets no eighth pattern has, with pattern step 5 sounded twice. Bad Moon
+  // Rising, Seven Nation Army and Smoke on the Water all have three-chord bars,
+  // and all three are difficulty 1–2 — the first songs anyone here plays. You read
+  // D-DU-UD- off the screen and heard something else.
+  //
+  // Absolute indexing keeps what the per-chord walk was for (the pattern runs
+  // continuously across chord changes rather than restarting on each) and drops
+  // what it got wrong.
+  const bounds = [];
+  let acc = 0;
   for (const ev of events) {
     const span = ev.beats ?? beatsPerBar;
-    // How many pattern steps fit in this chord's span, starting from wherever the
-    // pattern was — the pattern runs continuously across chord changes rather
-    // than restarting on each, which is what a strumming hand actually does.
-    const steps = Math.round(span * perBeat);
-    for (let i = 0; i < steps; i++) {
-      const stepIndex = Math.round(beat * perBeat) + i;
+    bounds.push({ to: acc + span, ev });
+    acc += span;
+  }
+  const totalSteps = Math.round(acc * perBeat);
+  let bi = 0;
+  {
+    for (let stepIndex = 0; stepIndex < totalSteps; stepIndex++) {
+      const i = stepIndex;
       const s = parsed.steps[stepIndex % parsed.steps.length];
       // SWING DELAYS THE SECOND OF EACH PAIR, and it is expressed as the ratio
       // the pair is split at: 0.5 is dead straight, 2⁄3 is a full triplet
@@ -157,8 +175,13 @@ export function strumTimeline(events, patternKey, { swing = 0, beatsPerBar = 4 }
         ? Math.floor(j / 2) * 2 * unit + 2 * unit * (0.5 + swing / 6)
         : j * unit);
       const swung = within;
+      // Which chord is sounding at this stroke. `bi` only moves forward, so the
+      // whole walk is linear no matter how many chords the chart has.
+      while (bi < bounds.length - 1 && swung >= bounds[bi].to - 1e-9) bi++;
+      const ev = bounds[bi]?.ev;
+      if (!ev) break;
       out.push({
-        beat: beat + swung,
+        beat: swung,
         stroke: s.stroke === "-" ? "D" : s.stroke,   // the hand is still moving; see above
         silent: s.stroke === "-",
         muted: s.stroke === "x",
@@ -167,7 +190,6 @@ export function strumTimeline(events, patternKey, { swing = 0, beatsPerBar = 4 }
         bar: ev.bar,
       });
     }
-    beat += span;
   }
   return out;
 }
@@ -254,14 +276,31 @@ export function buildBacking({
     ? expandChart(sections, { repeats })
     : expandProgression(progression, tonicPc, { barsPerChord, repeats });
   const voiced = voiceProgression(raw, { tuning, maxFret });
-  const strums = strumTimeline(voiced, strum, { swing });
   const bassNotes = bassLine(voiced, { style: bass, tuning });
+
+  // ── THE CAPO MOVES THE PITCH, NOT THE SHAPE ─────────────────────────────────
+  // It was taken as an argument, stamped on the result and never used, so the
+  // seven capoed songs in the library played their backing in the wrong key while
+  // their own notes told you to put the capo on. Wonderwall's note says "Capo 2 …
+  // it sounds in F♯ minor"; the track played E minor. Follow the instruction and
+  // you were a whole tone above your own backing.
+  //
+  // Mutated in place ON PURPOSE: `strums[i].chord` and `bass[i].chord` are the
+  // same objects as `voiced[i]`, so shifting here is what makes all three agree.
+  // The DIAGRAMS are untouched — a capo does not change what your fingers do, and
+  // the shape you are shown is the shape you play.
+  const cp = Math.max(0, Math.min(12, Math.round(Number(capo) || 0)));
+  if (cp > 0) {
+    for (const c of voiced) if (Array.isArray(c.midi)) c.midi = c.midi.map((m) => m + cp);
+    for (const n of bassNotes) if (Number.isFinite(n.midi)) n.midi += cp;
+  }
+  const strums = strumTimeline(voiced, strum, { swing });
   return {
     chords: voiced,
     strums,
     bass: bassNotes,
     beats: totalBeats(voiced),
-    capo: Number(capo) || 0,
+    capo: cp,
     minor,
     // Anything the chart named that this app could not read. Surfaced rather
     // than skipped: a backing track that silently drops two bars is a backing

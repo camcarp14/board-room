@@ -15,6 +15,7 @@ import {
   Card, SectionHeader, CellGroup, Cell, Button, Sheet, Segmented, PillRow,
   EmptyState, Grid, StatTile,
 } from "../../ui/kit.jsx";
+import { IcClock } from "../../ui/icons.jsx";
 import { DRILLS, PROGRESSIONS, STRUM_PATTERNS, strumByKey, BENCHMARKS, SKILLS } from "../../lib/guitar/library.js";
 import { SHARP_NAMES, pcName, mod12 } from "../../lib/guitar/theory.js";
 import { tuningByKey, scaleMap } from "../../lib/guitar/fretboard.js";
@@ -240,12 +241,22 @@ function DriftRunner({ onClose, isMobile }) {
                   ? "You come in early. Almost everyone does — the fix is not to slow down but to put the click on 2 and 4 so there is nothing to hide behind."
                   : result.tendency === "dragging"
                     ? "You come in late. Usually a right hand that is waiting to be sure rather than committing. Play it louder and earlier than feels right for a few minutes."
-                    : `Even, within ${Math.abs(result.meanMs)}ms.${grade ? ` That is ${grade.label.toLowerCase()}.` : ""}`}
+                    : `Even, within ${Math.abs(result.meanMs)}ms.`}
               </div>
+              {/* THE BAND IS PRINTED FOR ALL THREE VERDICTS. It used to live inside
+                  the "even" branch, which requires a mean under 8 ms — and 8 ms is
+                  already inside the tightest band, so "Loose" and "Tight" existed in
+                  the benchmark table and could never appear on screen. They are
+                  exactly the two the rushing and dragging cases earn. */}
+              {grade && (
+                <div className="t-foot" style={{ color: "var(--sub)" }}>
+                  {Math.abs(result.meanMs)}ms average — that is <b style={{ color: "var(--ink)" }}>{grade.label.toLowerCase()}</b>.
+                </div>
+              )}
               <Button kind="primary" full onClick={() => setState("idle")}>Again</Button>
             </>
           ) : (
-            <EmptyState icon="🥁" title="Not enough taps to measure"
+            <EmptyState icon={<IcClock size={24} />} title="Not enough taps to measure"
               sub="Tap on every beat one, including through the silent bars — three taps is the minimum for an average that means anything."
               action={<Button kind="tinted" onClick={() => setState("idle")}>Try again</Button>} />
           )

@@ -151,7 +151,7 @@ export function Fretboard({
             <rect key={`t${s}:${f}`} x={f === fromFret ? OPEN_X - 11 : xs[f - fromFret - 1]}
               y={y(s) - stepY / 2} width={f === fromFret ? 22 : widths[f - fromFret - 1]} height={stepY}
               fill="transparent" style={{ cursor: "pointer" }}
-              role="button" tabIndex={0}
+              role="button" tabIndex={0} className="fb-tap"
               aria-label={`String ${strings - s}, ${f === 0 ? "open" : `fret ${f}`} — ${pcName(mod12(midiAt(s, f, tuning, capo)))}`}
               onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); onFret({ string: s, fret: f, midi: midiAt(s, f, tuning, capo) }); } }}
               onClick={() => onFret({ string: s, fret: f, midi: midiAt(s, f, tuning, capo) })} />
@@ -166,7 +166,7 @@ export function Fretboard({
           return (
             <g key={`${d.string}:${d.fret}`} onClick={onDot ? () => onDot(d) : undefined}
               {...(onDot ? {
-                role: "button", tabIndex: 0,
+                role: "button", tabIndex: 0, className: "fb-tap",
                 "aria-label": `${pcName(d.pc)}, string ${strings - d.string} fret ${d.fret}`,
                 onKeyDown: (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); onDot(d); } },
               } : {})}

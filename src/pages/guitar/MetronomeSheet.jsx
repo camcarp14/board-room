@@ -21,14 +21,16 @@
 
 import { useEffect, useRef, useState } from "react";
 import { Sheet, Button, Segmented, SwitchRow, CellGroup } from "../../ui/kit.jsx";
-import { IcPlus } from "../../ui/icons.jsx";
 import { createMetronome, unlock } from "../../lib/guitar/audio.js";
 import { rampBpm } from "../../lib/guitar/dsp.js";
 
 const SUBDIVISIONS = [
   { key: 1, label: "♩", sub: "Beats" },
   { key: 2, label: "♪", sub: "Eighths" },
-  { key: 3, label: "⅗", sub: "Triplets" },
+  // "3" over the note it divides, not "⅗" — U+2157 is VULGAR FRACTION THREE
+  // FIFTHS and means three fifths of something. It was standing in for a triplet
+  // bracket, which no single codepoint provides.
+  { key: 3, label: "♪³", sub: "Triplets" },
   { key: 4, label: "♬", sub: "16ths" },
 ];
 const METERS = [2, 3, 4, 5, 6, 7];
@@ -140,7 +142,7 @@ export function MetronomeSheet({ onClose, settings, updateSetting, isMobile, ini
   // made before closing — the one you actually meant — was the one that never
   // landed. The ref is how the unmount closure sees today's values instead of
   // the ones from the render it was created in.
-  const save = () => { if (settings != null) updateSetting?.("guitar", { ...gs, bpm: chosen.current, meter, sub, twoFour }); };
+  const save = () => { if (settings != null) updateSetting?.("guitar", { ...gs, bpm: chosen.current, meter, sub, twoFour, level: Number(gs.level) || 0 }); };
   const saveRef = useRef(save); saveRef.current = save;
   useEffect(() => { const t = setTimeout(() => saveRef.current(), 900); return () => clearTimeout(t); }, [bpm, meter, sub, twoFour]);
   useEffect(() => () => saveRef.current(), []);
@@ -158,8 +160,12 @@ export function MetronomeSheet({ onClose, settings, updateSetting, isMobile, ini
             <div className="t-num" style={{ fontSize: 54, lineHeight: 1, fontWeight: 700, color: running ? "var(--accent)" : "var(--ink)" }}>{bpm}</div>
             <div className="t-cap" style={{ color: "var(--faint)", marginTop: 2 }}>bpm</div>
           </div>
+          {/* A TEXT + TO MATCH THE TEXT −. The house's two steppers (WorkoutPanel's
+              rep counter, GroceryPanel's quantity) both use a glyph on each side;
+              an SVG on one side and a typeset minus on the other put two different
+              weights and two different optical sizes either side of the number. */}
           <button type="button" className="icon-btn" aria-label="Faster" onClick={() => nudge(1)}
-            style={{ width: 44, height: 44 }}><IcPlus /></button>
+            style={{ fontSize: 22, fontWeight: 600, width: 44, height: 44 }}>+</button>
         </div>
 
         {/* the beat lights — the bar you are in, drawn */}

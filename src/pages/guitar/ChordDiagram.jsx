@@ -52,7 +52,15 @@ export function ChordDiagram({
   const labelH = label || labelSpace ? size * 0.19 : 0;
   const W = size, padX = size * 0.14;
   const padTop = labelH + size * 0.135;
-  const padBottom = size * 0.06;
+  // THE BOX HAS TO CONTAIN WHAT IT DRAWS. padBottom was a flat 0.06·size while
+  // the caption baseline sits at 0.11·size below the last fret and the interval
+  // row pushes it to 0.2 — so the text was painted outside the viewBox, kept
+  // visible only by `overflow: visible`, and landed on top of whatever the layout
+  // put underneath. In Fretboard → Chords → Show intervals that is the "Play"
+  // link on every tile. The extra room is 0.04·size of descender clearance below
+  // the lowest baseline, and it varies with `showIntervals` because the content
+  // does.
+  const padBottom = size * (showIntervals ? 0.24 : 0.15);
   const H = padTop + size * 0.87 + padBottom;
   const gridW = W - padX * 2;
   const gridH = size * 0.87;
@@ -65,7 +73,12 @@ export function ChordDiagram({
   const nutOpen = baseFret === 1;
   const midis = voicingMidi(frets, tuning);
   let midiIdx = 0;
-  const dotR = Math.max(5, stepX * 0.34);
+  // THE FINGER NUMBER IS THE INSTRUCTION, and it was the smallest text in the
+  // app. The digit is sized off the dot, so a floor of 5 put it at 6.25px on the
+  // 100px diagrams in the song sheet and 6.9px on the 112px ones on a phone —
+  // smaller than anything else Board Room renders anywhere. 6.4 buys ~8px at 100
+  // and ~9.5px at 128 without touching the grid the dots sit on.
+  const dotR = Math.max(6.4, stepX * 0.34);
 
   const ink = tone || "currentColor";
 
