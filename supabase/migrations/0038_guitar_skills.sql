@@ -25,11 +25,20 @@
 -- twenty is roughly a month of contact with an item, which is the window over
 -- which "am I in the zone on this" is a meaningful question.
 --
--- `best_bpm` and `ceiling_bpm` are two different facts and both are needed.
--- best_bpm is the fastest CLEAN rep ever recorded, which is what a regression is
--- measured against. ceiling_bpm is where the tempo ladder last broke, which is
--- where the next session starts — five below the first failure, so a session
--- opens somewhere achievable rather than at the wall it stopped at.
+-- `best_bpm` and `ceiling_bpm` are two different facts.
+--
+-- best_bpm is the fastest CLEAN rep ever recorded and is LIVE: practice.js's
+-- applyResult writes it on a clean rep, and the regression rule reads it. For a
+-- one-minute-changes skill the unit is changes per minute, which is that drill's
+-- own measure of tempo.
+--
+-- ceiling_bpm is RESERVED AND NOT YET WRITTEN. The intent is where the tempo
+-- ladder last broke, so the next session opens five below the first failure
+-- rather than at the wall it stopped at — but practice.js's ladderPlan and
+-- ladderStep have no caller in the app yet, so nothing sets this and every row
+-- has it null. Said plainly here because the previous version of this comment
+-- described the behaviour in the present tense, and a schema comment that
+-- describes a mechanism which does not exist is worse than no comment.
 --
 -- No index beyond the primary key: the only read is "all of this user's skills",
 -- which the pkey's leading user_id already serves, and the table is bounded by

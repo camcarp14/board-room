@@ -457,6 +457,13 @@ const CARDS = [
   ["src/features/upkeep/UpkeepPanel.jsx", "UPKEEP_SETUP_SQL", ["upkeep_items"]],
   ["src/LearnPanel.jsx", "SKILLS_SETUP_SQL", ["mini_skills"]],
   ["src/pages/personal/NotesPanel.jsx", "NOTES_UPGRADE_SQL", ["personal_notes"]],
+  // The Guitar card is here because src/data/guitar.js:112 says it is — it cites
+  // this file by name as the thing that stops the public-vs-boardroom scar
+  // recurring, and that was a false claim in a load-bearing comment: the string
+  // "guitar" did not appear anywhere in this script. This card is CORRECT today
+  // and pinned so it stays that way; the section below only fails on a `public.`
+  // reference, which is exactly the mistake being guarded against.
+  ["src/data/guitar.js", "GUITAR_SETUP_SQL", ["guitar_sessions", "guitar_skills", "guitar_songs"]],
 ];
 const readme = readFileSync(`${MIG_DIR}/README.md`, "utf8");
 const stale = [];
@@ -484,6 +491,42 @@ for (const [path, constant, tables] of CARDS) {
 for (const [constant, t] of stale) {
   check(`${constant}'s public.${t} is written down in the migrations README`,
     readme.includes(constant) && readme.includes(t), `${constant}:${t}`);
+}
+
+// ── 6b. the Guitar card and the Guitar migrations describe the same schema ───
+// The card is what a user actually runs, and the migrations are the record. They
+// drifted once already (the card kept `id text primary key` after 0039 was
+// re-keyed to the pair), and nothing would have caught it: the card is not
+// applied by any tooling, so only a check like this can notice.
+{
+  const card = readFileSync("src/data/guitar.js", "utf8")
+    .match(/GUITAR_SETUP_SQL = `([\s\S]*?)`;/)?.[1] || "";
+  check("the Guitar setup card is still where this check expects it", card.length > 0);
+  const mig = ["0037_guitar_sessions", "0038_guitar_skills", "0039_guitar_songs"]
+    .map((f) => readFileSync(`${MIG_DIR}/${f}.sql`, "utf8")).join("\n");
+  const norm = (t) => t.replace(/--[^\n]*/g, " ").replace(/\s+/g, " ").toLowerCase();
+  const c = norm(card), m = norm(mig);
+  for (const t of ["guitar_sessions", "guitar_skills", "guitar_songs"]) {
+    check(`the card creates boardroom.${t}`, c.includes(`create table if not exists boardroom.${t}`));
+    check(`…and so does a migration`, m.includes(`create table if not exists boardroom.${t}`));
+    check(`…with row level security on, in both`,
+      c.includes(`alter table boardroom.${t} enable row level security`)
+      && m.includes(`alter table boardroom.${t} enable row level security`));
+    check(`…and an own-rows policy, in both`,
+      c.includes(`create policy "own ${t}"`) && m.includes(`create policy "own ${t}"`));
+  }
+  // The keys, which is what actually drifted.
+  check("guitar_skills is keyed by the user and the skill, in both",
+    c.includes("primary key (user_id, skill_id)") && m.includes("primary key (user_id, skill_id)"));
+  check("guitar_songs is keyed by the user and the id, in both",
+    c.includes("primary key (user_id, id)") && m.includes("primary key (user_id, id)"));
+  // …and the code's upsert has to name that key, or PostgREST rejects it.
+  const dbjs = readFileSync("src/data/db.js", "utf8");
+  check("saveGuitarSong's onConflict names the composite key",
+    /guitar_songs"\)\.upsert\([^)]*onConflict: "user_id,id"/.test(dbjs.replace(/\s+/g, " ")));
+  check("a custom schema grants nothing by default, so the card grants explicitly",
+    ["guitar_sessions", "guitar_skills", "guitar_songs"].every((t) =>
+      c.includes(`on boardroom.${t} to authenticated`)));
 }
 
 // ── 7. the README does not overclaim ─────────────────────────────────────────

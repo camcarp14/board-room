@@ -45,7 +45,7 @@
 -- ═══════════════════════════════════════════════════════════════════════════
 
 create table if not exists boardroom.guitar_songs (
-  id          text        primary key,
+  id          text        not null,
   user_id     uuid        not null references auth.users(id) on delete cascade,
   title       text        not null,
   artist      text        not null default '',
@@ -60,7 +60,13 @@ create table if not exists boardroom.guitar_songs (
   last_played date,
   note        text        not null default '',
   created_at  timestamptz not null default now(),
-  updated_at  timestamptz not null default now()
+  updated_at  timestamptz not null default now(),
+  -- KEYED BY (user_id, id), NOT BY id ALONE, for the same reason guitar_skills
+  -- is. A seed song's id is its slug ('wonderwall', 'folsom'), so with a bare
+  -- primary key the first account to edit one owns that slug for everybody: a
+  -- second account's upsert targets a row its own RLS policy hides, and the
+  -- write fails rather than creating that user's copy.
+  primary key (user_id, id)
 );
 
 create index if not exists guitar_songs_user_updated_idx

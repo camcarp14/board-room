@@ -674,6 +674,31 @@ export function TodayPanel({ isMobile, settings, updateSetting, onOpenTuner, onO
                   </div>
                 )}
               </div>
+
+              {/* THE PARALLEL TRACK, DRAWN AS ONE. Fingerstyle deliberately never
+                  gates the spine — levelState skips it when it walks the ladder —
+                  which is right, and which also meant nothing on screen ever
+                  showed it: its name, its exit condition and what it is short of
+                  were unreachable, and the level tile stepped straight from L5 to
+                  L7 with no explanation of where 6 went. It gets its own line
+                  rather than its own number, because that is what it is. */}
+              {(() => {
+                const par = (lvl.all || []).find((x) => x.level?.key === "finger");
+                if (!par || lvl.level.n < 3) return null;   // unlocks alongside level 3
+                const shortOf = [
+                  ...(par.short || []).map((id) => skillById(id)?.name || id),
+                  par.songsShort ? `${par.songsShort} more song${par.songsShort === 1 ? "" : "s"}` : null,
+                ].filter(Boolean);
+                return (
+                  <div style={{ marginTop: 8, background: "var(--surface-2)", borderRadius: "var(--r-well)", padding: 10 }}>
+                    <div className="t-cap" style={{ color: "var(--faint)", marginBottom: 4 }}>Alongside · {par.level.name}</div>
+                    <div className="t-foot" style={{ color: "var(--ink)", lineHeight: 1.55 }}>{par.level.exit}</div>
+                    <div className="t-foot" style={{ color: shortOf.length ? "var(--amber)" : "var(--green)", marginTop: 6 }}>
+                      {shortOf.length ? `Still short: ${shortOf.join(", ")}` : "Cleared."}
+                    </div>
+                  </div>
+                );
+              })()}
             </Card>
           )}
 

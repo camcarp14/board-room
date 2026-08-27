@@ -920,6 +920,40 @@ console.log("\n── the schedule ──");
     (() => { const r = completeSession({ day: "2026-08-27" }, [{ id: "chord_c", name: "C", rating: "clean", seconds: 60 }], []); return r.session.items.length === 1 && r.skills.length === 1 && r.skills[0].lastPracticed === "2026-08-27"; })());
 }
 
+// ── THE PARALLEL TRACK IS REACHABLE, EVEN THOUGH IT IS NEVER THE LEVEL ───────
+// levelState skips the fingerstyle level when it walks the ladder — it is a
+// parallel track and must not gate the spine — so `computed.n` never takes its
+// value. That is correct, and it is also why the panel has to find it in
+// `lvl.all`: without that, its name, its exit condition and what it is short of
+// were unreachable and the level tile stepped from L5 straight to L7.
+{
+  const ids = SKILLS.map((x) => x.id);
+  const at = (v) => Object.fromEntries(ids.map((id) => [id, { strength: v }]));
+  // A LEARNER IS NOT UNIFORM, and testing as though they were proves nothing:
+  // with every skill at the same strength, clearing one level's bar clears every
+  // remaining level's bar in the same pass, so the ladder appears to jump 3 → 7.
+  // The honest walk is the real one — strong on what the levels up to k need,
+  // weak on everything past it.
+  const walk = (k) => {
+    const need = new Set(LEVELS.filter((l) => l.n <= k).flatMap((l) => l.gate?.skills || []));
+    return Object.fromEntries(ids.map((id) => [id, { strength: need.has(id) ? 100 : 10 }]));
+  };
+  const reachable = new Set();
+  for (let k = -1; k < LEVELS.length; k++) {
+    for (const songs of [0, 3, 5, 10, 20, 50]) {
+      reachable.add(levelState(walk(k), { songsOwned: songs, floor: 0 }).computed.n);
+    }
+  }
+  const parallel = LEVELS.find((l) => l.key === "finger");
+  check("the parallel track is never the spine's current level", !reachable.has(parallel.n));
+  check("but every other level is somewhere a learner can actually be",
+    LEVELS.filter((l) => l.key !== "finger").every((l) => reachable.has(l.n)),
+    `reached ${[...reachable].sort((a, b) => a - b).join(",")}`);
+  const st = levelState(at(100), { songsOwned: 50, floor: 0 });
+  check("and the panel can still find it, with a status of its own",
+    (st.all || []).some((x) => x.level?.key === "finger" && Array.isArray(x.short)));
+}
+
 // ══ 9. the library ══════════════════════════════════════════════════════════
 console.log("\n── the library ──");
 const skillIds = new Set(SKILLS.map((s) => s.id));

@@ -23,7 +23,7 @@ import { lookupChord } from "../../lib/guitar/chords.js";
 import { buildBacking } from "../../lib/guitar/progression.js";
 import { measureDrift } from "../../lib/guitar/practice.js";
 import { createMetronome, playNote, playDrone, unlock, audioNow } from "../../lib/guitar/audio.js";
-import { useGuitarSkills, useSaveGuitarSkills } from "../../data/guitar.js";
+import { useGuitarSkills, useSaveGuitarSkills, useSaveGuitarSession } from "../../data/guitar.js";
 import ChordDiagram from "./ChordDiagram.jsx";
 import Fretboard from "./Fretboard.jsx";
 import { PlayerBar } from "./PlayerBar.jsx";
@@ -131,7 +131,7 @@ function OMCRunner({ onClose, isMobile, pairs, onResult }) {
 // Sixteen bars: four silent stretches of two, which is enough taps for an
 // average that means something and short enough that nobody gives up halfway.
 const BARS = 16;
-function DriftRunner({ onClose, isMobile }) {
+function DriftRunner({ onClose, isMobile, onResult }) {
   const [bpm, setBpm] = useState(80);
   const [state, setState] = useState("idle");
   const [result, setResult] = useState(null);
@@ -174,7 +174,13 @@ function DriftRunner({ onClose, isMobile }) {
 
   const finish = () => {
     setState("done");
-    setResult(measureDrift(clicks.current, hits.current));
+    const r = measureDrift(clicks.current, hits.current);
+    setResult(r);
+    // THE MEASUREMENT IS KEPT. guitar_sessions has had a drift_ms column since
+    // 0037 and nothing ever wrote it — this drill computed a real number, drew it
+    // once, and dropped it on close, so there was no way to see whether your
+    // timing was improving. Which is the only reason to do the drill.
+    if (r && r.n >= 3) onResult?.({ ...r, bpm });
   };
 
   const tap = () => {
@@ -419,6 +425,7 @@ export function DrillsPanel({ isMobile, settings, updateSetting, onOpenMetronome
   const tuning = tuningByKey(gs.tuning || "standard").midi;
   const skillsQ = useGuitarSkills();
   const saveSkills = useSaveGuitarSkills();
+  const saveSession = useSaveGuitarSession();
   const [open, setOpen] = useState(null);
   const [jam, setJam] = useState(null);
   const [toast, setToast] = useState(null);
@@ -445,6 +452,26 @@ export function DrillsPanel({ isMobile, settings, updateSetting, onOpenMetronome
       setToast({ tone: "var(--green)", text: `${count} changes logged against ${pair.join(" ↔ ")}.` });
     } catch (e) {
       setToast({ tone: "var(--red)", text: `Couldn't save: ${e.message || "the write didn't land"}` });
+    }
+  };
+
+  // A finished drift drill is a short session with a timing measurement on it.
+  // Saved rather than shown-and-forgotten, so the number lands in the practice log
+  // where the twelve-week chart and the streak can see it.
+  const logDrift = async (r) => {
+    const { dayOf } = await import("../../lib/guitar/practice.js");
+    try {
+      await saveSession.mutateAsync({
+        session: {
+          id: crypto.randomUUID(), day: dayOf(Date.now()), minutes: 2, focus: "timing",
+          driftMs: r.meanMs, note: `Drop the click at ${r.bpm} bpm — ${r.tendency}, ${Math.abs(r.meanMs)}ms average over ${r.n} taps.`,
+          items: [{ id: "drift", name: "Drop the click", rating: Math.abs(r.meanMs) <= 20 ? "clean" : "shaky", seconds: 120 }],
+        },
+        skills: [],
+      });
+      setToast({ tone: "var(--green)", text: `Logged — ${r.meanMs > 0 ? "+" : ""}${r.meanMs}ms at ${r.bpm} bpm.` });
+    } catch (e) {
+      setToast({ tone: "var(--red)", text: `Couldn't save that measurement: ${e.message || "the write didn't land"}` });
     }
   };
 
@@ -481,7 +508,7 @@ export function DrillsPanel({ isMobile, settings, updateSetting, onOpenMetronome
       </Card>
 
       {open === "omc" && <OMCRunner isMobile={isMobile} pairs={pairs} onClose={() => setOpen(null)} onResult={logOMC} />}
-      {open === "drift" && <DriftRunner isMobile={isMobile} onClose={() => setOpen(null)} />}
+      {open === "drift" && <DriftRunner isMobile={isMobile} onClose={() => setOpen(null)} onResult={logDrift} />}
       {open === "ear" && <EarRunner isMobile={isMobile} onClose={() => setOpen(null)} />}
       {open === "jam" && !jam && <JamSetup isMobile={isMobile} onClose={() => setOpen(null)} onPlay={(j) => { setJam(j); setOpen(null); }} />}
       {jam && <PlayerBar title={jam.title} backing={jam.backing} bpm={jam.bpm} isMobile={isMobile} onClose={() => setJam(null)} />}

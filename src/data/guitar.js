@@ -91,7 +91,13 @@ export function loadActiveSession() {
     const ok = a && typeof a === "object"
       && typeof a.day === "string" && Number.isFinite(a.startedAt)
       && Array.isArray(a.results) && a.results.every(itemOk)
-      && Number.isFinite(a.blockIndex)
+      // A WHOLE, NON-NEGATIVE INDEX. Number.isFinite admits -1 and 0.5, and both
+      // reach `plan.blocks[i]` as undefined — which the runner renders as
+      // nothing at all, on every visit, with no button to press and no way out
+      // but clearing storage by hand. Nothing in the app writes either (start()
+      // writes 0, nextBlock writes i+1), so this is hardening against a
+      // hand-edited or drifted checkpoint rather than a live path.
+      && Number.isInteger(a.blockIndex) && a.blockIndex >= 0
       // The frozen plan has to be there and has to have the block the index
       // points at, or the runner resumes into `undefined` and renders nothing
       // with no way out but clearing storage by hand.
@@ -156,7 +162,7 @@ create policy "own guitar_skills" on boardroom.guitar_skills
   for all using (auth.uid() = user_id) with check (auth.uid() = user_id);
 
 create table if not exists boardroom.guitar_songs (
-  id          text        primary key,
+  id          text        not null,
   user_id     uuid        not null references auth.users(id) on delete cascade,
   title       text        not null,
   artist      text        not null default '',
@@ -171,7 +177,13 @@ create table if not exists boardroom.guitar_songs (
   last_played date,
   note        text        not null default '',
   created_at  timestamptz not null default now(),
-  updated_at  timestamptz not null default now()
+  updated_at  timestamptz not null default now(),
+  -- KEYED BY (user_id, id), NOT BY id ALONE, for the same reason guitar_skills
+  -- is. A seed song's id is its slug ('wonderwall', 'folsom'), so with a bare
+  -- primary key the first account to edit one owns that slug for everybody: a
+  -- second account's upsert targets a row its own RLS policy hides, and the
+  -- write fails rather than creating that user's copy.
+  primary key (user_id, id)
 );
 create index if not exists guitar_songs_user_updated_idx on boardroom.guitar_songs (user_id, updated_at desc);
 alter table boardroom.guitar_songs enable row level security;

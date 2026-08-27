@@ -1442,7 +1442,11 @@ export const db = {
       clean_runs: song.cleanRuns ?? 0, last_played: song.lastPlayed || null,
       note: song.note || "", updated_at: new Date().toISOString(),
     };
-    const { data, error } = await supabase.from("guitar_songs").upsert(row, { onConflict: "id" }).select().single();
+    // "user_id,id" MATCHES THE TABLE'S KEY. guitar_songs is keyed by the pair (a
+    // seed song's id is its slug, so id alone would be one row per slug for the
+    // whole database — see the note in 0039), and an onConflict that names a
+    // column set with no unique index behind it is an error, not a fallback.
+    const { data, error } = await supabase.from("guitar_songs").upsert(row, { onConflict: "user_id,id" }).select().single();
     if (error) throw error;
     return data;
   },

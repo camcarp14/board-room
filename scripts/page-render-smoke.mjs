@@ -920,6 +920,100 @@ async function harness() {
       stale.includes("--amber") && !stale.includes("--red") && crash.includes("--red"));
   }
 
+  // ══ 10. the guitar tab's two drawing components ═══════════════════════════
+  // Both draw SVG from arithmetic, and BOTH SHIPPED A BUG THAT IS INVISIBLE IN
+  // SVG: an element with a NaN coordinate is discarded silently, and text painted
+  // outside the viewBox survives only on `overflow: visible` and lands on
+  // whatever the layout put underneath. Neither shows up in a snapshot and
+  // neither throws. These assert the geometry instead.
+  {
+    const M = {
+      diagram: await import("../src/pages/guitar/ChordDiagram.jsx"),
+      board: await import("../src/pages/guitar/Fretboard.jsx"),
+      chords: await import("../src/lib/guitar/chords.js"),
+      fb: await import("../src/lib/guitar/fretboard.js"),
+      theory: await import("../src/lib/guitar/theory.js"),
+    };
+    const ChordDiagram = M.diagram.default;
+    const Fretboard = M.board.default;
+
+    // No coordinate anywhere may be NaN. `cx="NaN"` renders as nothing at all.
+    const nan = (html) => (html.match(/(?:cx|cy|x|y|x1|y1|x2|y2|width|height|r)="(?:NaN|Infinity|-Infinity)"/g) || []);
+
+    const badDots = [];
+    let boards = 0, totalDots = 0;
+    for (const pc of [0, 2, 5, 9, 11]) {
+      for (const view of ["minor_pent", "major_pent"]) {
+        for (let box = 0; box < 5; box++) {
+          const dots = M.fb.pentatonicBox(pc, box, { scaleKey: view })?.dots || [];
+          const toFret = Math.min(22, Math.max(15, ...dots.map((d) => d.fret + 1)));
+          const html = draw(await stage(), React.createElement(Fretboard, { dots, toFret, label: "degree" }));
+          const bad = nan(html);
+          const drawn = (html.match(/<circle/g) || []).length;
+          boards++; totalDots += dots.length;
+          if (!html) { badDots.push(`${view} pc${pc} box${box + 1}: rendered nothing`); continue; }
+          if (bad.length) badDots.push(`${view} pc${pc} box${box + 1}: ${bad.slice(0, 2).join(",")}`);
+          else if (drawn < dots.length) badDots.push(`${view} pc${pc} box${box + 1}: ${drawn} circles for ${dots.length} dots`);
+        }
+      }
+    }
+    // AND THE BACKSTOP, WHICH THE LOOP ABOVE CANNOT REACH. That loop sizes the
+    // board to its dots the way ScalesMode does, so the clamp inside xMid never
+    // engages and reverting it would not fail. This is the case it exists for: a
+    // caller that gets the range wrong. SVG discards a NaN coordinate in silence,
+    // so the failure has no symptom other than notes that are simply not there.
+    {
+      const dots = M.fb.pentatonicBox(2, 4, { scaleKey: "minor_pent" })?.dots || [];
+      const high = Math.max(...dots.map((d) => d.fret));
+      const html = draw(await stage(), React.createElement(Fretboard, { dots, toFret: 15, label: "degree" }));
+      check("Fretboard · a shape that runs off the end of the board still draws every note",
+        high > 15 && nan(html).length === 0 && (html.match(/<circle/g) || []).length >= dots.length,
+        `shape reaches fret ${high} on a 15-fret board; ${nan(html).length} NaN, ${(html.match(/<circle/g) || []).length} circles for ${dots.length} dots`);
+    }
+
+    check("Fretboard · every scale shape draws every note it was given, with no NaN coordinate",
+      badDots.length === 0 && boards === 50 && totalDots > 500,
+      `${boards}/50 boards, ${totalDots} dots${badDots.length ? " | " + badDots.slice(0, 3).join(" | ") : ""}`);
+
+    // Every <text> baseline inside the box the diagram claims to occupy.
+    const outside = [];
+    let seen = 0;
+    for (const sym of ["C", "G", "Am", "F", "Bm", "D7", "Em7", "Cmaj7", "F#m", "Bb"]) {
+      // lookupChord returns { rootPc, quality, bassPc, voicings }, NOT a voicing.
+      // Passing it straight in gave `frets: undefined`, ChordDiagram's own guard
+      // returned null, and all sixty renders came back as the empty string — so
+      // this check was passing on nothing at all. That is the one failure mode a
+      // check like this has, and this file says so about section 6 already.
+      const hit = M.chords.lookupChord(sym)?.voicings?.[0];
+      if (!hit) { outside.push(`${sym}: no voicing`); continue; }
+      for (const showIntervals of [false, true]) {
+        for (const size of [100, 112, 132]) {
+          const html = draw(await stage(), React.createElement(ChordDiagram, {
+            frets: hit.frets, fingers: hit.fingers, barre: hit.barre, label: sym, size, showIntervals,
+            rootPc: showIntervals ? hit.rootPc : null,
+          }));
+          if (nan(html).length) { outside.push(`${sym} @${size}: NaN`); continue; }
+          // Without this the whole loop goes quietly vacuous — see above.
+          if (!html) { outside.push(`${sym} @${size}: rendered nothing`); continue; }
+          const H = Number((html.match(/viewBox="0 0 [\d.]+ ([\d.]+)"/) || [])[1]);
+          if (!Number.isFinite(H)) { outside.push(`${sym} @${size}: no viewBox`); continue; }
+          seen++;
+          const ys = [...html.matchAll(/<text[^>]*\by="([\d.-]+)"/g)].map((m) => Number(m[1]));
+          const over = ys.filter((y) => y > H);
+          if (over.length) outside.push(`${sym} @${size}${showIntervals ? " +intervals" : ""}: text at y=${over.join(",")} past H=${H}`);
+        }
+      }
+    }
+    check("ChordDiagram · every label it draws is inside the box it reserves",
+      outside.length === 0 && seen === 60, `${seen}/60 diagrams measured${outside.length ? " | " + outside.slice(0, 3).join(" | ") : ""}`);
+
+    // A shape nobody verified is drawn as nothing, never guessed at.
+    check("ChordDiagram · no frets means no diagram, not an empty grid",
+      draw(await stage(), React.createElement(ChordDiagram, { frets: null, label: "???" })) === "");
+    check("the chord library has no voicing for a chord it cannot spell",
+      M.chords.lookupChord("Hmaj7") == null && M.chords.lookupChord("") == null);
+  }
+
   // ══ what this harness cannot reach ════════════════════════════════════════
   // Not a wish list — every entry here was attempted and failed for the stated
   // reason. Anything that renders clean belongs above instead.
@@ -932,6 +1026,12 @@ async function harness() {
     "useIsMobile() and IS_STANDALONE (src/hooks/index.js:57,94) call window.matchMedia during render, so the shells "
     + "and the page wrappers throw before their first element. Stubbing matchMedia here would make this file assert "
     + "against a browser it invented; the panels those pages compose are rendered directly instead.");
+  skip("TodayPanel.jsx, DrillsPanel.jsx, SongsPanel.jsx, FretboardPanel.jsx (the Guitar tab's four panels)",
+    "each one's honest states live behind a kit Sheet (the session runner, every drill, the song sheet, the tuner "
+    + "and the metronome), which is createPortal'd and therefore unreachable here for the same reason as the row "
+    + "above. Their two drawing components — ChordDiagram and Fretboard — render clean and are asserted in section "
+    + "10; their arithmetic is asserted by scripts/guitar-smoke.mjs; and the four panels' loading/empty/error/loaded "
+    + "paths are driven in a real browser instead. Named here so this file's skip count stops reading as complete.");
   skip("NotesTile.jsx, FinancesPanel.jsx, GroceryPanel.jsx, CreedPanel.jsx, DreamBoardPanel.jsx, UpkeepPanel.jsx, MoviesPanel.jsx, BirthdaysPanel.jsx",
     "each takes the whole settings/updateSetting surface plus its own editor state, and their numbers are already "
     + "asserted by the logic smokes (finance, grocery, creed, dreams, notes-order). They are the next ones to add "
