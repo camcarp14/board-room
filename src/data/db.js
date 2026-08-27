@@ -1337,6 +1337,119 @@ export const db = {
       .eq("id", id).is("closed_at", null);
     if (error) throw error;
   },
+
+  // ─── Guitar ────────────────────────────────────────────────────────────────
+  // Three tables and one principle: THE PRACTICE LOG IS THE ONE THING THIS TAB
+  // CANNOT LOSE. Everything else in the Guitar tab is either reference data
+  // (which is in the bundle) or a preference (which lives in app_settings). A
+  // session is the only row that represents something that actually happened,
+  // once, and cannot be reconstructed — so every write below reads its error and
+  // throws, and the panel keeps a localStorage mirror of the session in progress
+  // until the row lands.
+  //
+  // `day` is a LOCAL date string, not a timestamp, and the reason is in the
+  // header of lib/guitar/practice.js: a session that starts at 23:50 and saves at
+  // 00:10 is one sitting with a guitar, and filing it under two days would award
+  // a streak nobody earned.
+
+  /** The practice log, newest first. 400 rows is a bit over a year of daily
+   *  practice — enough for every streak, heatmap and weekly-minutes read the tab
+   *  makes, and small enough to hold in memory without thinking about it. */
+  async loadGuitarSessions(limit = 400) {
+    const { data, error } = await supabase.from("guitar_sessions")
+      .select("id,day,started_at,ended_at,minutes,items,focus,drift_ms,note")
+      .order("day", { ascending: false }).limit(limit);
+    if (error) throw error;
+    return data || [];
+  },
+  /** One finished session. Strict by nature — see the note above. */
+  async saveGuitarSession(row) {
+    const user_id = await db.uid();
+    if (!user_id) throw new Error("Not signed in");
+    const payload = {
+      id: row.id || crypto.randomUUID(), user_id,
+      day: row.day, started_at: row.startedAt || new Date().toISOString(),
+      ended_at: row.endedAt || new Date().toISOString(),
+      minutes: Math.max(0, Math.round(row.minutes || 0)),
+      items: row.items || [], focus: row.focus || null,
+      drift_ms: row.driftMs ?? null, note: row.note || "",
+    };
+    const { data, error } = await supabase.from("guitar_sessions").upsert(payload, { onConflict: "id" }).select().single();
+    if (error) throw error;
+    return data;
+  },
+  async deleteGuitarSession(id) {
+    const { error } = await supabase.from("guitar_sessions").delete().eq("id", id);
+    if (error) throw error;
+  },
+
+  /** Per-skill state — the thing the scheduler reads. Keyed by the skill id from
+   *  lib/guitar/library.js, which is why those ids are permanent. */
+  async loadGuitarSkills() {
+    const { data, error } = await supabase.from("guitar_skills")
+      .select("skill_id,strength,last_practiced,sessions,minutes,best_bpm,ceiling_bpm,history,updated_at");
+    if (error) throw error;
+    return (data || []).map((r) => ({
+      id: r.skill_id, strength: Number(r.strength) || 0, lastPracticed: r.last_practiced,
+      sessions: r.sessions || 0, minutes: Number(r.minutes) || 0,
+      bestBpm: r.best_bpm, ceilingBpm: r.ceiling_bpm, history: r.history || [],
+    }));
+  },
+  /** Upsert a batch of skill states. One call per session rather than one per
+   *  item: a session touches three or four skills and four round trips is four
+   *  chances for half of them to land. */
+  async saveGuitarSkills(rows) {
+    const user_id = await db.uid();
+    if (!user_id) throw new Error("Not signed in");
+    const payload = (rows || []).map((r) => ({
+      user_id, skill_id: r.id,
+      strength: r.strength ?? 0, last_practiced: r.lastPracticed || null,
+      sessions: r.sessions ?? 0, minutes: r.minutes ?? 0,
+      best_bpm: r.bestBpm ?? null, ceiling_bpm: r.ceilingBpm ?? null,
+      history: (r.history || []).slice(-20),
+      updated_at: new Date().toISOString(),
+    }));
+    if (!payload.length) return [];
+    const { data, error } = await supabase.from("guitar_skills")
+      .upsert(payload, { onConflict: "user_id,skill_id" }).select();
+    if (error) throw error;
+    return data || [];
+  },
+
+  /** The repertoire. `chart` holds the sections; everything else is metadata a
+   *  list needs to sort and filter by. */
+  async loadGuitarSongs() {
+    const { data, error } = await supabase.from("guitar_songs")
+      .select("id,title,artist,song_key,bpm,capo,difficulty,status,chart,strum,clean_runs,last_played,note,updated_at")
+      .order("updated_at", { ascending: false });
+    if (error) throw error;
+    return (data || []).map((r) => ({
+      id: r.id, title: r.title, artist: r.artist, key: r.song_key, bpm: r.bpm,
+      capo: r.capo || 0, difficulty: r.difficulty || 2, status: r.status || "learning",
+      sections: r.chart?.sections || [], strum: r.strum, cleanRuns: r.clean_runs || 0,
+      lastPlayed: r.last_played, note: r.note || "", source: "own",
+    }));
+  },
+  async saveGuitarSong(song) {
+    const user_id = await db.uid();
+    if (!user_id) throw new Error("Not signed in");
+    const row = {
+      id: song.id || crypto.randomUUID(), user_id,
+      title: song.title || "Untitled", artist: song.artist || "",
+      song_key: song.key || null, bpm: song.bpm ?? null, capo: song.capo ?? 0,
+      difficulty: song.difficulty ?? 2, status: song.status || "learning",
+      chart: { sections: song.sections || [] }, strum: song.strum || null,
+      clean_runs: song.cleanRuns ?? 0, last_played: song.lastPlayed || null,
+      note: song.note || "", updated_at: new Date().toISOString(),
+    };
+    const { data, error } = await supabase.from("guitar_songs").upsert(row, { onConflict: "id" }).select().single();
+    if (error) throw error;
+    return data;
+  },
+  async deleteGuitarSong(id) {
+    const { error } = await supabase.from("guitar_songs").delete().eq("id", id);
+    if (error) throw error;
+  },
 };
 
 // Postgres says 42P01 ("relation does not exist"); PostgREST/supabase-js says

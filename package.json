@@ -25,7 +25,7 @@
     "smoke:ambient": "node scripts/ambient-smoke.mjs",
     "smoke:spend": "node scripts/spend-smoke.mjs",
     "smoke:brief": "node scripts/brief-order-smoke.mjs",
-    "verify": "npm run smoke:functions && npm run smoke:upstream && npm run smoke:pages && npm run smoke:workout && npm run smoke:rides && npm run smoke:library && npm run smoke:melter && npm run smoke:notes && npm run smoke:capture && npm run smoke:theme && npm run smoke:watch && npm run smoke:grocery && npm run smoke:ambient && npm run smoke:spend && npm run smoke:upstream-paused && npm run smoke:brief && npm run smoke:creed && npm run smoke:dreams && npm run smoke:systems && npm run smoke:finance && npm run smoke:altseason && npm run smoke:layouts && npm run smoke:recurrence && npm run smoke:holidays && npm run smoke:callayout && npm run smoke:stocks && npm run smoke:record && npm run smoke:scorecard && npm run smoke:migrations && npm run smoke:resilience && npm run smoke:notesshelf && npm run smoke:texthistory && npm run smoke:keys && npm run build && npm run smoke:sw",
+    "verify": "npm run smoke:functions && npm run smoke:upstream && npm run smoke:pages && npm run smoke:workout && npm run smoke:rides && npm run smoke:library && npm run smoke:melter && npm run smoke:notes && npm run smoke:capture && npm run smoke:theme && npm run smoke:watch && npm run smoke:grocery && npm run smoke:ambient && npm run smoke:spend && npm run smoke:upstream-paused && npm run smoke:brief && npm run smoke:creed && npm run smoke:dreams && npm run smoke:systems && npm run smoke:finance && npm run smoke:altseason && npm run smoke:layouts && npm run smoke:recurrence && npm run smoke:holidays && npm run smoke:callayout && npm run smoke:stocks && npm run smoke:record && npm run smoke:scorecard && npm run smoke:migrations && npm run smoke:resilience && npm run smoke:notesshelf && npm run smoke:texthistory && npm run smoke:keys && npm run smoke:guitar && npm run build && npm run smoke:sw",
     "smoke:upstream-paused": "node scripts/upstream-paused-smoke.mjs",
     "smoke:systems": "node scripts/systems-smoke.mjs",
     "smoke:creed": "node scripts/creed-smoke.mjs",
@@ -44,7 +44,8 @@
     "smoke:resilience": "node scripts/resilience-smoke.mjs",
     "smoke:keys": "node scripts/key-exposure-smoke.mjs",
     "smoke:notesshelf": "node scripts/notes-shelf-smoke.mjs",
-    "smoke:texthistory": "node scripts/text-history-smoke.mjs"
+    "smoke:texthistory": "node scripts/text-history-smoke.mjs",
+    "smoke:guitar": "node scripts/guitar-smoke.mjs"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.110.0",

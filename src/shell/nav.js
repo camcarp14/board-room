@@ -36,6 +36,31 @@ export const NAV = [
   // clear. SEVEN IS THE CEILING NOW; an eighth genuinely doesn't fit, and the
   // proof burden for anyone tempted is a screenshot at 375pt, not arithmetic.
   { key: "finances", label: "Finances" },
+  // GUITAR IS THE EIGHTH, AND THE NOTE ABOVE SAID AN EIGHTH DOESN'T FIT. It also
+  // said the proof burden was a screenshot at 375pt rather than arithmetic, so
+  // here is the screenshot's numbers — the real dock CSS rendered in Chromium,
+  // label widths read off the DOM rather than estimated:
+  //
+  //   375pt (iPhone 12–15)  columns 46.9px · "Finances" 44px · 2.9px gutter · 0 clipped
+  //   390pt                 columns 48.8px · "Finances" 44px · 4.8px gutter · 0 clipped
+  //   320pt (SE, 1st gen)   columns 38.8–44.2px, flex giving the long labels
+  //                         their width back · 0.2px gutter · 0 clipped
+  //
+  // Tight, and it reads. The old estimate ("~46px labels in ~53px columns") was
+  // measuring the labels about two pixels generously; at 10px/600 Inter,
+  // "Finances" is 44px and "Personal" is 43px. Nothing is truncated at any of the
+  // three widths, including the narrowest phone anybody still runs this on.
+  //
+  // Two things follow, and both are done rather than promised. `.dock-label` now
+  // carries text-overflow: ellipsis, so if a ninth ever arrives the failure is a
+  // legible "Financ…" instead of a letter sliced down the middle. And the burden
+  // stays where it was: a ninth needs its own measurement, not this paragraph.
+  //
+  // On placement: last, after Finances, because it is the one tab that is not
+  // about the day's business at all. It is also the one most likely to be used on
+  // a tablet propped against something with a guitar in your hands, where the
+  // sidebar has no ceiling worth worrying about.
+  { key: "guitar", label: "Guitar" },
   // Assets is no longer a destination. Its last three sub-tabs — Usage, Status,
   // Miner — moved into the Settings sheet's Systems tab, because none of them is
   // somewhere you GO: they're things you check, on the same footing as which
@@ -71,5 +96,6 @@ export const HEADERS = {
   grocery: { title: "Grocery" },
   markets: { title: "Markets" },
   finances: { title: "Finances" },
+  guitar: { title: "Guitar" },
   upstream: { title: "Upstream" },
 };

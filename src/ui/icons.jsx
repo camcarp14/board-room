@@ -299,6 +299,27 @@ export const IcMarketsFill = (p = {}) => (
     <rect x="17.9" y="16.4" width="1.8" height="3.2" rx="0.9" />
   </svg>
 );
+// A guitar's outline read down to what a 24px grid can hold: the body's two
+// bouts, the neck, the headstock. Three strings rather than six — at this size
+// six is a smudge, and the point of the glyph is "guitar", not "how many
+// strings". Angled the way one leans against a wall, which is the silhouette
+// everyone recognises even at a tab bar's scale.
+export const IcGuitar = (p = {}) => (
+  <svg {...base(p)}>
+    <path d="M9.9 12.1a3.9 3.9 0 0 0-5.5.6c-1.4 1.7-1.1 4.2.5 5.8s4.1 1.9 5.8.5a3.9 3.9 0 0 0 .6-5.5" />
+    <path d="M10.6 13.3 18 5.9" />
+    <path d="m17.3 5.2 1.3-1.3a1.6 1.6 0 0 1 2.3 0l.2.2a1.6 1.6 0 0 1 0 2.3l-1.3 1.3z" />
+    <circle cx="8.4" cy="15.6" r="1.6" />
+  </svg>
+);
+export const IcGuitarFill = (p = {}) => (
+  <svg {...base(p)}>
+    <path d="M9.9 12.1a3.9 3.9 0 0 0-5.5.6c-1.4 1.7-1.1 4.2.5 5.8s4.1 1.9 5.8.5a3.9 3.9 0 0 0 .6-5.5" fill="currentColor" />
+    <circle cx="8.4" cy="15.6" r="1.5" fill="var(--glass-raised)" stroke="none" />
+    <path d="M10.6 13.3 18 5.9" />
+    <path d="m17.3 5.2 1.3-1.3a1.6 1.6 0 0 1 2.3 0l.2.2a1.6 1.6 0 0 1 0 2.3l-1.3 1.3z" fill="currentColor" />
+  </svg>
+);
 export const NAV_ICONS = {
   brief: { line: IcBrief, fill: IcBriefFill },
   personal: { line: IcPersonal, fill: IcPersonalFill },
@@ -307,6 +328,7 @@ export const NAV_ICONS = {
   markets: { line: IcMarkets, fill: IcMarketsFill },
   finances: { line: IcFinances, fill: IcFinancesFill },
   grocery: { line: IcGrocery, fill: IcGroceryFill },
+  guitar: { line: IcGuitar, fill: IcGuitarFill },
   boardroom: { line: IcBoard, fill: IcBoardFill },
   assets: { line: IcAssets, fill: IcAssetsFill },
   systems: { line: IcSystems, fill: IcSystemsFill },

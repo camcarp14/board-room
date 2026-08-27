@@ -74,19 +74,31 @@ const kit = readFileSync("src/ui/kit.jsx", "utf8");
 
 const navKeys = [...(nav.match(/export const NAV = \[([\s\S]*?)\n\];/)?.[1] || "")
   .matchAll(/^\s*\{ key: "(\w+)"/gm)].map(m => m[1]);
-check("the nav is Brief, Personal, Train, Creed, Grocery, Markets, Finances",
-  navKeys.join(",") === "brief,personal,train,creed,grocery,markets,finances", navKeys.join(","));
+check("the nav is Brief, Personal, Train, Creed, Grocery, Markets, Finances, Guitar",
+  navKeys.join(",") === "brief,personal,train,creed,grocery,markets,finances,guitar", navKeys.join(","));
 // A tab with no route renders a blank titled page. The nav entry and the switch
 // case in App are two separate edits and only one of them is visible when you
 // forget the other — the icon/header pairs are already checked per key below,
 // but nothing was checking that the tab actually goes anywhere.
 check("every tab has a route", navKeys.every(k => new RegExp(`case "${k}":`).test(app)),
   navKeys.filter(k => !new RegExp(`case "${k}":`).test(app)).join(","));
-// Seven is the ceiling for a phone tab bar with readable labels — Markets took
-// the seventh slot after measuring the real fit (~53px columns at 375pt, the
-// longest label ~46px at 10px/600; see the note in nav.js). An eighth needs a
-// different chrome, not a smaller font.
-check("the tab bar stays at seven or fewer", navKeys.length <= 7, String(navKeys.length));
+// EIGHT, AND THE NUMBER MOVED BECAUSE SOMEBODY MEASURED IT. This said seven, and
+// nav.js said the proof burden for an eighth was a screenshot at 375pt rather
+// than arithmetic. Guitar took the eighth slot after exactly that: the real dock
+// CSS, rendered in Chromium at three device pixel ratios, with the label widths
+// read off the DOM.
+//
+//   375pt (iPhone 12–15)  columns 46.9px · longest label "Finances" 44px · 0 clipped
+//   390pt                 columns 48.8px · longest label 44px            · 0 clipped
+//   320pt (SE, 1st gen)   columns 38.8–44.2px (flex gives the long ones room) · 0 clipped
+//
+// So it fits, with 2.9px of gutter on the tightest common phone — tight, legible,
+// and not the fudge the old note feared. What has NOT moved is the burden: a
+// ninth needs its own measurement, and `.dock-label` now carries text-overflow so
+// a label that one day does not fit degrades to an ellipsis instead of a letter
+// sliced down the middle. Twelve is the hard stop below, well past anything that
+// could be read, so a runaway loop still fails.
+check("the tab bar stays at eight or fewer", navKeys.length <= 8, String(navKeys.length));
 // Dreams is a sub-tab of Creed now. Both halves matter: it must not be a nav
 // destination, and the page must actually mount it — a half-fold leaves a
 // panel nothing can reach.

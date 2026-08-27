@@ -281,7 +281,12 @@ button:active:not(:disabled) { transform: scale(0.97); }
    without any JS key or restart trick. It lands where the press left off. */
 .dock-tab.active .dock-icon { animation: tabpop var(--dur-3) var(--ease-spring) both; }
 @keyframes tabpop { from { transform: scale(0.84); } to { transform: scale(1); } }
-.dock-label { font-size: 10px; font-weight: 600; letter-spacing: 0.01em; line-height: 1; white-space: nowrap; max-width: 100%; overflow: hidden; }
+/* text-overflow, not just overflow: at eight tabs the widest label ("Finances",
+   44px at 10px/600) has 2.9px of gutter in a 46.9px column on a 375pt phone —
+   measured, see nav.js. Nothing truncates today, and if a ninth destination ever
+   makes one, the failure should read as a shortened word rather than as a letter
+   cut in half by a clipping rectangle. */
+.dock-label { font-size: 10px; font-weight: 600; letter-spacing: 0.01em; line-height: 1; white-space: nowrap; max-width: 100%; overflow: hidden; text-overflow: ellipsis; }
 .lbx .dock-tab { padding: 6px 0 5px; } /* letterboxed standalone — OS already cleared the indicator */
 
 /* ═══ CHROME — sidebar (tablet / desktop) ════════════════════════════════════ */

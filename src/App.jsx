@@ -31,6 +31,10 @@ const FinancesPage = lazy(() => import("./pages/finances/FinancesPage.jsx").then
 const CreedPage = lazy(() => import("./pages/creed/CreedPage.jsx").then(m => ({ default: m.CreedPage })));
 const MarketsPage = lazy(() => import("./pages/markets/MarketsPage.jsx").then(m => ({ default: m.MarketsPage })));
 const UpstreamPage = lazy(() => import("./pages/upstream/UpstreamPage.jsx").then(m => ({ default: m.UpstreamPage })));
+// Lazy like the rest, and more so: this chunk carries the whole music-theory
+// library, a verified chord table and the DSP for the tuner and the synthesised
+// backing tracks. None of it belongs in the bundle that has to paint the Brief.
+const GuitarPage = lazy(() => import("./pages/guitar/GuitarPage.jsx").then(m => ({ default: m.GuitarPage })));
 
 // ════════════════════════════════════════════════════════════════════════════
 // THE BOARD ROOM — SESSION edition.
@@ -791,6 +795,7 @@ export default function App() {
       case "grocery": return <GroceryPage isMobile={isMobile} settings={settings} updateSetting={updateSetting} />;
       case "markets": return <MarketsPage isMobile={isMobile} btc={btc} jump={jump} settings={settings} updateSetting={updateSetting} />;
       case "finances": return <FinancesPage isMobile={isMobile} settings={settings} updateSetting={updateSetting} />;
+      case "guitar": return <GuitarPage isMobile={isMobile} settings={settings} updateSetting={updateSetting} jump={jump} />;
       case "upstream": return <UpstreamPage isMobile={isMobile} />;
       default: return null;
     }

@@ -57,6 +57,11 @@ const TABLES = [
   // history of what broke on which build is exactly the kind of thing you only
   // want after you have lost it.
   "client_errors",
+  // The Guitar tab. guitar_sessions is the one that matters most here: the chord
+  // library and the curriculum ship in the bundle and come back with a deploy,
+  // but a practice log is a record of things that happened once and cannot be
+  // reconstructed from anything.
+  "guitar_sessions", "guitar_skills", "guitar_songs",
 ];
 
 // LEFT OUT, AND SAID OUT LOUD. The reason travels in the response next to the
