@@ -8,6 +8,7 @@
 // a trackpad and worse on glass. Schema notes live in lib/brief-layouts.js.
 import { useState } from "react";
 import { Sheet, Button, Pill, PillRow, SectionHeader, Field, useConfirm } from "../../ui/kit.jsx";
+import { BriefWidgetList } from "../../ui/BriefWidgetList.jsx";
 import {
   activeLayout, layoutColumnCount, defaultColumnCount,
   dealExplicit, addLayout, renameLayout, removeLayout, moveCard, setLayoutColumns,
@@ -121,6 +122,9 @@ export function BriefLayoutSheet({ settings, updateSetting, cards, screenColumns
           </div>
         </>
       )}
+      {/* Which cards are on the page at all, under the sheet that arranges them —
+          the arrangement grid above only ever lists the ones switched on here. */}
+      <BriefWidgetList settings={settings} updateSetting={updateSetting} title="Widgets" />
       {confirmEl}
     </Sheet>
   );

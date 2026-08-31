@@ -5,12 +5,13 @@
 // (with the actual failure). Empty dashes beat plausible-looking fake data.
 import { useState, useEffect, useCallback, useMemo, useRef, lazy, Suspense } from "react";
 import { T } from "../../theme.js";
-import { CollapsibleCard, StatTile, Button, Dot, Delta } from "../../ui/kit.jsx";
+import { Card, CollapsibleCard, StatTile, Button, Dot, Delta } from "../../ui/kit.jsx";
 import { IcChevronRight, IcExternal } from "../../ui/icons.jsx";
 import { StancePill, StatusTag, CARD_STATES } from "../../ui/shared.jsx";
 import { NumTween, Sparkline } from "../../ui/primitives.jsx";
 import { SortableList } from "../../ui/SortableList.jsx";
 import { applyBriefOrder, orderOf, packColumns } from "../../lib/brief-order.js";
+import { BRIEF_CARDS, hiddenBriefCards, visibleBriefCards, mergeHiddenOrder } from "../../lib/brief-cards.js";
 import { activeLayout, layoutColumnCount, defaultColumnCount, dealExplicit } from "../../lib/brief-layouts.js";
 import { BriefLayoutSheet } from "./BriefLayoutSheet.jsx";
 import GscLineChart from "../../GscLineChart.jsx";
@@ -764,34 +765,32 @@ export function MorningBriefPage({ btc, isMobile, settings, updateSetting, onOpe
   // ONE masonry over every card — no fixed rows, no full-width section dividers
   // that would strand a short card above a gap. Cards are dealt in GLANCE ORDER
   // into whichever column is currently shortest, so tall and short widgets nestle
-  // together while the order still reflects what you actually read first. `w` is a
-  // rough relative height, eyeballed not measured: it only needs to be ordinally
-  // right, and being wrong costs a slightly uneven column, never a bug.
+  // together while the order still reflects what you actually read first.
   //
-  // On the phone (nCols 1) this array IS the scroll order, which is what the order
-  // below is tuned for. Birthdays sits directly under the calendar on purpose —
-  // it's a calendar concern ("who's coming up"), so that's where you look for it.
-  // Side effect worth knowing: at three columns that makes Birthdays a column-top
-  // and pushes Markets to second in its column. Markets is still above the fold,
-  // and the phone is the surface that matters here.
-  //
-  // `id` is the persistence key for the manual order (app_settings.brief_order),
-  // so these strings are permanent: renaming one silently resets that card to its
-  // default slot for everyone who had moved it.
-  // `label` feeds the layout sheet's arrangement grid — the card's own title,
-  // not a second name for it.
-  const DEFAULT_CARDS = [
-    { id: "notes", c: card_notes, w: 3, label: "Notes" }, { id: "minicalendar", c: card_minicalendar, w: 2.5, label: "Calendar" }, { id: "birthdays", c: card_birthdays, w: 1.5, label: "Birthdays" },
-    { id: "markets", c: card_markets, w: 2.5, label: "Markets" }, { id: "watch", c: card_watch, w: 3, label: "Watch This Week" },
-    // 4.5, not 3: the feed is 480px tall now (50% up from 320), and the weight is
-    // what stops the packer from stacking it under another tall card.
-    { id: "wire", c: card_wire, w: 4.5, label: "The Wire" },
-    { id: "gsc", c: card_gsc, w: 2.5, label: "Search Console" }, { id: "meetings", c: card_meetings, w: 2, label: "Meetings" }, { id: "clarify", c: card_clarify, w: 1.5, label: "Clarify" },
-    { id: "zts", c: card_zts, w: 1.5, label: "ZTS" }, { id: "shopify", c: card_shopify, w: 1.5, label: "Shopify" },
-  ];
+  // The catalogue — which widgets exist, in what glance order, at what weight,
+  // under what name — moved to lib/brief-cards.js, because Settings needs to
+  // list the same eleven cards from a sheet that must not import this page. What
+  // stays here is the only thing that genuinely lives here: id → rendered node.
+  // Anything absent from NODES is skipped rather than drawn as a hole, so a
+  // catalogue entry that arrives before its card does can't blank a column.
+  const NODES = {
+    notes: card_notes, minicalendar: card_minicalendar, birthdays: card_birthdays,
+    markets: card_markets, watch: card_watch, wire: card_wire,
+    gsc: card_gsc, meetings: card_meetings, clarify: card_clarify,
+    zts: card_zts, shopify: card_shopify,
+  };
+  // Widgets you've switched off in Settings → Tabs (or in the Layout sheet)
+  // never reach the packer, so the ones that are left close over the gap
+  // instead of holding an empty slot in a column.
+  const hiddenCards = hiddenBriefCards(settings);
+  const liveCards = visibleBriefCards(BRIEF_CARDS, hiddenCards)
+    .filter((c) => NODES[c.id])
+    .map((c) => ({ ...c, c: NODES[c.id] }));
   // Your arrangement, if you have one. See lib/brief-order.js for why a card the
-  // saved order has never seen keeps its default slot instead of jumping to top.
-  const cards = applyBriefOrder(DEFAULT_CARDS, settings?.brief_order);
+  // saved order has never seen keeps its default slot instead of jumping to top;
+  // ids in that order for cards you've hidden are simply not matched here, which
+  // is what keeps a hidden card's place warm until you switch it back on.
+  const cards = applyBriefOrder(liveCards, settings?.brief_order);
   // Layout profiles are a DESKTOP concern (they're named after screens — "Mac",
   // "iPad"); the phone always renders the one-column glance order. The default
   // arrangement honors the stored column-count override; a named profile deals
@@ -817,7 +816,18 @@ export function MorningBriefPage({ btc, isMobile, settings, updateSetting, onOpe
           ignoreWithin keeps the inner feeds scrollable — a hold inside The Wire
           or Watch This Week is a scroll, not a grab — and the nested Notes list
           claims its own holds through the [data-sortable] ownership rule. */}
-      {layoutProfile ? (
+      {/* Every widget switched off. A blank page reads as a broken tool, and the
+          one control that undoes it lives two sheets away, so the page says what
+          happened and hands back the switch it was turned off with. */}
+      {cards.length === 0 ? (
+        <Card style={{ maxWidth: maxW, width: "100%", margin: "0 auto", textAlign: "center" }}>
+          <div className="t-foot" style={{ color: "var(--faint)", lineHeight: 1.5, padding: "6px 0 10px" }}>
+            Every Brief widget is switched off. Nothing is lost — they're waiting in
+            Settings → Tabs, under “The Brief's widgets”.
+          </div>
+          <Button kind="tinted" onClick={() => updateSetting?.("brief_hidden", [])}>Show them all</Button>
+        </Card>
+      ) : layoutProfile ? (
         // A named profile renders its authored columns statically — no drag.
         // The arrangement is edited in the layout sheet (arrow moves); a drag
         // that re-dealt an authored column would rewrite the profile silently.
@@ -832,7 +842,9 @@ export function MorningBriefPage({ btc, isMobile, settings, updateSetting, onOpe
       <SortableList
         className="stagger"
         items={cards}
-        onReorder={(ids) => updateSetting?.("brief_order", ids)}
+        // The drag can only report the cards it can see, so the hidden ones are
+        // folded back in beside the neighbours they had — see mergeHiddenOrder.
+        onReorder={(ids) => updateSetting?.("brief_order", mergeHiddenOrder(ids, settings?.brief_order, hiddenCards))}
         ignoreWithin=".brief-scroll, .pillrow"
         style={{ maxWidth: maxW, width: "100%", margin: "0 auto", minWidth: 0, display: "flex", flexDirection: "row", gap: 8, alignItems: "flex-start" }}
         layout={(itemNodes, ordered) => {

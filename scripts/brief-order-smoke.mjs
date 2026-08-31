@@ -117,19 +117,25 @@ check("packColumns tolerates a nonsense column count", packColumns(CARDS, 0).len
 // A rename resets that card to its default slot for anyone who had moved it.
 // Pinning the list here makes that a deliberate decision rather than a typo.
 import { readFileSync } from "node:fs";
+import { BRIEF_CARDS } from "../src/lib/brief-cards.js";
 const brief = readFileSync("src/pages/brief/BriefPage.jsx", "utf8");
-const declared = [...(brief.match(/const DEFAULT_CARDS = \[([\s\S]*?)\n  \];/)?.[1] || "").matchAll(/id: "([\w-]+)"/g)].map((m) => m[1]);
-check("BriefPage declares the expected card ids",
+// The card list left BriefPage for lib/brief-cards.js when the widget switches
+// landed — Settings has to name the same eleven cards without importing the
+// page. The ids are still what this file pins; only their address moved.
+// (brief-cards-smoke.mjs is what checks the catalogue and the page's rendered
+// nodes are still the same set.)
+const declared = BRIEF_CARDS.map((c) => c.id);
+check("the catalogue declares the expected card ids",
   declared.join(",") === DEFAULT_IDS,
-  `\n  page  ${declared.join(",")}\n  test  ${DEFAULT_IDS}`);
+  `\n  catalogue  ${declared.join(",")}\n  test       ${DEFAULT_IDS}`);
 check("every card id is unique", new Set(declared).size === declared.length);
 check("the order is saved under app_settings.brief_order",
-  /updateSetting\?\.\("brief_order", ids\)/.test(brief));
+  /updateSetting\?\.\("brief_order",/.test(brief));
 
 // The Wire's feed and its packing weight have to move together — a taller card
 // with a stale weight is exactly how a column ends up lopsided.
 check("The Wire's feed is 480px (50% up from 320)", /maxHeight: 480/.test(brief));
-const wireW = brief.match(/id: "wire", c: card_wire, w: ([\d.]+)/)?.[1];
+const wireW = BRIEF_CARDS.find((c) => c.id === "wire")?.w;
 check("The Wire's packing weight grew with it", Number(wireW) >= 4, `w: ${wireW}`);
 
 // ── the thumb rails ──────────────────────────────────────────────────────────

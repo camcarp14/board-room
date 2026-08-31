@@ -26,6 +26,7 @@ import { supabase } from "../lib/supabase.js";
 import { NAV } from "./nav.js";
 import { Sheet, Cell, CellGroup, Button, Field, SectionHeader, Switch, SwitchRow, Segmented, Spinner, useConfirm } from "../ui/kit.jsx";
 import { IcSun, IcMoon, IcAutoTheme, IcCheck } from "../ui/icons.jsx";
+import { BriefWidgetList } from "../ui/BriefWidgetList.jsx";
 import { PALETTES } from "../design/palettes.js";
 
 // Lazy, and deliberately so: this sheet is imported eagerly by App (it has to be
@@ -359,6 +360,11 @@ export function SettingsSheet({ onClose, session, theme, calUrl, onSaveCalUrl, i
                 the app. Brief isn't listed because it can't move or go: it's the
                 front door, first on the bar, and the one tab that always leads home.
               </div>
+              {/* The same act one level down. The bar decides which rooms exist;
+                  this decides what's in the one you land in — and it is HERE, not
+                  only in the desktop Brief's Layout sheet, because the phone has
+                  no Layout button and the phone is where the Brief is read. */}
+              <BriefWidgetList settings={settings} updateSetting={updateSetting} />
             </div>
           );
         })()}

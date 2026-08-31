@@ -10,6 +10,10 @@
 //                                     default (auto-packed) arrangement
 //   brief_layouts        [profile…]   named profiles — explicit columns
 //   brief_active_layout  "default" | profile.id
+//   brief_hidden         [id…]        widgets switched off (lib/brief-cards.js)
+//                                     — filtered out before any of the above
+//                                     runs, so an arrangement never has to know
+//                                     which cards are currently on the page
 //
 // A profile: { id, name, order: [id…], columns, columnLayout: [[id…]…],
 //   layoutColumns }. `columnLayout` is the authored truth — which card sits in
