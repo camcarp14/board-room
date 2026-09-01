@@ -5,15 +5,17 @@
 // endpoint, both GET (TRMNL polls with GET, no body):
 //
 //   ?view=ics   → a text/calendar (.ics) feed of your calendar events, plus
-//                 birthdays (yearly-recurring) and upkeep due-dates as all-day
-//                 events. Point TRMNL's native "Calendar" plugin at this URL and
-//                 you get the exact month-grid render shown on the device today,
-//                 but sourced from Board Room instead of Google Calendar.
+//                 birthdays and anniversaries (both yearly-recurring) and upkeep
+//                 due-dates as all-day events. Point TRMNL's native "Calendar"
+//                 plugin at this URL and you get the exact month-grid render
+//                 shown on the device today, but sourced from Board Room instead
+//                 of Google Calendar.
 //
-//   ?view=json  → a compact JSON brief (upcoming events + birthdays + upkeep
-//                 due) for a TRMNL "Private Plugin" set to Polling. You write the
-//                 Liquid layout once (see trmnl/board-brief.liquid) and TRMNL
-//                 renders a custom multi-widget Board Room screen. Default view.
+//   ?view=json  → a compact JSON brief (upcoming events + birthdays +
+//                 anniversaries + upkeep due) for a TRMNL "Private Plugin" set to
+//                 Polling. You write the Liquid layout once (see
+//                 trmnl/board-brief.liquid) and TRMNL renders a custom
+//                 multi-widget Board Room screen. Default view.
 //
 // SECURITY: like export-data.js, this uses the Supabase SERVICE ROLE key, which
 // bypasses RLS — necessary because TRMNL polls with no logged-in session. So the
@@ -100,6 +102,28 @@ function buildIcs(sections) {
   return lines.map(icsFold).join("\r\n") + "\r\n";
 }
 
+// ── Anniversary wording (mirrors src/lib/anniversaries.js) ───────────────────
+// DUPLICATED, NOT IMPORTED, for the reason written at length in audit.js: under
+// this repo's "type":"module" + esbuild bundling, requiring a shared helper
+// clobbers the function bundle's exports and deploys a handler-less function.
+// scripts/anniversaries-smoke.mjs asserts this copy and the app's agree on the
+// three sentences they can both produce.
+//
+// The rules are the app's rules: an unknown kind reads as a milestone and never
+// as a passing, and a year count is omitted rather than guessed.
+const anniversaryKindOf = (kind) => (kind === "passing" ? "passing" : "milestone");
+function anniversaryYears(row, occurrenceYear) {
+  const from = Number(row && row.year);
+  if (!Number.isFinite(from) || from < 1900 || from > occurrenceYear) return null;
+  const n = occurrenceYear - from;
+  return n >= 1 ? n : null;
+}
+function anniversaryNote(row, occurrenceYear) {
+  const n = anniversaryYears(row, occurrenceYear);
+  const base = anniversaryKindOf(row && row.kind) === "passing" ? "In memory" : "Anniversary";
+  return n == null ? base : `${base} · ${n} year${n === 1 ? "" : "s"}`;
+}
+
 // ── Upkeep next-due math (mirrors src/lib/upkeep.js intent) ───────────────────
 function upkeepDue(item) {
   if (!item.last_done || !item.interval_days) return null;
@@ -122,16 +146,17 @@ async function loadAll(supabase, userId) {
     if (r.error) { errors.push(`${table}: ${r.error.message}`); return null; }
     return r.data || [];
   });
-  const [events, birthdays, upkeep] = await Promise.all([
+  const [events, birthdays, anniversaries, upkeep] = await Promise.all([
     read("personal_events", "id,title,notes,start_time,end_time,all_day,location,category"),
     read("personal_birthdays", "id,name,month,day,year"),
+    read("personal_anniversaries", "id,name,kind,month,day,year"),
     read("upkeep_items", "id,name,interval_days,last_done"),
   ]);
-  return { events, birthdays, upkeep, errors };
+  return { events, birthdays, anniversaries, upkeep, errors };
 }
 
 // ── ICS view ─────────────────────────────────────────────────────────────────
-function renderIcs({ events = [], birthdays = [], upkeep = [] }, include) {
+function renderIcs({ events = [], birthdays = [], anniversaries = [], upkeep = [] }, include) {
   const out = [];
 
   if (include.has("events")) {
@@ -170,6 +195,28 @@ function renderIcs({ events = [], birthdays = [], upkeep = [] }, include) {
     }
   }
 
+  if (include.has("anniversaries")) {
+    const thisYear = new Date().getUTCFullYear();
+    for (const a of anniversaries) {
+      if (!a.month || !a.day) continue;
+      const start = icsDate(thisYear, a.month, a.day);
+      const nx = addDaysYMD(thisYear, a.month, a.day, 1);
+      // NO YEAR COUNT IN THE SUMMARY, deliberately, and this is the one place
+      // the app's wording is NOT reused. These are FREQ=YEARLY events: the
+      // summary is written once and redrawn every year by the device, so a
+      // baked-in "· 5 years" is correct for one year and a lie for every year
+      // after it. Birthdays have always said "X's Birthday" rather than an age
+      // for exactly this reason. The JSON view below, which is regenerated on
+      // every poll, does carry the count.
+      out.push({
+        uid: `anniversary-${a.id}@boardroom`, allDay: true, start, end: icsDate(nx.y, nx.m, nx.d),
+        rrule: "FREQ=YEARLY",
+        summary: anniversaryKindOf(a.kind) === "passing" ? `In memory: ${a.name}` : a.name || "Anniversary",
+        categories: "anniversary",
+      });
+    }
+  }
+
   if (include.has("upkeep")) {
     for (const it of upkeep) {
       const due = upkeepDue(it);
@@ -186,7 +233,7 @@ function renderIcs({ events = [], birthdays = [], upkeep = [] }, include) {
 }
 
 // ── JSON view (for a TRMNL Private Plugin, Polling) ──────────────────────────
-function renderJson({ events = [], birthdays = [], upkeep = [] }) {
+function renderJson({ events = [], birthdays = [], anniversaries = [], upkeep = [] }) {
   const now = Date.now();
   const fmtDay = (d, opts) => d.toLocaleDateString("en-US", { timeZone: TZ, ...opts });
   const fmtDateTime = (d) => d.toLocaleString("en-US", { timeZone: TZ, weekday: "short", month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
@@ -240,6 +287,33 @@ function renderJson({ events = [], birthdays = [], upkeep = [] }) {
       };
     });
 
+  // Anniversaries — same 60-day window and shape as birthdays above, so a
+  // Liquid layout can render either list with the same block. `note` is the
+  // finished sentence ("In memory · 5 years"); `kind` is there so a layout can
+  // tell a passing from a milestone without parsing English.
+  const upAnniversaries = (anniversaries || [])
+    .filter(a => a.month && a.day)
+    .map(a => {
+      let occ = Date.UTC(yearNow, a.month - 1, a.day);
+      if (occ < now - 86400000) occ = Date.UTC(yearNow + 1, a.month - 1, a.day);
+      return { a, occ };
+    })
+    .filter(({ occ }) => occ - now <= 60 * 86400000)
+    .sort((x, y) => x.occ - y.occ)
+    .slice(0, 8)
+    .map(({ a, occ }) => {
+      const n = relDays(occ);
+      const occYear = new Date(occ).getUTCFullYear();
+      return {
+        name: a.name || "Anniversary",
+        kind: anniversaryKindOf(a.kind),
+        note: anniversaryNote(a, occYear),
+        years: anniversaryYears(a, occYear),
+        when: new Date(occ).toLocaleDateString("en-US", { timeZone: "UTC", month: "short", day: "numeric" }),
+        days_until: n, rel: rel(n),
+      };
+    });
+
   // Upkeep due — anything due within 30 days or already overdue, up to 8.
   const upUpkeep = (upkeep || [])
     .map(it => ({ it, due: upkeepDue(it) }))
@@ -258,9 +332,10 @@ function renderJson({ events = [], birthdays = [], upkeep = [] }) {
   return {
     generated_at: new Date().toLocaleString("en-US", { timeZone: TZ, month: "short", day: "numeric", hour: "numeric", minute: "2-digit" }),
     tz: TZ,
-    counts: { events: upEvents.length, birthdays: upBirthdays.length, upkeep: upUpkeep.length },
+    counts: { events: upEvents.length, birthdays: upBirthdays.length, anniversaries: upAnniversaries.length, upkeep: upUpkeep.length },
     events: upEvents,
     birthdays: upBirthdays,
+    anniversaries: upAnniversaries,
     upkeep: upUpkeep,
   };
 }
@@ -310,7 +385,7 @@ exports.handler = async (event) => {
     const view = (q.view || "json").toLowerCase();
 
     if (view === "ics" || view === "ical" || view === "calendar") {
-      const include = new Set((q.include ? q.include.split(",") : ["events", "birthdays", "upkeep"]).map(s => s.trim()).filter(Boolean));
+      const include = new Set((q.include ? q.include.split(",") : ["events", "birthdays", "anniversaries", "upkeep"]).map(s => s.trim()).filter(Boolean));
       const ics = renderIcs(data, include);
       return {
         statusCode: 200,

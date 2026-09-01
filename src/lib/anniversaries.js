@@ -81,6 +81,54 @@ export function sortByNextOccurrence(rows, fromDate = new Date()) {
     .sort((a, b) => a.daysUntil - b.daysUntil || String(a.name || "").localeCompare(String(b.name || "")));
 }
 
+/**
+ * ONE upcoming list: birthdays and anniversaries, merged, soonest first.
+ *
+ * The Brief's "Birthdays" card used to read one table and the TRMNL feed used
+ * to publish one table, and both were about to grow a second copy of the same
+ * "next occurrence within N days" arithmetic. This is that arithmetic, once.
+ *
+ * The rows come back UNIFORM — `{ key, id, name, kind, note, next, daysUntil }`
+ * — so a renderer never branches on which table a row came from. `kind` is
+ * "birthday" for a birthday and the anniversary's own kind otherwise, which is
+ * what lets a surface tint or label the three differently without knowing how
+ * either table is shaped. `note` is the trailing descriptor already worded:
+ * "turns 41", "In memory · 5 years", "Anniversary".
+ *
+ * `key` is prefixed by family because both tables generate their own uuids and
+ * a React list keyed on a bare id would be one collision away from dropping a
+ * row silently.
+ *
+ * Everything is computed against the OCCURRENCE year, not this year: a birthday
+ * on Jan 2 read on Dec 30 turns the age it will turn in January, and an
+ * anniversary the same. Getting that wrong is invisible for 50 weeks a year.
+ */
+export function upcomingDates({ birthdays, anniversaries, withinDays = 14, from = new Date() } = {}) {
+  const out = [];
+  for (const b of Array.isArray(birthdays) ? birthdays.filter(Boolean) : []) {
+    if (!isValidDate(b)) continue;
+    const { next, daysUntil } = nextBirthdayOccurrence(Number(b.month), Number(b.day), from);
+    const born = Number(b.year);
+    const turns = Number.isFinite(born) && born > 1900 && born <= next.getFullYear() ? next.getFullYear() - born : null;
+    out.push({
+      key: `birthday:${b.id}`, id: b.id, name: b.name || "Birthday", kind: "birthday",
+      note: turns == null ? "" : `turns ${turns}`, next, daysUntil,
+    });
+  }
+  for (const a of Array.isArray(anniversaries) ? anniversaries.filter(Boolean) : []) {
+    if (!isValidDate(a)) continue;
+    const { next, daysUntil } = nextBirthdayOccurrence(Number(a.month), Number(a.day), from);
+    out.push({
+      key: `anniversary:${a.id}`, id: a.id, name: a.name || "Anniversary", kind: normalizeKind(a.kind),
+      note: anniversaryLine(a, next.getFullYear()), next, daysUntil,
+    });
+  }
+  const cap = Number.isFinite(Number(withinDays)) ? Number(withinDays) : 14;
+  return out
+    .filter((r) => r.daysUntil >= 0 && r.daysUntil <= cap)
+    .sort((a, b) => a.daysUntil - b.daysUntil || String(a.name).localeCompare(String(b.name)));
+}
+
 /** The panel's filter. "all" is not a kind — it's the absence of one. */
 export function filterByKind(rows, kind) {
   const list = Array.isArray(rows) ? rows.filter(Boolean) : [];

@@ -43,7 +43,11 @@
 export const BRIEF_CARDS = [
   { id: "notes", w: 3, label: "Notes" },
   { id: "minicalendar", w: 2.5, label: "Calendar" },
-  { id: "birthdays", w: 1.5, label: "Birthdays" },
+  // Birthdays AND anniversaries — one card, because they answer the same
+  // question. The id stays "birthdays": it is the persistence key for the order
+  // and the hidden list, and renaming it would reset the card for anyone who
+  // had moved or switched it off.
+  { id: "birthdays", w: 1.5, label: "Birthdays & Dates" },
   { id: "markets", w: 2.5, label: "Markets" },
   { id: "watch", w: 3, label: "Watch This Week" },
   { id: "wire", w: 4.5, label: "The Wire" },

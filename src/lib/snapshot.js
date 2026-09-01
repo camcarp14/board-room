@@ -5,7 +5,7 @@
 // read it back out into a compact context block. Module-level on purpose —
 // this is a single-instance app, and it avoids threading every page's state
 // through the whole component tree just so the chat can see it.
-const siteSnapshot = { btc: null, stocks: null, wire: null, todayEvents: null, todayBirthdays: null, clarify: null, zts: null, shopify: null, gsc: null, updatedAt: null };
+const siteSnapshot = { btc: null, stocks: null, wire: null, todayEvents: null, todayBirthdays: null, todayAnniversaries: null, clarify: null, zts: null, shopify: null, gsc: null, updatedAt: null };
 
 // Persisted so the Brief can paint last-known market/pipeline data instantly on
 // reopen (instead of skeletons), and so the board seats have real numbers even
@@ -87,6 +87,11 @@ export function formatSnapshotForChat() {
   if (ev && ev.length) parts.push(`On the calendar soon: ${ev.slice(0, 3).map(e => e.title).join(", ")}`);
   const bd = siteSnapshot.todayBirthdays;
   if (bd && bd.length) parts.push(`Birthdays coming up: ${bd.slice(0, 3).map(x => x.name).join(", ")}`);
+  // Said in the row's own words ("Dad — In memory · 7 years"), not as a bare
+  // name: an advisor told only "Dad" on a coming date would guess what kind of
+  // date it is, and the one guess that matters here is the one to never make.
+  const an = siteSnapshot.todayAnniversaries;
+  if (an && an.length) parts.push(`Anniversaries coming up: ${an.slice(0, 3).map(x => x.note ? `${x.name} — ${x.note}` : x.name).join(", ")}`);
   if (!parts.length) return "";
   const ageMin = siteSnapshot.updatedAt ? Math.round((Date.now() - siteSnapshot.updatedAt) / 60000) : null;
   return `\n\nLive site data (as of ${ageMin != null ? ageMin + " min ago" : "just now"} — treat as current, not something to caveat):\n${parts.join("\n")}`;

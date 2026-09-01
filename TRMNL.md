@@ -1,7 +1,8 @@
 # Connecting Board Room to your TRMNL
 
 Your TRMNL currently shows a Google Calendar. This wires it to **Board Room's
-own data** instead — your calendar events, birthdays, and upkeep — served
+own data** instead — your calendar events, birthdays, anniversaries, and
+upkeep — served
 straight from Supabase. Nothing about your existing Board Room UI changes; this
 just adds one read-only endpoint (`netlify/functions/trmnl.js`) that publishes
 your data in the two shapes TRMNL understands.
@@ -11,7 +12,7 @@ There are two ways to connect, and you can use **both** at once:
 | You want… | Use | TRMNL side |
 |---|---|---|
 | The same clean month-grid calendar, but fed by Board Room | **ICS feed** | Native **Calendar** plugin |
-| A custom screen with events **+ birthdays + upkeep** together | **JSON brief** | **Private Plugin** (Polling) + the included Liquid |
+| A custom screen with events **+ birthdays + anniversaries + upkeep** together | **JSON brief** | **Private Plugin** (Polling) + the included Liquid |
 
 ---
 
@@ -57,17 +58,23 @@ Room.
 The feed includes, as all-day/recurring entries:
 - **Events** from your Calendar tab
 - **Birthdays** (yearly-recurring, from the Birthdays tab)
+- **Anniversaries** (yearly-recurring, from the Anniversaries tab) — a passing
+  reads as `In memory: Name`, a milestone as its own name. Neither carries a
+  year count, because an `.ics` recurring event's title is written once and
+  redrawn every year: "5 years" would be right for one of them and wrong for
+  the rest. The JSON brief below does carry the count, because it is
+  regenerated on every poll.
 - **Upkeep** next-due dates (from the Upkeep tab)
 
 Want just events? Add `&include=events` (or any comma list of
-`events,birthdays,upkeep`) to the URL.
+`events,birthdays,anniversaries,upkeep`) to the URL.
 
 ---
 
 ## Option 2 — Custom "Board Room Brief" screen (Private Plugin)
 
 This is the one that shows **other widgets alongside the calendar** — events,
-birthdays, and upkeep in one screen.
+birthdays, anniversaries, and upkeep in one screen.
 
 1. TRMNL dashboard → **Plugins** → **Private Plugin** → **Add New**.
 2. **Strategy:** Polling.
@@ -87,9 +94,13 @@ The JSON it renders from looks like:
 ```jsonc
 {
   "generated_at": "Jul 20, 12:31 PM",
-  "counts": { "events": 4, "birthdays": 2, "upkeep": 1 },
+  "counts": { "events": 4, "birthdays": 2, "anniversaries": 1, "upkeep": 1 },
   "events":    [{ "title": "...", "when": "Wed, Jul 22 · 6:00 PM", "rel": "in 2d", "location": "..." }],
   "birthdays": [{ "name": "Natalie", "when": "Jul 22", "rel": "in 2d", "turning": 30 }],
+  // `kind` is "passing" or "milestone"; `note` is the finished sentence, so a
+  // layout never has to decide what kind of day it is. `years` is null when no
+  // year was recorded — it is never guessed.
+  "anniversaries": [{ "name": "Dad", "kind": "passing", "note": "In memory · 5 years", "years": 5, "when": "Jul 24", "rel": "in 4d" }],
   "upkeep":    [{ "name": "Replace filter", "when": "Jul 25", "rel": "in 5d", "overdue": false }]
 }
 ```

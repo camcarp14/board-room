@@ -12,6 +12,7 @@ import { NumTween, Sparkline } from "../../ui/primitives.jsx";
 import { SortableList } from "../../ui/SortableList.jsx";
 import { applyBriefOrder, orderOf, packColumns } from "../../lib/brief-order.js";
 import { BRIEF_CARDS, hiddenBriefCards, visibleBriefCards, mergeHiddenOrder } from "../../lib/brief-cards.js";
+import { upcomingDates } from "../../lib/anniversaries.js";
 import { activeLayout, layoutColumnCount, defaultColumnCount, dealExplicit } from "../../lib/brief-layouts.js";
 import { BriefLayoutSheet } from "./BriefLayoutSheet.jsx";
 import GscLineChart from "../../GscLineChart.jsx";
@@ -80,7 +81,7 @@ function ShowMore({ open, count, onToggle }) {
   );
 }
 
-export function MorningBriefPage({ btc, isMobile, settings, updateSetting, onOpenCalendar, onAddEvent, onOpenNotes, onOpenQueue, onOpenBirthdays, refreshSignal }) {
+export function MorningBriefPage({ btc, isMobile, settings, updateSetting, onOpenCalendar, onAddEvent, onOpenNotes, onOpenQueue, onOpenBirthdays, onOpenAnniversaries, refreshSignal }) {
   // Column count follows the width: 1 (phone / tablet portrait), 2 (desktop &
   // tablet landscape ≥1024 — below this the market tiles truncated to "$…"),
   // 3 (wide desktop ≥1440, where a 2-column layout left big empty gutters).
@@ -123,6 +124,11 @@ export function MorningBriefPage({ btc, isMobile, settings, updateSetting, onOpe
   const [meetingsStatus, setMeetingsStatus] = useState({ state: "loading" });
   const [birthdays, setBirthdays] = useState(null); // null = loading
   const [birthdaysErr, setBirthdaysErr] = useState(null);
+  // Anniversaries share the birthdays card (see the card itself). Their own
+  // load state, because a failure in one table must not blank the other: a
+  // Supabase blip on anniversaries should cost you the passings, not the
+  // birthdays you would otherwise still be able to read.
+  const [anniversaries, setAnniversaries] = useState(null);
   const [miniEvents, setMiniEvents] = useState([]); // for the mini calendar card — same personal_events table CalendarPanel uses
   const [eventAnalysis, setEventAnalysis] = useState(() => { // takeKey(e) -> take | "loading" | "error"; hydrated from localStorage
     try { return JSON.parse(localStorage.getItem(TAKES_LS) || "{}") || {}; } catch { return {}; }
@@ -338,6 +344,19 @@ export function MorningBriefPage({ btc, isMobile, settings, updateSetting, onOpe
         const soon = (rows || []).map(b => ({ name: b.name, ...nextBirthdayOccurrence(b.month, b.day) })).filter(b => b.daysUntil <= 14).sort((a, b) => a.daysUntil - b.daysUntil);
         updateSnapshot({ todayBirthdays: soon });
       }).catch(e => { if (alive()) setBirthdaysErr(/fetch/i.test(e?.message || "") ? "Couldn't reach Supabase — check the connection and refresh." : e?.message || "Couldn't load birthdays."); }),
+      db.loadAnniversaries().then(rows => {
+        if (!alive()) return;
+        setAnniversaries(rows);
+        // The board seats read the snapshot. They already knew whose birthday
+        // was coming; the day somebody died is at least as relevant to advice
+        // about the week, and silence there is what made them tone-deaf.
+        const soon = upcomingDates({ anniversaries: rows, withinDays: 14 })
+          .map(({ name, kind, note, daysUntil }) => ({ name, kind, note, daysUntil }));
+        updateSnapshot({ todayAnniversaries: soon });
+        // A failed anniversaries read is not "no anniversaries": [] would be a
+        // quiet lie in the card. null keeps the merged list honest — see the
+        // card's own note on partial loads.
+      }).catch(() => { if (alive()) setAnniversaries(null); }),
       db.loadEvents().then(rows => {
         if (!alive()) return;
         setMiniEvents(rows);
@@ -640,16 +659,28 @@ export function MorningBriefPage({ btc, isMobile, settings, updateSetting, onOpe
     </CollapsibleCard>
   );
 
-  /* ── Upcoming birthdays — the next two weeks, rolling ──────────────────── */
-  const upcomingBdays = (birthdays || [])
-    .map(b => ({ ...b, ...nextBirthdayOccurrence(b.month, b.day) }))
-    .filter(b => b.daysUntil <= 14)
-    .sort((a, b) => a.daysUntil - b.daysUntil);
+  /* ── The next two weeks of dates, rolling ──────────────────────────────────
+     Birthdays AND anniversaries, in one list. They answer the same question —
+     "what day is coming that I need to know about" — and splitting them across
+     two cards would mean the passings live somewhere you don't look on the
+     morning you needed the reminder.
+     The merge and the wording are lib/anniversaries.js's, shared with the TRMNL
+     feed, so the phone and the e-ink panel can't describe the same day
+     differently. A tone per kind is the only thing this card adds. */
+  const upcomingBdays = upcomingDates({ birthdays, anniversaries, withinDays: 14 });
   const bdayUntil = (d) => d === 0 ? "Today" : d === 1 ? "Tomorrow" : `in ${d}d`;
+  // Pink for a birthday (as it always was), a quiet gray for a passing, and the
+  // blue the app uses for anything dated for the rest. The dot is the only
+  // signal that these are different kinds of day, so it does the work.
+  const dateTone = (kind) => (kind === "birthday" ? T.pink : kind === "passing" ? T.faint : T.blue);
   const card_birthdays = (
-    <CollapsibleCard {...coll("birthdays")} pad={pad} tight title="Birthdays"
+    <CollapsibleCard {...coll("birthdays")} pad={pad} tight title="Birthdays & Dates"
       trailing={<button className="sec-link" onClick={onOpenBirthdays} style={{ display: "inline-flex", alignItems: "center", gap: 2 }}>All<IcChevronRight size={12} /></button>}>
-      {birthdays === null ? (
+      {/* PARTIAL LOADS ARE SAID OUT LOUD RATHER THAN AVERAGED. The skeleton is
+          for "neither table has answered yet"; once either has, the list shows
+          what really loaded, and the footnote below names the half that didn't
+          instead of letting a short list pass for a quiet fortnight. */}
+      {birthdays === null && anniversaries === null ? (
         birthdaysErr ? (
           <div className="t-foot" style={{ color: "var(--faint)", padding: "4px 0" }}>{birthdaysErr}</div>
         ) : (
@@ -659,23 +690,38 @@ export function MorningBriefPage({ btc, isMobile, settings, updateSetting, onOpe
           </div>
         )
       ) : upcomingBdays.length === 0 ? (
-        <div className="t-foot" style={{ color: "var(--faint)", padding: "4px 0" }}>No birthdays in the next two weeks.</div>
+        <div className="t-foot" style={{ color: "var(--faint)", padding: "4px 0" }}>Nothing in the next two weeks.</div>
       ) : (
         <div style={{ display: "flex", flexDirection: "column" }}>
           {upcomingBdays.map((b, i) => {
             const soon = b.daysUntil <= 7;
+            // A row goes to the list it lives in — a passing opens
+            // Anniversaries, not Birthdays. The header's "All" keeps its old
+            // destination; it is the card's name that changed, not its home.
+            const open = b.kind === "birthday" ? onOpenBirthdays : onOpenAnniversaries;
             return (
-              <div key={b.id} style={{ display: "flex", alignItems: "center", gap: 10, minHeight: 34, padding: "3px 0", borderTop: i === 0 ? "none" : "0.5px solid var(--line)" }}>
-                <Dot tone={T.pink} size={6} />
+              <button key={b.key} onClick={open || undefined}
+                style={{
+                  display: "flex", alignItems: "center", gap: 10, minHeight: 34, padding: "3px 0",
+                  borderTop: i === 0 ? "none" : "0.5px solid var(--line)",
+                  background: "none", border: "none", font: "inherit", color: "inherit", textAlign: "left",
+                  cursor: open ? "pointer" : "default", width: "100%",
+                }}>
+                <Dot tone={dateTone(b.kind)} size={6} />
                 <span className="t-call" style={{ flex: 1, minWidth: 0, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
                   {b.name}
-                  {b.year ? <span className="t-cap" style={{ color: "var(--faint)", fontWeight: 400 }}> · turns {b.next.getFullYear() - b.year}</span> : null}
+                  {b.note ? <span className="t-cap" style={{ color: "var(--faint)", fontWeight: 400 }}> · {b.note}</span> : null}
                 </span>
                 <span className="t-cap t-num" style={{ color: "var(--faint)", flex: "none" }}>{b.next.toLocaleDateString("en-US", { month: "short", day: "numeric" })}</span>
                 <span className="t-num" style={{ fontSize: 12, fontWeight: 600, color: soon ? "var(--accent)" : "var(--faint)", flex: "none", minWidth: 56, textAlign: "right" }}>{bdayUntil(b.daysUntil)}</span>
-              </div>
+              </button>
             );
           })}
+        </div>
+      )}
+      {(birthdays === null || anniversaries === null) && !(birthdays === null && anniversaries === null) && (
+        <div className="t-cap" style={{ color: "var(--faint)", paddingTop: 6 }}>
+          {birthdays === null ? "Birthdays didn't load — this list is anniversaries only." : "Anniversaries didn't load — this list is birthdays only."}
         </div>
       )}
     </CollapsibleCard>
