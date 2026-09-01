@@ -146,7 +146,7 @@ for (const [layer, id] of Object.entries(modelIds)) {
 // Checked against Anthropic's published per-MTok rates. A model move that
 // forgets the price is otherwise invisible — the estimate just goes quietly
 // wrong, in whichever direction the new model happens to differ.
-const LIST = { haiku: [1, 5], sonnet: [3, 15], opus: [5, 25] };
+const LIST = { haiku: [1, 5], sonnet: [2, 10], opus: [5, 25] };
 for (const [layer, [i, o]] of Object.entries(LIST)) {
   const r = baseline?.[layer];
   check(`${layer} list price is $${i}/$${o} per MTok`,
@@ -156,23 +156,35 @@ for (const [layer, [i, o]] of Object.entries(LIST)) {
 check("fable-5 is priced at $10/$50", idTable["claude-fable-5"] && Number(idTable["claude-fable-5"].in) === 10 && Number(idTable["claude-fable-5"].out) === 50);
 check("web search is priced at $10/1k ($0.01 each)", /SEARCH_COST\s*=\s*0\.01/.test(upstreamSrc));
 
-// Sonnet's introductory window. While it is open every copy must bill $2/$10;
-// once it closes this flips to telling you the dead branch can come out.
-const introEnd = Date.parse("2026-09-01T00:00:00Z");
-const introOpen = Date.now() < introEnd;
+// SONNET'S "INTRODUCTORY" WINDOW IS OVER AND THE PRICE DID NOT MOVE.
+//
+// This block used to be a clock. Sonnet 5 launched at $2/$10 billed as
+// introductory pricing through 2026-08-31, with $3/$15 scheduled for September
+// 1 — so all five copies carried introIn/introOut/introUntil and resolved the
+// rate at call time, and this check flipped itself over on the 1st to say "the
+// dead branch can come out now".
+//
+// It flipped, and the instruction it printed was WRONG. Anthropic cancelled the
+// increase: the pricing page now lists Sonnet 5 at $2/$10 with a note that the
+// launch rate "is now the standard price" and that the September 1 increase
+// "will not occur". Following the smoke would have doubled every Sonnet row in
+// the ledger — Upstream routes every web-search stage and judge to Sonnet, so
+// that is the app's most expensive surface, mis-billed by 50%.
+//
+// What replaced it is not a clock. $2/$10 is the list rate, asserted in LIST
+// above like every other model, and the three assertions below only make sure
+// the time-travelling machinery cannot come back with a date attached to it.
 const s = baseline?.sonnet;
-if (introOpen) {
-  check("sonnet bills the $2/$10 introductory rate while it is in force",
-    s && Number(s.introIn) === 2 && Number(s.introOut) === 10 && s.introUntil === "SONNET_INTRO_ENDS",
-    s ? JSON.stringify(s) : "(missing)");
-  for (const p of LAYER_TABLES.concat("netlify/lib/upstream/llm.js")) {
-    check(`${p.split("/").pop()} resolves the rate at call time`, /introUntil && at < .+introUntil/.test(code(read(p))));
-  }
-} else {
-  check("sonnet's introductory pricing has expired — drop the intro branch and bill $3/$15",
-    !s?.introIn,
-    "the window closed 2026-08-31; introIn/introOut/introUntil are now dead code");
+check("sonnet's price is a plain rate, not a window",
+  s && !s.introIn && !s.introOut && !s.introUntil,
+  s ? JSON.stringify(s) : "(missing)");
+for (const p of LAYER_TABLES.concat("netlify/lib/upstream/llm.js")) {
+  const src = code(read(p));
+  check(`${p.split("/").pop()} bills one rate rather than resolving one by date`,
+    !/introUntil/.test(src) && !/SONNET_INTRO_ENDS/.test(src));
 }
+check("the model picker's label and multiple track the price",
+  /label: "Sonnet", price: "\$2\/\$10", mult: 2/.test(code(read("src/lib/claude.js"))));
 
 // ── 4. the ledger has a schema, and it is the one the app talks to ───────────
 const SQL_PATH = "supabase-usage-fix.sql";

@@ -32,7 +32,7 @@ const MODEL_IDS = {
 // on Systems → Model Control. It tracks `price` — update both together.
 export const MODEL_META = [
   { key: "haiku", label: "Haiku", price: "$1/$5", mult: 1 },
-  { key: "sonnet", label: "Sonnet", price: "$3/$15", mult: 3 },
+  { key: "sonnet", label: "Sonnet", price: "$2/$10", mult: 2 },
   { key: "opus", label: "Opus", price: "$5/$25", mult: 5 },
 ];
 // $ per 1M tokens. Opus 4.8 is $5/$25 — a third of the Opus 4.1 pricing this
@@ -45,22 +45,22 @@ export const MODEL_META = [
 // bundle's exports and the function deploys with no handler (see the note in
 // audit.js). scripts/spend-smoke.mjs asserts all three agree instead.
 //
-// Sonnet 5 runs on INTRODUCTORY pricing ($2/$10) through 2026-08-31, then
-// reverts to list ($3/$15). Billing the list rate before then overstated every
-// Sonnet row by 50%. Cost is computed at write time, so historical usage_log
-// rows correctly keep whichever rate was in force when the call was made.
-const SONNET_INTRO_ENDS = Date.parse("2026-09-01T00:00:00Z");
+// Sonnet 5 is $2/$10 — PERMANENTLY. This shipped as "introductory pricing
+// through 2026-08-31, then $3/$15", and the scheduled increase was cancelled:
+// Anthropic's pricing page now carries the $2/$10 row with a note saying the
+// launch rate "is now the standard price" and the September 1 increase "will
+// not occur". So there is no window and no clock — the rate below IS the rate,
+// and the intro branch that resolved it at call time is gone with the date it
+// was waiting for. Historical usage_log rows are unaffected: cost is computed
+// at write time and every one of them was already written at $2/$10.
 const PRICING = {
   haiku: { in: 1, out: 5 },
-  sonnet: { in: 3, out: 15, introIn: 2, introOut: 10, introUntil: SONNET_INTRO_ENDS },
+  sonnet: { in: 2, out: 10 },
   opus: { in: 5, out: 25 },
 };
 // Unknown layer keys resolve to Haiku here because callClaude() resolves an
 // unknown modelKey to the Haiku *model* — the estimate has to follow the call.
-const rateFor = (mk, at = Date.now()) => {
-  const p = PRICING[mk] || PRICING.haiku;
-  return p.introUntil && at < p.introUntil ? { in: p.introIn, out: p.introOut } : { in: p.in, out: p.out };
-};
+const rateFor = (mk) => PRICING[mk] || PRICING.haiku;
 // Cache tokens bill at 1.25x input (write) and 0.1x input (read). Nothing sets
 // cache_control today so both are 0 — but `input_tokens` is the UNCACHED
 // remainder, not total input, so the day caching is switched on anywhere this

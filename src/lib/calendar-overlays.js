@@ -12,7 +12,7 @@
 //      into event-SHAPED objects here, at render time, so the grid can treat
 //      everything uniformly without anything being written to the database.
 //
-// Overlay rows carry `overlay: 'birthday' | 'holiday'` and a synthetic id
+// Overlay rows carry `overlay: 'birthday' | 'anniversary' | 'holiday'` and a synthetic id
 // prefixed with that word. Nothing may pass one to a save or a delete: they
 // have no database identity, and the panel keys its edit affordances off this
 // flag rather than off the id's shape.
@@ -21,6 +21,7 @@
 // Pure. scripts/holidays-smoke.mjs exercises it.
 
 import { holidaysBetween } from "./holidays.js";
+import { anniversaryLine, isValidDate, normalizeKind } from "./anniversaries.js";
 
 const pad = (n) => String(n).padStart(2, "0");
 const dayKeyOf = (d) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
@@ -142,6 +143,52 @@ export function birthdayOccurrences(birthdays, from, to) {
   return out;
 }
 
+/**
+ * Anniversaries → all-day, event-shaped rows. Same contract as birthdays.
+ *
+ * The day somebody died, or any other date that repeats because it already
+ * happened (lib/anniversaries.js).
+ *
+ * `kind` rides along so the agenda can tell one from the other, and `line` is
+ * the day's own sentence already assembled — "In memory · 5 years",
+ * "Anniversary". The calendar and the panel have to word the same day
+ * identically, and the only way to guarantee that is for neither of them to be
+ * the one wording it. The year count inside it is omitted rather than guessed:
+ * see yearsSince in lib/anniversaries.js.
+ */
+export function anniversaryOccurrences(anniversaries, from, to) {
+  const a = from instanceof Date ? from : new Date(from);
+  const b = to instanceof Date ? to : new Date(to);
+  if (!Array.isArray(anniversaries) || Number.isNaN(a.getTime()) || Number.isNaN(b.getTime()) || b < a) return [];
+  const lo = dayKeyOf(a), hi = dayKeyOf(b);
+  const out = [];
+  for (let y = a.getFullYear(); y <= b.getFullYear(); y++) {
+    for (const r of anniversaries) {
+      if (!isValidDate(r)) continue;
+      const m = Number(r.month), d = Number(r.day);
+      const key = dayKeyOf(new Date(y, m - 1, d));
+      if (key < lo || key > hi) continue;
+      out.push({
+        id: `anniversary:${r.id || `${m}-${d}-${r.name}`}:${y}`,
+        overlay: "anniversary",
+        kind: normalizeKind(r.kind),
+        title: r.name || "Anniversary",
+        notes: r.notes || "",
+        location: "",
+        category: "personal",
+        all_day: true,
+        // Local midnight, for the reason spelled out above birthdays: an
+        // agenda row PARSES this instant to label its day, and a UTC midnight
+        // reads as the previous day for anyone west of Greenwich.
+        start_time: `${key}T00:00:00`,
+        end_time: null,
+        line: anniversaryLine(r, y),
+      });
+    }
+  }
+  return out;
+}
+
 /** Holidays → all-day, event-shaped rows. Same contract as birthdays. */
 export function holidayOccurrences(from, to) {
   return holidaysBetween(from, to).map((h) => ({
@@ -162,15 +209,17 @@ export function holidayOccurrences(from, to) {
  * One merged, date-ordered list of real occurrences plus overlays.
  *
  * Real events sort ahead of overlays on the same day: a birthday is context
- * for the day, your 9am is the day. Within overlays, birthdays lead holidays
- * for the same reason.
+ * for the day, your 9am is the day. Within overlays the order is birthdays,
+ * anniversaries, then holidays — most personal first, for the same reason.
  */
-export function withOverlays(occurrences, { birthdays, from, to, holidays = true } = {}) {
+export function withOverlays(occurrences, { birthdays, anniversaries, from, to, holidays = true } = {}) {
   const extra = [
     ...birthdayOccurrences(birthdays || [], from, to),
+    ...anniversaryOccurrences(anniversaries || [], from, to),
     ...(holidays ? holidayOccurrences(from, to) : []),
   ];
-  const rank = (e) => (!e.overlay ? 0 : e.overlay === "birthday" ? 1 : 2);
+  const ORDER = { birthday: 1, anniversary: 2, holiday: 3 };
+  const rank = (e) => (!e.overlay ? 0 : ORDER[e.overlay] || 3);
   return [...(Array.isArray(occurrences) ? occurrences : []), ...extra].sort((x, y) => {
     const kx = startDayKey(x) || "", ky = startDayKey(y) || "";
     if (kx !== ky) return kx < ky ? -1 : 1;

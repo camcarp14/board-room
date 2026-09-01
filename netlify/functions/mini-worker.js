@@ -29,17 +29,20 @@ const MODEL_IDS = { haiku: "claude-haiku-4-5", sonnet: "claude-sonnet-5", opus: 
 // $ per 1M tokens. Duplicated from src/lib/claude.js ON PURPOSE — a required
 // helper's module.exports clobbers this bundle's exports and deploys a handler-
 // less function (see audit.js). scripts/spend-smoke.mjs asserts they agree.
-// Sonnet 5 is on introductory pricing ($2/$10) through 2026-08-31.
-const SONNET_INTRO_ENDS = Date.parse("2026-09-01T00:00:00Z");
+// Sonnet 5 is $2/$10 — PERMANENTLY. This shipped as "introductory pricing
+// through 2026-08-31, then $3/$15", and the scheduled increase was cancelled:
+// Anthropic's pricing page now carries the $2/$10 row with a note saying the
+// launch rate "is now the standard price" and the September 1 increase "will
+// not occur". So there is no window and no clock — the rate below IS the rate,
+// and the intro branch that resolved it at call time is gone with the date it
+// was waiting for. Historical usage_log rows are unaffected: cost is computed
+// at write time and every one of them was already written at $2/$10.
 const PRICING = {
   haiku: { in: 1, out: 5 },
-  sonnet: { in: 3, out: 15, introIn: 2, introOut: 10, introUntil: SONNET_INTRO_ENDS },
+  sonnet: { in: 2, out: 10 },
   opus: { in: 5, out: 25 },
 };
-const rateFor = (mk, at = Date.now()) => {
-  const p = PRICING[mk] || PRICING.haiku;
-  return p.introUntil && at < p.introUntil ? { in: p.introIn, out: p.introOut } : { in: p.in, out: p.out };
-};
+const rateFor = (mk) => PRICING[mk] || PRICING.haiku;
 // Cache tokens: write 1.25x input, read 0.1x input. Zero today (nothing sets
 // cache_control), priced so enabling caching can't silently undercount.
 const estCost = (mk, i, o, cacheWrite = 0, cacheRead = 0) => {

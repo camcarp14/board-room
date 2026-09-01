@@ -17,6 +17,7 @@ import { EVENT_CATEGORIES } from "../../lib/eventCategories.js";
 import { spanDayKeys, spanPosition, withOverlays } from "../../lib/calendar-overlays.js";
 import { weeksOfMonth, layoutWeek, segmentShowsTitle } from "../../lib/calendar-layout.js";
 import { useBirthdays } from "../../data/birthdays.js";
+import { useAnniversaries } from "../../data/anniversaries.js";
 import { callClaude } from "../../lib/claude.js";
 import { localDayKey, todayISO, calendarDaysBetween } from "../../lib/dates.js";
 import { tint } from "../../ui/styles.js";
@@ -87,6 +88,10 @@ export function CalendarPanel({ isMobile, newEventSignal }) {
   // must not take the calendar with it, so this reads the data and ignores the
   // error state: no birthdays is a quieter grid, not a broken one.
   const { data: birthdays = null } = useBirthdays();
+  // Anniversaries ride along on exactly the same terms — their own table, their
+  // own panel (Personal → Anniversaries), read-only here, and a failed load
+  // costs the grid nothing but those rows.
+  const { data: anniversaries = null } = useAnniversaries();
   const loadErr = error ? (error.message || "Couldn't load your calendar.") : null;
   const saveMut = useSaveEvent();
   const delMut = useDeleteEvent();
@@ -483,7 +488,7 @@ Only extract entries you can read with real confidence — skip anything blurry,
   const gridTo = new Date(gridYear, gridMonth + 1, 7);
   const monthOccurrences = withOverlays(
     expandEvents(events || [], gridFrom, gridTo),
-    { birthdays: birthdays || [], from: gridFrom, to: gridTo },
+    { birthdays: birthdays || [], anniversaries: anniversaries || [], from: gridFrom, to: gridTo },
   );
   const eventsByDay = {}; // "YYYY-MM-DD" -> [occurrences]
   monthOccurrences.forEach(ev => {
@@ -503,7 +508,7 @@ Only extract entries you can read with real confidence — skip anything blurry,
     const now = Date.now();
     const real = expandEvents(events || [], from, to)
       .filter((o) => o.all_day || new Date(o.end_time || o.start_time).getTime() >= now);
-    return withOverlays(real, { birthdays: birthdays || [], from, to }).slice(0, 60);
+    return withOverlays(real, { birthdays: birthdays || [], anniversaries: anniversaries || [], from, to }).slice(0, 60);
   })();
   const monthLabel = viewMonth.toLocaleDateString("en-US", { month: "long", year: "numeric" });
   const changeMonth = (delta) => setViewMonth(new Date(gridYear, gridMonth + delta, 1));
@@ -556,9 +561,14 @@ Only extract entries you can read with real confidence — skip anything blurry,
     // neither gets an edit tap or a delete button. Giving them one would open
     // a form that can only fail on save.
     if (ev.overlay) {
+      // An anniversary already carries its own sentence — "In memory · 5
+      // years" — assembled in lib/anniversaries.js so this row and the panel's
+      // list can never word the same day two different ways.
       const sub = ev.overlay === "birthday"
         ? (ev.turns != null ? `Birthday · turns ${ev.turns}` : "Birthday")
-        : (ev.federal ? "Holiday" : "Observance");
+        : ev.overlay === "anniversary"
+          ? (ev.line || "Anniversary")
+          : (ev.federal ? "Holiday" : "Observance");
       return (
         <Cell key={ev.id}
           leading={<Dot tone="var(--faint)" size={8} />}

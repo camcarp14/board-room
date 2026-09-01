@@ -995,6 +995,29 @@ export const db = {
     if (error) throw error;
     return data;
   },
+  // ─── Anniversaries ─────────────────────────────────────────────────────────
+  // The same shape as birthdays one level up, and a separate table on purpose
+  // (see 0040). `kind` is written as given; the client normalizes an unknown
+  // one on read rather than here, so a row this release has never heard of is
+  // still returned to whatever release can understand it.
+  async loadAnniversaries() {
+    const { data, error } = await supabase.from("personal_anniversaries")
+      .select("id,name,kind,month,day,year,notes");
+    if (error) throw error;
+    return data || [];
+  },
+  async saveAnniversary(a) {
+    const user_id = await db.uid();
+    if (!user_id) throw new Error("Not signed in");
+    const row = { id: a.id, user_id, name: a.name, kind: a.kind, month: a.month, day: a.day, year: a.year ?? null, notes: a.notes || "" };
+    const { data, error } = await supabase.from("personal_anniversaries").upsert(row, { onConflict: "id" }).select().single();
+    if (error) throw error;
+    return data;
+  },
+  async deleteAnniversary(id) {
+    const { error } = await supabase.from("personal_anniversaries").delete().eq("id", id);
+    if (error) throw error;
+  },
   async loadUpkeep() {
     const { data, error } = await supabase.from("upkeep_items")
       .select("id,name,interval_days,last_done,notes")

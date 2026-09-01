@@ -43,7 +43,7 @@ const json = (code, body) => ({ statusCode: code, headers: { "Content-Type": "ap
 // app means adding a migration AND adding it here; the smoke enforces both.
 const TABLES = [
   "app_settings", "seat_notes", "chat_messages", "usage_log", "auditor_findings",
-  "personal_events", "personal_birthdays", "personal_notes", "upkeep_items",
+  "personal_events", "personal_birthdays", "personal_anniversaries", "personal_notes", "upkeep_items",
   "movies", "grocery_items", "saved_recipes",
   "affirmations", "dream_items",
   "workout_templates", "workout_sessions", "body_weight_log",

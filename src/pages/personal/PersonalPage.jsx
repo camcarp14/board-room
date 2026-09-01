@@ -15,6 +15,7 @@ import { CalendarPanel } from "./CalendarPanel.jsx";
 const PonderPanel = lazy(() => import("./PonderPanel.jsx").then(m => ({ default: m.PonderPanel })));
 const UpkeepPanel = lazy(() => import("../../features/upkeep/UpkeepPanel.jsx").then(m => ({ default: m.UpkeepPanel })));
 const BirthdaysPanel = lazy(() => import("../../features/birthdays/BirthdaysPanel.jsx").then(m => ({ default: m.BirthdaysPanel })));
+const AnniversariesPanel = lazy(() => import("../../features/anniversaries/AnniversariesPanel.jsx").then(m => ({ default: m.AnniversariesPanel })));
 const MoviesPanel = lazy(() => import("../../features/movies/MoviesPanel.jsx").then(m => ({ default: m.MoviesPanel })));
 const FoodPanel = lazy(() => import("../../features/food/FoodPanel.jsx").then(m => ({ default: m.FoodPanel })));
 
@@ -31,7 +32,11 @@ const PanelFallback = () => (
 // App.jsx so old deep links still land somewhere sensible.
 // Creed graduated to its own tab, like Workout did before it — App.jsx remaps
 // jump.sub "creed" so old deep links still land on it.
-const PERSONAL_SUBTABS = [{ key: "notescal", label: "Notes & Calendar" }, { key: "ponder", label: "Ponder" }, { key: "upkeep", label: "Upkeep" }, { key: "birthdays", label: "Birthdays" }, { key: "movies", label: "Movies" }, { key: "food", label: "Food" }];
+// Anniversaries sits directly after Birthdays because it is the same question
+// asked backwards — days that come around for people who are here, then days
+// that come around because they already happened. Both land on the same
+// calendar; keeping them apart in the pill row would hide that.
+const PERSONAL_SUBTABS = [{ key: "notescal", label: "Notes & Calendar" }, { key: "ponder", label: "Ponder" }, { key: "upkeep", label: "Upkeep" }, { key: "birthdays", label: "Birthdays" }, { key: "anniversaries", label: "Anniversaries" }, { key: "movies", label: "Movies" }, { key: "food", label: "Food" }];
 
 export function PersonalPage({ isMobile, jumpSignal, jump, settings, updateSetting }) {
   const [sub, setSub] = useState("notescal");
@@ -75,6 +80,7 @@ export function PersonalPage({ isMobile, jumpSignal, jump, settings, updateSetti
               {sub === "ponder" && <PonderPanel isMobile={isMobile} settings={settings} updateSetting={updateSetting} />}
               {sub === "upkeep" && <UpkeepPanel isMobile={isMobile} />}
               {sub === "birthdays" && <BirthdaysPanel isMobile={isMobile} />}
+              {sub === "anniversaries" && <AnniversariesPanel isMobile={isMobile} />}
               {sub === "movies" && <MoviesPanel isMobile={isMobile} />}
               {sub === "food" && <FoodPanel isMobile={isMobile} settings={settings} updateSetting={updateSetting} />}
             </Suspense>

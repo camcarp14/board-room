@@ -28,22 +28,21 @@ export const MODELS = {
 // and netlify/functions/mini-worker.js — are keyed by layer name instead).
 // scripts/spend-smoke.mjs asserts all three agree on every shared model.
 //
-// Sonnet 5 runs on INTRODUCTORY pricing ($2/$10) through 2026-08-31, then
-// reverts to list ($3/$15). Upstream routes every web-search stage and judge to
-// Sonnet, so billing list before then overstated the most expensive surface in
-// the app by 50%. Rates resolve at call time, so a run's recorded cost keeps
-// whichever rate was in force when it happened.
-const SONNET_INTRO_ENDS = Date.parse('2026-09-01T00:00:00Z');
+// Sonnet 5 is $2/$10 — PERMANENTLY. This shipped as "introductory pricing
+// through 2026-08-31, then $3/$15", and the scheduled increase was cancelled:
+// Anthropic's pricing page now carries the $2/$10 row with a note saying the
+// launch rate "is now the standard price" and the September 1 increase "will
+// not occur". So there is no window and no clock — the rate below IS the rate,
+// and the intro branch that resolved it at call time is gone with the date it
+// was waiting for. Historical usage_log rows are unaffected: cost is computed
+// at write time and every one of them was already written at $2/$10.
 const PRICE_TABLE = {
   'claude-fable-5': { in: 10, out: 50 },
-  'claude-sonnet-5': { in: 3, out: 15, introIn: 2, introOut: 10, introUntil: SONNET_INTRO_ENDS },
+  'claude-sonnet-5': { in: 2, out: 10 },
   'claude-haiku-4-5': { in: 1, out: 5 },
   'claude-opus-4-8': { in: 5, out: 25 },
 };
-const priceFor = (model, at = Date.now()) => {
-  const p = PRICE_TABLE[model] || PRICE_TABLE[MODELS.sonnet];
-  return p.introUntil && at < p.introUntil ? { in: p.introIn, out: p.introOut } : { in: p.in, out: p.out };
-};
+const priceFor = (model) => PRICE_TABLE[model] || PRICE_TABLE[MODELS.sonnet];
 const SEARCH_COST = 0.01; // $10 / 1k searches
 
 let _client = null;
