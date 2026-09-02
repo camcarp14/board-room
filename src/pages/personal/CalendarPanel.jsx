@@ -16,6 +16,7 @@ import {
 import { EVENT_CATEGORIES } from "../../lib/eventCategories.js";
 import { spanDayKeys, spanPosition, withOverlays } from "../../lib/calendar-overlays.js";
 import { weeksOfMonth, layoutWeek, segmentShowsTitle } from "../../lib/calendar-layout.js";
+import { softWrapTitle } from "../../lib/wrap-title.js";
 import { useBirthdays } from "../../data/birthdays.js";
 import { useAnniversaries } from "../../data/anniversaries.js";
 import { callClaude } from "../../lib/claude.js";
@@ -823,7 +824,17 @@ Only extract entries you can read with real confidence — skip anything blurry,
                             position: "absolute", left: l, width: w, top: seg.lane * (LANE_H + LANE_GAP),
                             height: LANE_H, borderRadius: radius, overflow: "hidden",
                             display: "flex", alignItems: "center",
-                            padding: "0 4px", minWidth: 0,
+                            // 1px, not 4. The bar is 41.4px wide on a 375pt
+                            // phone, so every pixel of padding is a pixel of
+                            // name. Measured in the app with its own Inter:
+                            // "Monkey" is 37.3px at the size below, which fits
+                            // in the 39.4px this leaves and does not fit in the
+                            // 37.4px that 2px a side leaves with any margin
+                            // worth trusting. A six-letter word gets no break
+                            // opportunities (see wrap-title.js), so if it does
+                            // not fit there is nothing to catch it — the "y"
+                            // ends up alone on line two.
+                            padding: "0 1px", minWidth: 0,
                             // Overlays stay flat and quiet; your own events get
                             // the solid category colour and white text.
                             // --on-accent is defined per palette AND per
@@ -835,11 +846,31 @@ Only extract entries you can read with real confidence — skip anything blurry,
                             color: tone ? "var(--on-accent)" : "var(--sub)",
                           }}>
                           <span style={{
-                            fontSize: 10.5, lineHeight: 1.15, fontWeight: 600, minWidth: 0,
+                            // 9.5, down from 10.5 — the same size the Brief's
+                            // mini calendar already uses, so the two calendars
+                            // finally agree. Half a point buys a whole
+                            // character a line here: measured over twenty real
+                            // titles, 15 of 20 fit inside two lines at 10px
+                            // and 19 of 20 at 9.5. "Brewers Game" and "Grandpa
+                            // Dittmer" are the difference, and they are names
+                            // you need to read, not recognise.
+                            fontSize: 9.5, lineHeight: 1.15, fontWeight: 600, minWidth: 0,
+                            // A touch tighter than default. At this size it is
+                            // invisible as texture and worth roughly a
+                            // character a line, which is the difference
+                            // between "Jordan" and "Jorda" over a lone "n".
+                            letterSpacing: "-0.012em",
                             overflow: "hidden", display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical",
-                            wordBreak: "break-word",
+                            // break-word is the FLOOR, not the plan: softWrapTitle
+                            // supplies the break points (see lib/wrap-title.js),
+                            // and this only catches a word so wide that even
+                            // those overrun. The old value here was the legacy
+                            // `word-break: break-word`, which is the one that
+                            // breaks anywhere it likes and strands single
+                            // letters; it must not come back.
+                            wordBreak: "normal", overflowWrap: "break-word",
                           }}>
-                            {segmentShowsTitle(seg) ? ev.title : ""}
+                            {segmentShowsTitle(seg) ? softWrapTitle(ev.title) : ""}
                           </span>
                         </div>
                       );

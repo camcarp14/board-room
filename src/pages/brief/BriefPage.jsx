@@ -42,6 +42,7 @@ import { useEconResults, useResolveEconEvents } from "../../data/econ.js";
 // multi-day events on the right cells. The panel and its layout code still
 // stay out; those were the bulk of the 42 kB.)
 import { EVENT_CATEGORIES } from "../../lib/eventCategories.js";
+import { softWrapTitle } from "../../lib/wrap-title.js";
 
 const GSC_EMPTY = { impressions: "—", impressionsD: "", clicks: "—", clicksD: "", pos: "—", posD: "", series: Array(14).fill(0), daily: [], note: "" };
 const STOCKS_EMPTY = { gold: { value: "—", price: "—", up: true }, nvda: { value: "—", price: "—", up: true }, mstr: { value: "—", price: "—", up: true }, strc: { value: "—", price: "—", up: true } };
@@ -639,6 +640,10 @@ export function MorningBriefPage({ btc, isMobile, settings, updateSetting, onOpe
 
   /* ── Mini calendar — tap a day to add an event on it; "Open" for the full tab ── */
   const miniCatColor = (key) => (EVENT_CATEGORIES.find(c => c.key === key) || EVENT_CATEGORIES[0]).color;
+  // One pill has to speak for the whole day, so a second event becomes "+1"
+  // rather than a second row there is no height for. Named because the chip
+  // needs it twice — once softened for display, once raw for the tooltip.
+  const miniTitle = (evs) => (evs.length > 1 ? `${evs[0].title} +${evs.length - 1}` : evs[0].title);
   const miniNow = new Date();
   const miniYear = miniNow.getFullYear(), miniMonth = miniNow.getMonth();
   const miniDaysInMonth = new Date(miniYear, miniMonth + 1, 0).getDate();
@@ -681,13 +686,19 @@ export function MorningBriefPage({ btc, isMobile, settings, updateSetting, onOpe
               onClick={() => onAddEvent?.(miniDateKey(day))}
               aria-label={`Add an event on ${miniNow.toLocaleDateString("en-US", { month: "long" })} ${day}`}
               title="Add an event on this day"
-              style={{ display: "flex", flexDirection: "column", alignItems: "stretch", gap: 2, textAlign: "left", minWidth: 0, height: 56, overflow: "hidden", padding: 3, borderRadius: 8, background: "none", border: "none", font: "inherit", color: "inherit", cursor: "pointer" }}>
+              style={{ display: "flex", flexDirection: "column", alignItems: "stretch", gap: 2, textAlign: "left", minWidth: 0, height: 56, overflow: "hidden", padding: "3px 1px", borderRadius: 8, background: "none", border: "none", font: "inherit", color: "inherit", cursor: "pointer" }}>
               {/* today = filled accent circle on the number, same as the Personal calendar */}
               <span className="t-num" style={{ width: 20, height: 20, borderRadius: "50%", display: "inline-flex", alignItems: "center", justifyContent: "center", alignSelf: "flex-start", flex: "none", fontSize: 11, fontWeight: isToday ? 600 : 500, background: isToday ? "var(--accent)" : "transparent", color: isToday ? "var(--on-accent)" : "var(--ink)" }}>{day}</span>
               {dayEvents.length > 0 && (
                 // title pill — wraps to two lines so the name is readable, not a
-                // 4-character stub; minWidth:0 keeps it from widening the column
-                <span style={{ fontSize: 9.5, fontWeight: 600, color: "var(--chip-ink)", background: miniCatColor(dayEvents[0].category), borderRadius: 4, padding: "1px 3px", lineHeight: 1.2, minWidth: 0, maxWidth: "100%", display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical", overflow: "hidden", wordBreak: "break-word" }}>{dayEvents.length > 1 ? `${dayEvents[0].title} +${dayEvents.length - 1}` : dayEvents[0].title}</span>
+                // 4-character stub; minWidth:0 keeps it from widening the column.
+                // The break points come from softWrapTitle rather than from the
+                // browser, which otherwise fills line one to the pixel and
+                // strands the last letter of the name on line two — a pill with
+                // 39px of text has no room to make that look like anything but
+                // a fault.
+                // See lib/wrap-title.js; `overflowWrap` here is only the floor.
+                <span title={miniTitle(dayEvents)} style={{ fontSize: 9.5, fontWeight: 600, color: "var(--chip-ink)", background: miniCatColor(dayEvents[0].category), borderRadius: 4, padding: "1px 2px", lineHeight: 1.2, letterSpacing: "-0.012em", minWidth: 0, maxWidth: "100%", display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical", overflow: "hidden", wordBreak: "normal", overflowWrap: "break-word" }}>{softWrapTitle(miniTitle(dayEvents))}</span>
               )}
             </button>
           );
