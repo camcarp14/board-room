@@ -34,6 +34,7 @@ function OMCRunner({ onClose, isMobile, pairs, onResult }) {
   const [count, setCount] = useState(0);
   const [left, setLeft] = useState(60);
   const [state, setState] = useState("idle"); // idle | running | done
+  const [hold, setHold] = useState(false);    // Log it pressed before the skill read landed
   const deadline = useRef(0);
 
   useEffect(() => {
@@ -46,7 +47,7 @@ function OMCRunner({ onClose, isMobile, pairs, onResult }) {
     return () => clearInterval(t);
   }, [state]);
 
-  const start = () => { setCount(0); setLeft(60); deadline.current = Date.now() + 60000; setState("running"); };
+  const start = () => { setCount(0); setLeft(60); setHold(false); deadline.current = Date.now() + 60000; setState("running"); };
   const bench = BENCHMARKS.omc.filter((b) => count >= b.n).pop();
 
   return (
@@ -113,8 +114,19 @@ function OMCRunner({ onClose, isMobile, pairs, onResult }) {
             </div>
             <div style={{ display: "flex", gap: 8 }}>
               <Button kind="quiet" full onClick={start}>Again</Button>
-              <Button kind="primary" full onClick={() => { onResult?.({ pair, count }); onClose(); }}>Log it</Button>
+              {/* The sheet closes only once the count has been handed over. A
+                  `false` from onResult means "not yet" — the skill read is still
+                  in flight — and closing then would throw the minute away. */}
+              <Button kind="primary" full onClick={async () => { if ((await onResult?.({ pair, count })) === false) setHold(true); else onClose(); }}>Log it</Button>
             </div>
+            {/* Said HERE, not in a toast: the panel's toasts sit behind an open
+                sheet, so a toast for a press that keeps the sheet open is a press
+                that visibly did nothing. */}
+            {hold && (
+              <div className="t-cap" style={{ color: "var(--amber)", textAlign: "center", lineHeight: 1.5 }}>
+                Still fetching your skill history — one moment, then press Log it again.
+              </div>
+            )}
           </>
         ) : (
           <Button kind="primary" size="lg" full onClick={start}>Start the minute</Button>
@@ -439,9 +451,23 @@ export function DrillsPanel({ isMobile, settings, updateSetting, onOpenMetronome
       .sort((a, b) => a.strength - b.strength);
   }, [skillsQ.data]);
 
+  // Returns false when the count could not be logged yet, so the runner keeps
+  // the number on screen instead of closing over it.
   const logOMC = async ({ pair, count }) => {
     const skill = SKILLS.find((s) => s.kind === "change" && s.pair?.join() === pair.join());
-    if (!skill) return;
+    if (!skill) return true;
+    // NEVER WRITE A SKILL AGAINST A READ THAT HAS NOT LANDED — the same guard as
+    // TodayPanel.finish, for the same reason. While guitar_skills is pending or
+    // failed `rows` is an empty array, `prev` is undefined, and applyResult builds
+    // the row from scratch: strength 0 plus one gain, one session, a history of
+    // one. saveGuitarSkills upserts the whole row, so a slow or dead read turned
+    // one minute of Em↔Am into the deletion of every session ever logged on it.
+    // The drill cards render without waiting for the read, so this is reachable.
+    // No toast: the runner is still open and says so itself, in the sheet.
+    if (skillsQ.isPending || skillsQ.error) {
+      skillsQ.refetch?.();
+      return false;
+    }
     const prev = (skillsQ.data?.rows || []).find((r) => r.id === skill.id);
     const target = skill.target || 30;
     const rating = count >= target ? "clean" : count >= target * 0.6 ? "shaky" : "rough";
@@ -453,6 +479,7 @@ export function DrillsPanel({ isMobile, settings, updateSetting, onOpenMetronome
     } catch (e) {
       setToast({ tone: "var(--red)", text: `Couldn't save: ${e.message || "the write didn't land"}` });
     }
+    return true;
   };
 
   // A finished drift drill is a short session with a timing measurement on it.

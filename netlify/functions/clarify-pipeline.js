@@ -13,8 +13,24 @@
 // computable from it — dropped rather than guessed. If those live
 // somewhere else (a `prospects` table?), tell Claude the real source and
 // they can be added back for real.
-// Needs: CLARIFY_SUPABASE_URL, CLARIFY_SUPABASE_ANON_KEY (or a service role
-// key if RLS blocks anon reads on this table).
+// Needs: CLARIFY_SUPABASE_URL and a key the table admits.
+//
+// THE ANON KEY IS NOT THAT KEY, AND HAS NOT BEEN SINCE 2026-08-02. public.outreach
+// grants select to postgres, service_role and authenticated only, and its one
+// RLS policy (outreach_operator_only) is for {authenticated}: a request wearing
+// the anon key gets `permission denied for table outreach`, a 401 from
+// PostgREST. Every call this function made for a month was that 401 — 1,600+
+// usage_log rows — and the error text blamed the table's columns, which were
+// fine, so the outage read as a schema question nobody could answer. The Brief's
+// Clarify card sat in its error state the whole time.
+//
+// So the read uses CLARIFY_SUPABASE_SERVICE_ROLE_KEY when it is set. That key
+// bypasses RLS on a project Board Room does not own, which is acceptable only
+// because it never leaves this function: the caller's own session is verified
+// first (denyUnlessSignedIn below), the read is four exact-count HEAD-shaped
+// queries, and nothing from the request body reaches the query string. The anon
+// key remains the fallback so a project that DOES grant anon keeps working, and
+// the 401/403 branch now names the real problem instead of the columns.
 const json = (code, body) => ({ statusCode: code, headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
 
 // Session gate, inlined ON PURPOSE. Under this repo's "type":"module" + esbuild
@@ -46,10 +62,11 @@ exports.handler = async (event) => {
   try { body = JSON.parse(event.body || "{}"); } catch {}
 
   const url = process.env.CLARIFY_SUPABASE_URL;
-  const key = process.env.CLARIFY_SUPABASE_ANON_KEY;
+  const serviceKey = process.env.CLARIFY_SUPABASE_SERVICE_ROLE_KEY;
+  const key = serviceKey || process.env.CLARIFY_SUPABASE_ANON_KEY;
   const configured = !!(url && key);
 
-  if (body.ping) return json(200, { success: true, service: "clarify-pipeline", configured, missing: configured ? undefined : "CLARIFY_SUPABASE_URL / CLARIFY_SUPABASE_ANON_KEY" });
+  if (body.ping) return json(200, { success: true, service: "clarify-pipeline", configured, missing: configured ? undefined : "CLARIFY_SUPABASE_URL / CLARIFY_SUPABASE_SERVICE_ROLE_KEY" });
   if (!configured) return json(500, { error: "Clarify Supabase env vars not set" });
 
   // Outreach pipeline counts from the Clarify project — session required.
@@ -59,6 +76,13 @@ exports.handler = async (event) => {
   const headers = { apikey: key, Authorization: `Bearer ${key}` };
   const count = async (query) => {
     const res = await fetch(`${url}/rest/v1/outreach?${query}&select=id`, { signal: AbortSignal.timeout(30000), headers: { ...headers, Prefer: "count=exact", Range: "0-0" } });
+    // A 401/403 is the KEY being refused, not the columns — see the header. The
+    // old message sent the reader to check a schema that was never wrong.
+    if (res.status === 401 || res.status === 403) {
+      throw new Error(serviceKey
+        ? `outreach query failed (${res.status}) — CLARIFY_SUPABASE_SERVICE_ROLE_KEY is not allowed to read "outreach"; check it is the Clarify project's service_role key`
+        : `outreach query failed (${res.status}) — the anon key has no grant on "outreach"; set CLARIFY_SUPABASE_SERVICE_ROLE_KEY in Netlify env vars and redeploy`);
+    }
     if (!res.ok) throw new Error(`outreach query failed (${res.status}) — check the "outreach" table and its columns still match`);
     return parseInt(res.headers.get("content-range")?.split("/")[1] || "0", 10);
   };

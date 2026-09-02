@@ -160,5 +160,104 @@ check("the rail is thumb-wide and paid for by the card padding",
 check("the feed is inset by the rail, not overlaid by it",
   /\.feed-rails > \.brief-scroll \{ margin-inline: var\(--rail\)/.test(css));
 
+// ── the feeds behind the cards ───────────────────────────────────────────────
+// Not arrangement, but the same file and the same failure shape: nothing
+// throws, the card just says something untrue. Each of these was shipped.
+
+// ONLY `stale` MEANS LAST-GOOD. The functions answer `cached: true` for a warm
+// in-TTL hit and reserve `cached: true, stale: true` for the upstream-failure
+// fallback (calendar.js:125 vs :144, same in markets/wire/btc). Reading either
+// flag as stale swapped the Live dot for a "last good data" stamp on three of
+// every four Brief refreshes — calendar caches for 20 minutes, the Brief asks
+// every 5 — and told the Markets card to say "showing the last good prices"
+// whenever another tab had asked a moment earlier.
+check("the Brief reads only `stale` as last-good, never `cached`",
+  !/\.cached\b/.test(brief) && (brief.match(/liveStatus\(!!res\.data\.stale\)/g) || []).length === 3,
+  `${(brief.match(/liveStatus\(!!res\.data\.stale\)/g) || []).length} honest stamp(s), cached read: ${/\.cached\b/.test(brief)}`);
+const hooks = readFileSync("src/hooks/index.js", "utf8");
+check("the BTC hook reads only `stale` as last-good, never `cached`",
+  /stale: !!data\.stale,/.test(hooks) && !/data\.cached/.test(hooks));
+
+// THE MINI CALENDAR PAINTS OCCURRENCES, NOT ROWS. A repeating event is one row
+// dated the day its series began, so grouping raw rows by start_time drew the
+// weekly standup once, in whatever month it was created, and a four-day trip
+// on its first day only. The card has to go through the same two functions the
+// month grid uses — pinned here as the exact expression, and exercised below on
+// a September with a Monday series (one Monday exdated) and a four-day trip, so
+// the outcome is stated rather than implied.
+check("the mini calendar expands occurrences with expandEvents and keys them by spanDayKeys",
+  /expandEvents\(miniEvents \|\| \[\], miniFrom, miniTo\)\.forEach\(ev => \{ for \(const k of spanDayKeys\(ev\)\)/.test(brief)
+  && !/localDayKey\(ev\.start_time\)/.test(brief));
+import { expandEvents } from "../src/lib/recurrence.js";
+import { spanDayKeys } from "../src/lib/calendar-overlays.js";
+{
+  const miniYear = 2026, miniMonth = 8; // September 2026 — the 7th is a Monday
+  const miniEvents = [
+    { id: "w", title: "Standup", start_time: "2026-06-01T14:00:00.000Z", end_time: null, all_day: false, rrule: { freq: "weekly", interval: 1, byWeekday: [1] }, exdates: ["2026-09-14"], category: "work" },
+    { id: "t", title: "Trip", start_time: "2026-09-10T05:00:00.000Z", end_time: "2026-09-13T05:00:00.000Z", all_day: true, rrule: null, exdates: [], category: "personal" },
+  ];
+  const miniEventsByDay = {};
+  const miniFrom = new Date(miniYear, miniMonth, 1), miniTo = new Date(miniYear, miniMonth + 1, 0, 23, 59);
+  expandEvents(miniEvents || [], miniFrom, miniTo).forEach(ev => { for (const k of spanDayKeys(ev)) (miniEventsByDay[k] = miniEventsByDay[k] || []).push(ev); });
+  const days = (title) => Object.keys(miniEventsByDay).filter((k) => miniEventsByDay[k].some((e) => e.title === title)).sort().join(",");
+  check("a weekly series paints every Monday of the month it is open on, minus the exdated one",
+    days("Standup") === "2026-09-07,2026-09-21,2026-09-28", days("Standup"));
+  check("a four-day trip paints all four cells, not just the first",
+    days("Trip") === "2026-09-10,2026-09-11,2026-09-12,2026-09-13", days("Trip"));
+}
+
+// WATCH THIS WEEK TRIGGERS ONCE PER EVENT, NOT ONCE PER PAGE LOAD. The trigger
+// guard was a boolean, so a page left open through a release morning resolved
+// only what had already passed at mount; every later print settled on
+// "couldn't confirm the published number" when nobody had looked.
+check("the econ trigger remembers ids, not a boolean",
+  /econTriggered = useRef\(new Set\(\)\)/.test(brief) && !/econTriggered\.current = true/.test(brief)
+  && /unresolvedPast\.filter\(\(e\) => !econTriggered\.current\.has\(eventId\(e\)\)\)/.test(brief));
+
+// A HIDDEN TAB DOES NOT POLL. Each Brief pass is eight function invocations and
+// eight usage_log rows; a Mac tab left on the Brief all day was spending ~96 of
+// each an hour for nobody. The tick checks visibility; the visibilitychange
+// handler is what catches up on return.
+check("the Brief's 5-minute tick skips a hidden tab",
+  /setInterval\(\(\) => \{ if \(document\.visibilityState !== "hidden"\) refreshBrief\(\); \}, 5 \* 60 \* 1000\)/.test(brief));
+check("the Brief still refreshes on return to the tab", /addEventListener\("visibilitychange", onVisible\)/.test(brief));
+check("the BTC hook's tick skips a hidden tab and catches up on return",
+  /if \(document\.visibilityState !== "hidden"\) \{ lastLoad = Date\.now\(\); load\(\); \}/.test(hooks)
+  && /addEventListener\("visibilitychange", onVisible\)/.test(hooks));
+
+// A PING OF A "-background" FUNCTION IS ANSWERED BY NETLIFY, NOT THE HANDLER:
+// 202 and an empty body, before the code that would say {configured:false} has
+// run. pingFn parsed that empty body to null and reported "responding" with
+// every key missing. Bundled through esbuild because lib/functions.js reads
+// import.meta.env on load (same recipe page-render-smoke.mjs uses).
+import { build } from "esbuild";
+import { rm } from "node:fs/promises";
+import { pathToFileURL } from "node:url";
+import path from "node:path";
+{
+  const out = path.resolve(import.meta.dirname, "..", ".brief-order-smoke.tmp.mjs");
+  await build({
+    entryPoints: [path.resolve(import.meta.dirname, "..", "src", "lib", "functions.js")],
+    bundle: true, platform: "node", format: "esm", outfile: out, logLevel: "error",
+    define: { "import.meta.env": JSON.stringify({ VITE_SUPABASE_URL: "", VITE_SUPABASE_ANON_KEY: "", VITE_ANTHROPIC_API_KEY: "", DEV: false }) },
+  });
+  let pingFn;
+  try { ({ pingFn } = await import(pathToFileURL(out).href)); } finally { await rm(out, { force: true }); }
+  const realFetch = globalThis.fetch;
+  const answer = (status, body) => { globalThis.fetch = async () => new Response(body, { status, headers: { "Content-Type": "application/json" } }); };
+  try {
+    answer(202, ""); // what Netlify sends for econ-resolve-background
+    const bg = await pingFn("econ-resolve-background");
+    check("a 202 with no body is reported as accepted, and says the keys were not checked",
+      bg.status === "ok" && /background/.test(bg.detail) && /not checkable/.test(bg.detail), JSON.stringify(bg));
+    answer(200, JSON.stringify({ configured: false, missing: "ANTHROPIC_API_KEY" }));
+    const partial = await pingFn("audit");
+    check("a synchronous function's {configured:false} still reads as partial",
+      partial.status === "warn" && /ANTHROPIC_API_KEY/.test(partial.detail), JSON.stringify(partial));
+    answer(404, "");
+    check("a 404 still reads as not deployed", (await pingFn("gone")).status === "off");
+  } finally { globalThis.fetch = realFetch; }
+}
+
 console.log(failed ? `\n${failed} brief-order check(s) failed` : "\nbrief-order: all checks passed");
 process.exit(failed ? 1 : 0);

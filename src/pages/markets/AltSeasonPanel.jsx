@@ -421,6 +421,9 @@ export default function AltSeasonPanel({ isMobile }) {
         domTrend={season?.domTrend}
         domSpanDays={data.season?.domSpanDays ?? null}
         error={positionsQ.error}
+        isPending={positionsQ.isPending}
+        isError={positionsQ.isError}
+        onRetry={() => positionsQ.refetch()}
       />
 
 

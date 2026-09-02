@@ -25,6 +25,7 @@ import {
 } from "../../lib/altLadder.js";
 import { useSaveAltPosition, useSellAltRung, useCloseAltPosition } from "../../data/altseason.js";
 import { isMissingTable } from "../../data/db.js";
+import { CARD_STATES } from "../../ui/shared.jsx";
 
 function px(x) {
   if (!Number.isFinite(x)) return "—";
@@ -216,12 +217,23 @@ function PositionSheet({ pos, onClose, onSaved }) {
  * @param positions rows from useAltPositions
  * @param priceOf   (coin_id, symbol) → live price, joined from the scan payload
  * @param season    for the regime override footer
+ * @param isPending / isError / onRetry — the positions query's state, because
+ *                  "no rows yet" and "no rows" are different sentences (below)
  */
-export default function AltBookCard({ positions, priceOf, season, fearGreed, domTrend, domSpanDays, error }) {
+export default function AltBookCard({ positions, priceOf, season, fearGreed, domTrend, domSpanDays, error, isPending, isError, onRetry }) {
   const [sheet, setSheet] = useState(null); // {pos} | {} for a new one
   const sellRung = useSellAltRung();
   const rows = Array.isArray(positions) ? positions : [];
   const needsSetup = !!error && isMissingTable(error, "alt_positions");
+  // A READ THAT HAS NOT LANDED IS NOT AN EMPTY BOOK. `rows` is [] while the query
+  // is pending and [] again when it fails, and both used to fall through to
+  // "Nothing tracked yet" — a confident sentence about the database, printed
+  // when the database had not answered. Offline on a cold cache (networkMode
+  // offlineFirst lands that in `error`, not pending), an RLS or auth failure,
+  // any 500 that is not a missing table: the same lie altseason.js throws to
+  // avoid on the scan. A failed REFETCH keeps the last rows on screen, as the
+  // scan does, so the fallback only replaces the list when there is no list.
+  const unread = isError && !needsSetup && positions == null;
 
   const override = regimeOverride({
     score: season && season.score,
@@ -264,6 +276,21 @@ export default function AltBookCard({ positions, priceOf, season, fearGreed, dom
         {needsSetup ? (
           <EmptyState title="One migration behind"
             sub="Run supabase/migrations/0035_alt_positions.sql and the book turns on — nothing else is waiting on it." />
+        ) : isPending ? (
+          /* two rows, the height of two positions, so nothing jumps when they land */
+          <div style={{ paddingTop: 6 }}>
+            <div className="sk sk-line w60" />
+            <div className="sk sk-line w40" />
+          </div>
+        ) : unread ? (
+          /* same anatomy as the panel's FallbackRow: a dot, the reason, a retry */
+          <div style={{ background: "var(--surface-2)", borderRadius: 12, display: "flex", alignItems: "center", gap: 10, padding: "8px 13px", minHeight: 52, marginTop: 8 }}>
+            <Dot tone={CARD_STATES.error.color} />
+            <span className="t-foot" style={{ flex: 1, minWidth: 0, lineHeight: 1.5 }}>
+              Couldn't read the book{error?.message ? ` — ${error.message}` : ""}. Nothing you hold has changed.
+            </span>
+            <Button kind="quiet" size="sm" style={{ height: 44, flex: "none" }} onClick={onRetry}>Retry</Button>
+          </div>
         ) : rows.length === 0 ? (
           <EmptyState title="Nothing tracked yet"
             sub="Add what you hold and the ladder does the rest — it tells you the next rung, and when price is already through one." />

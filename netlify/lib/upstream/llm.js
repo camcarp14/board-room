@@ -6,9 +6,12 @@
 import Anthropic from '@anthropic-ai/sdk';
 
 // Netlify function env: ANTHROPIC_API_KEY (the same var every server-side
-// Anthropic caller here reads — mini-worker, audit, auto-fix).
+// Anthropic caller here reads — mini-worker, audit, auto-fix). ONLY that name:
+// the VITE_ANTHROPIC_API_KEY fallback that used to sit beside it made a
+// VITE_-prefixed secret a working server config, and Vite ships that prefix to
+// the browser by design. scripts/spend-smoke.mjs refuses the name under netlify/.
 function requireApiKey() {
-  const key = process.env.ANTHROPIC_API_KEY || process.env.VITE_ANTHROPIC_API_KEY;
+  const key = process.env.ANTHROPIC_API_KEY;
   if (!key) {
     const err = new Error('UPSTREAM_ENV_MISSING: ANTHROPIC_API_KEY not set on this site');
     err.code = 'UPSTREAM_ENV_MISSING';

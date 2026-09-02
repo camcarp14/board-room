@@ -7,7 +7,7 @@
 import { useState, useEffect, useMemo, useRef, lazy, Suspense } from "react";
 import { db } from "../../data/db.js";
 import { SortableList } from "../../ui/SortableList.jsx";
-import { applyNotesOrder, orderOf } from "../../lib/notes-order.js";
+import { applyNotesOrder, orderOf, bumpToFront } from "../../lib/notes-order.js";
 import { queryClient } from "../../lib/queryClient.js";
 import { useNotes } from "../../data/notes.js";
 import { NOTE_SEALS, sealColor, NoteCardPreview, continueListOnEnter, toggleBulletAtCaret } from "../../ui/shared.jsx";
@@ -77,7 +77,7 @@ export function NotesPanel({ isMobile, openSignal, settings, updateSetting }) {
   const [selectMode, setSelectMode] = useState(false);
   const [selected, setSelected] = useState(() => new Set());
   const [actionsOpen, setActionsOpen] = useState(false); // select-mode action sheet
-  const [undo, setUndo] = useState(null); // { label, rows, extraDeleteId?, soft? }
+  const [undo, setUndo] = useState(null); // { label, rows, extraDeleteId?, soft?, rewrite? }
   const [shelf, setShelf] = useState("active"); // active | archived — which shelf the list shows
   const [binOpen, setBinOpen] = useState(false); // the Recently deleted sheet
   const [bin, setBin] = useState(null);          // null = not loaded / loading
@@ -255,9 +255,14 @@ export function NotesPanel({ isMobile, openSignal, settings, updateSetting }) {
   // longer carries the only rope. `soft` records which regime the delete actually
   // ran under, because the fallback path (0036 not pasted in yet) is still the
   // old one and its undo still has to re-upsert from memory.
-  const armUndo = (label, rows, { extraDeleteId = null, soft = true } = {}) => {
+  //
+  // `rewrite` is for rows that were OVERWRITTEN rather than deleted — the target
+  // of a merge. There is no stamp to clear on it, and the only copy of its old
+  // body is the one this tab kept, so it is re-upserted whichever regime the
+  // delete ran under.
+  const armUndo = (label, rows, { extraDeleteId = null, soft = true, rewrite = [] } = {}) => {
     clearTimeout(undoTimer.current);
-    setUndo({ label, rows, extraDeleteId, soft });
+    setUndo({ label, rows, extraDeleteId, soft, rewrite });
     undoTimer.current = setTimeout(() => setUndo(null), 6000);
   };
   const runUndo = async () => {
@@ -272,6 +277,7 @@ export function NotesPanel({ isMobile, openSignal, settings, updateSetting }) {
       // between is overwritten.
       if (u.soft) await db.undeleteNotes(u.rows.map((n) => n.id));
       else await db.restoreNotes(u.rows);
+      if (u.rewrite?.length) await db.restoreNotes(u.rewrite);
       setBin(null); // whatever it held is stale now; the sheet re-reads on open
       refresh();
     } catch (e) { complain(e.message || "Couldn't undo."); }
@@ -412,9 +418,24 @@ export function NotesPanel({ isMobile, openSignal, settings, updateSetting }) {
       clearSelection(); refresh();
     } catch (e) { complain(e.message || "Couldn't delete."); }
   };
+  // "PIN TO TOP" HAS TO MOVE THE NOTE. Manual order is absolute (see
+  // applyNotesOrder), so the flag alone draws a hairline and changes nothing
+  // about position — the button said "to top" and the note stayed put. Pinning
+  // writes the order: the note goes first, the rest keep their sequence.
+  // Unpinning leaves the order alone; where it sits is now the user's call.
+  const pinToTop = (ids) => {
+    if (!ids.length) return;
+    let order = orderOf(sorted || []);
+    for (const id of [...ids].reverse()) order = bumpToFront(order, id); // keep their relative order
+    saveOrder(order);
+  };
   const bulkPin = async () => {
     const pin = !selectedNotes.every(n => n.pinned);
-    try { await db.bulkUpdateNotes([...selected], { pinned: pin }); clearSelection(); refresh(); }
+    try {
+      await db.bulkUpdateNotes([...selected], { pinned: pin });
+      if (pin) pinToTop((sorted || []).filter(n => selected.has(n.id)).map(n => n.id));
+      clearSelection(); refresh();
+    }
     catch (e) { complain(e.message || "Couldn't update."); }
   };
   // ARCHIVE IS NOT A DELETE AND IS NOT UNDONE BY ONE. It takes the note off the
@@ -456,10 +477,17 @@ export function NotesPanel({ isMobile, openSignal, settings, updateSetting }) {
     const mergedBody = [target.body, ...rest.map(n => (n.title?.trim() ? `${n.title.trim()}\n${n.body || ""}` : n.body || ""))]
       .map(s => (s || "").trim()).filter(Boolean).join("\n\n⸻\n\n");
     try {
-      const originals = picks.map(n => ({ ...n }));
+      // Two different undos in one toast: the folded notes were DELETED (a
+      // stamp to clear, or rows to re-upsert on a pre-0036 table — whichever
+      // bulkDeleteNotes says it did), but the target was OVERWRITTEN and only
+      // this copy of its old body exists. Undo used to clear stamps on all of
+      // them: the folded notes came back and the target kept the merged text,
+      // so the words were there three times and the original never returned.
+      const restOriginals = rest.map(n => ({ ...n }));
+      const targetOriginal = { ...target };
       await db.saveNote({ id: target.id, title: target.title, body: mergedBody, ...(legacy ? {} : { pinned: target.pinned, color: target.color }) });
-      await db.bulkDeleteNotes(rest.map(n => n.id));
-      armUndo(`Merged ${picks.length} notes`, originals);
+      const { soft } = await db.bulkDeleteNotes(rest.map(n => n.id));
+      armUndo(`Merged ${picks.length} notes`, restOriginals, { soft, rewrite: [targetOriginal] });
       clearSelection(); refresh();
     } catch (e) { complain(e.message || "Couldn't merge."); }
   };
@@ -525,7 +553,7 @@ export function NotesPanel({ isMobile, openSignal, settings, updateSetting }) {
           <div style={{ display: "flex", alignItems: "center", gap: 2, margin: "2px 0 10px", flexWrap: "wrap" }}>
             {!legacy && (
               <>
-                <button className="icon-btn" onClick={() => setDraft(d => ({ ...d, pinned: !d.pinned }))}
+                <button className="icon-btn" onClick={() => { if (!draft.pinned) pinToTop([activeId]); setDraft(d => ({ ...d, pinned: !d.pinned })); }}
                   title={draft.pinned ? "Unpin" : "Pin to top"} aria-pressed={draft.pinned}
                   style={{ width: 38, height: 38, color: draft.pinned ? "var(--accent)" : "var(--faint)" }}>
                   <IcPin size={18} />

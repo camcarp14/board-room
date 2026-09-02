@@ -182,15 +182,21 @@ Only extract entries you can read with real confidence — skip anything blurry,
     // Cross-reference against what's already tracked, so re-importing your
     // old calendar doesn't create duplicate birthdays or duplicate events.
     const reviewed = merged.map(item => {
-      const [y, m, d] = item.date.split("-").map(Number);
+      const [, m, d] = item.date.split("-").map(Number);
       if (item.kind === "possible_birthday") {
         const match = birthdaysList.find(b => normName(b.name) === normName(item.title) && b.month === m && b.day === d);
+        // NO BIRTH YEAR. item.date is the day the screenshot shows the cake on —
+        // last year's calendar says 2025 — and that year used to be written into
+        // personal_birthdays.year, so every imported adult "turns 1" on the
+        // agenda and in the Birthdays list. The screenshot never knows the birth
+        // year; the row goes in with month/day only and the year can be added
+        // by hand in Birthdays.
         return {
           tempId: crypto.randomUUID(), title: item.title, date: item.date, time: item.time, allDay: !!item.all_day,
           kind: match ? "duplicate_birthday" : "new_birthday",
           matchedName: match?.name,
           action: match ? "skip" : "birthday",
-          month: m, day: d, year: y,
+          month: m, day: d, year: null,
         };
       }
       const dupEvent = eventsList.find(e => normName(e.title) === normName(item.title) && e.start_time.slice(0, 10) === item.date);
@@ -216,7 +222,7 @@ Only extract entries you can read with real confidence — skip anything blurry,
       all_day: r.allDay || !r.time,
     }));
     const toBirthdays = bulkPreview.filter(r => r.action === "birthday").map(r => ({
-      id: crypto.randomUUID(), name: r.title.replace(/'s birthday|birthday|bday/gi, "").trim() || r.title, month: r.month, day: r.day, year: r.year || null,
+      id: crypto.randomUUID(), name: r.title.replace(/'s birthday|birthday|bday/gi, "").trim() || r.title, month: r.month, day: r.day, year: null,
     }));
     Promise.all([
       toCalendar.length ? db.saveEventsBulk(toCalendar) : Promise.resolve(),

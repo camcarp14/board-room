@@ -357,23 +357,36 @@ check("a capo raises every string equally", [0, 3, 5].every((s) => midiAt(s, 0, 
 
 // The pentatonic boxes: every dot in the scale, every degree present, and
 // consecutive boxes overlapping — which is what "connecting the boxes" means.
+// ALL TWELVE ROOTS, because the one that broke was the one this loop skipped:
+// E♭ box 5 sits at root fret 11 and its top offset reached fret 23, where the
+// placement clip dropped it to one dot per string. Six dots still hold all five
+// degrees, so the degree check alone passed; the count per string is what
+// says the shape is whole.
 for (const scaleKey of ["minor_pent", "major_pent"]) {
-  for (const root of [9, 0, 5]) {
+  for (let root = 0; root < 12; root++) {
     const pcs = new Set(scalePcs(root, scaleKey));
     const boxes = PENTATONIC_BOXES[scaleKey].map((_, i) => pentatonicBox(root, i, { scaleKey }));
     check(`${scaleKey} at ${pcName(root)}: five boxes, every dot in the scale`,
       boxes.length === 5 && boxes.every((b) => b && b.dots.length > 0 && b.dots.every((d) => pcs.has(d.pc))));
     check(`${scaleKey} at ${pcName(root)}: every box holds all five degrees`,
       boxes.every((b) => new Set(b.dots.map((d) => d.pc)).size === 5));
+    check(`${scaleKey} at ${pcName(root)}: every box is whole — two dots on every string`,
+      boxes.every((b) => [0, 1, 2, 3, 4, 5].every((s) => b.dots.filter((d) => d.string === s).length === 2)),
+      boxes.map((b, i) => `box${i + 1}:${b.dots.length}`).join(" "));
     check(`${scaleKey} at ${pcName(root)}: every box is two frets wide per string`,
       boxes.every((b) => b.dots.every((d) => Number.isInteger(d.fret) && d.fret >= 0)));
     // Adjacent boxes share notes — that is what makes them connectable rather
-    // than five unrelated shapes.
+    // than five unrelated shapes. Compared an octave apart as well as on the
+    // same frets, because each box is placed on its own and the neck ends: E♭
+    // box 5 drops to frets 8–11 rather than run off the twenty-second fret, so
+    // the frets it shares with box 4 (18–21) are the ones it would have had an
+    // octave up. The join is still real — same string, same note, and box 5
+    // at 8–11 meets box 1 at 11–14 where the set wraps.
     check(`${scaleKey} at ${pcName(root)}: consecutive boxes overlap`,
       boxes.every((b, i) => {
         const nxt = boxes[(i + 1) % boxes.length];
-        const mine = new Set(b.dots.map((d) => `${d.string}:${d.fret}`));
-        return nxt.dots.some((d) => mine.has(`${d.string}:${d.fret}`)) || i === boxes.length - 1;
+        const mine = new Set(b.dots.map((d) => `${d.string}:${mod12(d.fret)}`));
+        return nxt.dots.some((d) => mine.has(`${d.string}:${mod12(d.fret)}`)) || i === boxes.length - 1;
       }));
   }
 }
@@ -443,7 +456,12 @@ check("nearestString: every open string finds itself",
     const box = PENTATONIC_BOXES[sk][b];
     let rootFret = mod12(pc - 4);
     const lowest = Math.min(...box.map((x) => Math.min(...x)));
+    const highest = Math.max(...box.map((x) => Math.max(...x)));
     while (rootFret + lowest < 0) rootFret += 12;
+    // The same octave drop the placement code makes when the top of a box would
+    // pass the twenty-second fret — E♭ box 5 — so the table is compared where
+    // the box is actually drawn, not where it would have been clipped.
+    while (rootFret + highest > 22 && rootFret - 12 + lowest >= 0) rootFret -= 12;
     const tabled = new Set();
     box.forEach((offs, st) => offs.forEach((o) => { const f = rootFret + o; if (f <= 22) tabled.add(`${st}:${f}`); }));
     const derived = new Set(pentatonicBox(pc, b, { scaleKey: sk }).dots.map((d) => `${d.string}:${d.fret}`));

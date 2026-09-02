@@ -79,3 +79,22 @@
   for = "/assets/*"
   [headers.values]
     Cache-Control = "public, max-age=31536000, immutable"
+
+# Baseline response hygiene for everything static. Nothing frames this app and
+# nothing should be able to: DENY closes clickjacking on Approve / Run now /
+# Delete for good. nosniff stops a browser second-guessing a content type, and
+# the referrer policy keeps the app's URL (with its ?p= state) off third-party
+# logs when a link out is followed. These apply to static responses only —
+# functions set their own headers.
+#
+# DELIBERATELY ABSENT: Permissions-Policy. The guitar tuner opens the
+# microphone (src/lib/guitar/audio.js → getUserMedia), so `microphone=()` here
+# would break it silently — no smoke tests browser permissions. And no CSP:
+# index.html carries an inline theme script the shell needs before first paint.
+# scripts/sw-smoke.mjs pins this block next to the redirect order.
+[[headers]]
+  for = "/*"
+  [headers.values]
+    X-Frame-Options = "DENY"
+    X-Content-Type-Options = "nosniff"
+    Referrer-Policy = "strict-origin-when-cross-origin"

@@ -433,7 +433,23 @@ export function TodayPanel({ isMobile, settings, updateSetting, onOpenTuner, onO
   // on a failed write says "try Finish again", so the app was instructing the
   // duplicate. Three taps, three rows, all counted in the weekly minutes.
   // WorkoutPanel.jsx:368 does the same thing for the same reason.
-  const start = () => {
+  //
+  // AND IT DOES NOT START OVER A SESSION THAT STILL HAS RATINGS IN IT. The plan
+  // card renders directly under the stale-session card, so "Start the session"
+  // — the biggest button on the tab — was one tap that replaced yesterday's
+  // checkpoint, rated items and all, with an empty one: the exact loss the
+  // two-question abandon flow below exists to prevent, on a different button.
+  // Same polarity as there: destruction sits behind `true`, and dismissing the
+  // sheet keeps the session.
+  const start = async () => {
+    if (active?.results?.length > 0) {
+      const bin = await confirm({
+        title: "Throw the session away?",
+        message: `${active.results.length} rated item${active.results.length === 1 ? "" : "s"} from the session you started earlier will be deleted. Log it from the card above to keep them.`,
+        confirmLabel: "Throw it away", cancelLabel: "Keep it",
+      });
+      if (!bin) return;
+    }
     setActive({
       id: crypto.randomUUID(),
       day: today, startedAt: Date.now(), blockIndex: 0,

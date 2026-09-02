@@ -24,8 +24,8 @@ export const useSaveAffirmation = () => useInvalidatingMutation((a) => db.saveAf
 // moved, so it keeps its number in the list, which matters here because CreedPanel
 // renders those positions as Roman numerals.
 //
-// Nothing draws that yet. The confirm still says the entry "comes off the plate for
-// good", which is no longer true; the panel is where the sentence and the undo both
-// belong, and this hook is here so that edit does not have to touch db.js.
+// CreedPanel draws it: a delete now ends in a short toast with Undo that calls
+// useRestoreAffirmation, and the confirm no longer promises the entry is gone
+// for good. The hook lives here so that panel never has to touch db.js.
 export const useDeleteAffirmation = () => useInvalidatingMutation((id) => db.deleteAffirmation(id));
 export const useRestoreAffirmation = () => useInvalidatingMutation((id) => db.restoreAffirmation(id));

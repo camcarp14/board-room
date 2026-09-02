@@ -157,9 +157,12 @@ function mapTx(t, account) {
     amount_cents: -cents,
     description,
     merchant: String(t?.merchant_name || description).trim(),
-    // Left as "other" on purpose: the client re-categorises with the same
-    // lexicon the CSV path uses, so one vocabulary covers both, and a
-    // category_override you set is never touched by a sync.
+    // "other" here means UNFILED, not "filed as Other". The column is NOT NULL
+    // DEFAULT 'other' and this function cannot run the client's lexicon (the
+    // bundling note at the top), so the client's effectiveCategory treats a
+    // stored "other" as absent and runs the lexicon at read time — one
+    // vocabulary for CSV and sync rows alike. A category_override you set is
+    // a separate column and is never touched by a sync.
     category: "other",
   };
 }
@@ -231,60 +234,80 @@ exports.handler = async (event) => {
       let added = 0, removed = 0;
       const accounts = [];
       const balances = [];
+      const failed = [];
       for (const item of items) {
         const bank = item.institution || "Bank";
-        // NAME THE ACCOUNT, NOT THE BANK. Every row used to be filed under
-        // "Chase", so a card and a checking account at the same bank collapsed
-        // into one column and per-account totals meant nothing. Plaid gives each
-        // transaction an account_id; this resolves it to "Sapphire ••1234".
-        // A bank that won't answer /accounts/get still syncs — it just falls
-        // back to the institution name, which is what it did before.
-        let byId = {};
+        // ONE BANK'S FAILURE IS ONE BANK'S FAILURE. Without this try, an
+        // ITEM_LOGIN_REQUIRED from the first item in PostgREST order threw
+        // straight out of the loop, so every bank after it stopped syncing too —
+        // and reconnecting after a password change creates a NEW item beside
+        // the broken one, so the fresh connection was blocked by the stale row
+        // until you found and disconnected it. Auto-sync is silent, so it read
+        // as "the numbers stopped updating". The cursor is saved per page below,
+        // so a bank that fails mid-way loses nothing; it is named in `failed`
+        // and the others carry on, the same way `balances` already does it.
         try {
-          const mine = await accountsFor(item, c);
-          balances.push(...mine);
-          byId = Object.fromEntries(mine.map((a) => [a.account_id, a.name]));
-        } catch { /* transactions are worth having without balances */ }
-        const nameFor = (t) => byId[String(t?.account_id || "")] || bank;
-        let cursor = item.cursor || undefined;
-        let more = true, guard = 0;
-        // /transactions/sync pages. The guard is a backstop, not a limit: a
-        // cursor that never advances would otherwise loop until the function
-        // times out and nothing would be written at all.
-        while (more && guard++ < 40) {
-          const page = await plaid("/transactions/sync", {
-            access_token: item.access_token, cursor, count: 500,
-          }, c);
-          const rows = [...(page.added || []), ...(page.modified || [])]
-            .map((t) => mapTx(t, nameFor(t))).filter(Boolean)
-            .map((r) => ({ ...r, user_id: uid }));
-          if (rows.length) {
-            for (let i = 0; i < rows.length; i += 400) {
-              await sb("transactions", {
-                method: "POST",
-                headers: { Prefer: "resolution=merge-duplicates" },
-                body: JSON.stringify(rows.slice(i, i + 400)),
-              }, c);
+          // NAME THE ACCOUNT, NOT THE BANK. Every row used to be filed under
+          // "Chase", so a card and a checking account at the same bank collapsed
+          // into one column and per-account totals meant nothing. Plaid gives each
+          // transaction an account_id; this resolves it to "Sapphire ••1234".
+          // A bank that won't answer /accounts/get still syncs — it just falls
+          // back to the institution name, which is what it did before.
+          let byId = {};
+          try {
+            const mine = await accountsFor(item, c);
+            balances.push(...mine);
+            byId = Object.fromEntries(mine.map((a) => [a.account_id, a.name]));
+          } catch { /* transactions are worth having without balances */ }
+          const nameFor = (t) => byId[String(t?.account_id || "")] || bank;
+          let cursor = item.cursor || undefined;
+          let more = true, guard = 0;
+          // /transactions/sync pages. The guard is a backstop, not a limit: a
+          // cursor that never advances would otherwise loop until the function
+          // times out and nothing would be written at all.
+          while (more && guard++ < 40) {
+            const page = await plaid("/transactions/sync", {
+              access_token: item.access_token, cursor, count: 500,
+            }, c);
+            const rows = [...(page.added || []), ...(page.modified || [])]
+              .map((t) => mapTx(t, nameFor(t))).filter(Boolean)
+              .map((r) => ({ ...r, user_id: uid }));
+            if (rows.length) {
+              for (let i = 0; i < rows.length; i += 400) {
+                await sb("transactions", {
+                  method: "POST",
+                  headers: { Prefer: "resolution=merge-duplicates" },
+                  body: JSON.stringify(rows.slice(i, i + 400)),
+                }, c);
+              }
+              added += rows.length;
             }
-            added += rows.length;
+            const gone = (page.removed || []).map((r) => `plaid:${r.transaction_id}`).filter((s) => s !== "plaid:undefined");
+            if (gone.length) {
+              await sb(`transactions?user_id=eq.${uid}&id=in.(${gone.map((g) => `"${g}"`).join(",")})`, { method: "DELETE" }, c);
+              removed += gone.length;
+            }
+            cursor = page.next_cursor;
+            more = !!page.has_more;
+            // The cursor is saved after EVERY page, not at the end. A timeout
+            // halfway through a first sync would otherwise replay from zero on
+            // the next run, forever, for an account with enough history.
+            await sb(`plaid_items?user_id=eq.${uid}&item_id=eq.${item.item_id}`, {
+              method: "PATCH", body: JSON.stringify({ cursor, synced_at: new Date().toISOString() }),
+            }, c);
           }
-          const gone = (page.removed || []).map((r) => `plaid:${r.transaction_id}`).filter((s) => s !== "plaid:undefined");
-          if (gone.length) {
-            await sb(`transactions?user_id=eq.${uid}&id=in.(${gone.map((g) => `"${g}"`).join(",")})`, { method: "DELETE" }, c);
-            removed += gone.length;
-          }
-          cursor = page.next_cursor;
-          more = !!page.has_more;
-          // The cursor is saved after EVERY page, not at the end. A timeout
-          // halfway through a first sync would otherwise replay from zero on
-          // the next run, forever, for an account with enough history.
-          await sb(`plaid_items?user_id=eq.${uid}&item_id=eq.${item.item_id}`, {
-            method: "PATCH", body: JSON.stringify({ cursor, synced_at: new Date().toISOString() }),
-          }, c);
+          accounts.push(bank);
+        } catch (e) {
+          failed.push({ institution: bank, code: e.code || null, message: e.message || "sync failed" });
         }
-        accounts.push(bank);
       }
-      return json(200, { ok: true, connected: items.length, added, removed, accounts, balances });
+      // Every bank failing is still an error, and the same one as before — the
+      // rethrow keeps its code so ITEM_LOGIN_REQUIRED still reaches the 409
+      // wording below, and a single-bank install sees exactly what it did.
+      if (failed.length && failed.length === items.length) {
+        throw Object.assign(new Error(failed[0].message), { code: failed[0].code, status: 400 });
+      }
+      return json(200, { ok: true, connected: items.length, added, removed, accounts, balances, failed });
     }
 
     // ── 3a. balances, without a sync ───────────────────────────────────────
@@ -367,9 +390,25 @@ exports.handler = async (event) => {
       if (!id) return error(400, "item_id missing");
       const rows = await sb(`plaid_items?user_id=eq.${uid}&item_id=eq.${id}&select=access_token`, {}, c) || [];
       // Told to Plaid as well as forgotten here — an item left live keeps
-      // pulling from the bank and, on a metered plan, keeps billing.
+      // pulling from the bank and, on a metered plan, keeps billing. And the
+      // order matters: PLAID FIRST, AND ONLY THEN THE ROW. This used to swallow
+      // a failed /item/remove and delete the token anyway, so a timeout or a
+      // Plaid 5xx left the connection live at the bank with the only copy of
+      // the access_token gone — nothing left to retry the removal with, while
+      // the app said "disconnected" and privacy.html promised revocation.
+      // The one failure that IS safe to forget through is Plaid saying the
+      // Item no longer exists: it has already been removed (or the bank pulled
+      // access), so there is nothing to revoke and keeping the row would leave
+      // a bank you can never disconnect.
       if (rows[0]?.access_token) {
-        try { await plaid("/item/remove", { access_token: rows[0].access_token }, c); } catch { /* forget it locally regardless */ }
+        try {
+          await plaid("/item/remove", { access_token: rows[0].access_token }, c);
+        } catch (e) {
+          const alreadyGone = e.code === "ITEM_NOT_FOUND" || e.code === "INVALID_ACCESS_TOKEN";
+          if (!alreadyGone) {
+            return json(502, { error: "Couldn't reach Plaid to revoke the connection — nothing was changed. Try disconnecting again.", code: e.code });
+          }
+        }
       }
       await sb(`plaid_items?user_id=eq.${uid}&item_id=eq.${id}`, { method: "DELETE" }, c);
       return json(200, { ok: true });

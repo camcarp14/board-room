@@ -22,7 +22,6 @@
 // Theme or Systems, and Systems chooses which panel. Flattening them into one
 // six-item row would put "Colour scheme" and "Miner" on the same shelf.
 import { useState, useEffect, useRef, lazy, Suspense } from "react";
-import { supabase } from "../lib/supabase.js";
 import { NAV } from "./nav.js";
 import { Sheet, Cell, CellGroup, Button, Field, SectionHeader, Switch, SwitchRow, Segmented, Spinner, useConfirm } from "../ui/kit.jsx";
 import { IcSun, IcMoon, IcAutoTheme, IcCheck } from "../ui/icons.jsx";
@@ -115,7 +114,7 @@ function Swatch({ p, mode, selected }) {
   );
 }
 
-export function SettingsSheet({ onClose, session, theme, calUrl, onSaveCalUrl, isMobile, conn, settings, updateSetting }) {
+export function SettingsSheet({ onClose, session, theme, calUrl, onSaveCalUrl, isMobile, conn, settings, settingsLoaded, updateSetting, onSignOut }) {
   // Systems first, and Usage first within it. The sheet is opened from the
   // sun/moon button, so Theme was the obvious landing — but the theme is set
   // once and then never again, while "what has this been spending" is the thing
@@ -142,7 +141,15 @@ export function SettingsSheet({ onClose, session, theme, calUrl, onSaveCalUrl, i
       confirmLabel: "Sign out",
       destructive: true,
     });
-    if (ok) await supabase.auth.signOut();
+    // App does the signing out, not this sheet, because App is the thing that
+    // has to know it was asked. Its SIGNED_OUT handler purges the device — the
+    // query cache, the unsaved-writes queue, the br_* keys — and the same event
+    // arrives when a session simply expires under an open tab, where that purge
+    // would throw away typed edits. App tells the two apart by the intent it
+    // records before the call; a bare supabase.auth.signOut() from here could
+    // not be told from an expiry. It is also App that scopes the sign-out to
+    // THIS device, which is what the copy above promises.
+    if (ok) await onSignOut?.();
   };
 
   // Status fires ~25 network calls including a paid Anthropic ping, so it must
@@ -305,6 +312,28 @@ export function SettingsSheet({ onClose, session, theme, calUrl, onSaveCalUrl, i
         )}
 
         {tab === "tabs" && (() => {
+          // NOT UNTIL THE SAVED BAR IS HERE. `settings` is null from sign-in until
+          // loadSettings lands, and stays null for the whole session if that one
+          // read failed — App keeps the previous value on a failed read, and at
+          // sign-in there is no previous value. To the rows below, null reads
+          // exactly like "no saved nav": they draw NAV's default order, and the
+          // first switch flipped or arrow tapped writes that default order plus
+          // the one change over the account's real bar, which every other device
+          // then picks up on its next load — with nothing on this screen to say
+          // the row it was about to write was not his. So the panel says what it
+          // is waiting for instead of drawing a layout it has no right to save;
+          // the Brief's widget list underneath shares the exposure and waits too.
+          // App refuses the write as well, in case another surface reaches it.
+          if (!settingsLoaded) return (
+            <div key="tabs" className="pagefade" style={{ display: "flex", flexDirection: "column", gap: 4, paddingBottom: 4 }}>
+              <SectionHeader title="The bar" />
+              <div className="t-body" style={{ color: "var(--sub)", lineHeight: 1.6, padding: "8px 4px" }}>
+                Your saved bar hasn't loaded yet. Until it does, anything changed here
+                would be written over it as the default layout — so the switches for
+                the tabs and the Brief's widgets wait. Refresh, then come back.
+              </div>
+            </div>
+          );
           // The bar's shape lives in app_settings.navigation = {order, hidden}
           // (account-scoped, unlike the device-local theme prefs): which rooms
           // exist, and in what sequence, is a fact about the house, not about

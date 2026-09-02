@@ -23,7 +23,12 @@ import { callFnFull } from "../../lib/functions.js";
 import { callClaude } from "../../lib/claude.js";
 import { updateSnapshot, getSnapshot } from "../../lib/snapshot.js";
 import { db } from "../../data/db.js";
-import { nextBirthdayOccurrence, localDayKey } from "../../lib/dates.js";
+import { nextBirthdayOccurrence } from "../../lib/dates.js";
+// The mini calendar groups OCCURRENCES, not stored rows — see the card. These two
+// are the same functions the Personal month grid uses, so the two views cannot
+// disagree about which cell an event belongs on.
+import { expandEvents } from "../../lib/recurrence.js";
+import { spanDayKeys } from "../../lib/calendar-overlays.js";
 import { NotesTile } from "./NotesTile.jsx";
 import { eventId, takeKey, hasPassed, isSettled, watchRowState, POLL_EVERY_MS, POLL_MAX, CLAIM_STALE_MS } from "./watchState.js";
 import { useEconResults, useResolveEconEvents } from "../../data/econ.js";
@@ -32,6 +37,10 @@ import { useEconResults, useResolveEconEvents } from "../../data/econ.js";
 // panel pulled the panel — and recurrence, overlays, layout, holidays — into this
 // page's first-paint chunk for the sake of a four-entry array. 42 kB of calendar
 // on the landing tab, bought by one import line. See lib/eventCategories.js.
+// (recurrence and overlays — and holidays, which overlays imports — DO come in
+// now, deliberately: the mini calendar needs them to paint repeating and
+// multi-day events on the right cells. The panel and its layout code still
+// stay out; those were the bulk of the 42 kB.)
 import { EVENT_CATEGORIES } from "../../lib/eventCategories.js";
 
 const GSC_EMPTY = { impressions: "—", impressionsD: "", clicks: "—", clicksD: "", pos: "—", posD: "", series: Array(14).fill(0), daily: [], note: "" };
@@ -185,14 +194,21 @@ export function MorningBriefPage({ btc, isMobile, settings, updateSetting, onOpe
   // Now the work is off the request path entirely and the answers are shared:
   // econ-resolve-background resolves whatever is unresolved and writes verdicts
   // to app_settings, which useEconResults reads. This component's whole job is
-  // to fire ONE trigger per page load and then wait.
+  // to fire ONE trigger per newly-past event and then wait.
   //
   // That is the spend fix, and it is structural rather than a promise: the
   // trigger carries the whole list, the resolver caps how many it will price out
   // per invocation, it claims rows before calling anything so two devices can't
   // both pay, and a verdict it could not establish is recorded so it is never
   // asked again. Nothing on this page can spend by re-rendering.
-  const econTriggered = useRef(false);
+  //
+  // "Newly-past", not "once per page load". This was a boolean, and a page left
+  // open through a release morning resolved only what had already passed when it
+  // mounted: the 9:45 PMI after the 8:30 CPI never got a trigger, the poll had
+  // long lapsed, and its row settled on "couldn't confirm the published number"
+  // when nobody had looked. The set remembers which ids have been handed over so
+  // a later refresh triggers for the ones that are new and leaves the rest alone.
+  const econTriggered = useRef(new Set()); // event ids already handed to the resolver this page load
   const [pollTicks, setPollTicks] = useState(0);
 
   // Past events with no verdict yet — the trigger's payload, and the poll's
@@ -211,13 +227,17 @@ export function MorningBriefPage({ btc, isMobile, settings, updateSetting, onOpe
   }, [events, eventsStatus.state, econ]);
 
   useEffect(() => {
-    if (econTriggered.current || !unresolvedPast.length) return;
-    econTriggered.current = true; // once per page load, for the whole card
+    const fresh = unresolvedPast.filter((e) => !econTriggered.current.has(eventId(e)));
+    if (!fresh.length) return; // nothing has passed since the last trigger
+    fresh.forEach((e) => econTriggered.current.add(eventId(e)));
+    // The whole unresolved list goes, not just the new ids — a stale claim from a
+    // crashed invocation rides along and gets asked again; the resolver's own
+    // claims and per-invocation cap are what keep that from double-paying.
     resolveEcon.trigger(unresolvedPast.map((e) => ({
       id: eventId(e), title: e.title, at: e.at,
       forecast: e.forecast, previous: e.previous, numeric: e.numeric,
     })));
-    setPollTicks(1);
+    setPollTicks(1); // (re)start the patience budget for this batch
   }, [unresolvedPast]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Poll for the verdicts the background invocation is writing. Reads only — the
@@ -302,9 +322,9 @@ export function MorningBriefPage({ btc, isMobile, settings, updateSetting, onOpe
         ? { state: "live", stale: true, at: prev?.at ?? boot.updatedAt, detail }
         : { state: "error", detail };
     };
-    // Stamp a live status with its data's timestamp: fresh data is "now"; stale/
-    // cached data keeps the last known-good time (the card shows that instead of
-    // a "Stale" tag), falling back to the persisted snapshot's time.
+    // Stamp a live status with its data's timestamp: fresh data is "now"; stale
+    // (last-good) data keeps the last known-good time (the card shows that
+    // instead of a "Stale" tag), falling back to the persisted snapshot's time.
     const liveStatus = (stale) => (prev) => ({ state: "live", stale, at: stale ? (prev?.at ?? boot.updatedAt ?? Date.now()) : Date.now() });
     const loadCredentialed = async (fn, payload, setData, setStatus, hint) => {
       const ping = await pingOnce(fn);
@@ -314,15 +334,19 @@ export function MorningBriefPage({ btc, isMobile, settings, updateSetting, onOpe
       const res = await callFnFull(fn, payload);
       if (!alive()) return;
       // A backend can answer 200 with its last-good value when the upstream
-      // failed (stale/cached flags) — surface that instead of stamping it fresh.
-      if (res.ok && res.data?.success) { setData(res.data); setStatus(liveStatus(!!(res.data.stale || res.data.cached))); }
+      // failed — that answer carries `stale: true`, and ONLY that flag means
+      // last-good. `cached: true` on its own is a warm in-TTL hit (calendar.js
+      // keeps one for 20 minutes against this page's 5-minute refresh), and
+      // reading it as stale swapped the Live dot for a "last good data" stamp
+      // on three of every four refreshes, over data that was current.
+      if (res.ok && res.data?.success) { setData(res.data); setStatus(liveStatus(!!res.data.stale)); }
       else setStatus(keepIfLive(res));
     };
     const loadOpen = async (fn, apply, setStatus) => {
       const res = await callFnFull(fn, {});
       if (!alive()) return;
       if (res.status === 404) return setStatus({ state: "nofn", detail: `push netlify/functions/${fn}.js and redeploy` });
-      if (res.ok && res.data?.success) { apply(res.data); setStatus(liveStatus(!!(res.data.stale || res.data.cached))); }
+      if (res.ok && res.data?.success) { apply(res.data); setStatus(liveStatus(!!res.data.stale)); }
       else setStatus(keepIfLive(res));
     };
     await Promise.all([
@@ -331,7 +355,7 @@ export function MorningBriefPage({ btc, isMobile, settings, updateSetting, onOpe
       loadCredentialed("gsc", { site: "zerotosecure.com", days: 14 }, (d) => { setGsc(d); updateSnapshot({ gsc: d }); }, setGscStatus,
         (m) => `Add ${m || "GSC_CLIENT_EMAIL + GSC_PRIVATE_KEY"} in Netlify env vars, share the Search Console property with the service account, then redeploy.`),
       loadCredentialed("clarify-pipeline", {}, (d) => { setClarify(d); updateSnapshot({ clarify: d }); }, setClarifyStatus,
-        (m) => `Add ${m || "CLARIFY_SUPABASE_URL + CLARIFY_SUPABASE_ANON_KEY"} in Netlify env vars, then redeploy.`),
+        (m) => `Add ${m || "CLARIFY_SUPABASE_URL + CLARIFY_SUPABASE_SERVICE_ROLE_KEY"} in Netlify env vars, then redeploy.`),
       loadCredentialed("zts-pipeline", {}, (d) => { setZtsPipe(d); updateSnapshot({ zts: d }); }, setZtsPipeStatus,
         (m) => `Add ${m || "CLARIFY_SUPABASE_URL + CLARIFY_SUPABASE_ANON_KEY"} in Netlify env vars (ZTS now shares the Pentagon Supabase project), then redeploy.`),
       loadOpen("markets", (d) => { setStocks(d); updateSnapshot({ stocks: d }); }, setStocksStatus),
@@ -368,7 +392,7 @@ export function MorningBriefPage({ btc, isMobile, settings, updateSetting, onOpe
         if (!settings?.calendar_url) { if (alive()) setMeetingsStatus({ state: "notconfigured", detail: "Add your calendar's iCal (.ics) link in Settings to see meetings here." }); return; }
         const res = await callFnFull("calendar-events", { url: settings.calendar_url });
         if (!alive()) return;
-        if (res.ok && res.data?.success) { setMeetings(res.data.events || []); setMeetingsStatus(liveStatus(!!(res.data.stale || res.data.cached))); }
+        if (res.ok && res.data?.success) { setMeetings(res.data.events || []); setMeetingsStatus(liveStatus(!!res.data.stale)); }
         else setMeetingsStatus(keepIfLive(res));
       })(),
     ]);
@@ -385,12 +409,16 @@ export function MorningBriefPage({ btc, isMobile, settings, updateSetting, onOpe
 
   // One shared interval for everything above (was several separate mechanisms
   // — this one-time effect plus bespoke per-feed intervals — consolidated
-  // since they were all polling the same way for no real reason). Also
-  // refetches when you switch back to this tab after
-  // it's been hidden a while, so alt-tabbing away for hours doesn't leave
-  // you staring at a stale page until the next 5-min tick happens to land.
+  // since they were all polling the same way for no real reason). A tick that
+  // lands while the tab is hidden is skipped: each pass is eight function
+  // invocations and eight usage_log rows, and a Mac tab left on the Brief all
+  // day was spending ~96 of each an hour for nobody (iOS suspends timers, so
+  // the phone never did). The visibilitychange handler below is what catches
+  // up when you switch back after it's been hidden a while, so alt-tabbing
+  // away for hours doesn't leave you staring at a stale page until the next
+  // 5-min tick happens to land.
   useEffect(() => {
-    const iv = setInterval(refreshBrief, 5 * 60 * 1000);
+    const iv = setInterval(() => { if (document.visibilityState !== "hidden") refreshBrief(); }, 5 * 60 * 1000);
     let lastVisibleRefresh = Date.now();
     const onVisible = () => {
       if (document.visibilityState !== "visible") return;
@@ -617,10 +645,19 @@ export function MorningBriefPage({ btc, isMobile, settings, updateSetting, onOpe
   const miniLeading = new Date(miniYear, miniMonth, 1).getDay();
   const miniCells = [...Array(miniLeading).fill(null), ...Array.from({ length: miniDaysInMonth }, (_, i) => i + 1)];
   const miniEventsByDay = {};
-  // Local day-key (all-day events keep their literal date) so an evening event
-  // lands on the same cell the Personal calendar and the Docket show it on —
-  // start_time is stored UTC, and slice(0,10) put evening events a day early.
-  (miniEvents || []).forEach(ev => { const k = ev.all_day ? String(ev.start_time).slice(0, 10) : localDayKey(ev.start_time); (miniEventsByDay[k] = miniEventsByDay[k] || []).push(ev); });
+  // OCCURRENCES, NOT ROWS. loadEvents() hands back the stored rows, and a
+  // repeating event is ONE row dated the day its series began — grouped raw,
+  // the weekly standup painted a single cell in whatever month it was created
+  // and never again, a four-day trip painted only its first day, a day removed
+  // via exdates still showed, and the "+N" counted all of it wrong. expandEvents
+  // gives this month's occurrences (rrule, exdates, until honoured); spanDayKeys
+  // says which local cells each one covers — all-day rows keep their literal
+  // date, and an evening event lands on the same cell the Personal calendar
+  // shows it on (start_time is stored UTC, and slice(0,10) put evening events a
+  // day early). Same two functions the month grid uses, so the card the Brief
+  // opens with cannot disagree with the calendar it links to.
+  const miniFrom = new Date(miniYear, miniMonth, 1), miniTo = new Date(miniYear, miniMonth + 1, 0, 23, 59);
+  expandEvents(miniEvents || [], miniFrom, miniTo).forEach(ev => { for (const k of spanDayKeys(ev)) (miniEventsByDay[k] = miniEventsByDay[k] || []).push(ev); });
   const miniDateKey = (day) => `${miniYear}-${String(miniMonth + 1).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
   const todayDate = miniNow.getDate();
   const card_minicalendar = (

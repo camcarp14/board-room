@@ -35,7 +35,18 @@
 //     call, so two overlapping triggers can't both pay for the same event
 // High/medium USD events run 10-16 a week. At one search plus a short answer
 // each, that is cents a week, and it does not multiply by devices or reloads.
-import { searchCall, MODELS, parseJsonLoose } from "../lib/upstream/llm.js";
+//
+// AND EVERY ONE OF THOSE CENTS IS WRITTEN DOWN. The router's searchCall only
+// records usage into a ledger it is handed, and this file handed it none — so
+// the predecessor's usage_log rows (the ones the failure story above was read
+// from) stopped when it was replaced, and Systems → Usage showed every resolved
+// print at $0 under a label that was already waiting for it. A spend ceiling
+// that the ledger cannot see is the class of failure scripts/spend-smoke.mjs
+// exists for; that smoke now holds this file to the same bar as the SDK
+// callers, and the row is written through the Upstream store's logUsage, which
+// is try/catch'd so accounting can never fail a run.
+import { searchCall, MODELS, parseJsonLoose, makeLedger, ledgerTotal } from "../lib/upstream/llm.js";
+import { makeStore } from "../lib/upstream/store.js";
 
 const json = (status, body) => new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
 
@@ -160,7 +171,13 @@ export default async (req) => {
   let body;
   try { body = await req.json(); } catch { return json(400, { error: "invalid JSON" }); }
 
-  const key = process.env.ANTHROPIC_API_KEY || process.env.VITE_ANTHROPIC_API_KEY;
+  // ANTHROPIC_API_KEY only — the same single name every server-side caller
+  // reads. This used to fall back to VITE_ANTHROPIC_API_KEY, which made a
+  // VITE_-prefixed secret a working server configuration; Vite exposes that
+  // prefix to the browser by design, so the fallback was an invitation to keep
+  // the real key under a name one careless `import.meta.env` read away from a
+  // public URL.
+  const key = process.env.ANTHROPIC_API_KEY;
   if (body?.ping) return json(200, { success: true, service: "econ-resolve-background", configured: !!(key && SUPA && SERVICE && OWNER), missing: key ? (SUPA && SERVICE && OWNER ? undefined : "SUPABASE_URL + SUPABASE_SERVICE_ROLE_KEY + BOARD_USER_ID") : "ANTHROPIC_API_KEY" });
   if (!key || !SUPA || !SERVICE || !OWNER) return json(503, { error: "server owner is not configured" });
 
@@ -183,6 +200,10 @@ export default async (req) => {
   for (const e of todo) store[e.id] = { status: "claimed", at: now };
   await writeStore(userId, pruneStore(store));
 
+  // The usage_log writer. Built after the owner gate on purpose: a stranger's
+  // knock never reaches a model call, so it has nothing to account for.
+  const usage = makeStore(userId);
+
   // Netlify returns this 202 to the client immediately; the work below keeps
   // running in the background invocation.
   for (const e of todo) {
@@ -197,6 +218,11 @@ export default async (req) => {
       numeric ? "This release is expected to carry a figure." : "This release does not carry a figure — report what was decided or said.",
     ].join("\n");
 
+    // One ledger per event, so the row says what THIS print cost — including
+    // the searches, which the router prices per use on top of the tokens.
+    const ledger = makeLedger();
+    const t0 = Date.now();
+    let ok = true;
     try {
       const res = await searchCall({
         model: MODELS.sonnet,
@@ -206,6 +232,7 @@ export default async (req) => {
         maxTokens: 4000,
         effort: "low",
         timeoutMs: PER_EVENT_MS,
+        ledger,
       });
       const v = normalizeVerdict(parseJsonLoose(res.text) ?? parseJsonLoose(res.lastText), { numeric });
       // A "pending" answer is recorded as `unresolved`, not left blank. The model
@@ -216,9 +243,18 @@ export default async (req) => {
         ? { status: "unresolved", at: Date.now() }
         : { ...v, at: Date.now() };
     } catch (err) {
+      ok = false;
       console.error("econ-resolve failed for", e.id, err?.message || err);
       store[e.id] = { status: "unresolved", at: Date.now(), detail: String(err?.message || err).slice(0, 120) };
     }
+    // The row lands under this function's own name: SystemsPage buckets by fn,
+    // and callFn already files its timing-only kind:"call" rows under
+    // "econ-resolve-background", so this is the one value that meets the
+    // "Econ prints resolved" label already waiting in USAGE_META. A failed call
+    // is still a billed call (an aborted search is the original sin above), so
+    // it is logged with ok:false rather than not at all.
+    const tot = ledgerTotal(ledger);
+    await usage.logUsage({ fn: "econ-resolve-background", inTokens: tot.inputTokens, outTokens: tot.outputTokens, costUsd: tot.estCostUsd, ms: Date.now() - t0, ok, detail: e.title });
     // Save after each one: a crash halfway through keeps what it already paid for.
     await writeStore(userId, pruneStore(store));
   }

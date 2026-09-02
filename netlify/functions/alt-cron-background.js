@@ -790,6 +790,21 @@ function seasonRead({ universe = null, btcRow = null, ethRow = null, fearGreed =
   const facts = [];
   const breadth = computeBreadth(universe, btcRow, facts);
   const dom = domTrendOf(domHistory, facts);
+  // THE SPAN THE OVERRIDE READS, which the 30-day trend cannot supply. The
+  // regime override in src/lib/altLadder.js asks for dominance "falling for
+  // 60+ days" (OVERRIDE_DOM_DAYS), and this used to publish dom.spanDays —
+  // first and last sample of a 30-day window, so at most 30, so the leg could
+  // not arm on any feed this engine will ever produce and the book's footer
+  // promised a switch that was arithmetically welded open. The direction is
+  // still the month's; the span is how far back that direction holds. When
+  // the full kept history (DOM_KEEP_DAYS, 90) reads the same way, it is the
+  // history's span; when the history disagrees, the fall is younger than the
+  // history and the month's span is the honest answer. The fact sentence is
+  // untouched — it describes the month it measured.
+  const domLong = domTrendOf(domHistory, [], DOM_KEEP_DAYS);
+  const domSpanDays = dom.trend != null && domLong.trend === dom.trend
+    ? domLong.spanDays ?? dom.spanDays ?? null
+    : dom.spanDays ?? null;
   const ethBtc = computeEthBtc(ethRow, btcRow, facts);
   const fg = normFearGreed(fearGreed, facts);
 
@@ -800,11 +815,10 @@ function seasonRead({ universe = null, btcRow = null, ethRow = null, fearGreed =
     fearGreed: fg ? fg.value : null,
     ethBtc7d: ethBtc ? ethBtc.chg7dPct : null,
     domTrend: dom.trend,
-    // The SPAN, not just the direction. The regime override in
-    // src/lib/altLadder.js needs "falling for 60+ days", and a trend with no
-    // measured span cannot answer that — seven samples inside six days is a
-    // real "falling" and is not what the override is asking about.
-    domSpanDays: dom.spanDays ?? null,
+    // The SPAN, not just the direction — see domSpanDays above. Seven samples
+    // inside six days is a real "falling" and is not what the override is
+    // asking about.
+    domSpanDays,
     measured: { earned: 0, of: 0 },
   });
 
@@ -870,11 +884,8 @@ function seasonRead({ universe = null, btcRow = null, ethRow = null, fearGreed =
     fearGreed: fg ? fg.value : null,
     ethBtc7d: ethBtc ? ethBtc.chg7dPct : null,
     domTrend: dom.trend,
-    // The SPAN, not just the direction. The regime override in
-    // src/lib/altLadder.js needs "falling for 60+ days", and a trend with no
-    // measured span cannot answer that — seven samples inside six days is a
-    // real "falling" and is not what the override is asking about.
-    domSpanDays: dom.spanDays ?? null,
+    // The SPAN, not just the direction — see domSpanDays above.
+    domSpanDays,
     measured: { earned, of },
   };
 }
@@ -934,14 +945,20 @@ function computeBreadth(universe, btcRow, facts) {
  * measured one and is not. The window is anchored to the NEWEST sample and
  * bounded by dates, not by a sample count: after a cron gap, "the last 30
  * samples" reaches back months and labels the result a 30-day move.
+ *
+ * `windowDays` defaults to the month the season scores on; seasonRead also
+ * runs it over the full kept history for the span the regime override reads.
+ * The span it returns is strictly under the window at daily cadence (the
+ * sample exactly `windowDays` back is excluded), which is why the override's
+ * 60 days can only be met by a window wider than 60.
  */
-function domTrendOf(domHistory, facts = []) {
+function domTrendOf(domHistory, facts = [], windowDays = DOM_WINDOW_DAYS) {
   const rows = (Array.isArray(domHistory) ? domHistory : [])
     .filter((s) => s && Number.isFinite(s.t) && Number.isFinite(s.dom))
     .sort((a, b) => a.t - b.t);
   if (rows.length === 0) return { trend: null, changePts: null, samples: 0 };
   const newest = rows[rows.length - 1].t;
-  const window = rows.filter((s) => s.t > newest - DOM_WINDOW_DAYS * DAY);
+  const window = rows.filter((s) => s.t > newest - windowDays * DAY);
   if (window.length < MIN_DOM_SAMPLES) {
     facts.push(`${window.length} recent dominance sample${window.length === 1 ? "" : "s"} stored — the trend needs ${MIN_DOM_SAMPLES} and stays unknown until then`);
     return { trend: null, changePts: null, samples: window.length };
@@ -1232,9 +1249,17 @@ function cohortRead(index, pages) {
  *   ATH snap: an all-time high sitting between price and just past T3 is a
  *     real wall; the nearest target at or above it snaps onto it rather than
  *     pretending the market will pick our number over the market's.
- *   Clamps: T1 under +4% is not a target worth flagging (bumped to +5%);
- *     T1<T2<T3 strictly (≥2% steps); an invalidation at or above price×0.99
- *     means the structure is already lost — no targets at all.
+ *   Clamps: T1 under +5% is not a target worth flagging (bumped to +5% — the
+ *     same 5% the flag gate asks for, so the two can never disagree); T1<T2
+ *     strictly (≥2% step); an invalidation at or above price×0.99 means the
+ *     structure is already lost — no targets at all.
+ *   T3 IS NEVER CLAMPED. The last rung is the measured move or there is no
+ *     ladder: when the structural T3 sits under the clamped T2's +2% step the
+ *     move is spent (price through most of h, or a base too tight to measure
+ *     one off) and the answer is null. Raising T3 to fit under it manufactured
+ *     a +5/+7.1/+9.2% staircase out of nothing — 46 of the first 55 flags
+ *     carried T1 = price×1.05 exactly and twenty-odd the full triple, and a
+ *     bull hour cleared "T3" on a level no chart ever drew.
  */
 function targetsFor(row) {
   const price = row && Number.isFinite(row.price) ? row.price : null;
@@ -1269,12 +1294,21 @@ function targetsFor(row) {
   }
 
   // ≥2% between rungs, not merely ascending. `t2 <= t1` only guaranteed a
-  // strict order, so when the T1 clamp above pushed T1 up to price×1.05 it
+  // strict order, so when the T1 clamp below pushed T1 up to price×1.05 it
   // could land a hair under an unmoved T2 and pass: PUMP shipped T1 $0.002553
   // and T2 $0.002555, 0.08% apart, which is one target wearing two labels.
-  if (t1 < price * 1.04) t1 = price * 1.05;
+  //
+  // The bump threshold IS the flag gate's 5%. It used to bump under +4% and
+  // leave [4%, 5%) alone, so a structural T1 3.9% away was lifted to 5% and
+  // flagged while one 4.5% away was refused — the gate read backwards across
+  // that band. One number, in one place, and the gate is monotone again.
+  if (t1 < price * 1.05) t1 = price * 1.05;
   if (t2 < t1 * 1.02) t2 = t1 * 1.02;
-  if (t3 < t2 * 1.02) t3 = t2 * 1.02;
+  // T3 is the structure's or the ladder does not exist. If the measured move
+  // cannot clear the clamped T2 by the same 2% step, the clamps would be
+  // supplying every rung, and a ladder of three invented numbers is exactly
+  // what the Record then grades itself against.
+  if (t3 < t2 * 1.02) return null;
   if (!(invalidation < price * 0.99)) return null;
 
   const pctVs = (t) => Math.round((t / price - 1) * 1000) / 10;
@@ -1372,7 +1406,8 @@ const STALE_MS = 14 * DAY;
  * first_flagged_at — inserts only happen when no open row exists for the coin.
  * The status ladder is judged by PEAK price against the frozen targets and
  * ratchets up only; "hit T1 then round-tripped" is hit_t1 closed by
- * invalidation, not a hit erased.
+ * invalidation, not a hit erased. T3 is the top of the ladder and CLOSES the
+ * episode — there is nothing left to grade past the measured move.
  *
  * @param openRows      alt_flags rows with resolved_at null (DB column names)
  * @param screenedById  Map (or plain object) id → screened row with .targets
@@ -1457,6 +1492,20 @@ function transitionFlags(openRows, screenedById, asOf, gate = DEFAULT_GATE) {
       }
     }
 
+    // T3 close — with or without a screened row this pass, and after the
+    // invalidation branch so a T3 winner that has since lost its level is
+    // filed as the round-trip it is. This is the close the equity engine has
+    // always made and this one never did: a flag at hit_t3 sat open until the
+    // 14-day stale timer, and every new peak on a still-running name reset
+    // that timer, so twelve month-old winners held twelve of a `mixed` tape's
+    // eight slots and no setup found after 5 Aug could open at all. The
+    // Flags card froze on its best month and looked like it was working.
+    if (!patch.resolved_at && status === "hit_t3") {
+      patch.resolved_at = nowIso;
+      notes.closedBy = "target";
+      notesTouched = true;
+    }
+
     // Stale close — with or without a screened row this pass: 14 days without
     // a new peak means the episode is over; the status it earned stands.
     if (!patch.resolved_at) {
@@ -1483,8 +1532,16 @@ function transitionFlags(openRows, screenedById, asOf, gate = DEFAULT_GATE) {
   // pass that finds thirty qualifiers in a `btc_only` tape opens the five it
   // rates highest rather than whichever five `screenedRows` happened to reach
   // first (which is market-cap order — i.e. nothing to do with the setup).
+  //
+  // A FLAG CLOSED ON THIS PASS IS NOT OPEN. `openCoins` holds every row the
+  // pass started with, and the room was measured against that — so on the
+  // hour a T3 print or a shakeout closed three episodes, the hour you most
+  // want to know what replaces them, the cap read as full and nothing new
+  // opened. The set itself still excludes them from becoming candidates: a
+  // name that just closed does not get re-flagged in the same breath.
   const cap = Number.isFinite(gate && gate.max) ? gate.max : DEFAULT_GATE.max;
-  const room = Math.max(0, cap - openCoins.size);
+  const closedThisPass = updates.filter((u) => u.resolved_at).length;
+  const room = Math.max(0, cap - (openCoins.size - closedThisPass));
   const candidates = [];
   for (const s of screenedRows) {
     if (!s || !s.id || openCoins.has(s.id)) continue;
@@ -2053,6 +2110,8 @@ exports.transitionFlags = transitionFlags;
 exports.gateFor = gateFor;
 exports.PHASE_GATE = PHASE_GATE;
 exports.domTrendOf = domTrendOf;
+exports.DOM_WINDOW_DAYS = DOM_WINDOW_DAYS;
+exports.DOM_KEEP_DAYS = DOM_KEEP_DAYS;
 exports.capitalLadder = capitalLadder;
 exports.mergeScoreSample = mergeScoreSample;
 exports.scoreDriftOf = scoreDriftOf;

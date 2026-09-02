@@ -36,6 +36,12 @@ export function useImportTransactions() {
  * whole exercise feel broken. Writes `category_override` rather than `category`
  * so the imported value survives underneath: re-importing the same export can
  * never quietly undo a correction you made.
+ *
+ * The cached data is the ENVELOPE from useTransactions, so the optimistic
+ * update maps `old.rows`, not `old`. It mapped `old` directly for a while,
+ * which threw inside onMutate — and react-query runs onMutate BEFORE the
+ * mutationFn, so the throw aborted the whole mutation: "Just this one" closed
+ * the sheet and changed nothing, with no error anywhere.
  */
 export function useSetCategory() {
   const qc = useQueryClient();
@@ -44,7 +50,9 @@ export function useSetCategory() {
     onMutate: async ({ id, category }) => {
       await qc.cancelQueries({ queryKey: KEY });
       const prev = qc.getQueryData(KEY);
-      qc.setQueryData(KEY, (old) => (old || []).map((t) => (t.id === id ? { ...t, category_override: category } : t)));
+      qc.setQueryData(KEY, (old) => (old
+        ? { ...old, rows: (old.rows || []).map((t) => (t.id === id ? { ...t, category_override: category } : t)) }
+        : old));
       return { prev };
     },
     onError: (_e, _v, ctx) => { if (ctx?.prev !== undefined) qc.setQueryData(KEY, ctx.prev); },

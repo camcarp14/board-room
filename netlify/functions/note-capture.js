@@ -257,9 +257,13 @@ export default async (req) => {
     if (user_id !== c.owner) return fail(403, "this account is not allowed to use Board Room");
 
     // Recent rows serve two purposes in one round trip: the retry check, and
-    // (for a same-day append) the target note itself.
+    // (for a same-day append) the target note itself. NEVER THE BIN: deleting
+    // stamps updated_at, so a list deleted a minute ago is the newest row of
+    // all, and without the filter the next dictation was answered "duplicate"
+    // against it — or appended into it, invisibly, since the Notes tab reads
+    // `deleted_at is null` (db.loadNotes).
     const since = new Date(now - DEDUPE_MS).toISOString();
-    const recentRes = await rest(c, `personal_notes?user_id=eq.${user_id}&updated_at=gte.${encodeURIComponent(since)}&select=id,title,body,updated_at&order=updated_at.desc&limit=20`);
+    const recentRes = await rest(c, `personal_notes?user_id=eq.${user_id}&deleted_at=is.null&updated_at=gte.${encodeURIComponent(since)}&select=id,title,body,updated_at&order=updated_at.desc&limit=20`);
     if (!recentRes.ok) return fail(502, `notes lookup failed (${recentRes.status})`);
     const dupe = isDuplicate(await recentRes.json(), v, now);
     if (dupe) return json(200, { success: true, duplicate: true, id: dupe.id, mode: v.into ? "append" : "new" });
@@ -267,8 +271,9 @@ export default async (req) => {
     if (v.into) {
       // Find the note this list lives in. `title=eq.` is exact — the resolved
       // template, not a fuzzy match, so "Errands — Aug 8" never appends into
-      // "Errands — Aug 7".
-      const targetRes = await rest(c, `personal_notes?user_id=eq.${user_id}&title=eq.${encodeURIComponent(v.into)}&select=id,body&order=updated_at.desc&limit=1`);
+      // "Errands — Aug 7". And never the bin: a list the user deleted today must
+      // not silently receive the next dictation. A fresh one is started instead.
+      const targetRes = await rest(c, `personal_notes?user_id=eq.${user_id}&deleted_at=is.null&title=eq.${encodeURIComponent(v.into)}&select=id,body&order=updated_at.desc&limit=1`);
       if (!targetRes.ok) return fail(502, `note lookup failed (${targetRes.status})`);
       const target = (await targetRes.json())?.[0];
       if (target) {

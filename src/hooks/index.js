@@ -136,7 +136,12 @@ export function useBitcoinPrice() {
         const res = await fetch("/.netlify/functions/btc");
         if (res.ok) {
           const data = await res.json();
-          if (data?.success && data.price != null && alive) { const next = { price: data.price, changePct: data.changePct, points: data.points || [], high24: data.high24 ?? null, low24: data.low24 ?? null, loading: false, error: null, stale: !!(data.stale || data.cached), fetchedAt: Date.now() }; setState(next); updateSnapshot({ btc: next }); return; }
+          // Only `stale` means last-good: btc.js sets it when CoinGecko failed and
+          // it served the previous answer. `cached` alone is a warm hit inside the
+          // 45s TTL — fresh by any honest reading — and treating it as stale had
+          // the Markets card saying "showing the last good prices" whenever
+          // another tab or device had asked a moment earlier.
+          if (data?.success && data.price != null && alive) { const next = { price: data.price, changePct: data.changePct, points: data.points || [], high24: data.high24 ?? null, low24: data.low24 ?? null, loading: false, error: null, stale: !!data.stale, fetchedAt: Date.now() }; setState(next); updateSnapshot({ btc: next }); return; }
         }
         if (res.status !== 404) throw new Error(`proxy ${res.status}`);
       } catch { /* fall through to direct fetch below */ }
@@ -147,8 +152,18 @@ export function useBitcoinPrice() {
       } catch { if (alive) setState(s => ({ ...s, loading: false, error: "price feed unavailable" })); }
     };
     load();
-    const iv = setInterval(load, 5 * 60 * 1000); // cheap now that it's proxied+cached
-    return () => { alive = false; clearInterval(iv); };
+    // Cheap now that it's proxied+cached — but not free, and a hidden tab has
+    // nobody to show the price to, so a tick that lands while hidden is skipped
+    // (a backgrounded Mac tab was paying 12 of these an hour). Coming back
+    // refetches if the last load is over a minute old, so the hero doesn't sit
+    // on a stale figure waiting for the next tick to land; the one-minute floor
+    // keeps rapid tab-switching from refiring it.
+    let lastLoad = Date.now();
+    const tick = () => { if (document.visibilityState !== "hidden") { lastLoad = Date.now(); load(); } };
+    const iv = setInterval(tick, 5 * 60 * 1000);
+    const onVisible = () => { if (document.visibilityState === "visible" && Date.now() - lastLoad >= 60 * 1000) tick(); };
+    document.addEventListener("visibilitychange", onVisible);
+    return () => { alive = false; clearInterval(iv); document.removeEventListener("visibilitychange", onVisible); };
   }, [nonce]);
   return { ...state, refresh: () => setNonce(n => n + 1) };
 }

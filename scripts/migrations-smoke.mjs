@@ -272,26 +272,31 @@ try {
   // header of scripts/functions-smoke.mjs is about — the alias would resolve, the
   // bundle would build, and createClient would be undefined at call time.
   writeFileSync(`${EXPORT_DIR}/supabase-stub.cjs`, `
-// The one dependency export-data.js has, replaced by a fixture. Only the two
-// calls readTable() makes are implemented: .from(t).select("*", {count})
+// The one dependency export-data.js has, replaced by a fixture. Only the calls
+// readTable() makes are implemented: .from(t).select("*", {count}).order(col)
 // .range(from, to). A table with no entry in the plan comes back as an ERROR
 // rather than as an empty read, so a table the export starts reading without the
-// fixture knowing about it is loud instead of silently zero.
+// fixture knowing about it is loud instead of silently zero. The order columns
+// asked for are recorded per table, so the smoke can assert paging is ordered.
 exports.createClient = () => ({
   from: (table) => ({
-    select: (_cols, opts) => ({
-      range: async (from, to) => {
-        const plan = (globalThis.__EXPORT_SMOKE_PLAN__ || {})[table];
-        if (!plan) return { data: null, error: { message: "no fixture for " + table }, count: null };
-        if (plan.error) return { data: null, error: { message: plan.error }, count: null };
-        const rows = plan.rows || [];
-        // A plan may claim a count LARGER than the rows it hands back: that is how
-        // PostgREST reports a read the project's max-rows ceiling truncated, and
-        // it is the case readTable's count check exists for.
-        const count = opts && opts.count === "exact" ? (plan.count == null ? rows.length : plan.count) : null;
-        return { data: rows.slice(from, to + 1), error: null, count };
-      },
-    }),
+    select: (_cols, opts) => {
+      const q = {
+        order: (col) => { ((globalThis.__EXPORT_SMOKE_ORDERED__ ||= {})[table] ||= []).push(col); return q; },
+        range: async (from, to) => {
+          const plan = (globalThis.__EXPORT_SMOKE_PLAN__ || {})[table];
+          if (!plan) return { data: null, error: { message: "no fixture for " + table }, count: null };
+          if (plan.error) return { data: null, error: { message: plan.error }, count: null };
+          const rows = plan.rows || [];
+          // A plan may claim a count LARGER than the rows it hands back: that is how
+          // PostgREST reports a read the project's max-rows ceiling truncated, and
+          // it is the case readTable's count check exists for.
+          const count = opts && opts.count === "exact" ? (plan.count == null ? rows.length : plan.count) : null;
+          return { data: rows.slice(from, to + 1), error: null, count };
+        },
+      };
+      return q;
+    },
   }),
 });
 `);
@@ -384,6 +389,86 @@ try {
   check("a table that comes back short of its own count fails the export too",
     short.code === 500 && /usage_log/.test(JSON.stringify(short.body?.failed || {})) && /3 of 5/.test(JSON.stringify(short.body?.failed || {})),
     `${short.code} ${short.raw.slice(0, 200)}`);
+
+  // ── a database that no longer fits in one response ────────────────────────
+  // Netlify drops a synchronous response over 6 MB: the caller gets a 502 with
+  // nothing this function computed in it. That was every backup call for
+  // months — usage_log alone is 14 MB — and this section ran against empty
+  // tables and stayed green. So: rows that serialize past the cap, and the
+  // handler has to say so itself, name the weight, and hand back no partial
+  // payload to be written to disk as a backup.
+  const wide = (n, id0 = 0) => Array.from({ length: n }, (_, i) => ({ id: id0 + i, blob: "x".repeat(1000) }));
+  plan({ ...allRead(), usage_log: { rows: wide(6500) } });
+  const big = await call({ ip: "203.0.113.13" });
+  check("an export over the platform's 6 MB cap is refused with a 413, not returned",
+    big.code === 413 && big.body?.success === false, `${big.code} ${big.raw.slice(0, 200)}`);
+  check("…the refusal names the table that is the weight, and how to page it",
+    Object.keys(big.body?.sizes || {})[0] === "usage_log" && /table by table/.test(String(big.body?.error)), big.raw.slice(0, 300));
+  check("…and carries no partial payload", !("tables" in (big.body || {})) && !("rowCounts" in (big.body || {})));
+
+  // The table list a looping caller starts from: exactly the export's own
+  // tables, with the skipped ones named beside them.
+  plan(allRead());
+  const list = await call({ ip: "203.0.113.14", list: true });
+  check("{ list: true } returns the tables the export covers",
+    list.code === 200 && JSON.stringify(list.body?.tables) === JSON.stringify(exportList.filter((t) => !skippedNames.includes(t))),
+    `${list.code} ${list.raw.slice(0, 200)}`);
+  check("…and names the skipped ones with their reasons", skippedNames.every((t) => typeof list.body?.skipped?.[t] === "string"));
+
+  // Per-table paging: every row exactly once, in order, across as many calls
+  // as it takes, and `next` goes null only at the end. 2,500 rows is three
+  // PostgREST pages inside one response (~2.5 MB, under the page budget); the
+  // scenario after this one pushes past the budget.
+  const ROWS = 2500;
+  plan({ ...allRead(), usage_log: { rows: wide(ROWS) } });
+  const seen = [];
+  let offset = 0, pages = 0, total = null, bad = null;
+  for (;;) {
+    const page = await call({ ip: "203.0.113.15", table: "usage_log", offset });
+    pages++;
+    if (page.code !== 200 || !page.body?.success) { bad = `${page.code} ${page.raw.slice(0, 160)}`; break; }
+    total = page.body.total;
+    seen.push(...page.body.rows.map((r) => r.id));
+    if (page.body.next == null) break;
+    if (page.body.next <= offset || pages > 50) { bad = `no forward progress: next=${page.body.next} offset=${offset}`; break; }
+    offset = page.body.next;
+  }
+  check("{ table, offset } pages a table to the end", bad === null && total === ROWS, bad || `total ${total}`);
+  check("…every row exactly once, in order", seen.length === ROWS && seen.every((id, i) => id === i), `${seen.length} rows, first ${seen.slice(0, 3)}`);
+  check("…ordered by the table's primary key, so pages from separate calls line up",
+    JSON.stringify((globalThis.__EXPORT_SMOKE_ORDERED__ || {}).usage_log?.slice(0, 1)) === JSON.stringify(["id"]),
+    JSON.stringify((globalThis.__EXPORT_SMOKE_ORDERED__ || {}).usage_log));
+  // A table too wide for one page: the page stops under the budget, says where
+  // to continue, and the two pages together are the whole table.
+  plan({ ...allRead(), usage_log: { rows: wide(6000) } });
+  const p1 = await call({ ip: "203.0.113.16", table: "usage_log", offset: 0 });
+  check("a page stops under the page budget and points at the next offset",
+    p1.code === 200 && p1.body?.next != null && p1.body.rows.length < 6000 && p1.body.rows.length === p1.body.next && p1.raw.length < 6_000_000,
+    `${p1.code} rows=${p1.body?.rows?.length} next=${p1.body?.next} bytes=${p1.raw.length}`);
+  const p2 = await call({ ip: "203.0.113.16", table: "usage_log", offset: p1.body?.next || 0 });
+  check("…and the continuation finishes the table",
+    p2.code === 200 && p2.body?.next === null && (p1.body?.rows?.length || 0) + (p2.body?.rows?.length || 0) === 6000,
+    `${p2.code} rows=${p2.body?.rows?.length} next=${p2.body?.next}`);
+  // The same short-read refusal applies per table: a page that ends short of
+  // the count is not a page, it is the truncation this file exists to catch.
+  plan({ ...allRead(), usage_log: { rows: [{ id: 1 }, { id: 2 }], count: 9 } });
+  const shortPage = await call({ ip: "203.0.113.17", table: "usage_log", offset: 0 });
+  check("a per-table read short of its count is refused too", shortPage.code === 500 && /2 of 9/.test(shortPage.raw), `${shortPage.code} ${shortPage.raw.slice(0, 160)}`);
+  const unknown = await call({ ip: "203.0.113.18", table: "not_a_table" });
+  check("a table outside the export is refused before it reaches the database", unknown.code === 400, `${unknown.code} ${unknown.raw.slice(0, 120)}`);
+  const skippedOne = await call({ ip: "203.0.113.18", table: skippedNames[0] });
+  check("a skipped table is refused WITH its reason", skippedOne.code === 400 && String(skippedOne.body?.error).includes(skipped[0][1]), `${skippedOne.code} ${skippedOne.raw.slice(0, 160)}`);
+
+  // Every order column names a real column of its table's DDL: a typo here
+  // would 400 from PostgREST on every page of that table, in production only.
+  const orderMap = exportSrc.match(/const ORDER = \{([\s\S]*?)\n\};/)?.[1] || "";
+  for (const m of orderMap.matchAll(/(\w+):\s*\[([^\]]*)\]/g)) {
+    const table = m[1];
+    const cols = [...m[2].matchAll(/"(\w+)"/g)].map((c) => c[1]);
+    const ddlFile = declared.get(table);
+    const ddl = ddlFile ? (stripped.get(ddlFile) || "").match(new RegExp(`create table if not exists boardroom\\.${table}\\s*\\(([\\s\\S]*?)\\n\\);`))?.[1] || "" : "";
+    check(`export pages ${table} on columns its DDL declares`, !!ddlFile && cols.length > 0 && cols.every((c) => new RegExp(`^\\s*${c}\\s`, "m").test(ddl)), `${cols.join(",")} in ${ddlFile}`);
+  }
 
   // ── the secret ────────────────────────────────────────────────────────────
   plan(allRead());

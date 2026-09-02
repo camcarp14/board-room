@@ -138,6 +138,22 @@ check("the worker doesn't try to message the page about builds",
   // would hand the app to someone who followed a link to read a document.
   check("the worker only shells the app's own URL",
     /req\.mode === "navigate" && url\.pathname === "\/"/.test(sw));
+
+  // ── the response headers the shell ships with ──────────────────────────────
+  // The app was frameable by any site and shipped no nosniff or referrer
+  // policy; the block that fixes it is a few lines of TOML that nothing would
+  // notice going missing. Asserted as one block under "/*", so a header moved
+  // to a narrower path does not pass.
+  const shellHeaders = toml.match(/\[\[headers\]\]\s*\n\s*for = "\/\*"\s*\n\s*\[headers\.values\]([\s\S]*?)(?=\n\[\[|\s*$)/)?.[1] || "";
+  check("the shell is served with X-Frame-Options: DENY", /X-Frame-Options = "DENY"/.test(shellHeaders));
+  check("…and X-Content-Type-Options: nosniff", /X-Content-Type-Options = "nosniff"/.test(shellHeaders));
+  check("…and a strict referrer policy", /Referrer-Policy = "strict-origin-when-cross-origin"/.test(shellHeaders));
+  // The guitar tuner opens the microphone. A Permissions-Policy that shuts it
+  // would fail in the one place no smoke can see — the browser's permission
+  // prompt — so the absence is asserted, with the reason beside it in the TOML.
+  // Comments stripped first: the TOML explains the absence by naming the value.
+  check("no Permissions-Policy shuts the microphone the tuner needs",
+    !/microphone=\(\)/.test(toml.replace(/^\s*#.*$/gm, "")));
 }
 
 console.log(failed ? `\n${failed} update-check failure(s)` : "\nSW SMOKE PASS");

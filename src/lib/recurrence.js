@@ -31,6 +31,12 @@ const ORDINALS = ["", "1st", "2nd", "3rd", "4th", "5th"];
 // A hard ceiling on how many occurrences one expansion may produce. A corrupt
 // or hand-edited rule (interval 0, a far-future `until`) must not be able to
 // hang the render loop — it fails as a short list, never as a frozen tab.
+//
+// IT CAPS THE OUTPUT, NOT THE WALK. It was the loop's step counter, and the
+// loop always began at the series start — so a daily rule silently stopped
+// rendering 750 days after it was created, a weekly one after 750 weeks, with
+// the row still in the table and no `until` to explain it. The step count is
+// now bounded by the window (see occurrenceDays); this only bounds `out`.
 const MAX_OCCURRENCES = 750;
 
 /* ── local day keys — "YYYY-MM-DD" in the USER'S zone ──────────────────────
@@ -89,10 +95,14 @@ export function normalizeRule(rrule) {
  * Every occurrence DAY of one master between `from` and `to` (inclusive),
  * as local day keys.
  *
- * Walks the series from its own start rather than jumping into the middle of
- * it: a monthly rule's clamping (see addMonthsClamped) makes the nth date a
- * function of the sequence, not an offset, so seeking would drift. The walk
- * is bounded by MAX_OCCURRENCES and short-circuits once past `to`.
+ * Daily and weekly rules SEEK to the window first: their step is a fixed
+ * number of days, so the first occurrence at or after `from` is integer
+ * arithmetic, and the walk then covers only the window. Monthly and yearly
+ * rules walk from the series start instead — addMonthsClamped makes the nth
+ * date a function of the sequence, not an offset, so seeking would drift; a
+ * month is one step, so even a decades-old series is a few hundred of them.
+ * Either way the walk stops once past `to`, and `out` never exceeds
+ * MAX_OCCURRENCES.
  */
 // A span wider than this is a corrupt end_time rather than a real event, and
 // widening the search window by it would make every expansion walk years.
@@ -137,9 +147,9 @@ export function occurrenceDays(master, from, to) {
 
   // `emitted` counts occurrences from the SERIES start, not from `from` —
   // `count: 10` means ten in total, so a window late in the series must know
-  // how many came before it or it would keep emitting past the tenth.
+  // how many came before it or it would keep emitting past the tenth. The
+  // seeks below credit it with everything they skip over for the same reason.
   let emitted = 0;
-  let guard = 0;
 
   const consider = (d) => {
     if (untilDay && d > untilDay) return false;           // series over
@@ -152,6 +162,10 @@ export function occurrenceDays(master, from, to) {
     return true;
   };
 
+  // Whole local days from a to b — both are local midnights, so the only
+  // thing Math.round absorbs is the DST hour.
+  const daysBetween = (a, b) => Math.round((b - a) / 86400000);
+
   if (rule.freq === "weekly") {
     // The days of the week this rule lands on; empty means "the same weekday
     // the series started on".
@@ -159,31 +173,41 @@ export function occurrenceDays(master, from, to) {
     // Anchor to the start of the series' own week so `interval` counts WEEKS
     // rather than counting from an arbitrary weekday inside one.
     let weekStart = addDays(startDay, -startDay.getDay());
-    while (guard++ < MAX_OCCURRENCES) {
-      let alive = false;
+    // Seek: skip whole interval-blocks of weeks that end before `lo`. The first
+    // block is short — only its days on or after the start count — and every
+    // later one carries all of `days`.
+    const blocks = lo > weekStart ? Math.floor(Math.floor(daysBetween(weekStart, lo) / 7) / rule.interval) : 0;
+    if (blocks > 0) {
+      const firstBlock = days.filter((wd) => addDays(weekStart, wd) >= startDay).length;
+      emitted = firstBlock + (blocks - 1) * days.length;
+      weekStart = addDays(weekStart, 7 * rule.interval * blocks);
+    }
+    while (out.length < MAX_OCCURRENCES && weekStart <= hi) {
+      let alive = true;
       for (const wd of days) {
         const d = addDays(weekStart, wd);
-        if (d < startDay) { alive = true; continue; }      // before the series began
+        if (d < startDay) continue;                          // before the series began
         if (!consider(d)) { alive = false; break; }
-        alive = true;
       }
       if (!alive) break;
       weekStart = addDays(weekStart, 7 * rule.interval);
-      if (weekStart > hi && out.length) break;
-      if (weekStart > hi && (!rule.count || emitted >= rule.count)) break;
-      if (weekStart.getFullYear() > hi.getFullYear() + 5) break;
     }
     return out;
   }
 
   const anchorDom = startDay.getDate();
   let d = startDay;
-  while (guard++ < MAX_OCCURRENCES) {
+  if (rule.freq === "daily" && lo > startDay) {
+    // Seek: the first step on or after `lo`, and how many steps came before it.
+    const steps = Math.ceil(daysBetween(startDay, lo) / rule.interval);
+    emitted = steps;
+    d = addDays(startDay, steps * rule.interval);
+  }
+  while (out.length < MAX_OCCURRENCES && d <= hi) {
     if (!consider(d)) break;
     if (rule.freq === "daily") d = addDays(d, rule.interval);
     else if (rule.freq === "monthly") d = addMonthsClamped(d, rule.interval, anchorDom);
     else d = addMonthsClamped(d, 12 * rule.interval, anchorDom);
-    if (d > hi) break;
   }
   return out;
 }

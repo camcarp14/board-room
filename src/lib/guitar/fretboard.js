@@ -415,7 +415,8 @@ const MINOR_PENT_BOXES = [
 // means the five major shapes cannot disagree with the five minor ones, which is
 // exactly the disagreement a second hand-typed table would eventually contain.
 // The +12 on the wrap keeps every offset for box 5 positive; the placement code
-// below shifts an octave anyway when a box would fall off the nut.
+// below shifts an octave anyway when a box would fall off the nut, or off the
+// last fret.
 const MAJOR_PENT_BOXES = MINOR_PENT_BOXES.map((_, i) => {
   const src = MINOR_PENT_BOXES[(i + 1) % MINOR_PENT_BOXES.length];
   const wrapped = i === MINOR_PENT_BOXES.length - 1;
@@ -431,10 +432,19 @@ export function pentatonicBox(rootPc, boxIndex, { scaleKey = "minor_pent", tunin
   const box = table[((boxIndex % table.length) + table.length) % table.length];
   const openPc = mod12(tuning[0]);
   let rootFret = mod12(mod12(rootPc) - openPc);
-  // Box 1 rooted at fret 0 is playable (open position) but every higher box would
-  // then run off the bottom; shift the whole set up an octave when it would.
+  // Each box is placed on its own. One whose offsets reach below the nut — a
+  // major box, which sits three frets under its minor twin — goes up an octave;
+  // box 1 rooted at fret 0 is open position and stays.
   const lowest = Math.min(...box.map((s) => Math.min(...s)));
   while (rootFret + lowest < 0) rootFret += 12;
+  // …AND DOWN AN OCTAVE WHEN IT WOULD RUN OFF THE OTHER END. That loop only ever
+  // raises the root, so E♭ — root fret 11 — put box 5's top offset at fret 23,
+  // and the `fret <= maxFret` clip below drew the box as one dot per string: six
+  // of its twelve notes, confidently, with nothing on screen saying so. A box is
+  // the same shape an octave down, and frets 8–11 is where E♭ box 5 is actually
+  // played, so the box drops when its top would leave the neck.
+  const highest = Math.max(...box.map((s) => Math.max(...s)));
+  while (rootFret + highest > maxFret && rootFret - 12 + lowest >= 0) rootFret -= 12;
 
   // ── THE TABLE IS A FACT ABOUT STANDARD TUNING, SO THE WINDOW IS TAKEN FROM IT
   //    AND THE NOTES ARE TAKEN FROM THE NECK ────────────────────────────────────

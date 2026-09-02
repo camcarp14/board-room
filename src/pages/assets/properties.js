@@ -18,9 +18,20 @@
 // at a deleted repo/site 404s. Keep `repo` on the CURRENT name: GitHub redirects
 // reads after a rename, but auto-fix commits via a PUT that won't follow that
 // redirect, so a stale name breaks Approve while propose still appears to work.
+//
+// ZERO TO SECURE AND CLARIFY PAID SEARCH HAVE NO DEPLOY ROW. Their `site` slugs
+// ("zero-to-secure", "clarify-paid-search") named Netlify sites that do not
+// exist on this token — the team's project list has neither — so deploy.js
+// resolved them by exact name and 404'd: Redeploy said "no site named…" and
+// Rollback said "Deploy history unreachable", on the panel whose whole purpose
+// is a rollback reachable from the phone during an outage. Their app IS the
+// Pentagon, and the Pentagon already has its own row (Macro, site: the-pentagon),
+// so `assetsOnly` here loses nothing: the Assets cards and the auditor keep
+// working from `repo`, and the one deploy that would help is one row down.
+// Give them a `site` again only when a real slug on this token exists for them.
 export const PROPERTIES = [
-  { name: "Zero To Secure", desc: "Premium seed phrase backup", url: "https://zerotosecure.com", appUrl: "https://the-pentagon.netlify.app", color: "var(--green)", repo: "camcarp14/the-pentagon", site: "zero-to-secure" },
-  { name: "Clarify Paid Search", desc: "Boutique Google Ads agency", url: "https://clarifypaidsearch.com", appUrl: "https://the-pentagon.netlify.app", color: "var(--amber)", repo: "camcarp14/the-pentagon", site: "clarify-paid-search" },
+  { name: "Zero To Secure", desc: "Premium seed phrase backup", url: "https://zerotosecure.com", appUrl: "https://the-pentagon.netlify.app", color: "var(--green)", repo: "camcarp14/the-pentagon", site: null, assetsOnly: true },
+  { name: "Clarify Paid Search", desc: "Boutique Google Ads agency", url: "https://clarifypaidsearch.com", appUrl: "https://the-pentagon.netlify.app", color: "var(--amber)", repo: "camcarp14/the-pentagon", site: null, assetsOnly: true },
   { name: "Clarify SaaS", desc: "Google Ads auditing tool", url: null, appUrl: "https://clarify-saas.netlify.app/", color: "var(--pink)", repo: "camcarp14/clarify-saas", site: "clarify-saas" },
   { name: "Macro Command Center", desc: "Markets, portfolio, thesis", url: null, appUrl: "https://the-pentagon.netlify.app", color: "var(--blue)", repo: "camcarp14/the-pentagon", site: "the-pentagon" },
   // assetsOnly: shown as reference cards on Assets (link + live status) but kept

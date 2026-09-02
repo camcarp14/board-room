@@ -76,6 +76,13 @@ function MigrationModal({ counts, onImport, onSkip, importing }) {
 }
 
 
+// The keys that describe a LAYOUT the account already has — which tabs sit in
+// the bar and in what order, which Brief widgets are off. Every panel that edits
+// one of these reads the saved value out of `settings`, changes one thing, and
+// writes the whole thing back, so while `settings` is still null the value it
+// would write is the default layout with one change in it. See updateSetting.
+const LAYOUT_KEYS = new Set(["navigation", "hidden_tabs", "brief_hidden", "brief_order", "brief_columns", "brief_layouts", "brief_active_layout"]);
+
 // ─── Main app ────────────────────────────────────────────────────────────────
 export default function App() {
   const theme = useThemeController();
@@ -99,6 +106,15 @@ export default function App() {
   // his account is perfectly fine and only the cell tower isn't.
   const [authStalled, setAuthStalled] = useState(false);
   const [authAttempt, setAuthAttempt] = useState(0);
+  // The session ended without being asked to — see the SIGNED_OUT handler. It
+  // puts a line over the login screen and is cleared by the next session in.
+  const [sessionExpired, setSessionExpired] = useState(false);
+  // Set for the duration of a sign-out this device asked for, so the handler
+  // below can tell that SIGNED_OUT from the one an expiry sends.
+  const explicitSignOut = useRef(false);
+  // Which account this device last held, so a DIFFERENT account arriving is the
+  // moment to purge what the previous one left in the caches.
+  const lastUser = useRef(null);
   const [messages, setMessages] = useState([]);
   const [seatNotes, setSeatNotes] = useState({});
   const [settings, setSettings] = useState(null);
@@ -167,7 +183,9 @@ export default function App() {
     if (news.kind === "adopt") {
       // Only into settings that are actually loaded. `null` means the load hasn't
       // landed (or failed), and a settings object invented out of one key is the
-      // shape that makes Settings → Tabs write the DEFAULT tab bar over his own
+      // shape that used to let Settings → Tabs write the DEFAULT tab bar over his
+      // own — the panel and updateSetting both refuse a null now, and painting
+      // one key into an object that does not exist would undo that from here
       // (the long version is above updateSetting). Nothing is lost by skipping:
       // db.loadSettings clears every revision as it hands over the real row, so
       // the next write starts from a baseline that matches the screen again.
@@ -261,9 +279,11 @@ export default function App() {
   // WHY THE SHELL IS NOT OPENED OPTIMISTICALLY over the rehydrated query cache,
   // which is the obvious next move and was considered: with no session the loader
   // below sets `settings` to null, and null is indistinguishable from "nothing
-  // saved" to the panels that read it — Settings → Tabs takes it as no saved nav
-  // and writes the DEFAULT tab layout over his own the moment it is opened (the
-  // long version is in the note above updateSetting). It would also point every
+  // saved" to the panels that read it — Settings → Tabs used to take it as no
+  // saved nav and write the DEFAULT tab layout over his own the moment it was
+  // opened; it waits for the load now, so the reward would be a Tabs panel that
+  // says "hasn't loaded yet" for the whole optimistic window (the long version is
+  // in the note above updateSetting). It would also point every
   // query at Supabase with no token, so the reward for a slow handshake would be a
   // Brief full of correctly-designed error cards, and the freshness pill would owe
   // the reader a date on rehydrated data it currently has no way to know. Three
@@ -318,7 +338,7 @@ export default function App() {
       // cache holds notes/events/birthdays/groceries and the query keys carry
       // no user id, so without this the next account to sign in on the same
       // device briefly rehydrates the previous user's private data.
-      if (event === "SIGNED_OUT") {
+      const purgeDevice = () => {
         try {
           queryClient.clear();
           // The failed-write store belongs to the account too: each entry holds
@@ -334,6 +354,37 @@ export default function App() {
           db.forgetSettings();
           ["br_rq_cache", "br_snapshot", "br_event_takes"].forEach(k => localStorage.removeItem(k));
         } catch { /* storage unavailable — nothing to leak anyway */ }
+        lastUser.current = null;
+      };
+      // TWO DIFFERENT THINGS ARRIVE AS SIGNED_OUT, and the purge is right for
+      // exactly one of them. supabase-js sends the same event from the Sign out
+      // button and from a session that simply died — a refresh token refused
+      // after the iPad sat open overnight, a password change, reuse detection —
+      // and on that second path this handler used to run the purge anyway. The
+      // order of events there was: a write fails "Not signed in" and files itself
+      // with a retry closure that would have worked after signing back in; a
+      // moment later SIGNED_OUT clears the store that held it; the gate below
+      // swaps the page for the login screen. Nothing was ever shown, and the
+      // budget or the thought that had just been typed was gone. So the button
+      // records its intent in explicitSignOut before it calls signOut, and only
+      // that SIGNED_OUT purges. An expiry keeps the queue — the retry closures
+      // re-read the session on retry, which data/db.js documents as the intent —
+      // keeps the cache, since the same account is coming back, and says so over
+      // the login screen instead of pretending nothing happened.
+      if (event === "SIGNED_OUT") {
+        const explicit = explicitSignOut.current;
+        explicitSignOut.current = false;
+        if (explicit) purgeDevice();
+        else setSessionExpired(true);
+      }
+      if (s?.user) {
+        // The other half of not purging on expiry: what the caches hold belongs
+        // to the account that left, and it is only safe to keep while that is
+        // the account that comes back. A different one gets the same purge the
+        // button would have done.
+        if (lastUser.current && lastUser.current !== s.user.id) purgeDevice();
+        lastUser.current = s.user.id;
+        setSessionExpired(false);
       }
     });
     return () => { sub.subscription.unsubscribe(); };
@@ -347,6 +398,22 @@ export default function App() {
   // connection; re-asking is the same request without the demolition.
   const retryAuth = () => setAuthAttempt((n) => n + 1);
 
+  // The Sign out button, via SettingsSheet. THIS DEVICE ONLY: supabase-js's
+  // default scope is 'global', which revokes every device's refresh token, so
+  // signing out on the phone used to sign out the iPad too — not at once but
+  // whenever its access token next expired, mid-use, dropping it on the login
+  // screen with an open draft gone and no explanation, under a confirm that had
+  // promised "this device's" cache was all that would be touched. The intent
+  // flag is what the SIGNED_OUT handler above reads; supabase-js awaits its
+  // subscribers inside signOut(), so the flag is still up when they run and is
+  // lowered again either way — an offline sign-out that never emitted must not
+  // leave it armed for an expiry hours later.
+  const signOut = async () => {
+    explicitSignOut.current = true;
+    try { await supabase.auth.signOut({ scope: "local" }); }
+    finally { explicitSignOut.current = false; }
+  };
+
   useEffect(() => {
     if (!supabase) return;
     if (!session?.user) { setMessages([]); setSeatNotes({}); setSettings(null); return; }
@@ -357,10 +424,12 @@ export default function App() {
       // error (db.js does `if (error) throw error`), and Promise.all rejects on
       // the first — so a blip on the CHAT read discarded the settings too, and
       // `settings` stayed null for the whole session. Downstream that is not
-      // merely a missing preference: the Tabs panel treats a null settings
-      // object as "no saved nav" and writes the DEFAULT tab layout back over
-      // his saved one the moment he opens it. One transient read failure could
-      // permanently overwrite a configuration.
+      // merely a missing preference: the Tabs panel used to treat a null settings
+      // object as "no saved nav" and write the DEFAULT tab layout back over his
+      // saved one the moment he opened it — it and updateSetting refuse a null
+      // now, so a null here costs the layout controls for the session rather
+      // than the row, but one transient read failure could still switch them
+      // all off until a Refresh.
       //
       // allSettled applies each slice independently, so a failure costs exactly
       // its own slice and nothing else.
@@ -438,7 +507,23 @@ export default function App() {
   // compare-and-set passed, and a thought parked on the phone was overwritten under
   // a green "saved". So adoption travels over settingsNews, from the same act that
   // moves the baseline, and is painted in one place: the subscription above.
+  //
+  // A LAYOUT KEY IS REFUSED WHILE THERE ARE NO SETTINGS TO PUT IT IN. `settings`
+  // is null from sign-in until loadSettings lands and for the whole session after
+  // a failed one, and the line below used to invent a settings object out of the
+  // one key being written — the exact shape the notes above describe as Settings →
+  // Tabs writing the DEFAULT bar over his own, because the panel that built the
+  // value read null as "nothing saved" and started from NAV's order. The panels
+  // now wait for the load themselves (SettingsSheet's Tabs panel says so on
+  // screen); this is the backstop for any surface that reaches here first. It
+  // answers in reported()'s shape and paints nothing, so the caller sees a write
+  // that did not happen rather than one that did.
   const updateSetting = async (key, value) => {
+    if (settings === null && LAYOUT_KEYS.has(key)) {
+      const error = new Error(`Your saved ${key.replace(/_/g, " ")} hasn't loaded yet, so this wasn't written over it.`);
+      console.warn(`[settings] refused ${key}: settings not loaded`);
+      return { ok: false, error };
+    }
     setSettings(prev => ({ ...(prev || {}), [key]: value }));
     if (MERGING_SETTINGS[key]) return await db.mergeSetting(key, value);
     return await db.saveSetting(key, value);
@@ -782,7 +867,24 @@ export default function App() {
     !authChecked && !PREVIEW ? <BootScreen key={authAttempt} stalled={authStalled} onRetry={retryAuth} /> :
     !session && !PREVIEW ? <LoginScreen /> :
     null;
-  if (gate) return <>{ambient}{gate}</>;
+  // The session ended on its own (see the SIGNED_OUT handler). The queue of
+  // failed writes was kept for exactly this, so the line says what is waiting;
+  // the chip's Retry sends them once he is back in. The toast stack rather than
+  // a line inside LoginScreen, which knows nothing of sessions ending and
+  // shouldn't have to.
+  const n = failedWrites.length;
+  const expiredNote = sessionExpired && !session && !PREVIEW ? (
+    <div className="toasts">
+      <div className="toast">
+        <span className="tdot" style={{ background: "var(--amber)" }} />
+        <span>
+          Your session expired.
+          {n ? ` ${n} unsaved change${n === 1 ? "" : "s"} ${n === 1 ? "is" : "are"} kept — sign in and tap the chip to retry.` : " Nothing was lost — sign in to carry on."}
+        </span>
+      </div>
+    </div>
+  ) : null;
+  if (gate) return <>{ambient}{gate}{expiredNote}</>;
 
   const calUrl = settings?.calendar_url || "";
 
@@ -839,7 +941,11 @@ export default function App() {
           isMobile={isMobile}
           conn={conn}
           settings={settings}
+          // The preview has no session and therefore no settings, and its Tabs
+          // panel is still the panel — the gate is for a load that hasn't landed.
+          settingsLoaded={settings != null || PREVIEW}
           updateSetting={updateSetting}
+          onSignOut={signOut}
         />
       )}
       {/* THE MERGE PROTECTION IS NOT ON YET. A toast, in the .toasts stack every

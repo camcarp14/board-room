@@ -1,13 +1,16 @@
-import { useState } from "react";
+import { useState, useRef } from "react";
 import { tint } from "../../ui/styles.js";
 import { callClaude } from "../../lib/claude.js";
 import { useSavedRecipes, useSaveRecipe, useDeleteRecipe } from "../../data/food.js";
-import { Card, CellGroup, Button, Field, Pill, Grid, useConfirm } from "../../ui/kit.jsx";
+import { Card, CellGroup, Button, Field, Pill, Grid, Sheet, useConfirm, closeSheet } from "../../ui/kit.jsx";
 import { IcClose, IcSpark } from "../../ui/icons.jsx";
 
 // Full-bleed list inside a pad-md card: the group sheds its own surface and
 // stretches to the card edges so row hairlines read like native inset cells.
 const inCardGroup = { boxShadow: "none", background: "transparent", borderRadius: 0, margin: "0 -16px -10px" };
+// Reset that lets a <button> wear the kit's .cell-body anatomy (rows keep a
+// separate delete button, so the whole cell can't be one <button> itself).
+const rowBtn = { background: "none", border: 0, padding: 0, margin: 0, font: "inherit", color: "inherit", textAlign: "left", cursor: "pointer", alignSelf: "stretch", justifyContent: "center" };
 
 export function FoodPanel({ isMobile, settings, updateSetting }) {
   const prefs = settings?.food_preferences || { likes: [], dislikes: [] };
@@ -28,6 +31,14 @@ export function FoodPanel({ isMobile, settings, updateSetting }) {
   const [reasonOpen, setReasonOpen] = useState(false); // inline "not my taste" flow (replaces window.prompt)
   const [reason, setReason] = useState("");
   const [confirmEl, confirm] = useConfirm();
+  // The saved recipe you have open. Saving used to be write-only: the idea card
+  // vanished on save and the list drew a title with an X, so the ingredients and
+  // steps went into the table and no screen ever read them back out. A row opens
+  // a sheet now, and that sheet is where Delete lives too — the same tap that
+  // finds the recipe is the one that can bin it.
+  const [open, setOpen] = useState(null);
+  // Populated by the Sheet while it is mounted. See closeSheet in ui/kit.jsx.
+  const sheetClose = useRef(null);
 
   const addLike = () => { if (!newLike.trim()) return; updateSetting("food_preferences", { ...prefs, likes: [...prefs.likes, newLike.trim()] }); setNewLike(""); };
   const addDislike = () => { if (!newDislike.trim()) return; updateSetting("food_preferences", { ...prefs, dislikes: [...prefs.dislikes, newDislike.trim()] }); setNewDislike(""); };
@@ -54,9 +65,11 @@ export function FoodPanel({ isMobile, settings, updateSetting }) {
     if (addReason && reason.trim()) updateSetting("food_preferences", { ...prefs, dislikes: [...prefs.dislikes, reason.trim()] });
     setIdea(null); setReasonOpen(false); setReason("");
   };
+  // "Gone for good" is still true here — this is a hard delete, unlike the Creed
+  // and Dream soft deletes. From the sheet, the sheet leaves once the row has.
   const removeRecipe = async (r) => {
     if (!(await confirm({ title: `Delete "${r.title}"?`, message: "The saved recipe is gone for good.", confirmLabel: "Delete", destructive: true }))) return;
-    delRecipeMut.mutate(r.id);
+    delRecipeMut.mutate(r.id, { onSuccess: () => { if (open?.id === r.id) closeSheet(sheetClose, () => setOpen(null)); } });
   };
 
   const tagRow = (items, onRemove, color, emptyText) => (
@@ -140,7 +153,7 @@ export function FoodPanel({ isMobile, settings, updateSetting }) {
             <CellGroup style={inCardGroup}>
               {savedRecipes.map(r => (
                 <div key={r.id} className="cell" style={{ paddingRight: 8, minHeight: 48 }}>
-                  <span className="cell-body"><span className="cell-title" style={{ fontSize: 14.5 }}>{r.title}</span></span>
+                  <button className="cell-body" onClick={() => setOpen(r)} style={rowBtn}><span className="cell-title" style={{ fontSize: 14.5 }}>{r.title}</span></button>
                   <button className="icon-btn" aria-label={`Delete ${r.title}`} onClick={() => removeRecipe(r)}><IcClose size={15} /></button>
                 </div>
               ))}
@@ -148,6 +161,14 @@ export function FoodPanel({ isMobile, settings, updateSetting }) {
           </div>
         )}
       </Card>
+
+      {/* ── a saved recipe, read back — the same pre-wrap block the idea card uses ── */}
+      {open && (
+        <Sheet closeRef={sheetClose} onClose={() => setOpen(null)} title={open.title}
+          footer={<Button kind="danger" size="lg" disabled={delRecipeMut.isPending} onClick={() => removeRecipe(open)} style={{ flex: 1 }}>Delete</Button>}>
+          <div className="t-call" style={{ lineHeight: 1.65, whiteSpace: "pre-wrap", overflowWrap: "break-word", paddingTop: 4 }}>{open.content}</div>
+        </Sheet>
+      )}
       {confirmEl}
     </Grid>
   );

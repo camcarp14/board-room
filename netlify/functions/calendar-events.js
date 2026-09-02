@@ -7,6 +7,12 @@
 // codebase (see wire.js for the same approach with RSS).
 const json = (code, body) => ({ statusCode: code, headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
 
+// The viewer's zone. Netlify runs this in UTC and netlify.toml sets no TZ, so
+// every wall-clock decision here — what day an all-day event is, when a
+// floating time is, what the label says — names the zone explicitly rather than
+// trusting the box. Same constant, same reason, as calendar.js and trmnl.js.
+const TZ = "America/Chicago";
+
 // Calendar URLs are user-provided secrets, so this function has to fetch them
 // server-side. Restrict that fetch to public HTTP(S) hosts and re-check every
 // redirect; otherwise a signed-in browser can turn this endpoint into a probe
@@ -118,6 +124,18 @@ function tzOffsetMs(utcMs, tz) {
 }
 
 /**
+ * The instant at which wall time y-mo-d h:mi:s occurs IN `tz`. Treat the wall
+ * time as UTC, then correct by the zone's offset. Measured twice: the first
+ * offset is read at the wrong instant, and on the two DST nights a year that is
+ * exactly the hour that would come out wrong.
+ */
+function zoned(y, mo, d, h, mi, s, tz) {
+  const guess = Date.UTC(Number(y), Number(mo) - 1, Number(d), Number(h), Number(mi), Number(s));
+  const once = guess - tzOffsetMs(guess, tz);
+  return new Date(guess - tzOffsetMs(once, tz));
+}
+
+/**
  * An iCal date, honouring its TZID.
  *
  * THE ZONE USED TO BE THROWN AWAY. The property regex captured the value and
@@ -127,12 +145,18 @@ function tzOffsetMs(utcMs, tz) {
  * as 2pm UTC and read back as 9am. Every timed event on a linked calendar was
  * wrong by the UTC offset, in one direction or the other, all year.
  *
- * Three cases, and only the middle one was ever right:
+ * Four cases:
  *   · trailing Z      — already UTC, unchanged
  *   · TZID=<zone>     — wall time IN that zone, converted here
  *   · neither         — "floating" local time; iCal says interpret it in the
- *                       viewer's zone, and the viewer is a phone, so it is
- *                       left as a bare local-time string for the client.
+ *                       viewer's zone, and the viewer lives in TZ. This used to
+ *                       fall through to `new Date("…T14:00:00")` — the server's
+ *                       zone again, the very bug above, for any feed that
+ *                       writes times without a TZID.
+ *   · date only       — all-day; midnight in TZ, NOT the server's midnight.
+ *                       As UTC midnight it fell out of the handler's window at
+ *                       8pm Chicago the evening before, so an all-day event was
+ *                       gone from the card on its own day.
  */
 function parseIcsDate(raw, tzid) {
   if (!raw) return null;
@@ -140,18 +164,33 @@ function parseIcsDate(raw, tzid) {
   const m = raw.match(/^(\d{4})(\d{2})(\d{2})(?:T(\d{2})(\d{2})(\d{2})(Z)?)?$/);
   if (!m) return null;
   const [, y, mo, d, h, mi, s, z] = m;
-  if (h === undefined) return { date: new Date(`${y}-${mo}-${d}T00:00:00`), allDay: true };
+  if (h === undefined) return { date: zoned(y, mo, d, 0, 0, 0, TZ), allDay: true };
   if (z) return { date: new Date(`${y}-${mo}-${d}T${h}:${mi}:${s}Z`), allDay: false };
-  if (tzid) {
-    // Treat the wall time as UTC, then correct by the zone's offset. Measured
-    // twice: the first offset is read at the wrong instant, and on the two DST
-    // nights a year that is exactly the hour that would come out wrong.
-    const guess = Date.UTC(Number(y), Number(mo) - 1, Number(d), Number(h), Number(mi), Number(s));
-    const once = guess - tzOffsetMs(guess, tzid);
-    const twice = guess - tzOffsetMs(once, tzid);
-    return { date: new Date(twice), allDay: false };
-  }
-  return { date: new Date(`${y}-${mo}-${d}T${h}:${mi}:${s}`), allDay: false };
+  return { date: zoned(y, mo, d, h, mi, s, tzid || TZ), allDay: false };
+}
+
+/**
+ * The card's label. `timeZone` on BOTH branches: the instant is right after
+ * parseIcsDate, and toLocaleString without a zone formatted it in the server's
+ * — UTC — so a 2pm meeting read "7:00 PM" and a 9pm one landed on tomorrow's
+ * date. BriefPage prints this string verbatim and never sees `start`.
+ */
+function formatWhen(e) {
+  return e.allDay
+    ? new Date(e.start).toLocaleDateString("en-US", { timeZone: TZ, weekday: "short", month: "short", day: "numeric" })
+    : new Date(e.start).toLocaleString("en-US", { timeZone: TZ, weekday: "short", month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
+}
+
+/**
+ * Is this event still worth a row? A timed event stays for an hour past its
+ * start (it may be running); an all-day one stays until its Chicago day is
+ * over, because it is happening all of that day — measured from start it
+ * dropped off the card the morning it happened.
+ */
+function inWindow(e, now, windowEnd) {
+  const t = new Date(e.start).getTime();
+  const end = t + (e.allDay ? 86400000 : 3600000);
+  return end > now && t <= windowEnd;
 }
 
 function parseIcs(ics) {
@@ -209,16 +248,10 @@ exports.handler = async (event) => {
     const now = Date.now();
     const windowEnd = now + 14 * 86400000;
     const events = parseIcs(text)
-      .filter(e => { const t = new Date(e.start).getTime(); return t >= now - 3600000 && t <= windowEnd; }) // small grace window for events just starting
+      .filter(e => inWindow(e, now, windowEnd))
       .sort((a, b) => new Date(a.start) - new Date(b.start))
       .slice(0, 10)
-      .map(e => ({
-        title: e.title,
-        location: e.location,
-        when: e.allDay
-          ? new Date(e.start).toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric" })
-          : new Date(e.start).toLocaleString("en-US", { weekday: "short", month: "short", day: "numeric", hour: "numeric", minute: "2-digit" }),
-      }));
+      .map(e => ({ title: e.title, location: e.location, when: formatWhen(e) }));
 
     return json(200, { success: true, events });
   } catch (e) {
@@ -234,3 +267,5 @@ exports.badUrl = badUrl;
 // Exported for scripts — Netlify only reads `handler`.
 exports.parseIcs = parseIcs;
 exports.parseIcsDate = parseIcsDate;
+exports.formatWhen = formatWhen;
+exports.inWindow = inWindow;

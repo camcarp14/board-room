@@ -9,6 +9,7 @@
 // So the whole decision layer of netlify/functions/note-capture.js is pure and
 // asserted here against fixed clocks. Run by `npm run verify`.
 
+import { readFileSync } from "node:fs";
 import {
   normalizeCapture, resolveTitle, appendEntry, isDuplicate, bool, lowerKeys,
   chicagoDate, chicagoTime, MAX_BODY, MAX_TITLE, DEDUPE_MS, SEALS,
@@ -154,6 +155,21 @@ check("an append is never deduped against a plain note of the same text",
 check("an unstamped list line still dedupes",
   isDuplicate([{ id: "l2", title: "L", body: "- return the drill", updated_at: iso(LATE - 5000) }], { body: "return the drill", into: "L" }, LATE)?.id === "l2");
 check("no recent rows is not a duplicate", isDuplicate([], { body: "x", into: null }, LATE) === null && isDuplicate(null, { body: "x", into: null }, LATE) === null);
+
+// ─── 9. THE BIN IS NOT A TARGET. ─────────────────────────────────────────────
+// Deleting a note stamps updated_at, so a list deleted a minute ago is the
+// newest row there is. Read without a deleted_at filter, the next dictation
+// was either answered "duplicate" against it or appended INTO it — a 200 to
+// the watch, and nothing on the Notes tab, which reads `deleted_at is null`.
+// The handler's queries are not pure, so this pins their text.
+{
+  const src = readFileSync("netlify/functions/note-capture.js", "utf8");
+  // Reads carry `select=`; the PATCH that appends addresses a row by id and is
+  // not a lookup — it can only reach a row one of these reads returned.
+  const reads = (src.match(/personal_notes\?[^`]*/g) || []).filter((q) => q.includes("select="));
+  check("the handler reads personal_notes (the queries are where expected)", reads.length >= 2, String(reads.length));
+  check("every personal_notes read excludes the bin", reads.every((q) => q.includes("deleted_at=is.null")), reads.join(" | "));
+}
 
 console.log(failed ? `\n${failed} FAILED` : "\nNOTE CAPTURE SMOKE PASS");
 process.exit(failed ? 1 : 0);

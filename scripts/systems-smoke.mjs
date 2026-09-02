@@ -450,6 +450,53 @@ check("…in the toast stack, with no hardcoded colour",
   !/#[0-9a-fA-F]{3,8}\b/.test(app.match(/\{unprotectedKey && \([\s\S]*?\n      \)\}/)?.[0] || ""));
 check("signing out forgets which revision this device had seen",
   /db\.forgetSettings\(\)/.test(app) && /forgetSettings\(\) \{ lastSeen\.clear\(\); foreignMoves\.clear\(\); \}/.test(dataDb));
+// THE FULL READ HAS ONE CALLER. The argument that loadSettings may move the
+// baseline unannounced — the caller receives the baseline and the settings in one
+// hand — is only true of a caller that keeps both. Two hooks (the Brief's econ
+// verdicts, the grocery frequency tally) took one key out of it and dropped the
+// rest, on their own refetch cadence, so every Brief return after a minute moved
+// lastSeen to the other device's revision while App's settings stood still; the
+// next merge claimed a revision the screen had never seen and the compare-and-set
+// passed. Section 8e replays it. A second caller anywhere in src/ is that bug back.
+const fullReaders = [];
+const findReaders = (dir) => {
+  for (const e of readdirSync(dir, { withFileTypes: true })) {
+    const p = `${dir}/${e.name}`;
+    if (e.isDirectory()) findReaders(p);
+    else if (/\.(js|jsx)$/.test(e.name) && /db\.loadSettings\(/.test(readFileSync(p, "utf8"))) fullReaders.push(p);
+  }
+};
+findReaders("src");
+check("db.loadSettings is called from App and nowhere else in src/",
+  JSON.stringify(fullReaders) === JSON.stringify(["src/App.jsx"]), fullReaders.join(" "));
+const loadSettingBody = dataDb.match(/async loadSetting\(key\) \{[\s\S]*?\n  \},/)?.[0] || "";
+check("the one-key reader reads one row", /\.eq\("setting_key", key\)\.maybeSingle\(\)/.test(loadSettingBody));
+check("…and never touches the baseline", loadSettingBody.length > 0 && !/lastSeen/.test(loadSettingBody));
+check("the econ verdicts and the grocery tally read their one key through it",
+  /db\.loadSetting\(RESULT_KEY\)/.test(readFileSync("src/data/econ.js", "utf8")) &&
+  /db\.loadSetting\(STAPLES_KEY\)/.test(readFileSync("src/data/food.js", "utf8")));
+// THE CLAIM IS FROZEN BEFORE THE SIGNED-IN CHECK. A merge refused "Not signed in"
+// used to retry with no claim built, and build it at retry time — after the
+// baseline had been re-seeded by the sign-in that followed. Section 8f replays it.
+check("mergeSetting freezes its claim before it asks for a session",
+  mergeBody.indexOf("sent = { patch:") > 0 && mergeBody.indexOf("sent = { patch:") < mergeBody.indexOf("const user_id = await db.uid();"));
+
+// THE TABS PANEL WAITS FOR THE SETTINGS. `settings` is null from sign-in until
+// loadSettings lands and for the whole session after a failed one, and to the
+// panel null read as "no saved nav": it drew NAV's default order and the first
+// switch flipped wrote that default plus one change over the account's real bar.
+const tabsPanel = readFileSync("src/shell/SettingsSheet.jsx", "utf8");
+check("Settings → Tabs draws nothing editable until the settings have loaded",
+  tabsPanel.indexOf("if (!settingsLoaded) return (") > 0 &&
+  tabsPanel.indexOf("if (!settingsLoaded) return (") < tabsPanel.indexOf("const navSet = settings?.navigation || {}"));
+check("…and the Brief's widget list waits with it",
+  tabsPanel.indexOf("if (!settingsLoaded) return (") < tabsPanel.indexOf("<BriefWidgetList settings={settings}"));
+check("…with App telling it the truth, the preview excused", /settingsLoaded=\{settings != null \|\| PREVIEW\}/.test(app));
+check("updateSetting refuses a layout key while settings are null",
+  /if \(settings === null && LAYOUT_KEYS\.has\(key\)\) \{[\s\S]*?return \{ ok: false, error \};/.test(app) &&
+  /const LAYOUT_KEYS = new Set\(\[[^\]]*"navigation"[^\]]*"brief_hidden"[^\]]*\]\)/.test(app));
+check("…before anything is painted",
+  app.indexOf("LAYOUT_KEYS.has(key)") < app.indexOf("setSettings(prev => ({ ...(prev || {}), [key]: value }))"));
 
 // ── 7. a crash is recorded, and something reads it ───────────────────────────
 // The gap this closes: ErrorBoundary wrote localStorage.br_crashes and nothing in
@@ -579,7 +626,7 @@ const dbMod = await (async () => {
   const stub = `
     export const ANTHROPIC_API_KEY = "";
     export const supabase = {
-      auth: { getUser: async () => ({ data: { user: { id: "smoke-user" } } }) },
+      auth: { getUser: async () => ({ data: { user: globalThis.__srv.user() } }) },
       from: (t) => globalThis.__srv.from(t),
       rpc: (n, a) => globalThis.__srv.rpc(n, a),
     };
@@ -602,10 +649,23 @@ const { db: DB, writeFailures: WF, settingsNews } = dbMod;
 check("db.js is importable with a stubbed client",
   typeof DB?.mergeSetting === "function" && typeof WF?.retryAll === "function" && typeof settingsNews?.subscribe === "function");
 
-const srv = { upserts: [], rpcs: [], onSelect: null, onUpsert: null, onRpc: null };
+const signedIn = () => ({ id: "smoke-user" });
+const srv = { upserts: [], rpcs: [], onSelect: null, onUpsert: null, onRpc: null, user: signedIn };
 globalThis.__srv = {
+  user: () => srv.user(),
   from: () => ({
-    select: () => Promise.resolve(srv.onSelect ? srv.onSelect() : { data: [], error: null }),
+    // loadSettings awaits the select itself; loadSetting narrows it to one row
+    // with .eq().maybeSingle(). One set of rows answers both, so a scenario
+    // describes the server once.
+    select: () => {
+      const rows = srv.onSelect ? srv.onSelect() : { data: [], error: null };
+      const p = Promise.resolve(rows);
+      p.eq = (col, v) => ({ maybeSingle: async () => {
+        const r = await rows;
+        return { data: (r.data || []).find((x) => x[col] === v) || null, error: r.error };
+      } });
+      return p;
+    },
     upsert: (row) => Promise.resolve(srv.onUpsert ? srv.onUpsert(row) : { error: null }).then((r) => { srv.upserts.push(row); return r; }),
   }),
   rpc: (name, args) => { srv.rpcs.push(args); return Promise.resolve(srv.onRpc ? srv.onRpc(args) : { data: null, error: null }); },
@@ -624,7 +684,7 @@ const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const reset = () => {
   WF.clearAll(); DB.forgetSettings();
-  srv.upserts = []; srv.rpcs = []; srv.onSelect = null; srv.onUpsert = null; srv.onRpc = null;
+  srv.upserts = []; srv.rpcs = []; srv.onSelect = null; srv.onUpsert = null; srv.onRpc = null; srv.user = signedIn;
   notices.length = 0;
   for (const k of Object.keys(screen)) delete screen[k];
 };
@@ -791,6 +851,53 @@ await seed("ponder_items", ["a", "b"], "R1");
 srv.onRpc = () => ({ data: null, error: { code: "42501", message: "new row violates row-level security policy" } });
 r = await edit("ponder_items", ["b"]);
 check("an RLS refusal does not fall back either", r.ok === false && srv.upserts.length === 0);
+
+// ── 8e. A SIDE READ MUST NOT MOVE THE BASELINE ────────────────────────────────
+// The iPad parks a thought. The phone, signed in since the morning, opens the
+// grocery tab — whose tally lives in app_settings — and then archives an item.
+// Read through loadSettings, the tally read re-seeded lastSeen to the iPad's
+// revision while the phone's screen still held the morning's array; the archive
+// then claimed that revision, passed the compare-and-set, and the thought was gone.
+reset();
+await seed("ponder_items", ["a", "b"], "R1");
+srv.onSelect = () => ({ data: [
+  { setting_key: "ponder_items", setting_value: ["c", "a", "b"], updated_at: "R2" },
+  { setting_key: "grocery_staples", setting_value: { milk: 3 }, updated_at: "R9" },
+], error: null });
+const tally = await DB.loadSetting("grocery_staples");
+check("the one-key reader returns its one row", same(tally, { milk: 3 }), JSON.stringify(tally));
+srv.rpcs = [];
+srv.onRpc = (args) => args.p_expected_updated_at === "R1" ? refused(["c", "a", "b"], "R2") : applied(args.p_patch, "R3");
+r = await edit("ponder_items", ["b"]);
+check("A SIDE READ LEAVES THE BASELINE WHERE THE SCREEN IS",
+  srv.rpcs[0]?.p_expected_updated_at === "R1", String(srv.rpcs[0]?.p_expected_updated_at));
+check("…so an archive built on the old screen is refused and the thought adopted",
+  r.ok === false && same(screen.ponder_items, ["c", "a", "b"]), JSON.stringify(screen.ponder_items));
+srv.onSelect = () => ({ data: [], error: null });
+check("a missing row reads as undefined, not as an empty tally", (await DB.loadSetting("grocery_staples")) === undefined);
+
+// ── 8f. A WRITE REFUSED FOR WANT OF A SESSION RETRIES ON THE REVISION IT WAS BUILT ON
+// The session dies under an open tab; an archive fails "Not signed in" and sits on
+// the chip. He signs back in — which re-seeds the baseline from a row the iPad has
+// moved meanwhile — and taps Retry. The claim was built at retry time before, so
+// it named the new revision with the old array and landed.
+reset();
+await seed("ponder_items", ["a", "b"], "R1");
+srv.user = () => null;
+srv.rpcs = [];
+r = await edit("ponder_items", ["b"]);
+check("a write with no session is filed, not dropped",
+  r.ok === false && /Not signed in/.test(r.error?.message || "") && !!entryFor("ponder_items"), r.error?.message || "");
+check("…and nothing was sent", srv.rpcs.length === 0, `${srv.rpcs.length} rpc call(s)`);
+srv.user = signedIn;
+srv.onSelect = () => ({ data: [{ setting_key: "ponder_items", setting_value: ["c", "a", "b"], updated_at: "R2" }], error: null });
+await DB.loadSettings(); // App's loader on the way back in
+srv.onRpc = (args) => args.p_expected_updated_at === "R1" ? refused(["c", "a", "b"], "R2") : applied(args.p_patch, "R3");
+await WF.retryAll();
+check("THE RETRY CLAIMS THE REVISION ITS VALUE WAS BUILT ON",
+  srv.rpcs[0]?.p_expected_updated_at === "R1", String(srv.rpcs[0]?.p_expected_updated_at));
+check("…so it is refused and the parked thought survives",
+  !!entryFor("ponder_items") && same(screen.ponder_items, ["c", "a", "b"]), JSON.stringify(screen.ponder_items));
 
 console.log(failed ? `\n${failed} systems check(s) failed` : "\nsystems: all checks passed");
 process.exit(failed ? 1 : 0);

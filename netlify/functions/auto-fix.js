@@ -43,7 +43,9 @@ const estCost = (mk, i, o, cacheWrite = 0, cacheRead = 0) => {
   return ((i + cacheWrite * 1.25 + cacheRead * 0.1) * p.in + o * p.out) / 1e6;
 };
 /** Fire-and-forget usage row. Never awaited — accounting must not be able to
- *  fail a fix. No-ops without a verified user id (the degrade-open local path). */
+ *  fail a fix. Skips when there is no user id or no Supabase config (defensive —
+ *  the handler already 503s/401s before reaching here; there is no open local
+ *  mode, and scripts/functions-smoke.mjs asserts the refusal). */
 function logSpend(userId, { modelKey, usage, ms, ok, detail }) {
   const url = process.env.SUPABASE_URL, service = process.env.SUPABASE_SERVICE_ROLE_KEY;
   if (!url || !service || !userId) return;
@@ -105,10 +107,25 @@ exports.handler = async (event) => {
   if (userId !== owner) return json(403, { error: "this account is not allowed to use Board Room" });
 
   if (!body.repo) return json(400, { error: "repo is required" });
+  // owner/name and nothing else — the repo is interpolated into a GitHub URL,
+  // and a value with a slash too many or a query string in it would name a
+  // different endpoint than the one this function is about.
+  if (!/^[\w.-]+\/[\w.-]+$/.test(String(body.repo))) return json(400, { error: "repo must be owner/name" });
 
   try {
     if (body.action === "commit") {
       if (!body.path || body.content === undefined) return json(400, { error: "path and content are required to commit" });
+      // THE SAME ALLOWLIST PROPOSE USES, ENFORCED ON THE WAY OUT. The header
+      // promises this tool is scoped to the static template files, and propose
+      // is — but commit took any path in any repo the GITHUB_TOKEN can write.
+      // The only thing in front of it is the browser's session, so a stolen or
+      // replayed session could PUT .github/workflows/anything.yml into every
+      // venture repo, which auto-deploys: remote code execution in CI for the
+      // price of one JWT. propose only ever hands back `${dir}${p}` from these
+      // two lists, so nothing it proposes is refused here, and a path outside
+      // them was never a fix this tool drafted.
+      const allowedPath = REPO_DIRS.some((d) => BASE_FILES.some((p) => body.path === `${d}${p}`));
+      if (!allowedPath) return json(400, { error: "auto-fix only commits the static template files it proposes" });
       const current = await ghGet(body.repo, body.path, githubToken);
       const putRes = await fetch(`${GH}/repos/${body.repo}/contents/${body.path}`, { signal: AbortSignal.timeout(30000),
         method: "PUT",

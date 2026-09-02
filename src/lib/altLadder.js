@@ -135,6 +135,12 @@ export function averageIn(position, addPrice, addUnits) {
  *
  * Every input is a field the engine already publishes, which is the point —
  * this is not new measurement, it is a conclusion nobody was drawing.
+ *
+ * OVERRIDE_DOM_DAYS MUST STAY UNDER THE CRON'S DOM_KEEP_DAYS (90). The span
+ * alt-cron publishes as season.domSpanDays is measured first-to-last sample
+ * over the dominance history it keeps, so a number the history cannot reach
+ * is a leg that can never arm — which is what 60 was against the 30-day
+ * window it used to be read from. altseason-smoke pins the reachability.
  */
 export const OVERRIDE_SCORE = 70;
 export const OVERRIDE_GREED = 80;

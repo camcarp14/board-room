@@ -196,6 +196,82 @@ check("until is stated as a date", describeRule({ freq: "daily", interval: 1, un
 // ─── the runaway guard ───────────────────────────────────────────────────────
 check("a forever rule over a wide window still terminates",
   occurrenceDays(ev({ rrule: { freq: "daily", interval: 1 } }), D(2026, 8, 3), D(2060, 1, 1)).length <= 750);
+check("...and the ceiling is on what comes OUT — the window gets its full 750",
+  occurrenceDays(ev({ rrule: { freq: "daily", interval: 1 } }), D(2026, 8, 3), D(2060, 1, 1)).length === 750,
+  String(occurrenceDays(ev({ rrule: { freq: "daily", interval: 1 } }), D(2026, 8, 3), D(2060, 1, 1)).length));
+
+// ─── AN OLD SERIES IS STILL A SERIES ─────────────────────────────────────────
+// The ceiling above used to count STEPS from the series start, so a daily
+// reminder created in early 2024 stopped rendering in early 2026 — no until, no
+// exdate, row still in the table — and a weekly one lasted fourteen years. The
+// window is what bounds the walk now; the series' age must not.
+check("a daily series started three years ago still fills this month",
+  occurrenceDays(ev({ start_time: at(2024, 1, 1), rrule: { freq: "daily", interval: 1 } }), D(2026, 9, 1), D(2026, 9, 30)).length === 30,
+  String(occurrenceDays(ev({ start_time: at(2024, 1, 1), rrule: { freq: "daily", interval: 1 } }), D(2026, 9, 1), D(2026, 9, 30)).length));
+check("a weekly series started fifteen years ago still fills this month",
+  // 2011-01-03 was a Monday; the Mondays of September 2026 are the 7th, 14th, 21st, 28th.
+  occurrenceDays(ev({ start_time: at(2011, 1, 3), rrule: { freq: "weekly", interval: 1 } }), D(2026, 9, 1), D(2026, 9, 30)).join(",")
+    === "2026-09-07,2026-09-14,2026-09-21,2026-09-28",
+  occurrenceDays(ev({ start_time: at(2011, 1, 3), rrule: { freq: "weekly", interval: 1 } }), D(2026, 9, 1), D(2026, 9, 30)).join(","));
+check("a monthly series from 2000 still clamps correctly a quarter-century on",
+  occurrenceDays(ev({ start_time: at(2000, 1, 31), rrule: { freq: "monthly", interval: 1 } }), D(2026, 2, 1), D(2026, 3, 31)).join(",")
+    === "2026-02-28,2026-03-31");
+
+// The seek must land on the same PHASE the walk would have — every 3 days from
+// Jan 1 2024 is not every 3 days from whatever day the month opens on. Compared
+// against a naive walk from the series start (no seek, no ceiling), which is the
+// definition of correct here.
+{
+  const walk = (row, from, to) => {
+    const rule = normalizeRule(row.rrule);
+    const start = new Date(row.start_time);
+    const s0 = new Date(start.getFullYear(), start.getMonth(), start.getDate());
+    const add = (d, n) => new Date(d.getFullYear(), d.getMonth(), d.getDate() + n);
+    const out = [];
+    let n = 0;
+    if (rule.freq === "daily") {
+      for (let d = s0; d <= to; d = add(d, rule.interval)) {
+        if (rule.count != null && n >= rule.count) break;
+        n += 1;
+        if (d >= from) out.push(dayKey(d));
+      }
+    } else {
+      const days = rule.byWeekday.length ? rule.byWeekday : [s0.getDay()];
+      let ws = add(s0, -s0.getDay());
+      outer: for (; ws <= to; ws = add(ws, 7 * rule.interval)) {
+        for (const wd of days) {
+          const d = add(ws, wd);
+          if (d < s0) continue;
+          if (rule.count != null && n >= rule.count) break outer;
+          n += 1;
+          if (d >= from && d <= to) out.push(dayKey(d));
+        }
+      }
+    }
+    return out.join(",");
+  };
+  const cases = [
+    ["every 3 days keeps its phase across a seek", { start_time: at(2024, 1, 1), rrule: { freq: "daily", interval: 3 } }],
+    ["every 2 weeks keeps its phase across a seek", { start_time: at(2024, 1, 3), rrule: { freq: "weekly", interval: 2 } }],
+    ["every 5 weeks on Mon/Wed/Fri keeps its phase across a seek", { start_time: at(2023, 6, 14), rrule: { freq: "weekly", interval: 5, byWeekday: [1, 3, 5] } }],
+    ["a mid-week start with an earlier byWeekday keeps its phase", { start_time: at(2024, 8, 7), rrule: { freq: "weekly", interval: 3, byWeekday: [1, 3] } }],
+    ["a daily count is honoured across a seek", { start_time: at(2024, 1, 1), rrule: { freq: "daily", interval: 1, count: 700 } }],
+    ["a weekly count is honoured across a seek", { start_time: at(2026, 8, 3), rrule: { freq: "weekly", interval: 1, byWeekday: [1, 3, 5], count: 10 } }],
+  ];
+  const windows = [[D(2025, 11, 1), D(2025, 12, 31)], [D(2026, 8, 17), D(2026, 9, 30)], [D(2026, 9, 1), D(2026, 9, 30)]];
+  for (const [name, o] of cases) {
+    const ok = windows.every(([f, t]) => occurrenceDays(ev(o), f, t).join(",") === walk(ev(o), f, t));
+    check(name, ok, windows.map(([f, t]) => `${occurrenceDays(ev(o), f, t).join(",")} vs ${walk(ev(o), f, t)}`).join(" | "));
+  }
+  // The two count cases must actually reach their count inside a window —
+  // otherwise the comparison above proves nothing about `emitted`.
+  check("...the daily count case ends on its 700th day, inside the window",
+    occurrenceDays(ev(cases[4][1]), D(2025, 11, 1), D(2025, 12, 31)).join(",").endsWith("2025-11-30")
+    && occurrenceDays(ev(cases[4][1]), D(2025, 12, 1), D(2025, 12, 31)).length === 0);
+  check("...the weekly count case emits its last four in a window that opens mid-series",
+    occurrenceDays(ev(cases[5][1]), D(2026, 8, 17), D(2026, 9, 30)).join(",") === "2026-08-17,2026-08-19,2026-08-21,2026-08-24",
+    occurrenceDays(ev(cases[5][1]), D(2026, 8, 17), D(2026, 9, 30)).join(","));
+}
 
 if (failed) { console.log(`\n${failed} recurrence check(s) failed`); process.exit(1); }
 
@@ -273,6 +349,22 @@ if (failed) { console.log(`\n${failed} recurrence check(s) failed`); process.exi
       const r = seriesFields(master, tapped, span);
       return calendarDaysBetween(r.start_time, new Date(r.end_time)) === 2;
     })());
+}
+
+// ─── the bulk import never invents a birth year ──────────────────────────────
+// Not recurrence arithmetic, but the same file the block above lifts from, and
+// the same class of silent wrong number: the screenshot importer wrote the
+// CALENDAR year of the screenshot (last year's, usually) into
+// personal_birthdays.year, so every imported adult "turns 1" on the agenda. A
+// screenshot cannot know a birth year; the row goes in with month/day only.
+{
+  const { readFileSync } = await import("node:fs");
+  const panel = readFileSync("src/pages/personal/CalendarPanel.jsx", "utf8");
+  const review = panel.match(/const reviewed = merged\.map\([\s\S]*?\n    \}\);/)?.[0] || "";
+  check("the bulk-import review builds birthday rows", review.length > 0);
+  check("…without a birth year taken from the screenshot", /month: m, day: d, year: null,/.test(review) && !/year: y\b/.test(review));
+  const confirm = panel.match(/const toBirthdays = [\s\S]*?\}\)\);/)?.[0] || "";
+  check("…and the insert carries none either", confirm.length > 0 && /year: null/.test(confirm) && !/r\.year/.test(confirm));
 }
 
 console.log("\nRECURRENCE SMOKE PASS");

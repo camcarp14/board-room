@@ -390,8 +390,14 @@ export function useGroceryFrequency() {
       // appear once a thing crosses STAPLE_MIN_BUYS. Throwing puts the query in
       // `error` with the last good tally still in `data`, which is the whole
       // contract the rest of the app's queries follow.
-      const all = await db.loadSettings();
-      const t = all?.[STAPLES_KEY];
+      //
+      // loadSetting, not loadSettings: the full read re-seeds the two-device
+      // merge baseline for ponder_items and finance_rules as it goes, and this
+      // hook kept one key and dropped the rest — so every grocery open moved the
+      // baseline to the other device's revision while App's settings stayed put,
+      // and the next Ponder archive overwrote that device's thought under a green
+      // save. The note on db.loadSetting has the long version.
+      const t = await db.loadSetting(STAPLES_KEY);
       return t && typeof t === "object" && !Array.isArray(t) ? t : {};
     },
     staleTime: 5 * 60 * 1000, // it only changes when you clear the cart

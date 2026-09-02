@@ -295,6 +295,32 @@ export function txKey(tx, occurrence = 0) {
 }
 
 /**
+ * An account name guessed from an export's file name.
+ *
+ * The account is PART OF THE DEDUPE KEY above, so the guess has to come out the
+ * same for the same card every month or the idempotent import is not. Chase
+ * names downloads with the export's date range in them — something like
+ * `Chase1234_Activity20250101_20250831_20250901.CSV` — and the raw file name
+ * made every export a new "account": the overlapping month imported twice under
+ * two labels, both counts looked plausible, and the sheet's "nothing doubles"
+ * promise was false. Runs of six or more digits are dates, so they go; a short
+ * run is the card's mask, which is the useful part, so it stays. "Activity" is
+ * Chase's word, not yours.
+ */
+export function accountFromFileName(name) {
+  // Separators become spaces BEFORE the word is looked for: an underscore is a
+  // word character, so "\bactivity\b" cannot see "Activity_" until it is.
+  return String(name || "")
+    .replace(/\.[a-z0-9]+$/i, "")
+    .replace(/\d{6,}/g, "")
+    .replace(/[_\-\s]+/g, " ")
+    .replace(/\bactivity\b/gi, "")
+    .replace(/\s{2,}/g, " ")
+    .trim()
+    .slice(0, 40);
+}
+
+/**
  * A Chase CSV → rows ready to store, plus everything that went wrong.
  *
  * Returns problems rather than throwing them. A 400-row export with three
@@ -479,8 +505,21 @@ export function groupAccounts(accounts = []) {
  *      every month, and without rules you'd recategorise the same coffee shop
  *      forever. Rules beat the imported category deliberately — the whole point
  *      is to override what the bank guessed.
- *   3. The category stored at import.
- *   4. The lexicon, for a row that somehow has none.
+ *   3. The category stored at import — UNLESS it is the default, "other".
+ *   4. The lexicon, on the description, for everything else.
+ *
+ * "other" is not a filing, it is the absence of one. The column defaults to it,
+ * and the Plaid function writes it for every synced row because it cannot run
+ * this lexicon (see the bundling note at the top of netlify/functions/plaid.js).
+ * Treating that string as a decision meant a live bank feed filed a paycheque
+ * as Other, and summarise then SUBTRACTED it from Spent — In showed $0, the
+ * breakdown was one grey bar, and every number still looked like a number. So
+ * the stored value only stands when it says something; "other" falls through.
+ * A CSV row nothing recognises comes out "other" again, so it doesn't move. A
+ * CSV row that was "other" only because Chase's label mapped there (education,
+ * gifts, professional services — see CHASE_MAP) is re-read from its
+ * description, since the Chase label is not a stored column; that is the one
+ * deliberate change to already-filed rows, and it is a narrowing, not a loss.
  *
  * Rules live in app_settings.finance_rules keyed by merchantKey, so they cost no
  * database write and apply RETROACTIVELY: set one and every past charge from
@@ -491,7 +530,9 @@ export function effectiveCategory(tx, rules) {
   if (tx?.category_override && catMeta(tx.category_override).key === tx.category_override) return tx.category_override;
   const r = rules?.[merchantKey(tx?.description)];
   if (r && catMeta(r).key === r) return r;
-  return tx?.category || categorise(tx || {}, rules);
+  const stored = tx?.category;
+  if (stored && stored !== "other") return stored;
+  return categorise(tx || {}, rules);
 }
 
 /** Set or clear a merchant rule. Clearing removes the key rather than storing a

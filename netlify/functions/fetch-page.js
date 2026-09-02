@@ -1,8 +1,11 @@
 // Fetches a public web page server-side for the Learn tab (browser CORS makes
 // this impossible client-side). Returns { title, text } with tags stripped.
 // Guards: http(s) only, no private/loopback hosts, 10s timeout, 1.5MB cap.
-// Auth mirrors mini-worker: requires the user's Supabase session token when
-// the service key is configured; degrades to open in local dev without it.
+// Auth mirrors mini-worker: 503 unless SUPABASE_URL / SUPABASE_SERVICE_ROLE_KEY
+// / BOARD_USER_ID are set, then the caller's session must resolve to
+// BOARD_USER_ID (401 no token, 403 wrong account). There is no open local mode
+// — an unauthenticated fetch-anything endpoint is an SSRF proxy, and
+// scripts/functions-smoke.mjs asserts the refusal.
 const json = (statusCode, body) => ({ statusCode, headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
 
 const PRIVATE_HOST = /^(localhost|0\.0\.0\.0|127\.|10\.|192\.168\.|169\.254\.|172\.(1[6-9]|2\d|3[01])\.)/i;

@@ -65,13 +65,36 @@ function icsUtc(iso) {
   return `${d.getUTCFullYear()}${pad(d.getUTCMonth() + 1)}${pad(d.getUTCDate())}T${pad(d.getUTCHours())}${pad(d.getUTCMinutes())}${pad(d.getUTCSeconds())}Z`;
 }
 // DATE form YYYYMMDD for all-day events. We take the date portion the app itself
-// shows (the UTC date slice — see CalendarPanel's all-day day-key), so the feed
-// lands events on the same day the app does.
+// shows (the date slice of the stored string — see startDayKey in
+// calendar-overlays.js), so the feed lands events on the same day the app does.
+//
+// WHAT THAT SLICE IS. All-day rows are NOT stored at UTC midnight, whatever an
+// earlier version of this comment said: CalendarPanel writes them as
+// `${date}T00:00:00` in the browser's own clock, so a Chicago row lands at
+// 05:00Z (CDT) or 06:00Z (CST) on the SAME calendar date. The first ten
+// characters are therefore the day the user picked, and that — not the instant
+// — is what every all-day computation below starts from. Treating the instant
+// as the event's time is how today's all-day events vanished from the brief by
+// mid-morning (see renderJson).
 const icsDate = (y, m, d) => `${y}${pad(m)}${pad(d)}`;
+const ymdOfSlice = (iso) => { const [y, m, d] = String(iso).slice(0, 10).split("-").map(Number); return { y, m, d }; };
 function addDaysYMD(y, m, d, delta) {
   const dt = new Date(Date.UTC(y, m - 1, d + delta));
   return { y: dt.getUTCFullYear(), m: dt.getUTCMonth() + 1, d: dt.getUTCDate() };
 }
+// The Chicago calendar date of an instant. Every "how many days away" answer in
+// the JSON view is a difference of two of these, never of two instants: the
+// device asks "is it today", and today is a Chicago date, not a 24-hour radius
+// around now. Math.round over instants put a Sep 2 birthday on "Today" from 7pm
+// on Sep 1, and marked an upkeep item due today as overdue from 7am.
+function ymdIn(ms) {
+  const parts = new Intl.DateTimeFormat("en-US", { timeZone: TZ, year: "numeric", month: "numeric", day: "numeric" }).formatToParts(new Date(ms));
+  const get = (t) => Number(parts.find((p) => p.type === t).value);
+  return { y: get("year"), m: get("month"), d: get("day") };
+}
+// A calendar date as a comparable stamp (UTC midnight of that Y-M-D). Only ever
+// compared with another stamp, so the zone it is nominally in does not matter.
+const dayStamp = ({ y, m, d }) => Date.UTC(y, m - 1, d);
 
 function buildIcs(sections) {
   const lines = [
@@ -164,9 +187,19 @@ function renderIcs({ events = [], birthdays = [], anniversaries = [], upkeep = [
       const allDay = !!ev.all_day;
       let start, end;
       if (allDay) {
-        const [y, m, d] = String(ev.start_time).slice(0, 10).split("-").map(Number);
+        const { y, m, d } = ymdOfSlice(ev.start_time);
         start = icsDate(y, m, d);
-        const nx = addDaysYMD(y, m, d, 1); // DTEND is exclusive for DATE values
+        // A multi-day all-day span stores its LAST day, inclusive, in end_time
+        // (CalendarPanel's draftFields: `${endDate}T00:00:00`). DTEND for DATE
+        // values is exclusive, so the feed ends the day after that — and, with
+        // no end_time, the day after the start. This used to ignore end_time
+        // entirely, and a four-day trip that painted four cells in the app
+        // painted one on the device. An end before the start is a row the app
+        // would not have written; it falls back to a single day rather than to
+        // a negative span the parser would drop.
+        const last = ev.end_time ? ymdOfSlice(ev.end_time) : null;
+        const lastDay = last && dayStamp(last) >= dayStamp({ y, m, d }) ? last : { y, m, d };
+        const nx = addDaysYMD(lastDay.y, lastDay.m, lastDay.d, 1);
         end = icsDate(nx.y, nx.m, nx.d);
       } else {
         start = icsUtc(ev.start_time);
@@ -233,26 +266,43 @@ function renderIcs({ events = [], birthdays = [], anniversaries = [], upkeep = [
 }
 
 // ── JSON view (for a TRMNL Private Plugin, Polling) ──────────────────────────
-function renderJson({ events = [], birthdays = [], anniversaries = [], upkeep = [] }) {
-  const now = Date.now();
-  const fmtDay = (d, opts) => d.toLocaleDateString("en-US", { timeZone: TZ, ...opts });
+// `now` is a parameter so scripts/anniversaries-smoke.mjs can pin the day math at
+// chosen Chicago evenings and mornings; the handler passes nothing.
+function renderJson({ events = [], birthdays = [], anniversaries = [], upkeep = [] }, now = Date.now()) {
   const fmtDateTime = (d) => d.toLocaleString("en-US", { timeZone: TZ, weekday: "short", month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
-  const relDays = (ms) => Math.round((ms - now) / 86400000);
+  // Whole Chicago calendar days from today to a date stamp (see ymdIn/dayStamp
+  // above). 0 is today until Chicago midnight, whatever the hour in UTC.
+  const today = dayStamp(ymdIn(now));
+  const relDays = (stamp) => Math.round((stamp - today) / 86400000);
   const rel = (n) => (n === 0 ? "Today" : n === 1 ? "Tomorrow" : n < 0 ? `${-n}d ago` : `in ${n}d`);
 
-  // Upcoming events — next 14 days, up to 12.
-  const windowEnd = now + 14 * 86400000;
+  // Upcoming events — next 14 days, up to 12. Two different notions of "still
+  // upcoming", because the two kinds of row store two different things:
+  //   · a TIMED event is an instant, kept from an hour before it starts until
+  //     the window closes;
+  //   · an ALL-DAY event is a date (or a span of dates — end_time holds the
+  //     last day, inclusive), kept while its last day is today or later. It
+  //     used to be filtered as an instant at its stored midnight, so by ~1am
+  //     Chicago on the day itself it was already "an hour ago" and gone: the
+  //     device said nothing was scheduled on exactly the day something was.
   const upEvents = (events || [])
-    .map(ev => ({ ev, t: new Date(ev.start_time).getTime() }))
-    .filter(({ t }) => t >= now - 3600000 && t <= windowEnd)
+    .map(ev => {
+      if (ev.all_day) {
+        const start = dayStamp(ymdOfSlice(ev.start_time));
+        const last = ev.end_time ? Math.max(start, dayStamp(ymdOfSlice(ev.end_time))) : start;
+        return { ev, t: start, startDay: relDays(start), lastDay: relDays(last) };
+      }
+      const t = new Date(ev.start_time).getTime();
+      const day = relDays(dayStamp(ymdIn(t)));
+      return { ev, t, startDay: day, lastDay: day, keep: t >= now - 3600000 };
+    })
+    .filter(({ ev, keep, lastDay, startDay }) => (ev.all_day ? lastDay >= 0 : keep) && startDay <= 14)
     .sort((a, b) => a.t - b.t)
     .slice(0, 12)
-    .map(({ ev, t }) => {
+    .map(({ ev, startDay }) => {
       const d = new Date(ev.start_time);
-      // All-day events are stored at UTC midnight; the app keys them by the UTC
-      // date slice (see CalendarPanel), so format all-day labels from that slice
-      // rather than TZ-converting — otherwise a UTC-midnight event reads as the
-      // previous day in America/Chicago. Timed events convert to TZ as normal.
+      // All-day labels come from the date slice, not from TZ-converting the
+      // instant (see the note above ymdOfSlice); timed events convert as normal.
       const allDayDate = ev.all_day ? new Date(String(ev.start_time).slice(0, 10) + "T12:00:00Z") : null;
       const dayOpts = { timeZone: "UTC", weekday: "short", month: "short", day: "numeric" };
       return {
@@ -261,20 +311,23 @@ function renderJson({ events = [], birthdays = [], anniversaries = [], upkeep = 
         date: (ev.all_day ? allDayDate : d).toLocaleDateString("en-US", { timeZone: ev.all_day ? "UTC" : TZ, month: "short", day: "numeric" }),
         time: ev.all_day ? "All day" : d.toLocaleTimeString("en-US", { timeZone: TZ, hour: "numeric", minute: "2-digit" }),
         all_day: !!ev.all_day, category: ev.category || "personal",
-        location: ev.location || "", rel: rel(relDays(t)),
+        // A span that began before today is happening today, not "2d ago".
+        location: ev.location || "", rel: rel(Math.max(startDay, 0)),
       };
     });
 
-  // Birthdays — next 60 days (this year's or next year's occurrence).
-  const yearNow = new Date().getUTCFullYear();
+  // Birthdays — next 60 days (this year's or next year's occurrence). The year
+  // is Chicago's, and "already passed" is a calendar comparison: a birthday
+  // today is today, not "an occurrence more than a day ago".
+  const yearNow = ymdIn(now).y;
   const upBirthdays = (birthdays || [])
     .filter(b => b.month && b.day)
     .map(b => {
       let occ = Date.UTC(yearNow, b.month - 1, b.day);
-      if (occ < now - 86400000) occ = Date.UTC(yearNow + 1, b.month - 1, b.day);
+      if (relDays(occ) < 0) occ = Date.UTC(yearNow + 1, b.month - 1, b.day);
       return { b, occ };
     })
-    .filter(({ occ }) => occ - now <= 60 * 86400000)
+    .filter(({ occ }) => relDays(occ) <= 60)
     .sort((a, b) => a.occ - b.occ)
     .slice(0, 8)
     .map(({ b, occ }) => {
@@ -295,10 +348,10 @@ function renderJson({ events = [], birthdays = [], anniversaries = [], upkeep = 
     .filter(a => a.month && a.day)
     .map(a => {
       let occ = Date.UTC(yearNow, a.month - 1, a.day);
-      if (occ < now - 86400000) occ = Date.UTC(yearNow + 1, a.month - 1, a.day);
+      if (relDays(occ) < 0) occ = Date.UTC(yearNow + 1, a.month - 1, a.day);
       return { a, occ };
     })
-    .filter(({ occ }) => occ - now <= 60 * 86400000)
+    .filter(({ occ }) => relDays(occ) <= 60)
     .sort((x, y) => x.occ - y.occ)
     .slice(0, 8)
     .map(({ a, occ }) => {
@@ -314,10 +367,11 @@ function renderJson({ events = [], birthdays = [], anniversaries = [], upkeep = 
       };
     });
 
-  // Upkeep due — anything due within 30 days or already overdue, up to 8.
+  // Upkeep due — anything due within 30 days or already overdue, up to 8. `due`
+  // is a date, so an item due today is 0 — not overdue — until Chicago midnight.
   const upUpkeep = (upkeep || [])
     .map(it => ({ it, due: upkeepDue(it) }))
-    .filter(({ due }) => due && (due.ts - now) <= 30 * 86400000)
+    .filter(({ due }) => due && relDays(due.ts) <= 30)
     .sort((a, b) => a.due.ts - b.due.ts)
     .slice(0, 8)
     .map(({ it, due }) => {
@@ -403,3 +457,9 @@ exports.handler = async (event) => {
     return jsonRes(500, { success: false, error: e.message });
   }
 };
+
+// Netlify only reads `handler`. The two renderers are exported so
+// scripts/anniversaries-smoke.mjs can run them against fixture rows at a chosen
+// instant — the day math above was wrong for a year without a smoke to say so.
+exports.renderJson = renderJson;
+exports.renderIcs = renderIcs;

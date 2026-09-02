@@ -173,7 +173,6 @@ const FAKE_ENV = {
   SUPABASE_SERVICE_ROLE_KEY: "smoke-service-role-key-not-real",
   BOARD_USER_ID: "00000000-0000-4000-8000-000000000000",
   ANTHROPIC_API_KEY: "sk-ant-smoke-not-real",
-  VITE_ANTHROPIC_API_KEY: "sk-ant-smoke-not-real",
   INTERNAL_WORKER_SECRET: "smoke-internal-worker-secret",
   BACKUP_SECRET: "smoke-backup-secret",
   TRMNL_TOKEN: "smoke-trmnl-token",
@@ -333,14 +332,37 @@ const EXTRA = {
     ];
   },
   "calendar-events": (mod) => {
-    const badUrl = mod.badUrl;
+    const { badUrl, parseIcsDate, formatWhen, inWindow } = mod;
     if (typeof badUrl !== "function") return [["calendar-events exports badUrl", false, "not exported"]];
+    if (typeof parseIcsDate !== "function" || typeof formatWhen !== "function" || typeof inWindow !== "function") {
+      return [["calendar-events exports parseIcsDate + formatWhen + inWindow", false, "not exported"]];
+    }
+    // The function runs in UTC on Netlify and the Brief prints `when` verbatim,
+    // so every instant and label below is asserted against Chicago, whatever
+    // zone this smoke happens to run in. 2026-09-03 14:00 CDT is 19:00Z.
+    const iso = (raw, tzid) => parseIcsDate(raw, tzid)?.date.toISOString();
+    const T = Date.parse;
+    const allDay = { start: "2026-09-03T05:00:00.000Z", allDay: true };
     return [
       ["calendar events allow a public HTTPS host", !badUrl("https://calendar.google.com/calendar/ical/example/basic.ics")],
       ["calendar events reject loopback hosts", !!badUrl("http://127.0.0.1:8080/private.ics")],
       ["calendar events reject IPv6 loopback", !!badUrl("http://[::1]/private.ics")],
       ["calendar events reject metadata hosts", !!badUrl("http://169.254.169.254/latest/meta-data/")],
       ["calendar events reject embedded credentials", !!badUrl("https://user:pass@example.com/feed.ics")],
+      ["a TZID wall time is the instant in that zone", iso("20260903T140000", "America/Chicago") === "2026-09-03T19:00:00.000Z", iso("20260903T140000", "America/Chicago")],
+      ["a floating wall time is read in Chicago, not the server's zone", iso("20260903T140000", null) === "2026-09-03T19:00:00.000Z", iso("20260903T140000", null)],
+      ["a Z time is left alone", iso("20260903T140000Z") === "2026-09-03T14:00:00.000Z"],
+      ["an all-day event is Chicago midnight", iso("20260903") === "2026-09-03T05:00:00.000Z", iso("20260903")],
+      ["…in January too (CST, not CDT)", iso("20260115") === "2026-01-15T06:00:00.000Z", iso("20260115")],
+      ["a 2pm Chicago meeting is labelled 2:00 PM", formatWhen({ start: "2026-09-03T19:00:00.000Z", allDay: false }) === "Thu, Sep 3, 2:00 PM", formatWhen({ start: "2026-09-03T19:00:00.000Z", allDay: false })],
+      ["a 9pm Chicago meeting stays on its own date", formatWhen({ start: "2026-09-04T02:00:00.000Z", allDay: false }) === "Thu, Sep 3, 9:00 PM", formatWhen({ start: "2026-09-04T02:00:00.000Z", allDay: false })],
+      ["an all-day event is labelled with its Chicago day", formatWhen(allDay) === "Thu, Sep 3", formatWhen(allDay)],
+      ["an all-day event is on the card the evening before", inWindow(allDay, T("2026-09-02T20:00:00Z"), T("2026-09-02T20:00:00Z") + 14 * 86400000)],
+      ["…and at 8am on the day itself", inWindow(allDay, T("2026-09-03T13:00:00Z"), T("2026-09-03T13:00:00Z") + 14 * 86400000)],
+      ["…and at 10pm on the day itself", inWindow(allDay, T("2026-09-04T03:00:00Z"), T("2026-09-04T03:00:00Z") + 14 * 86400000)],
+      ["…and gone once its Chicago day is over", !inWindow(allDay, T("2026-09-04T05:30:00Z"), T("2026-09-04T05:30:00Z") + 14 * 86400000)],
+      ["a timed event keeps its hour of grace", inWindow({ start: "2026-09-03T19:00:00.000Z", allDay: false }, T("2026-09-03T19:50:00Z"), T("2026-09-03T19:50:00Z") + 14 * 86400000)
+        && !inWindow({ start: "2026-09-03T19:00:00.000Z", allDay: false }, T("2026-09-03T20:10:00Z"), T("2026-09-03T20:10:00Z") + 14 * 86400000)],
     ];
   },
   "site-status": (mod) => {

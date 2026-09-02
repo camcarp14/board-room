@@ -26,9 +26,9 @@ export const useRenameDreamBoard = () => useInvalidating(({ from, to }) => db.re
 // back — not every tile that shares the board name, which would also drag in one
 // you deleted on its own three weeks ago. A single tile's undo is its own id.
 //
-// Nothing draws that yet. DreamBoardPanel still tells you a board delete "can't be
-// undone", which stopped being true the moment db.js changed, and the panel is
-// where that sentence and the undo button both have to land. The hooks exist so
-// that edit is a panel change and not a data-layer one.
+// DreamBoardPanel draws it: a board delete keeps the ids dropBoardMut resolves
+// with and offers Undo through useRestoreDreamItems, and the confirm no longer
+// says it can't be undone. The hooks exist so that stayed a panel change and not
+// a data-layer one.
 export const useDeleteDreamBoard = () => useInvalidating((board) => db.deleteDreamBoard(board));
 export const useRestoreDreamItems = () => useInvalidating((ids) => db.restoreDreamItems(ids));

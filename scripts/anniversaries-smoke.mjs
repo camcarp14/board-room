@@ -212,6 +212,11 @@ check("the recurring ICS summary carries NO year count (it would be stale by nex
   && !/summary:.*anniversaryNote/.test(trmnl));
 check("the ICS rows repeat yearly like birthdays", /uid: `anniversary-\$\{a\.id\}@boardroom`[\s\S]{0,120}rrule: "FREQ=YEARLY"/.test(trmnl));
 check("the Liquid layout renders them", /\{% for a in anniversaries/.test(src("trmnl/board-brief.liquid")));
+// Liquid's comment is {% comment %}…{% endcomment %}. A Jinja-style brace-hash
+// note is not a comment to Liquid — it is text, and the device printed a
+// five-line paragraph under every birthday list until someone looked.
+check("the Liquid layout carries no Jinja-style comment (Liquid prints it as text)",
+  !/\{#/.test(src("trmnl/board-brief.liquid")));
 
 // Behavioural, not textual: run the function's own copy of the wording.
 const trmnlKind = (kind) => (kind === "passing" ? "passing" : "milestone");
@@ -238,6 +243,97 @@ for (const [name, re] of [
   ["the 1900 floor and the future guard", /from < 1900 \|\| from > occurrenceYear/],
   ["the one-full-year floor", /n >= 1 \? n : null/],
 ]) check(`TRMNL's copy keeps ${name}`, re.test(trmnl));
+
+// ── TRMNL's day math, RUN at the hours it used to get wrong ──────────────────
+// The e-ink brief answers "is it today" for every row, and for a year it
+// answered from instants: Math.round((occurrence - now) / day) with birthdays
+// and upkeep at UTC midnight and all-day events at the stored midnight. That is
+// off by one for most of a Chicago evening and morning — tomorrow's birthday
+// read "Today" from 7pm, an item due today read "overdue" from 7am, and an
+// all-day event vanished from the brief by ~1am on the day itself. Nothing here
+// could see it, because nothing here ran the function. The renderers are
+// exported for exactly this; trmnl.js is CJS under a "type":"module" package,
+// so it is bundled to .cjs first (the same trick scripts/migrations-smoke.mjs
+// uses for export-data.js). The Supabase client is left external: only the
+// renderers are called, never the handler.
+{
+  const { mkdirSync, rmSync } = await import("node:fs");
+  const { createRequire } = await import("node:module");
+  const { resolve } = await import("node:path");
+  const esbuild = (await import("esbuild")).default;
+  const DIR = ".trmnl-smoke";
+  let fn = null;
+  try {
+    rmSync(DIR, { recursive: true, force: true });
+    mkdirSync(DIR, { recursive: true });
+    esbuild.buildSync({
+      entryPoints: ["netlify/functions/trmnl.js"], bundle: true, platform: "node", format: "cjs",
+      outfile: `${DIR}/trmnl.cjs`, external: ["@supabase/supabase-js"], logLevel: "silent",
+    });
+    fn = createRequire(import.meta.url)(resolve(`${DIR}/trmnl.cjs`));
+  } catch (e) {
+    check("trmnl.js bundles for execution", false, (e.message || String(e)).split("\n")[0]);
+  } finally {
+    rmSync(DIR, { recursive: true, force: true });
+  }
+  check("trmnl.js exports its renderers for this smoke", typeof fn?.renderJson === "function" && typeof fn?.renderIcs === "function");
+  if (fn) {
+    // 2026-09-02T01:00Z is Sep 1, 8pm CDT; 2026-09-02T13:00Z is Sep 2, 8am CDT.
+    const EVE = Date.parse("2026-09-02T01:00:00Z");
+    const MORNING = Date.parse("2026-09-02T13:00:00Z");
+    const rows = {
+      birthdays: [{ id: "b", name: "Sister", month: 9, day: 2, year: 1990 }],
+      anniversaries: [{ id: "a", name: "Dad", kind: "passing", month: 9, day: 2, year: 2019 }],
+      // last_done + interval lands on Sep 2.
+      upkeep: [{ id: "u", name: "Filters", interval_days: 7, last_done: "2026-08-26" }],
+      events: [
+        // An all-day row as CalendarPanel stores it from a Chicago browser: local midnight, 05:00Z.
+        { id: "e1", title: "Dentist", all_day: true, start_time: "2026-09-02T05:00:00+00:00", end_time: null },
+        // A timed row at 1am CDT on Sep 2 — five hours after EVE, and tomorrow.
+        { id: "e2", title: "Red-eye", all_day: false, start_time: "2026-09-02T06:00:00+00:00", end_time: null },
+        // A span that began yesterday and runs through Sep 3: happening today.
+        { id: "e3", title: "Trip", all_day: true, start_time: "2026-09-01T05:00:00+00:00", end_time: "2026-09-03T05:00:00+00:00" },
+      ],
+    };
+    const eve = fn.renderJson(rows, EVE);
+    const bday = eve.birthdays.find((b) => b.name === "Sister");
+    check("at 8pm the evening before, a birthday is Tomorrow, not Today",
+      bday?.rel === "Tomorrow" && bday?.days_until === 1, JSON.stringify(bday));
+    const ann = eve.anniversaries.find((a) => a.name === "Dad");
+    check("…and so is an anniversary, with its count intact",
+      ann?.rel === "Tomorrow" && ann?.note === "In memory · 7 years", JSON.stringify(ann));
+    check("…and a 1am timed event is Tomorrow, not Today",
+      eve.events.find((e) => e.title === "Red-eye")?.rel === "Tomorrow", JSON.stringify(eve.events));
+
+    const morning = fn.renderJson(rows, MORNING);
+    const due = morning.upkeep.find((u) => u.name === "Filters");
+    check("at 8am on the due day, an upkeep item is Today and not overdue",
+      due?.rel === "Today" && due?.overdue === false && due?.days_until === 0, JSON.stringify(due));
+    check("…the birthday is Today", morning.birthdays.find((b) => b.name === "Sister")?.rel === "Today");
+    const dentist = morning.events.find((e) => e.title === "Dentist");
+    check("…today's all-day event is still on the brief, labelled Today, on the right date",
+      dentist?.rel === "Today" && dentist?.when === "Wed, Sep 2" && dentist?.time === "All day", JSON.stringify(morning.events));
+    check("…a span that started yesterday is Today, not '1d ago'",
+      morning.events.find((e) => e.title === "Trip")?.rel === "Today", JSON.stringify(morning.events));
+    check("…and the 1am timed event, now seven hours gone, has dropped off",
+      !morning.events.some((e) => e.title === "Red-eye"), JSON.stringify(morning.events));
+    check("the day after, the all-day event is gone and the birthday has rolled to next year",
+      !fn.renderJson(rows, Date.parse("2026-09-03T13:00:00Z")).events.some((e) => e.title === "Dentist")
+      && fn.renderJson(rows, Date.parse("2026-09-03T13:00:00Z")).birthdays.length === 0);
+
+    // The ICS feed: a multi-day all-day span has to END on the day after its
+    // last day (DTEND is exclusive for DATE values), not on the day after it
+    // starts. It painted one cell for a four-day trip until this was asserted.
+    const ics = fn.renderIcs({ events: [
+      { id: "s", title: "Denver", all_day: true, start_time: "2026-09-10T05:00:00+00:00", end_time: "2026-09-13T05:00:00+00:00" },
+      { id: "o", title: "One day", all_day: true, start_time: "2026-09-20T05:00:00+00:00", end_time: null },
+    ] }, new Set(["events"]));
+    check("a four-day all-day span spans four days in the ICS",
+      /DTSTART;VALUE=DATE:20260910\r\nDTEND;VALUE=DATE:20260914/.test(ics), ics.match(/DT(START|END)[^\r]*/g)?.join(" "));
+    check("a single all-day event still ends the next day",
+      /DTSTART;VALUE=DATE:20260920\r\nDTEND;VALUE=DATE:20260921/.test(ics), ics.match(/DT(START|END)[^\r]*/g)?.join(" "));
+  }
+}
 
 console.log(failed ? `\n${failed} check(s) failed` : "\nAll anniversary checks passed");
 process.exit(failed ? 1 : 0);

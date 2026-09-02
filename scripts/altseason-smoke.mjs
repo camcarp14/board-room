@@ -71,6 +71,7 @@ try {
   const {
     parseMarketsRow, priceAgo, isStablecoin, isWrapper, structure7d, PHASE_GATE,
     screenCoin, screenUniverse, seasonRead, targetsFor, flagTier, transitionFlags,
+    DOM_WINDOW_DAYS, DOM_KEEP_DAYS,
   } = cron;
 
   const HOUR = 3600 * 1000;
@@ -197,7 +198,13 @@ try {
   check("breakout invalidation is the 0.382 retrace", near(breakout.invalidation, 1.309));
 
   const clamped = targetsFor(tRow(1.65, 1.5, 1.0, true));
-  check("a T1 under +4% is bumped to +5%", near(clamped.t1, 1.65 * 1.05), `got ${clamped?.t1}`);
+  check("a T1 under +5% is bumped to +5%", near(clamped.t1, 1.65 * 1.05), `got ${clamped?.t1}`);
+  // THE DEAD BAND. The bump used to fire under +4% while the flag gate asked
+  // for +5%, so a structural T1 3.9% away was lifted and flagged while one at
+  // 4.5% was refused: the gate read backwards across [4%, 5%). One threshold.
+  const t45 = targetsFor(tRow(1.0, 1.045, 0.85, false));
+  check("a T1 4.5% away is bumped to +5% too — no dead band under the gate",
+    t45 && near(t45.t1, 1.05) && t45.t1Pct === 5, JSON.stringify(t45));
 
   // Price already through the prior high — breakout path without a fresh-break
   // flag — and far enough that the clamp cascades through T2.
@@ -210,9 +217,28 @@ try {
   check("...without touching the targets below it", near(snapped.t1, 1.5) && near(snapped.t2, 1.75));
   check("an ATH far above T3 snaps nothing", near(targetsFor(tRow(1.2, 1.5, 1.0, false, 5)).t3, 2.0));
 
-  check("T1 ≥ price×1.04 on every result",
+  check("T1 ≥ price×1.05 on every result",
     [[1.2, building], [1.6, breakout], [1.65, clamped], [1.79, cascade], [1.2, snapped]]
-      .every(([p, t]) => t && t.t1 >= p * 1.04 - 1e-9));
+      .every(([p, t]) => t && t.t1 >= p * 1.05 - 1e-9));
+  // T3 IS NEVER THE CLAMP'S. Every ladder above tops out at the measured move
+  // (priorHigh + h = 2.0, or the ATH it snapped to) — the clamps may lift T1
+  // and T2 under it, never T3 past it.
+  check("T3 is the structure's on every result, never a clamped number",
+    near(building.t3, 2.0) && near(breakout.t3, 2.0) && near(clamped.t3, 2.0) && near(cascade.t3, 2.0) && near(snapped.t3, 1.9),
+    JSON.stringify([building.t3, breakout.t3, clamped.t3, cascade.t3, snapped.t3]));
+  // THE MANUFACTURED LADDER. Price 1.20 through a 0.90–1.10 base: structural
+  // T1 1.176 and T2 1.224 are behind or under the bump, and T3 1.30 sits under
+  // the clamped T2's +2% step. This used to ship +5/+7.1/+9.2% — three numbers
+  // no chart drew, which a bull hour cleared and the Record then graded as a
+  // T3 hit. Forty-six of the first fifty-five flags carried that T1.
+  check("price through most of its measured move gets no ladder, not an invented one",
+    targetsFor(tRow(1.2, 1.1, 0.9, false)) === null, JSON.stringify(targetsFor(tRow(1.2, 1.1, 0.9, false))));
+  check("price above the structural T3 yields no targets",
+    targetsFor(tRow(2.1, 1.5, 1.0, false)) === null);
+  check("a base too tight to measure a move off yields no targets",
+    targetsFor(tRow(1.0, 1.02, 0.99, false)) === null);
+  check("...while a move with its T3 still ahead keeps the real T3",
+    near(targetsFor(tRow(1.0, 1.01, 0.9, false)).t3, 1.12), JSON.stringify(targetsFor(tRow(1.0, 1.01, 0.9, false))));
   check("a flat sparkline yields no targets",
     targetsFor({ price: 1, range7d: structure7d(Array(14).fill(1)) }) === null);
   check("an invalidation at price is no structure at all — null",
@@ -261,6 +287,12 @@ try {
   check("thin liquidity is never flagged", flagTier(fRow({ flags: { thinLiquidity: true } })) === null);
   check("under $1M of volume is never flagged", flagTier(fRow({ vol24h: 9e5 })) === null);
   check("a T1 under 5% away is never flagged", flagTier(fRow({ targets: { ...T_OK, t1Pct: 4.9 } })) === null);
+  // ...and the gate is monotone in the structure: a T1 4.5% away (bumped to 5,
+  // see section 5's t45) flags exactly as one 3.9% away does — the [4%, 5%)
+  // dead band where the bump and the gate disagreed is gone.
+  check("a structural T1 in the old dead band flags like one under it",
+    flagTier(fRow({ score: 70, targets: targetsFor(tRow(1.0, 1.039, 0.85, false)) })) === "igniting" &&
+    flagTier(fRow({ score: 70, targets: t45 })) === "igniting");
   check("no targets, no flag", flagTier(fRow({ targets: null })) === null);
 
   // ─── 7. transitionFlags — the episode ladder, end to end ───────────────────
@@ -309,6 +341,19 @@ try {
   const push = step(mkFlag({ status: "hit_t2", peak_price: 1.3 }), scr(1.45));
   check("the peak ratchets up and carries peak_at", push?.peak_price === 1.45 && !!push?.peak_at);
   check("peak 1.45 grades hit_t3 on the FROZEN t3", push?.status === "hit_t3", push?.status);
+  // THE CLOSE THAT NEVER CAME. hit_t3 is the top of the ladder and the equity
+  // engine closes on it; this one left the row open until the 14-day stale
+  // timer, which every new peak reset — so twelve month-old winners held the
+  // whole regime budget and no flag opened for four weeks.
+  check("peak through T3 closes the episode", !!push?.resolved_at && push?.notes?.closedBy === "target", JSON.stringify(push));
+  const alreadyT3 = step(mkFlag({ status: "hit_t3", peak_price: 1.45, peak_at: iso(NOW - 2 * DAY) }), scr(1.3));
+  check("an open row already at hit_t3 is closed on sight", !!alreadyT3?.resolved_at && alreadyT3?.notes?.closedBy === "target", JSON.stringify(alreadyT3));
+  const unseenT3 = transitionFlags([mkFlag({ status: "hit_t3", peak_price: 1.45, peak_at: iso(NOW - 2 * DAY) })], {}, NOW)
+    .updates.find((u) => u.id === "altcoin:20260801");
+  check("...with or without a screened row this pass", !!unseenT3?.resolved_at && unseenT3?.notes?.closedBy === "target");
+  const t3Then = step(mkFlag({ status: "hit_t3", peak_price: 1.45 }), scr(0.85));
+  check("a T3 winner through its level closes as the round-trip, not the target",
+    !!t3Then?.resolved_at && t3Then?.status === undefined && t3Then?.notes?.closedBy === "invalidation", JSON.stringify(t3Then));
 
   const rung1 = step(mkFlag(), scr(1.15));
   check("active → hit_t1 against the frozen T1, not the live one", rung1?.status === "hit_t1" && !("resolved_at" in rung1), JSON.stringify(rung1));
@@ -372,6 +417,14 @@ try {
   const openAlready = capped.inserts.map((r) => ({ ...r, notes: {} }));
   check("existing open flags spend the budget too",
     transitionFlags(openAlready, many, NOW, PHASE_GATE.btc_only).inserts.length === 0);
+  // A FLAG CLOSED THIS PASS IS NOT OPEN. One of the five prints its T3 on this
+  // scan: the slot it frees goes to the best of the seven still waiting, on
+  // the same pass — not to nobody, and not back to the coin that just closed.
+  const oneDone = openAlready.map((r, i) => (i === 0 ? { ...r, t3: many[r.coin_id].price * 0.5 } : r));
+  const freed = transitionFlags(oneDone, many, NOW, PHASE_GATE.btc_only);
+  check("a slot freed by a close this pass is filled on the same pass",
+    freed.inserts.length === 1 && freed.inserts[0].symbol === "C5",
+    JSON.stringify({ inserts: freed.inserts.map((r) => r.symbol), closed: freed.updates.filter((u) => u.resolved_at).map((u) => u.id) }));
 
   // ─── 8. seasonRead — renormalisation, and the phase ladder's edges ─────────
   // 100 eligible alts (BTC is the bar, passed separately), exact beat counts so
@@ -950,6 +1003,36 @@ try {
     check("a tranche with no unit count is refused, never guessed",
       averageIn({ cost_basis: 10, units: 40 }, 20, null) === null &&
       averageIn({ cost_basis: 10, units: 40 }, 20, 0) === null);
+
+    // THE LEG THE FEED COULD NEVER SUPPLY. OVERRIDE_DOM_DAYS was 60 against a
+    // domSpanDays read off the cron's 30-day window, so the fixture below
+    // armed on a span the engine never publishes and the footer promised a
+    // switch welded open. The span now comes off the full kept history, and
+    // this pins that it reaches — through seasonRead, the way the book gets it.
+    const { OVERRIDE_DOM_DAYS } = await import("../src/lib/altLadder.js");
+    check("the override's dominance days sit inside the history the cron keeps",
+      OVERRIDE_DOM_DAYS < DOM_KEEP_DAYS && DOM_WINDOW_DAYS < DOM_KEEP_DAYS, `${OVERRIDE_DOM_DAYS} / ${DOM_WINDOW_DAYS} / ${DOM_KEEP_DAYS}`);
+    const daily = (days, domAt) => Array.from({ length: days + 1 }, (_, k) => ({ t: NOW - (days - k) * DAY, dom: domAt(days - k) }));
+    const longFall = seasonRead({
+      universe: seasonUniverse(100, 100), btcRow: BTC0, ethRow: { symbol: "ETH", chg7d: 2, chg30d: 2 },
+      fearGreed: { value: 84 }, domHistory: daily(70, (ago) => 50 + ago * 0.1), now: NOW,
+    });
+    check("seventy days of falling dominance publish a span past the override's 60",
+      longFall.domTrend === "falling" && longFall.domSpanDays === 70, `${longFall.domTrend} ${longFall.domSpanDays}`);
+    check("...and the override arms on what seasonRead actually publishes",
+      regimeOverride({ score: longFall.score, fearGreed: longFall.fearGreed, domTrend: longFall.domTrend, domSpanDays: longFall.domSpanDays }).armed === true,
+      JSON.stringify({ score: longFall.score, fg: longFall.fearGreed, span: longFall.domSpanDays }));
+    // A month-old fall inside a quarter that rose: the direction is the month's
+    // and the span is the month's — the history does not vouch for more.
+    const youngFall = seasonRead({
+      universe: seasonUniverse(100, 100), btcRow: BTC0, ethRow: { symbol: "ETH", chg7d: 2, chg30d: 2 },
+      fearGreed: { value: 84 }, domHistory: daily(70, (ago) => (ago > 29 ? 40 + (70 - ago) * 0.5 : 60 - (29 - ago) * 0.1)), now: NOW,
+    });
+    check("a fall younger than the history spans only the month it holds for",
+      youngFall.domTrend === "falling" && youngFall.domSpanDays != null && youngFall.domSpanDays < DOM_WINDOW_DAYS,
+      `${youngFall.domTrend} ${youngFall.domSpanDays}`);
+    check("...and does not arm the override",
+      regimeOverride({ score: youngFall.score, fearGreed: youngFall.fearGreed, domTrend: youngFall.domTrend, domSpanDays: youngFall.domSpanDays }).armed === false);
 
     // ALL THREE LEGS, NOT ANY. Each fires alone several times a cycle.
     const armed = regimeOverride({ score: 72, fearGreed: 84, domTrend: "falling", domSpanDays: 70 });

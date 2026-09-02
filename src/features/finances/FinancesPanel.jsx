@@ -33,7 +33,7 @@ import {
   CATEGORIES, SPEND_CATEGORIES, catMeta, isSpendCategory, SETUP_SQL,
   parseChaseCsv, money, monthsOf, monthLabel, summarise, compare, budgetStatus,
   recurring, largest, merchantKey, effectiveCategory, applyRule, ruleReach,
-  netWorth, groupAccounts, accountKind, accountCents,
+  netWorth, groupAccounts, accountKind, accountCents, accountFromFileName, PLAID_PREFIX,
 } from "./financeLogic.js";
 
 const pct = (n, d) => (d > 0 ? Math.min(100, Math.round((n / d) * 100)) : 0);
@@ -242,7 +242,10 @@ function ImportSheet({ onClose, onDone }) {
     const raw = await f.text();
     setText(raw);
     // The file name is a better account label than nothing, and you can edit it.
-    const guess = account.trim() || f.name.replace(/\.[a-z]+$/i, "").replace(/[_-]+/g, " ").slice(0, 40);
+    // The date range Chase puts in the name is stripped (accountFromFileName):
+    // the account is part of the dedupe key, and a label that changed with
+    // every export made every overlapping month import twice.
+    const guess = account.trim() || accountFromFileName(f.name);
     setAccount(guess);
     parse(raw, guess);
   };
@@ -538,16 +541,34 @@ export function FinancesPanel({ isMobile, settings, updateSetting }) {
       const out = await callPlaid("sync");
       setReceipt({ n: out.added || 0, skipped: 0, synced: true });
       if (out.balances?.length) setBalances({ accounts: out.balances });
+      // A sync is per bank now: one needing re-auth no longer stops the rest,
+      // so the receipt and the rows still land for the banks that worked, and
+      // the one that didn't is NAMED here rather than folded into a green tick.
+      if (out.failed?.length) {
+        const names = out.failed.map((f) => f.institution).join(", ");
+        setLinkErr(out.failed.some((f) => f.code === "ITEM_LOGIN_REQUIRED")
+          ? `${names} needs you to sign in again — disconnect it and reconnect.`
+          : `Couldn't sync ${names}: ${out.failed[0].message}`);
+      }
       refetch(); refreshBanks();
     } catch (e) { setLinkErr(e.message || "Sync failed."); }
     finally { setLinking(null); }
   };
 
   const dropAccount = async (name) => {
-    const n = all.filter((t) => t.account === name).length;
+    const mine = all.filter((t) => t.account === name);
+    const n = mine.length;
+    // A synced account is NOT the same loss as an imported one. The CSV rows
+    // come back from the same export; the synced ones don't — the sync cursor
+    // only ever moves forward, so the next pull never re-delivers what this
+    // deletes. The old wording promised the CSV outcome for both, which on a
+    // bank feed was months of history gone with a note saying it was safe.
+    const synced = mine.some((t) => String(t.id).startsWith(PLAID_PREFIX));
     const ok = await confirm({
       title: `Forget ${name}?`,
-      message: `Removes the ${n} transaction${n === 1 ? "" : "s"} imported under that name. Nothing at Chase changes — you can re-import the same export and get them back.`,
+      message: synced
+        ? `Removes the ${n} transaction${n === 1 ? "" : "s"} synced under that name. These came from the bank sync and the sync won't send them again — they come back only if you disconnect and reconnect the bank.`
+        : `Removes the ${n} transaction${n === 1 ? "" : "s"} imported under that name. Nothing at Chase changes — you can re-import the same export and get them back.`,
       confirmLabel: "Forget", destructive: true,
     });
     if (ok) forget.mutate(name);
@@ -573,6 +594,30 @@ export function FinancesPanel({ isMobile, settings, updateSetting }) {
           }}>{copied ? "Copied" : "Copy SQL"}</Button>
           <Button kind="quiet" size="md" onClick={() => refetch()}>I've run it</Button>
         </div>
+      </Card>
+    );
+  }
+
+  // ── still loading, or the read failed with nothing to fall back on ─────────
+  // `rows` is null until the first read lands, and `all` defaults to [] — so
+  // for the seconds a phone spends loading, and permanently when the read
+  // failed, the page below said "$0 Spent · $0 In · $0 Net · 0 transactions" in
+  // confident green. On the money tab a fabricated zero is the one thing worse
+  // than a blank. The skeleton has the SHAPE of the month card (one heading,
+  // three tiles) so nothing jumps when the numbers arrive; a failure with no
+  // last-good ledger gets the error and Retry alone. When a REFETCH fails,
+  // react-query keeps the previous data, so rows is not null and the error
+  // card renders above real, if stale, numbers — which is the right call.
+  if (rows === null) {
+    return loadErr ? (
+      <Card pad="md" style={{ display: "flex", alignItems: "center", gap: 10 }}>
+        <span className="t-cap" style={{ color: "var(--red)", flex: 1 }}>{loadErr}</span>
+        <Button kind="tinted" size="sm" onClick={() => refetch()}>Retry</Button>
+      </Card>
+    ) : (
+      <Card pad="md" style={{ display: "flex", flexDirection: "column", gap: 12 }} aria-busy="true">
+        <div className="sk sk-line w40" style={{ margin: 0 }} />
+        <div className="sk-row" style={{ gap: 8 }}>{[0, 1, 2].map((i) => <div key={i} className="sk sk-tile" />)}</div>
       </Card>
     );
   }
@@ -790,7 +835,15 @@ export function FinancesPanel({ isMobile, settings, updateSetting }) {
                       message: "Stops the sync and tells Plaid to drop the connection. Transactions already imported stay — remove them separately if you want them gone.",
                       confirmLabel: "Disconnect", destructive: true,
                     });
-                    if (ok) { await callPlaid("disconnect", { item_id: b.item_id }).catch(() => {}); refreshBanks(); }
+                    // The function refuses to forget a bank Plaid hasn't
+                    // released (the token would be the only way left to
+                    // revoke it), so a refusal has to be shown or the bank
+                    // just stays in the list with no explanation.
+                    if (ok) {
+                      setLinkErr(null);
+                      await callPlaid("disconnect", { item_id: b.item_id }).catch((e) => setLinkErr(e.message || "Couldn't disconnect that bank."));
+                      refreshBanks();
+                    }
                   }}>Disconnect</Button>
               </div>
             ))}

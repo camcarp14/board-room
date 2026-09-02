@@ -1,6 +1,6 @@
-import { useState, useMemo, useRef } from "react";
+import { useState, useMemo, useRef, useEffect } from "react";
 import { isMissingTable } from "../../data/db.js";
-import { useAffirmations, useSaveAffirmation, useDeleteAffirmation } from "../../data/creed.js";
+import { useAffirmations, useSaveAffirmation, useDeleteAffirmation, useRestoreAffirmation } from "../../data/creed.js";
 import { Card, SectionHeader, CellGroup, Button, TextArea, PillRow, Pill, Sheet, EmptyState, useConfirm, IcCheck, closeSheet } from "../../ui/kit.jsx";
 import { KINDS, kindMeta, splitQuote, dailyIndex, dayKey, countsByKind, filterByKind, STARTERS } from "./creedLogic.js";
 
@@ -76,12 +76,33 @@ export function CreedPanel({ isMobile }) {
   const loadErr = error && !needsSetup ? (error.message || "Couldn't load the creed.") : null;
   const saveMut = useSaveAffirmation();
   const delMut = useDeleteAffirmation();
+  const restoreMut = useRestoreAffirmation();
   const [copied, setCopied] = useState(false);
   const [kind, setKind] = useState("");        // filter — "" is everything
   const [turned, setTurned] = useState(0);     // how many times you've tapped the plate
   const [form, setForm] = useState(null);      // { id, text, kind, isNew }
   const [saving, setSaving] = useState(false);
   const [saveErr, setSaveErr] = useState(null);
+  // Starters save from the room itself, with no sheet open — so their failure
+  // cannot share `saveErr`, which only the sheet draws. This one is drawn under
+  // "Add to the room", where the tap happened.
+  const [starterErr, setStarterErr] = useState(null);
+  // ─── undo ───
+  // The delete is a soft one (deleted_at, see db.deleteAffirmation), so the id
+  // is the whole undo: useRestoreAffirmation clears the stamp and the line comes
+  // back with its number, because created_at never moved. This toast is the only
+  // way back the panel offers — the row is kept in the table for thirty days
+  // after, but nothing on screen reaches it, so the confirm does not promise it.
+  // { kind: "undo", label, id } | { kind: "err", text }
+  const [toast, setToast] = useState(null);
+  const toastTimer = useRef(null);
+  const showToast = (t, ms) => { clearTimeout(toastTimer.current); setToast(t); toastTimer.current = setTimeout(() => setToast(null), ms); };
+  useEffect(() => () => clearTimeout(toastTimer.current), []);
+  const runUndo = () => {
+    const t = toast; setToast(null); clearTimeout(toastTimer.current);
+    if (t?.kind !== "undo") return;
+    restoreMut.mutate(t.id, { onError: (e) => showToast({ kind: "err", text: e.message || "Couldn't undo." }, 5000) });
+  };
   const [confirmEl, confirm] = useConfirm();
 
   const all = rows || [];
@@ -122,18 +143,24 @@ export function CreedPanel({ isMobile }) {
     });
   };
   const remove = async () => {
-    // "for good" stopped being true when the delete became a soft one — the row
-    // keeps its place for thirty days now, and the Roman numerals do not renumber
-    // because created_at is untouched.
-    if (!(await confirm({ title: "Delete this entry?", message: "It comes off the plate. Recoverable for 30 days.", confirmLabel: "Delete", destructive: true }))) return;
+    // "for good" stopped being true when the delete became a soft one, and
+    // "Recoverable for 30 days" was the other kind of untrue: the row does stay
+    // that long, but the only recovery this screen offers is the Undo toast that
+    // follows. The sentence promises exactly what the panel can do. The Roman
+    // numerals do not renumber on the way back because created_at is untouched.
+    if (!(await confirm({ title: "Delete this entry?", message: "It comes off the plate. You get a few seconds to undo.", confirmLabel: "Delete", destructive: true }))) return;
     setSaving(true);
-    delMut.mutate(form.id, {
-      onSuccess: () => { setSaving(false); closeSheet(sheetClose, () => { setForm(null); setTurned(0); }); },
+    const id = form.id;
+    delMut.mutate(id, {
+      onSuccess: () => { setSaving(false); closeSheet(sheetClose, () => { setForm(null); setTurned(0); }); showToast({ kind: "undo", label: "Entry removed", id }, 6000); },
       onError: (e) => { setSaving(false); setSaveErr(e.message || "Couldn't delete."); },
     });
   };
+  // The pills are disabled while a save is in flight (below): each tap minted a
+  // fresh id, so a second tap on a slow connection engraved the same line twice.
   const addStarter = (k, text) => {
-    saveMut.mutate({ id: crypto.randomUUID(), text, kind: k }, { onError: (e) => setSaveErr(e.message || "Couldn't save.") });
+    setStarterErr(null);
+    saveMut.mutate({ id: crypto.randomUUID(), text, kind: k }, { onError: (e) => setStarterErr(e.message || "Couldn't save.") });
   };
   // Jump the plate to a specific entry — both scrolls are needed: window for
   // mobile, #page-scroll for the app shell's scroll container.
@@ -284,6 +311,7 @@ export function CreedPanel({ isMobile }) {
                 useful if choosing one is the same gesture as reading it. ── */}
           <div>
             <SectionHeader title="Add to the room" />
+            {starterErr && <div className="t-foot" style={{ color: "var(--red)", padding: "0 4px 8px" }}>{starterErr}</div>}
             <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
               {KINDS.map((k) => (
                 <Card key={k.key} pad="md" style={{ display: "flex", flexDirection: "column", gap: 8 }}>
@@ -295,11 +323,14 @@ export function CreedPanel({ isMobile }) {
                   </div>
                   <span className="t-foot" style={{ color: "var(--sub)", lineHeight: 1.55 }}>{k.hint}</span>
                   {/* Starters are only offered for kinds you haven't started —
-                      once you have your own, suggestions are clutter. */}
+                      once you have your own, suggestions are clutter. They may
+                      shrink (the kit's .pill is flex: none) or a sentence-long
+                      proof runs past the card edge instead of wrapping. */}
                   {counts[k.key] === 0 && (
                     <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
                       {(STARTERS[k.key] || []).map((text, i) => (
-                        <Pill key={i} onClick={() => addStarter(k.key, text)} style={{ textAlign: "left", height: "auto", minHeight: 34, padding: "7px 12px", whiteSpace: "normal", lineHeight: 1.45 }}>
+                        <Pill key={i} onClick={() => addStarter(k.key, text)} disabled={saveMut.isPending}
+                          style={{ textAlign: "left", height: "auto", minHeight: 34, padding: "7px 12px", whiteSpace: "normal", lineHeight: 1.45, flex: "0 1 auto", ...(saveMut.isPending ? { opacity: 0.45, cursor: "default" } : null) }}>
                           {splitQuote(text).body}
                         </Pill>
                       ))}
@@ -333,6 +364,18 @@ export function CreedPanel({ isMobile }) {
             {saveErr && <div className="t-foot" style={{ color: "var(--red)" }}>{saveErr}</div>}
           </div>
         </Sheet>
+      )}
+      {toast && (
+        <div className="toasts">
+          {toast.kind === "err" ? (
+            <div className="toast err"><span className="tdot" /><span>{toast.text}</span></div>
+          ) : (
+            <div className="toast">
+              <span>{toast.label}</span>
+              <button onClick={runUndo} style={{ background: "none", border: "none", color: "var(--accent)", fontWeight: 600, fontSize: 13.5, cursor: "pointer", padding: "6px 4px", margin: "-6px 0" }}>Undo</button>
+            </div>
+          )}
+        </div>
       )}
       {confirmEl}
     </section>

@@ -840,7 +840,18 @@ export function DeployTab({ isMobile }) {
   const [hist, setHist] = useState(null);       // null = loading; { rows } or { err }
   const [restoring, setRestoring] = useState(null); // id of the deploy mid-restore
 
+  // Through the house confirm, like rollBack below, and for the same reason: a
+  // tap here starts a production build of a named site, and on a phone the
+  // row's title was clipped to "Clarify…" — two rows read identically, so the
+  // confirm is where the site's name is finally spelled out before anything
+  // happens. Not destructive: a build that fails leaves the live deploy alone.
   const redeploy = async (p) => {
+    const go = await confirm({
+      title: `Redeploy ${p.name}?`,
+      message: `Triggers a fresh Netlify build of ${p.site} from its connected repo. It goes live when the build finishes — minutes, not seconds — and if the build fails the deploy that is live stays live.`,
+      confirmLabel: "Redeploy",
+    });
+    if (!go) return;
     setDeploys(d => ({ ...d, [p.name]: { busy: true } }));
     // callFnFull, not callFn: a build trigger that fails does it for a reason
     // the function already puts in the body (no token, site not on this token,
@@ -907,32 +918,48 @@ export function DeployTab({ isMobile }) {
     loadHistory(p);
   };
 
-  const deployables = PROPERTIES.filter(p => !p.assetsOnly); // Runway/FFSR excluded on purpose
+  // Only ventures with a real Netlify slug on this token. Runway and FFSR never
+  // had one; Zero To Secure and Clarify Paid Search named sites that do not
+  // exist (see properties.js), so their rows could only 404 — the Pentagon row
+  // is the deploy for all of them.
+  const deployables = PROPERTIES.filter(p => !p.assetsOnly);
 
   return (
     <div style={{ maxWidth: 520 }}>
       <div>
         <SectionHeader title="Deployments" trailing="Netlify" />
         <CellGroup>
-          {deployables.map(p => {
+          {deployables.map((p, i) => {
             const d = deploys[p.name] || {};
             const open = histFor?.name === p.name;
             const line = d.busy ? "Triggering build…" : d.when ? (d.ok ? `Build triggered · ${d.when}` : `Trigger failed — ${d.err}`) : `netlify · ${p.site}`;
+            const controls = (
+              <span style={{ display: "inline-flex", alignItems: "center", gap: 6, flex: "none" }}>
+                <Button kind="plain" size="sm" onClick={() => toggleHistory(p)}>{open ? "Hide" : "Rollback"}</Button>
+                <Button kind="quiet" size="md" disabled={d.busy} onClick={() => redeploy(p)} style={{ flex: "none" }}>
+                  {d.busy ? "Deploying…" : "Redeploy"}
+                </Button>
+              </span>
+            );
+            // On a phone the two buttons are ~190px of a 375px row, which left
+            // the title ~100px: "Clarify…" twice, and no way to tell which site
+            // a Redeploy belonged to on the one surface this panel is for. So
+            // the controls drop under the title there and the title keeps the
+            // width. The row below carries the group's own hairline, because
+            // the cell divider only draws between adjacent cells.
             return (
-              <Cell
-                key={p.name}
-                leading={<Dot tone={d.busy ? "var(--amber)" : d.when ? (d.ok ? "var(--green)" : "var(--red)") : "var(--faint)"} size={7} pulse={d.busy} />}
-                title={p.name}
-                sub={<span className="t-num" style={{ fontSize: 11.5, color: d.busy ? "var(--amber)" : d.when && !d.ok ? "var(--red)" : "var(--sub)" }}>{line}</span>}
-                trailing={
-                  <span style={{ display: "inline-flex", alignItems: "center", gap: 6, flex: "none" }}>
-                    <Button kind="plain" size="sm" onClick={() => toggleHistory(p)}>{open ? "Hide" : "Rollback"}</Button>
-                    <Button kind="quiet" size="md" disabled={d.busy} onClick={() => redeploy(p)} style={{ flex: "none" }}>
-                      {d.busy ? "Deploying…" : "Redeploy"}
-                    </Button>
-                  </span>
-                }
-              />
+              <div key={p.name} style={{ position: "relative" }}>
+                <Cell
+                  leading={<Dot tone={d.busy ? "var(--amber)" : d.when ? (d.ok ? "var(--green)" : "var(--red)") : "var(--faint)"} size={7} pulse={d.busy} />}
+                  title={p.name}
+                  sub={<span className="t-num" style={{ fontSize: 11.5, color: d.busy ? "var(--amber)" : d.when && !d.ok ? "var(--red)" : "var(--sub)" }}>{line}</span>}
+                  trailing={isMobile ? null : controls}
+                />
+                {isMobile && (
+                  <div style={{ display: "flex", justifyContent: "flex-end", padding: "0 16px 10px 56px" }}>{controls}</div>
+                )}
+                {i > 0 && <span aria-hidden="true" style={{ position: "absolute", top: 0, left: 56, right: 0, height: 0.5, background: "var(--line)" }} />}
+              </div>
             );
           })}
         </CellGroup>

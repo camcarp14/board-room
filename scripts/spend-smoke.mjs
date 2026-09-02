@@ -51,12 +51,20 @@ const CALLERS = [
   "netlify/functions/auto-fix.js",
   "netlify/functions/mini-worker.js",
   "netlify/lib/upstream/llm.js",
+  "netlify/functions/econ-resolve-background.js",
 ];
 import { readdirSync } from "node:fs";
+// A function that spends THROUGH THE ROUTER never names the API or the SDK, so
+// the discovery below would not see it — and did not: econ-resolve-background
+// billed Sonnet plus a web search per event for months, invisible to this file
+// and to Systems → Usage alike. So a function that imports lib/upstream/llm.js
+// is a spender too. Functions only: the engine files under netlify/lib/upstream
+// also import the router, and they are accounted for through store.js below.
+const importsRouter = (p) => /from ['"]\.\.\/lib\/upstream\/llm\.js['"]/.test(code(read(p)));
 const discovered = [
   ...readdirSync("netlify/functions").map(f => `netlify/functions/${f}`),
   ...readdirSync("netlify/lib/upstream").map(f => `netlify/lib/upstream/${f}`),
-].filter(p => p.endsWith(".js") && /api\.anthropic\.com|@anthropic-ai\/sdk/.test(read(p)));
+].filter(p => p.endsWith(".js") && (/api\.anthropic\.com|@anthropic-ai\/sdk/.test(read(p)) || (p.startsWith("netlify/functions/") && importsRouter(p))));
 
 check("the known Anthropic-caller list is complete",
   discovered.every(p => CALLERS.includes(p)),
@@ -81,8 +89,30 @@ for (const p of CALLERS) {
     check("upstream store writes the ledger to usage_log", /usage_log/.test(code(read("netlify/lib/upstream/store.js"))));
     continue;
   }
+  // A router caller prices through the ledger, not estCost(): it has to make a
+  // ledger, HAND IT to the call (searchCall's ledgerAdd is a no-op without one —
+  // which is precisely how the spend went missing), and write the total out.
+  if (importsRouter(p)) {
+    const name = p.split("/").pop();
+    check(`${name} keeps a ledger`, /makeLedger\(/.test(src));
+    check(`${name} hands the ledger to the router call`, /\bledger\s*[,}]/.test(src));
+    check(`${name} writes the ledger total to usage_log`, /ledgerTotal\(/.test(src) && /logUsage\(/.test(src));
+    continue;
+  }
   check(`${p.split("/").pop()} writes a usage_log row`, /usage_log/.test(src));
   check(`${p.split("/").pop()} prices the call`, /estCost\(/.test(src));
+}
+
+// THE SERVER SIDE HAS ONE NAME FOR THE KEY. Two callers used to fall back to
+// VITE_ANTHROPIC_API_KEY, which made a VITE_-prefixed secret a working server
+// configuration — and Vite exposes that prefix to the browser by design. The
+// build-side canary in scripts/key-exposure-smoke.mjs catches the leak; this
+// catches the habit that invites it.
+{
+  const walk = (dir) => readdirSync(dir, { withFileTypes: true }).flatMap(e =>
+    e.isDirectory() ? walk(`${dir}/${e.name}`) : (/\.(js|mjs)$/.test(e.name) ? [`${dir}/${e.name}`] : []));
+  const readers = walk("netlify").filter(p => /VITE_ANTHROPIC_API_KEY/.test(code(read(p))));
+  check("no server-side file reads VITE_ANTHROPIC_API_KEY", readers.length === 0, readers.join(" "));
 }
 
 // The client path: one wrapper, one place to check.

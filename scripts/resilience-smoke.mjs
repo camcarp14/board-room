@@ -1,6 +1,6 @@
 // ─── Resilience smoke — the failures that used to have no way out ────────────
 //
-// Four things are pinned here, and each one shipped as a state the app could
+// Six things are pinned here, and each one shipped as a state the app could
 // enter and not leave, or a statement it made that was not true. None of them is
 // visible to the other suites: they are not a render, not a colour, not a pure
 // function's arithmetic, but a decision about what happens when something has
@@ -23,6 +23,13 @@
 //      role="tablist" over children that were never role="tab", so the structure
 //      was invalid AND the active pill was carried by colour alone.
 //   4. A USAGE ROW THAT SAID "ok" ABOUT A CALL THAT RETURNED NULL.
+//   5. THE SIGN-OUT THAT REACHED THE OTHER DEVICE, AND THE EXPIRY THAT ATE THE
+//      QUEUE. supabase-js signs out every device unless told otherwise, under a
+//      confirm that promised only this one; and the SIGNED_OUT a dead session
+//      sends looked identical to the button's, so App purged the failed-writes
+//      queue a moment after a write had filed itself there to be retried.
+//   6. THE TAB BAR THAT VANISHED IN LANDSCAPE. The keyboard heuristic compared
+//      the visual viewport to iOS's portrait-only screen.height.
 //
 // Run by `npm run verify`.
 
@@ -291,6 +298,52 @@ const fakeStore = () => {
   const orphans = all.map((f) => relative(process.cwd(), f).replace(/\\/g, "/"))
     .filter((f) => !seen.has(resolve(f)) && !KNOWN_UNROUTED.has(f));
   check("every module in src/ is reachable from main.jsx", orphans.length === 0, orphans.join(" "));
+}
+
+// ══ 5. the sign-out that reached the other device, and the expiry that ate the queue
+{
+  const app = readFileSync("src/App.jsx", "utf8");
+  const sheet = readFileSync("src/shell/SettingsSheet.jsx", "utf8");
+  // supabase-js's default scope is 'global': every device's refresh token is
+  // revoked, so the phone's Sign out reached the iPad up to an hour later, mid-use,
+  // under a confirm that promised only this device's cache would be touched.
+  check("sign-out is scoped to this device", /supabase\.auth\.signOut\(\{ scope: "local" \}\)/.test(app));
+  // The call, not the sheet's history of it in prose.
+  check("…and it is the only signOut in the shell",
+    !/await supabase\.auth\.signOut\(/.test(sheet) && (app.match(/await supabase\.auth\.signOut\(/g) || []).length === 1);
+  check("…so the confirm's promise is still true", /This device's cached notes/.test(sheet));
+  // The same SIGNED_OUT arrives from the button and from a dead session. Only the
+  // button's may purge: an expiry keeps the failed-writes queue it used to throw
+  // away a moment after a write had filed itself "Not signed in".
+  check("the button records its intent before signing out",
+    /explicitSignOut\.current = true;\s*\n\s*try \{ await supabase\.auth\.signOut/.test(app));
+  check("…and lowers it whether or not the event came", /finally \{ explicitSignOut\.current = false; \}/.test(app));
+  check("only an explicit sign-out purges the device",
+    /if \(explicit\) purgeDevice\(\);\s*\n\s*else setSessionExpired\(true\);/.test(app));
+  check("…and clearAll lives inside that purge alone",
+    (app.match(/writeFailures\.clearAll\(\)/g) || []).length === 1 &&
+    /const purgeDevice = \(\) => \{[\s\S]*?writeFailures\.clearAll\(\)/.test(app));
+  check("a different account arriving gets the purge instead",
+    /if \(lastUser\.current && lastUser\.current !== s\.user\.id\) purgeDevice\(\);/.test(app));
+  check("an expiry is said over the login screen, with what is waiting",
+    /Your session expired\./.test(app) && /unsaved change/.test(app) && /\{ambient\}\{gate\}\{expiredNote\}/.test(app));
+}
+
+// ══ 6. the tab bar that vanished in landscape ════════════════════════════════
+{
+  const shell = readFileSync("src/shell/MobileShell.jsx", "utf8");
+  // iOS reports screen.height in portrait however the phone is held, so an SE
+  // turned sideways (667×375) read as "keyboard up" and lost the bar. innerHeight
+  // is the window's own height and does not shrink for the keyboard on iOS.
+  check("the keyboard heuristic measures against the window, not the portrait screen",
+    /const keyboardOpen = vvh != null && window\.innerHeight \? vvh < window\.innerHeight \* 0\.72 : false;/.test(shell));
+  check("…and the dock still leaves when it fires", /display: keyboardOpen \? "none" : undefined/.test(shell));
+  // The arithmetic, on the two windows that used to lose the bar and the one that
+  // must still lose it.
+  const open = (vvh, innerHeight) => vvh < innerHeight * 0.72;
+  check("an SE turned sideways keeps its tab bar", !open(375, 375));
+  check("a narrow Split View window on a landscape iPad keeps its tab bar", !open(744, 744));
+  check("a keyboard over a portrait phone still hides it", open(812 - 336, 812));
 }
 
 console.log(`\n${failed ? `${failed} FAILURE(S)` : "RESILIENCE SMOKE: ALL CLEAN"}`);

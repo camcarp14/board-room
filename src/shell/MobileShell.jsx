@@ -53,7 +53,19 @@ export function MobileShell({ page, navDir, nav = NAV, onNavigate, onOpenSetting
 
   // When the keyboard eats most of the viewport, slide the tab bar away
   // instead of letting it hover mid-screen.
-  const keyboardOpen = vvh != null && window.screen?.height ? vvh < window.screen.height * 0.72 : false;
+  //
+  // MEASURED AGAINST THE WINDOW, NOT THE SCREEN. iOS reports screen.width and
+  // screen.height in portrait whichever way the phone is held, so against
+  // screen.height an SE-class phone turned sideways — 667×375, still ≤760 and so
+  // still this shell — read as "keyboard up" (375 < 667·0.72) and lost its tab
+  // bar with no keyboard anywhere; a narrow Split View or Slide Over window on a
+  // landscape iPad did the same. innerHeight is the height of the window this
+  // shell is actually in, whichever way it is turned, and on iOS it does NOT
+  // shrink for the keyboard — only the visual viewport does — so the gap between
+  // the two is the keyboard and nothing else. A letterboxed standalone window
+  // (below) falls short by a status bar and a home indicator, nowhere near the
+  // 28% this asks for, so it does not trip it either.
+  const keyboardOpen = vvh != null && window.innerHeight ? vvh < window.innerHeight * 0.72 : false;
   // visualViewport is the ONLY height this window can actually render.
   // Field-proven on device (day-theme letterbox showed WHITE under a beige
   // canvas): 100vh/100lvh report the full screen, but iOS standalone clips

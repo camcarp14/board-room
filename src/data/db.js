@@ -302,7 +302,12 @@ const lastSeen = new Map();
 // loadSettings is the one other place the baseline moves, and it needs no
 // announcement for a reason that is not an exception to this: the row it seeds from
 // IS its return value, so a caller cannot receive the new baseline without also
-// receiving the settings it describes. The systems smoke pins both of them.
+// receiving the settings it describes. THAT ARGUMENT ONLY HOLDS FOR A CALLER THAT
+// KEEPS WHAT IT IS HANDED, which is why loadSettings has exactly one caller — App —
+// and every other reader of a settings row goes through loadSetting, which never
+// touches the map. Two hooks used to take one key out of loadSettings and drop the
+// rest, and the baseline moved on every Brief return with App none the wiser; the
+// note on loadSetting has the cost. The systems smoke pins all three.
 const newsListeners = new Set();
 export const settingsNews = {
   subscribe(fn) { newsListeners.add(fn); return () => { newsListeners.delete(fn); }; },
@@ -503,6 +508,33 @@ export const db = {
     });
     return out;
   },
+  /**
+   * One value, and NOT the baseline. The Brief's econ verdicts and the grocery
+   * frequency tally each live in a single app_settings row and are refetched on
+   * their own cadence — every Brief return after a minute, every grocery open
+   * after five — and both used to take that row through loadSettings, which also
+   * clears and re-seeds lastSeen from the server on every call. The whole reason
+   * loadSettings may move the baseline unannounced is that App receives the
+   * settings and the baseline in one hand; these readers kept one key and threw
+   * the rest away, so on each of those refetches the baseline advanced to
+   * whatever revision the other device had written while App's `settings` — the
+   * value the next merge is built from and diffed against — stayed where sign-in
+   * left it. The next Ponder archive then claimed a revision the screen had never
+   * seen, the compare-and-set PASSED, and the thought parked on the iPad was gone
+   * under a green save; finance_rules diffed the stale object against the fresh
+   * base and sent the rule the iPad added as a null. Exactly the loss 0033 and
+   * the whole lastSeen machinery exist to refuse, re-opened by a side read on the
+   * two most common navigations in the app.
+   *
+   * So this reads one row and touches nothing. A missing row is undefined, which
+   * both callers already treat as "nothing yet". It also stops those hooks
+   * pulling the entire app_settings table to read one value.
+   */
+  async loadSetting(key) {
+    const { data, error } = await supabase.from("app_settings").select("setting_value").eq("setting_key", key).maybeSingle();
+    if (error) throw error;
+    return data?.setting_value;
+  },
   /** Forget which revision of each merging setting this device has seen. Called
    *  on sign-out: the revisions belong to the account, and a leftover base would
    *  have the next user's first write diff against a stranger's value. */
@@ -576,8 +608,6 @@ export const db = {
     let outcome = null;
     let sent = null; // { patch, at } — frozen on the first attempt so a retry re-claims it
     const res = await reported(`setting:${key}`, label, () => queued(key, async () => {
-      const user_id = await db.uid();
-      if (!user_id) throw new Error("Not signed in");
       // AN ARRAY BUILT ON A REVISION SOMETHING HAS ALREADY REPLACED IS NOT SENT AT
       // ALL. This fires for a write that was still in the queue when the one ahead
       // of it came back refused: the revision has since been rebased, so the server
@@ -608,6 +638,18 @@ export const db = {
         const base = lastSeen.get(key);
         sent = { patch: strategy === "merge" ? objectPatch(value, base?.value) : value, at: base?.at ?? null };
       }
+      // THE SIGNED-IN CHECK COMES AFTER THE CLAIM IS FROZEN, and the order is the
+      // point. It used to come first, so a write refused here — the session had
+      // expired under an open tab — retried with `sent` still null and built its
+      // claim at RETRY time: after signing back in, after loadSettings had re-seeded
+      // the baseline to whatever the other device wrote meanwhile. The value was
+      // the old screen's, the revision was the new row's, the compare-and-set
+      // passed. Frozen here, the retry claims the revision the value was actually
+      // built on and is refused honestly if the row has moved. The check itself
+      // still lives inside the runner so a retry re-reads the session, which is
+      // the right answer when an expired token was the reason it failed.
+      const user_id = await db.uid();
+      if (!user_id) throw new Error("Not signed in");
       const { data, error } = await supabase.rpc("settings_merge", {
         p_key: key,
         p_patch: sent.patch,

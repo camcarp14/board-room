@@ -24,8 +24,12 @@ export function useEconResults() {
     queryKey: ECON_RESULTS,
     queryFn: async () => {
       try {
-        const all = await db.loadSettings();
-        const v = all?.[RESULT_KEY];
+        // loadSetting, not loadSettings: the full read re-seeds the two-device
+        // merge baseline for ponder_items and finance_rules as it goes, and a
+        // reader that keeps this one key and drops the rest moved that baseline
+        // on every Brief return without App ever seeing the value it now had to
+        // match — the note on db.loadSetting has what that cost.
+        const v = await db.loadSetting(RESULT_KEY);
         return v && typeof v === "object" && !Array.isArray(v) ? v : {};
       } catch { return {}; }
     },

@@ -1,7 +1,7 @@
-import { useState, useMemo, useRef } from "react";
+import { useState, useMemo, useRef, useEffect } from "react";
 import { isMissingTable } from "../../data/db.js";
 import {
-  useDreamItems, useSaveDreamItem, useDeleteDreamItem, useRenameDreamBoard, useDeleteDreamBoard,
+  useDreamItems, useSaveDreamItem, useDeleteDreamItem, useRenameDreamBoard, useDeleteDreamBoard, useRestoreDreamItems,
 } from "../../data/dreams.js";
 import { Card, Button, Field, TextArea, Sheet, EmptyState, PillRow, Pill, useConfirm, IcCheck, closeSheet } from "../../ui/kit.jsx";
 import { IcClose, IcChevronDown } from "../../ui/icons.jsx";
@@ -91,14 +91,41 @@ export function DreamBoardPanel({ isMobile, settings, updateSetting }) {
   const delMut = useDeleteDreamItem();
   const renameMut = useRenameDreamBoard();
   const dropBoardMut = useDeleteDreamBoard();
+  const restoreMut = useRestoreDreamItems();
 
   const [copied, setCopied] = useState(false);
   const [board, setBoard] = useState("");
   const [boardForm, setBoardForm] = useState(null);   // null | { mode, original }
   const [boardDraft, setBoardDraft] = useState("");
+  // A rename or a board delete fails with the form already closed, so `saveErr`
+  // — drawn only inside the tile sheet — could never carry it: the strip just
+  // jumped to the first board and the board was still there, which reads as a
+  // mis-tap. This is drawn under the strip, where the board you acted on is.
+  // db.js composes the pre-migration message for exactly this line to show.
+  const [boardErr, setBoardErr] = useState(null);
   const [tile, setTile] = useState(null);             // the open editor
   const [saving, setSaving] = useState(false);
   const [saveErr, setSaveErr] = useState(null);
+  // ─── undo ───
+  // Both deletes are soft ones and hand back what the undo needs: the tile's own
+  // id, or the ids db.deleteDreamBoard marked — exactly those tiles, not every
+  // row that shares the board name. useRestoreDreamItems clears the stamps, and
+  // the board reappears in the strip because boardsOf reads names off the tiles.
+  // This toast is the only way back the panel offers; the rows are kept for
+  // thirty days after, but nothing on screen reaches them, so the confirms do
+  // not promise it. { kind: "undo", label, ids, board } | { kind: "err", text }
+  const [toast, setToast] = useState(null);
+  const toastTimer = useRef(null);
+  const showToast = (t, ms) => { clearTimeout(toastTimer.current); setToast(t); toastTimer.current = setTimeout(() => setToast(null), ms); };
+  useEffect(() => () => clearTimeout(toastTimer.current), []);
+  const runUndo = () => {
+    const t = toast; setToast(null); clearTimeout(toastTimer.current);
+    if (t?.kind !== "undo") return;
+    restoreMut.mutate(t.ids, {
+      onSuccess: () => { if (t.board) setBoard(t.board); },
+      onError: (e) => showToast({ kind: "err", text: e.message || "Couldn't undo." }, 5000),
+    });
+  };
   const [confirmEl, confirm] = useConfirm();
   // Populated by the tile Sheet while it is mounted. Both closes below fire from a
   // mutation callback in THIS scope, so setTile(null) would unmount the sheet that
@@ -125,18 +152,22 @@ export function DreamBoardPanel({ isMobile, settings, updateSetting }) {
     if (!name) return;
     const original = boardForm?.mode === "edit" ? boardForm.original : "";
     closeBoardForm();
+    setBoardErr(null);
     if (original && original === name) return;
     if (original) {
       // The board name lives on every tile, so a rename is a rewrite of all of
       // them — and the saved list only follows once that lands, or a failure
-      // would leave the new name listed with nothing under it.
+      // would leave the new name listed with nothing under it. The selection
+      // waits too: selecting a name no board carries yet falls back to the first
+      // board, which on a failure looked like the strip jumping for no reason.
       renameMut.mutate({ from: original, to: name }, {
-        onSuccess: () => saveBoardList([...(savedBoards || []).filter((b) => b !== original), name]),
+        onSuccess: () => { saveBoardList([...(savedBoards || []).filter((b) => b !== original), name]); setBoard(name); },
+        onError: (e) => setBoardErr(e.message || `Couldn't rename ${original}.`),
       });
     } else {
       saveBoardList([...(savedBoards || []), name]);
+      setBoard(name);
     }
-    setBoard(name);
   };
 
   const removeBoard = async () => {
@@ -145,22 +176,29 @@ export function DreamBoardPanel({ isMobile, settings, updateSetting }) {
     const n = counts[name] || 0;
     const ok = await confirm({
       title: `Delete ${name}?`,
-      // This said "This can't be undone" until the delete became a soft one.
-      // Deleting now writes deleted_at and the row stays for thirty days, so the
-      // old sentence had become the wrong kind of untrue — the kind that makes
-      // you keep a board you wanted rid of.
+      // This said "This can't be undone" until the delete became a soft one, and
+      // then "Recoverable for 30 days" — which the panel could not keep, since
+      // the only way back it draws is the Undo toast that follows. The sentence
+      // now promises exactly that.
       message: n
-        ? `The ${n} tile${n === 1 ? "" : "s"} on this board come off the wall with it. Recoverable for 30 days.`
+        ? `The ${n} tile${n === 1 ? "" : "s"} on this board come off the wall with it. You get a few seconds to undo.`
         : `This board is empty — nothing is lost.`,
       confirmLabel: "Delete board",
       destructive: true,
     });
     if (!ok) return;
     closeBoardForm();
-    const drop = () => saveBoardList((savedBoards || []).filter((b) => b !== name));
-    if (n) dropBoardMut.mutate(name, { onSuccess: drop });
-    else drop();
-    setBoard("");
+    setBoardErr(null);
+    // The strip only lets go of the board once it is actually gone — leaving it
+    // early on a failed delete showed the first board with the deleted one still
+    // sitting in the strip and nothing said.
+    const drop = () => { saveBoardList((savedBoards || []).filter((b) => b !== name)); setBoard(""); };
+    if (n) {
+      dropBoardMut.mutate(name, {
+        onSuccess: (ids) => { drop(); showToast({ kind: "undo", label: `${name} deleted`, ids, board: name }, 6000); },
+        onError: (e) => setBoardErr(e.message || `Couldn't delete ${name}.`),
+      });
+    } else drop();
   };
 
   const openNewTile = (seedTitle) => {
@@ -178,11 +216,13 @@ export function DreamBoardPanel({ isMobile, settings, updateSetting }) {
     });
   };
   const removeTile = async () => {
-    // "for good" stopped being true when the delete became a soft one.
-    if (!(await confirm({ title: "Remove this tile?", message: "It comes off the board. Recoverable for 30 days.", confirmLabel: "Remove", destructive: true }))) return;
+    // "for good" stopped being true when the delete became a soft one; "for 30
+    // days" promised more than the panel can reach. The Undo toast is what it can.
+    if (!(await confirm({ title: "Remove this tile?", message: "It comes off the board. You get a few seconds to undo.", confirmLabel: "Remove", destructive: true }))) return;
     setSaving(true);
-    delMut.mutate(tile.id, {
-      onSuccess: () => { setSaving(false); closeSheet(sheetClose, () => setTile(null)); },
+    const id = tile.id;
+    delMut.mutate(id, {
+      onSuccess: () => { setSaving(false); closeSheet(sheetClose, () => setTile(null)); showToast({ kind: "undo", label: "Tile removed", ids: [id] }, 6000); },
       onError: (e) => { setSaving(false); setSaveErr(e.message || "Couldn't remove."); },
     });
   };
@@ -233,6 +273,7 @@ export function DreamBoardPanel({ isMobile, settings, updateSetting }) {
           onChange={(k) => (k === NEW_BOARD ? openNewBoard() : setBoard(k))}
         />
       )}
+      {boardErr && <div className="t-foot" style={{ color: "var(--red)", padding: "0 4px", lineHeight: 1.5 }}>{boardErr}</div>}
 
       {boardForm && (
         <Card pad="md" style={{ display: "flex", flexDirection: "column", gap: 10 }}>
@@ -278,7 +319,9 @@ export function DreamBoardPanel({ isMobile, settings, updateSetting }) {
           </span>
           <div style={{ display: "flex", flexWrap: "wrap", gap: 6, justifyContent: "center", marginTop: 4 }}>
             {DREAM_STARTERS.map((t, i) => (
-              <Pill key={i} onClick={() => openNewTile(t)} style={{ height: "auto", minHeight: 34, padding: "7px 12px", whiteSpace: "normal", lineHeight: 1.45, textAlign: "left" }}>{t}</Pill>
+              // flex 0 1 auto: the kit's .pill is flex: none, and a sentence-long
+              // starter would run past the card edge on a phone instead of wrapping.
+              <Pill key={i} onClick={() => openNewTile(t)} style={{ height: "auto", minHeight: 34, padding: "7px 12px", whiteSpace: "normal", lineHeight: 1.45, textAlign: "left", flex: "0 1 auto" }}>{t}</Pill>
             ))}
           </div>
           <Button kind="primary" size="md" onClick={() => openNewTile()} style={{ marginTop: 6 }}>Add a tile</Button>
@@ -336,6 +379,18 @@ export function DreamBoardPanel({ isMobile, settings, updateSetting }) {
             {saveErr && <div className="t-foot" style={{ color: "var(--red)" }}>{saveErr}</div>}
           </div>
         </Sheet>
+      )}
+      {toast && (
+        <div className="toasts">
+          {toast.kind === "err" ? (
+            <div className="toast err"><span className="tdot" /><span>{toast.text}</span></div>
+          ) : (
+            <div className="toast">
+              <span>{toast.label}</span>
+              <button onClick={runUndo} style={{ background: "none", border: "none", color: "var(--accent)", fontWeight: 600, fontSize: 13.5, cursor: "pointer", padding: "6px 4px", margin: "-6px 0" }}>Undo</button>
+            </div>
+          )}
+        </div>
       )}
       {confirmEl}
     </section>

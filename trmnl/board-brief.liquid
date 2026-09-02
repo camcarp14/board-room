@@ -51,11 +51,16 @@
       <span class="label label--gray-out">None coming up</span>
       {% endif %}
 
-      {# Anniversaries — the days that already happened. Only drawn when there
-         are some: an empty "In memory" heading standing on the wall of an
-         e-ink panel all month is worse than no heading. `note` arrives already
-         worded by the endpoint ("In memory · 5 years"), so nothing here has to
-         decide what kind of day this is. #}
+      {% comment %}
+        Anniversaries — the days that already happened. Only drawn when there
+        are some: an empty "In memory" heading standing on the wall of an
+        e-ink panel all month is worse than no heading. `note` arrives already
+        worded by the endpoint ("In memory · 5 years"), so nothing here has to
+        decide what kind of day this is.
+        (Liquid has no brace-hash comment form — that is Jinja's. Written that
+        way once, this paragraph printed itself on the device under every
+        birthday list; scripts/anniversaries-smoke.mjs now refuses the shape.)
+      {% endcomment %}
       {% if anniversaries.size > 0 %}
       <div class="markdown" style="margin-top: 16px;">
         <span class="title">Anniversaries</span>

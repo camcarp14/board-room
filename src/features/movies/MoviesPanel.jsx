@@ -35,6 +35,11 @@ export function MoviesPanel({ isMobile }) {
     setSearchResults(res.ok && res.data?.success ? res.data.results : []);
   };
   const pickPoster = (r) => { setTitle(r.title); setYear(r.year ? String(r.year) : ""); setPosterUrl(r.poster_url); setSearchResults(null); };
+  // Four digits, nothing else. The year has its own field because TMDb was the
+  // ONLY thing that ever set it: with no TMDB_API_KEY, or no match, a movie could
+  // never carry one — and after a poster pick the year it chose was invisible, so
+  // a wrong match (the 1998 one, not the 2018 one) only surfaced after saving.
+  const setYearFromField = (raw) => setYear(raw.replace(/\D/g, "").slice(0, 4));
 
   const resetForm = () => { setEditingId(null); setTitle(""); setYear(""); setPosterUrl(null); setTrueScore(""); setCameronScore(""); setNote(""); setSaveErr(null); setSearchResults(null); };
   const startEdit = (m) => {
@@ -160,6 +165,8 @@ export function MoviesPanel({ isMobile }) {
           <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
             {posterUrl && <img src={posterUrl} alt="" style={{ width: 34, height: 51, borderRadius: 6, objectFit: "cover", flex: "none" }} />}
             <Field value={title} onChange={e => setTitle(e.target.value)} onKeyDown={e => { if (e.key === "Enter") findPoster(); }} placeholder="Movie title…" style={{ flex: 1, minWidth: 0 }} />
+            <Field value={year} onChange={e => setYearFromField(e.target.value)} placeholder="Year" inputMode="numeric" aria-label="Year"
+              className="t-num" style={{ width: 66, flex: "none", textAlign: "center" }} />
             <Button kind="quiet" size="md" onClick={findPoster} disabled={searching || !title.trim()} aria-label="Look up poster and year" title="Optional — just fills in a poster/year" style={{ width: 46, padding: 0, flex: "none" }}>
               {searching ? <Spinner size={15} /> : <IcSearch size={17} />}
             </Button>

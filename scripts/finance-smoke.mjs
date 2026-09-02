@@ -18,7 +18,7 @@ import { readFileSync } from "node:fs";
 import {
   CATEGORIES, SPEND_CATEGORIES, catMeta, isSpendCategory, SETUP_SQL,
   parseCsv, toCents, money, toISO, monthOf, monthLabel, detectFormat,
-  merchantOf, merchantKey, categorise, txKey, parseChaseCsv,
+  merchantOf, merchantKey, categorise, txKey, parseChaseCsv, accountFromFileName,
   monthsOf, summarise, compare, budgetStatus, recurring, largest,
   fromPlaid, fromPlaidSync, PLAID_PREFIX,
   effectiveCategory, applyRule, ruleReach,
@@ -350,19 +350,49 @@ check("months come back newest first", monthsOf(ALL).join() === "2026-08");
 // category — and it must lose to a change you made to one specific row.
 {
   const key = merchantKey("SQ *BLUE BOTTLE COFFEE 0123");
-  const tx = { description: "SQ *BLUE BOTTLE COFFEE 0123", category: "other", amount: -475, date: "2026-08-01" };
-  check("with no rule, the imported category stands", effectiveCategory(tx, null) === "other");
+  // The stored category DISAGREES with the lexicon on purpose ("shopping" for a
+  // coffee shop): if the lexicon were quietly winning over the import, these
+  // would read "dining" and the precedence test would be testing nothing.
+  const tx = { description: "SQ *BLUE BOTTLE COFFEE 0123", category: "shopping", amount: -475, date: "2026-08-01" };
+  check("with no rule, the imported category stands", effectiveCategory(tx, null) === "shopping");
   const rules = applyRule({}, key, "dining");
   check("a rule beats what the bank said", effectiveCategory(tx, rules) === "dining");
   // Most specific wins: you touched this row on purpose.
   check("a per-row override still beats the rule",
     effectiveCategory({ ...tx, category_override: "travel" }, rules) === "travel");
   check("clearing a rule reverts, rather than storing a blank",
-    effectiveCategory(tx, applyRule(rules, key, "")) === "other" && !(key in applyRule(rules, key, "")));
+    effectiveCategory(tx, applyRule(rules, key, "")) === "shopping" && !(key in applyRule(rules, key, "")));
   check("a nonsense rule is ignored, not rendered as an empty category",
-    effectiveCategory(tx, { [key]: "not_a_category" }) === "other");
+    effectiveCategory(tx, { [key]: "not_a_category" }) === "shopping");
   check("a nonsense override is ignored too",
-    effectiveCategory({ ...tx, category_override: "nope" }, null) === "other");
+    effectiveCategory({ ...tx, category_override: "nope" }, null) === "shopping");
+
+  // "OTHER" IS THE ABSENCE OF A FILING, NOT ONE. The column defaults to it and
+  // the Plaid function writes it for every synced row (it can't run the
+  // lexicon), and for a while effectiveCategory took the string at its word:
+  // a live bank feed filed the paycheque under Other, summarise subtracted it
+  // from Spent, In read $0 and the breakdown was one grey bar. Every figure
+  // looked like a figure. These rows are shaped exactly as the function writes
+  // them and readTransactions returns them.
+  const synced = [
+    { id: "plaid:1", account: "Checking ••1234", date: "2026-08-01", amount: 500000, description: "ACME PAYROLL DIRECT DEP", merchant: "ACME PAYROLL DIRECT DEP", category: "other", category_override: null },
+    { id: "plaid:2", account: "Sapphire ••4321", date: "2026-08-03", amount: -475, description: "Starbucks", merchant: "Starbucks", category: "other", category_override: null },
+    { id: "plaid:3", account: "Sapphire ••4321", date: "2026-08-12", amount: 120000, description: "Payment Thank You-Mobile", merchant: "Payment Thank You-Mobile", category: "other", category_override: null },
+  ];
+  check("a synced paycheque stored as 'other' resolves to income",
+    effectiveCategory(synced[0], null) === "income", effectiveCategory(synced[0], null));
+  check("a synced coffee stored as 'other' resolves through the lexicon",
+    effectiveCategory(synced[1], null) === "dining", effectiveCategory(synced[1], null));
+  const sv = summarise(synced, "2026-08", {});
+  check("a month of synced rows shows the income", sv.income === 500000, `income ${sv.income}`);
+  check("…and the spend is the coffee, not the coffee minus the paycheque", sv.spent === 475, `spent ${sv.spent}`);
+  check("…and the card payment is a transfer, not spending", sv.transfers === 120000, `transfers ${sv.transfers}`);
+  check("…so the breakdown is not one 'other' bar", !sv.categories.some((c) => c.key === "other"),
+    sv.categories.map((c) => c.key).join(","));
+  // The other direction: a row the lexicon genuinely cannot place must come out
+  // "other" again, so a CSV import already filed that way does not move.
+  check("a debit nothing recognises is still Other",
+    effectiveCategory({ description: "ZZZ MYSTERY", category: "other", amount: -5000 }, null) === "other");
   check("applyRule doesn't mutate what it was given",
     (() => { const before = { a: "dining" }; applyRule(before, "b", "travel"); return Object.keys(before).length === 1; })());
   check("a rule says how many rows it moves", ruleReach(card.rows, key) === 2, String(ruleReach(card.rows, key)));
@@ -403,6 +433,38 @@ check("months come back newest first", monthsOf(ALL).join() === "2026-08");
   // timeout mid-backfill replays from zero forever on a big account.
   check("the sync cursor is saved after every page, not at the end",
     /cursor, synced_at/.test(fn) && fn.indexOf("more = !!page.has_more") < fn.indexOf("cursor, synced_at"));
+  // ONE BANK, ONE FAILURE. An ITEM_LOGIN_REQUIRED from the first item used to
+  // throw out of the whole loop, so every other bank stopped syncing with it —
+  // and a reconnect makes a NEW item beside the broken one, so the fresh
+  // connection was blocked by the stale row. Each item is guarded the way
+  // `balances` guards its own, and named rather than thrown.
+  {
+    const sync = fn.match(/if \(action === "sync"\) \{[\s\S]*?\n    \}/)?.[0] || "";
+    check("the sync block is findable", !!sync);
+    check("one bank needing re-login doesn't stop the others syncing",
+      /for \(const item of items\) \{[\s\S]*?try \{[\s\S]*?transactions\/sync[\s\S]*?\} catch \(e\) \{[\s\S]*?failed\.push\(\{ institution: bank/.test(sync));
+    // Everyone failing is still the error it always was, and it must keep its
+    // code or the 409 "sign in again" branch degrades to a generic 400.
+    check("…but every bank failing is still an error, with its code intact",
+      /failed\.length === items\.length[\s\S]*?throw Object\.assign\(new Error\([^)]*\), \{ code: failed\[0\]\.code/.test(sync));
+    check("…and a partial sync reports who was left out", /balances, failed \}\)/.test(sync));
+  }
+  // DISCONNECT REVOKES BEFORE IT FORGETS. The token is the only way to tell
+  // Plaid to drop the Item; deleting the row after a failed /item/remove left
+  // the connection live at the bank with nothing left to retry the removal
+  // with, while the app said "disconnected" and the privacy page promised
+  // revocation. The DELETE must be unreachable when Plaid did not answer.
+  {
+    const disc = fn.match(/if \(action === "disconnect"\) \{[\s\S]*?\n    \}/)?.[0] || "";
+    check("the disconnect block is findable", !!disc);
+    check("a failed /item/remove returns before the row is deleted",
+      /item\/remove[\s\S]*?catch \(e\) \{[\s\S]*?return json\(502[\s\S]*?method: "DELETE"/.test(disc) &&
+      !/catch \{ \/\* forget it locally/.test(disc));
+    // The one failure that may fall through: Plaid saying the Item is already
+    // gone. Keeping that row would leave a bank you can never disconnect.
+    check("…except when Plaid says the Item no longer exists",
+      /ITEM_NOT_FOUND/.test(disc) && /INVALID_ACCESS_TOKEN/.test(disc));
+  }
   // The blast radius of this function is a bank feed. These two are the reason
   // it is safe: the caller is identified by their own JWT, and no secret ever
   // travels back to the browser.
@@ -451,6 +513,63 @@ check("months come back newest first", monthsOf(ALL).join() === "2026-08");
   check("recategorising sets a merchant RULE by default",
     /if \(onlyThis\) setCat\.mutate/.test(ui) && /updateSetting\?\.\("finance_rules"/.test(ui));
   check("…and still offers the one-row escape hatch", /Just this one/.test(ui));
+  // …AND THE ESCAPE HATCH HAS TO REACH THE DATABASE. The optimistic update
+  // mapped the cached value as an array, but useTransactions caches the
+  // ENVELOPE `{ rows, … }` — and react-query runs onMutate before the
+  // mutationFn, so the TypeError aborted the write: the sheet closed and the
+  // row kept its old category, silently.
+  {
+    const hooks = readFileSync("src/data/finances.js", "utf8");
+    const onMutate = hooks.match(/onMutate: async[\s\S]*?return \{ prev \};/)?.[0] || "";
+    check("the optimistic recategorise is findable", !!onMutate);
+    check("…and it maps the envelope's rows, not the envelope",
+      /old\.rows/.test(onMutate) && !/\(old \|\| \[\]\)\.map/.test(onMutate));
+  }
+  // A synced sync-failure is per bank now, and the one that failed has to be
+  // said, not folded into a green "Synced N transactions" receipt.
+  check("Sync now names a bank that couldn't sync", /out\.failed\?\.length/.test(ui) && /needs you to sign in again/.test(ui));
+  // The function now refuses to forget a bank Plaid hasn't released; a swallowed
+  // refusal is a bank that stays in the list for no visible reason.
+  check("a refused disconnect is shown, not swallowed",
+    /callPlaid\("disconnect"[^\n]*\.catch\(\(e\) => setLinkErr/.test(ui));
+
+  // FORGET SAYS WHICH LOSS IT IS. A CSV account's rows come back from the same
+  // export; a synced account's don't — the cursor only moves forward, so the
+  // next sync never re-delivers them. One message promised the CSV outcome for
+  // both, on the account type a connected bank produces.
+  check("forgetting a synced account says the sync won't bring the rows back",
+    /startsWith\(PLAID_PREFIX\)/.test(ui) && /disconnect and reconnect the bank/.test(ui));
+  check("…while a CSV account still says re-importing gets them back",
+    /re-import the same export and get them back/.test(ui));
+
+  // THE LOADING STATE IS NOT A ZERO. `rows` is null until the read lands and
+  // `all` defaults to [], so the month card said "$0 Spent · $0 In · $0 Net ·
+  // 0 transactions" for every second of loading and forever after a failed
+  // first read. On the money tab that is the one lie worse than a blank.
+  {
+    const loading = ui.match(/if \(rows === null\) \{[\s\S]*?\n  \}/)?.[0] || "";
+    check("a null ledger has its own branch before the empty state",
+      !!loading && ui.indexOf("if (rows === null) {") < ui.indexOf("if (rows !== null && all.length === 0)"));
+    check("…which draws a skeleton shaped like the month card, not <Totals>",
+      /sk sk-tile/.test(loading) && !/<Totals/.test(loading) && !/\$0/.test(loading));
+    check("…and a failed first read shows only the error and Retry",
+      /loadErr \?/.test(loading) && /Retry/.test(loading));
+  }
+
+  // THE FILE-NAME GUESS HAS TO BE STABLE. The account is part of the dedupe
+  // key, and Chase's file names carry the export's date range — so the raw
+  // name made every monthly export a new "account" and every overlapping
+  // month imported twice, under the sheet's promise that nothing doubles.
+  check("the import sheet guesses the account through accountFromFileName", /accountFromFileName\(f\.name\)/.test(ui));
+  check("two exports of the same card guess the same account",
+    accountFromFileName("Chase1234_Activity20250101_20250831_20250901.CSV") ===
+    accountFromFileName("Chase1234_Activity20250201_20250930_20251001.CSV"),
+    `${accountFromFileName("Chase1234_Activity20250101_20250831_20250901.CSV")} vs ${accountFromFileName("Chase1234_Activity20250201_20250930_20251001.CSV")}`);
+  check("…and the guess keeps the card's mask, which is the useful part",
+    accountFromFileName("Chase1234_Activity20250101_20250831_20250901.CSV") === "Chase1234",
+    accountFromFileName("Chase1234_Activity20250101_20250831_20250901.CSV"));
+  check("a plain file name still guesses something readable",
+    accountFromFileName("sapphire-august.csv") === "sapphire august" && accountFromFileName("") === "");
 
   // THE BUG THIS EXISTS FOR. The empty state early-returns before the Accounts
   // card, so for a while the ONLY thing on a fresh install was "Import from

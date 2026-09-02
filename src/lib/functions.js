@@ -140,8 +140,9 @@ export async function callFnFull(name, payload) {
 }
 
 // Ping protocol: {ping:true} body; fns answer {configured:false, missing:"…"}
-// for the PARTIAL state. 404 = not deployed. One copy for every health pill
-// (Systems connections, Mini Me worker probe).
+// for the PARTIAL state. 404 = not deployed. 202 = a "-background" function,
+// which Netlify acknowledges before its handler runs (see below). One copy for
+// every health pill (Systems connections, Mini Me worker probe).
 export async function pingFn(name) {
   const t0 = Date.now();
   try {
@@ -151,6 +152,12 @@ export async function pingFn(name) {
     });
     const ms = Date.now() - t0;
     if (res.status === 404) return { status: "off", detail: "function not deployed", ms };
+    // A "-background" function is acknowledged with 202 and an EMPTY body before
+    // its handler has run, so the {configured:false} it would answer a ping with
+    // can never reach us. Without this branch the empty body parsed to null,
+    // `null?.configured === false` was false, and the row read "responding" with
+    // every key missing. Deployed and accepting is all a ping can honestly say.
+    if (res.status === 202) return { status: "ok", detail: "accepted — background function, keys not checkable from a ping", ms };
     const data = await res.json().catch(() => null);
     if (!res.ok) return { status: "down", detail: data?.error || `HTTP ${res.status}`, ms };
     if (data?.configured === false) return { status: "warn", detail: data?.missing ? `deployed — missing ${data.missing}` : "deployed — keys not set", ms };

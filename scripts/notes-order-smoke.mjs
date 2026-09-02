@@ -127,5 +127,30 @@ const topStatus = readFileSync("src/shell/TopStatus.jsx", "utf8");
 check("the chip only draws when there is a real failure", /\{n > 0 && \(/.test(topStatus));
 check("…and it offers the retry", /onClick=\{onRetry\}/.test(topStatus));
 
+// 10 — THE PIN THAT WRITES THE ORDER. Section 6 proves bumpToFront works; for
+// a long time nothing called it. Manual order is absolute, so the pinned flag
+// alone draws a hairline and moves nothing — "Pin to top" left the note exactly
+// where it was on both surfaces. The panel has to write the order when a note
+// is pinned, from the editor's pin button and from the select sheet alike.
+const panel = readFileSync("src/pages/personal/NotesPanel.jsx", "utf8");
+check("NotesPanel imports bumpToFront", /import \{[^}]*\bbumpToFront\b[^}]*\} from "\.\.\/\.\.\/lib\/notes-order\.js"/.test(panel));
+check("…and calls it on the persisted order", /bumpToFront\(order, id\)/.test(panel) && /saveOrder\(order\)/.test(panel));
+check("the editor's pin button moves the note", /if \(!draft\.pinned\) pinToTop\(\[activeId\]\)/.test(panel));
+check("the select sheet's Pin moves every picked note", /if \(pin\) pinToTop\(/.test(panel));
+
+// 11 — UNDO AFTER A MERGE RESTORES THE TARGET. The folded notes are deleted and
+// come back by clearing their stamp; the target was overwritten in place and
+// has no stamp to clear — its old body exists only in this tab's copy. Undo used
+// to un-delete the folded notes and leave the merged text on the target, so the
+// words were there three times and the original never returned. The merge must
+// arm undo with the regime bulkDeleteNotes actually ran under AND the target's
+// original row to re-upsert.
+check("bulkMerge reads the delete regime instead of assuming soft",
+  /const \{ soft \} = await db\.bulkDeleteNotes\(/.test(panel));
+check("…and arms undo with the target's original row",
+  /armUndo\(`Merged \$\{picks\.length\} notes`, restOriginals, \{ soft, rewrite: \[targetOriginal\] \}\)/.test(panel));
+check("runUndo re-upserts overwritten rows whichever regime the delete ran under",
+  /if \(u\.rewrite\?\.length\) await db\.restoreNotes\(u\.rewrite\)/.test(panel));
+
 console.log(`\n${failed ? `${failed} FAILURE(S)` : "NOTES ORDER SMOKE: ALL CLEAN"}`);
 if (failed) { console.error("NOTES ORDER SMOKE FAILED"); process.exit(1); }
