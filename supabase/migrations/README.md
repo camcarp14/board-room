@@ -2,7 +2,7 @@
 
 ## What this is
 
-Board Room reads and writes 33 tables in the `boardroom` schema of the shared
+Board Room reads and writes 38 tables in the `boardroom` schema of the shared
 Pentagon Supabase project. It was 32 when this directory was written, and **ten**
 of those had DDL anywhere in the repository: four in-app setup cards that got the
 schema right (`affirmations`, `dream_items`, `transactions`, `plaid_items`), five
