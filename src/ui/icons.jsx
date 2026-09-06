@@ -183,6 +183,12 @@ export const IcNote = (p = {}) => <svg {...base(p)}><path d="M5 5.8C5 4.8 5.8 4 
 export const IcClock = (p = {}) => <svg {...base(p)}><circle cx="12" cy="12" r="8.5" /><polyline points="12 7 12 12 15.5 14" /></svg>;
 export const IcArchive = (p = {}) => <svg {...base(p)}><rect x="3.5" y="4.5" width="17" height="4.4" rx="1.3" /><path d="M4.6 8.9v8.6c0 1.1.9 2 2 2h10.8c1.1 0 2-.9 2-2V8.9" /><line x1="10" y1="12.6" x2="14" y2="12.6" /></svg>;
 export const IcUnarchive = (p = {}) => <svg {...base(p)}><rect x="3.5" y="4.5" width="17" height="4.4" rx="1.3" /><path d="M4.6 8.9v8.6c0 1.1.9 2 2 2h10.8c1.1 0 2-.9 2-2V8.9" /><polyline points="9.8 15.4 12 13.2 14.2 15.4" /><line x1="12" y1="13.2" x2="12" y2="18" /></svg>;
+/* Off the Brief / back on it. The eye is the right verb here and the archive box
+   is not: hiding a note does not put it anywhere, it only stops the homescreen
+   from drawing it. Same geometry either way so the pair does not jump when the
+   toggle flips — the slash is the whole difference. */
+export const IcEye = (p = {}) => <svg {...base(p)}><path d="M2.6 12S6 5.9 12 5.9 21.4 12 21.4 12 18 18.1 12 18.1 2.6 12 2.6 12z" /><circle cx="12" cy="12" r="2.9" /></svg>;
+export const IcEyeOff = (p = {}) => <svg {...base(p)}><path d="M9.6 6.3A9.6 9.6 0 0 1 12 6c6 0 9.4 6 9.4 6a17 17 0 0 1-3 3.7" /><path d="M6.4 8.2A17 17 0 0 0 2.6 12S6 18.1 12 18.1a9.4 9.4 0 0 0 3.5-.65" /><path d="M10 10a2.9 2.9 0 0 0 4 4" /><line x1="4" y1="3.8" x2="20.2" y2="20.2" /></svg>;
 export const IcExternal = (p = {}) => <svg {...base(p)}><path d="M13.5 5H7.3A2.3 2.3 0 0 0 5 7.3v9.4A2.3 2.3 0 0 0 7.3 19h9.4a2.3 2.3 0 0 0 2.3-2.3v-6.2" /><line x1="11.5" y1="12.5" x2="19.5" y2="4.5" /><polyline points="14 4.5 19.5 4.5 19.5 10" /></svg>;
 export const IcSpark = (p = {}) => <svg {...solid(p)}><path d="M12 2.5c.5 3.4 1.2 5.4 2.4 6.6 1.2 1.2 3.2 1.9 6.6 2.4-3.4.5-5.4 1.2-6.6 2.4-1.2 1.2-1.9 3.2-2.4 6.6-.5-3.4-1.2-5.4-2.4-6.6C8.4 12.7 6.4 12 3 11.5c3.4-.5 5.4-1.2 6.6-2.4 1.2-1.2 1.9-3.2 2.4-6.6z" /></svg>;
 export const IcSun = (p = {}) => <svg {...base(p)}><circle cx="12" cy="12" r="4" /><line x1="12" y1="3" x2="12" y2="5.2" /><line x1="12" y1="18.8" x2="12" y2="21" /><line x1="3" y1="12" x2="5.2" y2="12" /><line x1="18.8" y1="12" x2="21" y2="12" /><line x1="5.6" y1="5.6" x2="7.2" y2="7.2" /><line x1="16.8" y1="16.8" x2="18.4" y2="18.4" /><line x1="5.6" y1="18.4" x2="7.2" y2="16.8" /><line x1="16.8" y1="7.2" x2="18.4" y2="5.6" /></svg>;

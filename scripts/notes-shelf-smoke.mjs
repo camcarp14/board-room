@@ -21,7 +21,8 @@
 import { readFileSync } from "node:fs";
 import {
   shelfOf, onShelf, homescreenNotes, panelNotes, deletedNotes, lastDeletion,
-  isDeleted, isArchived, noteTint, daysLeft, SHELVES, PURGE_AFTER_DAYS,
+  isDeleted, isArchived, isBriefHidden, onBrief, briefHiddenNotes,
+  noteTint, daysLeft, SHELVES, PURGE_AFTER_DAYS,
   UNDO_GROUP_MS, TINT_PCT, TINT_PCT_STRONG,
 } from "../src/lib/notes-shelf.js";
 
@@ -40,7 +41,10 @@ const B = { id: "b", title: "archived", archived: true };
 const C = { id: "c", title: "binned", deleted_at: "2026-08-17T10:00:00Z" };
 const D = { id: "d", title: "binned too", archived: true, deleted_at: "2026-08-17T10:00:01Z" };
 const E = { id: "e", title: "older bin", deleted_at: "2026-08-01T09:00:00Z" };
-const rows = [A, B, C, D, E];
+// 0042: off the Brief, still on the active shelf. The running list you read
+// every day and never want on the homescreen.
+const F = { id: "f", title: "off the brief", brief_hidden: true };
+const rows = [A, B, C, D, E, F];
 
 check("a plain note is active", shelfOf(A) === "active");
 check("an archived note is archived", shelfOf(B) === "archived");
@@ -51,10 +55,24 @@ check("a deleted note is deleted even when it was archived", shelfOf(D) === "del
 check("…and is not also reported as archived", !isArchived(D) && isDeleted(D));
 check("every row lands on exactly one shelf",
   SHELVES.reduce((n, sh) => n + onShelf(rows, sh).length, 0) === rows.length);
+// HIDING IS NOT A FOURTH SHELF. A hidden note is an ordinary active note that
+// the Brief may not draw — it stays in the Notes tab's default list, stays
+// searchable, stays counted. Making it a shelf would bury it behind a chip,
+// which is what archiving already does and the reason this flag exists.
+check("a hidden note is still on the active shelf", shelfOf(F) === "active" && !isArchived(F));
+check("…and is reported hidden", isBriefHidden(F) && !isBriefHidden(A));
 
 // ── 2. the homescreen ────────────────────────────────────────────────────────
 // The whole contract of the archive toggle, in one assertion.
-check("the Brief shows active notes only", homescreenNotes(rows).map((n) => n.id).join(",") === "a");
+check("the Brief shows active, un-hidden notes only", homescreenNotes(rows).map((n) => n.id).join(",") === "a");
+check("…and onBrief is the single question behind that", onBrief(A) && !onBrief(B) && !onBrief(C) && !onBrief(F));
+// The other half of the promise, and the half archiving could not keep: the
+// Notes tab still lists it, right where it was.
+check("the Notes tab still lists a hidden note", panelNotes(rows, "active").map((n) => n.id).join(",") === "a,f");
+check("the Off-the-Brief count is the active hidden ones, never the archived or binned",
+  briefHiddenNotes(rows).map((n) => n.id).join(",") === "f");
+check("a hidden note that is also deleted is in the bin, not the count",
+  briefHiddenNotes([{ id: "g", brief_hidden: true, deleted_at: "2026-08-17T10:00:00Z" }]).length === 0);
 check("the Notes tab's Archived shelf shows the archived one", panelNotes(rows, "archived").map((n) => n.id).join(",") === "b");
 // An unknown shelf must not fall through to "everything" — a typo that puts the
 // bin on the homescreen is worse than a typo that shows an empty list.
@@ -98,6 +116,23 @@ const tile = read("src/pages/brief/NotesTile.jsx");
 const panel = read("src/pages/personal/NotesPanel.jsx");
 check("the Brief tile filters through homescreenNotes", /homescreenNotes\(/.test(code(tile)));
 check("the Notes tab filters through panelNotes", /panelNotes\(sorted, shelf\)/.test(code(panel)));
+// Both ways off the Brief have to be reachable, or the column is a schema change
+// nobody can use: the Notes tab's editor and its bulk sheet, and the Brief tile
+// itself — which is where you actually notice a note does not belong there.
+check("the Notes tab offers the Brief switch", /setBriefHidden\(/.test(code(panel)) && /bulkHide/.test(code(panel)));
+check("…and counts what is off the Brief", /briefHiddenNotes\(/.test(code(panel)));
+check("the Brief tile can take a note off the Brief in place", /brief_hidden: true/.test(code(tile)));
+// The switch is gated on the COLUMN, not on `legacy` — a database on 0036 has
+// pins, seals, archiving and the bin, and must not lose them to report a column
+// added six migrations later.
+check("the switch is gated on its own flag, not on legacy",
+  /const canHide = notesData\?\.briefHidden/.test(code(panel)) && /canHide && activeNote/.test(code(panel)));
+// An optimistic write that rebuilt the cache entry from scratch dropped
+// briefHidden and took the toggle down mid-session with nothing having changed.
+for (const [name, src] of [["the Notes tab", panel], ["the Brief tile", tile]]) {
+  check(`${name} carries the whole cache entry through an optimistic write`,
+    /setQueryData\(\["notes"\], \(old\) => \(\{ \.\.\.\(old \|\| \{\}\)/.test(code(src)));
+}
 check("both surfaces tint through noteTint", /noteTint\(/.test(code(tile)) && /noteTint\(/.test(code(panel)));
 // THE COUNT HAS TO BE ABOUT THE SAME SET AS THE LIST. "Show all 23" over a list
 // of nine is the same lie as showing the archived ones, so the tile's cap and
@@ -135,6 +170,16 @@ check("purging can only ever touch a row that is already in the bin",
   /purgeNotes[\s\S]{0,320}\.delete\(\)\.in\("id", list\)\.not\("deleted_at", "is", null\)/.test(db));
 check("the live read excludes the bin at the source", /\.is\("deleted_at", null\)/.test(db) && /loadDeletedNotes/.test(db));
 check("archived is only written when the caller means it", /if \(note\.archived !== undefined\) row\.archived = note\.archived/.test(db));
+check("…and so is brief_hidden, so an autosave cannot put a hidden note back on the Brief",
+  /if \(note\.brief_hidden !== undefined\) row\.brief_hidden = note\.brief_hidden/.test(db));
+// The ladder: 0042 missing must cost 0042 only. Falling back to the pre-0036
+// read would turn OFF archiving and the bin on a database that has them.
+check("a database on 0036 keeps everything 0036 gave it",
+  /return \{ rows: shelved\.data \|\| \[\], legacy: false, briefHidden: false \}/.test(db));
+check("…and one on 0042 reports the switch as available",
+  /return \{ rows: briefed\.data \|\| \[\], legacy: false, briefHidden: true \}/.test(db));
+check("restoring from the bin puts a hidden note back hidden",
+  /if \(brief_hidden !== undefined\) r\.brief_hidden = brief_hidden/.test(db));
 
 // ── 8. thirty days means thirty days ─────────────────────────────────────────
 // The number is promised in the panel's copy and enforced by db-admin. Two
@@ -154,11 +199,17 @@ for (const col of ["archived", "deleted_at"]) {
 }
 check("0036 is boardroom-qualified, like every other migration",
   !/alter table (?!boardroom\.)/i.test(mig) && /boardroom\.personal_notes/.test(mig));
+const mig42 = read("supabase/migrations/0042_notes_brief_hidden.sql");
+check("0042 adds brief_hidden idempotently", /add column if not exists\s+brief_hidden\b/.test(mig42));
+check("…with a default, so every note that exists today stays on the Brief",
+  /brief_hidden boolean not null default false/.test(mig42));
+check("0042 is boardroom-qualified too",
+  !/alter table (?!boardroom\.)/i.test(mig42) && /boardroom\.personal_notes/.test(mig42));
 // The banner's SQL is what actually gets run in practice, so it has to cover the
 // same columns — a paste that unlocks half the feature leaves the panel showing
 // a banner for something the user believes they already did.
 const sql = (read("src/pages/personal/NotesPanel.jsx").match(/NOTES_UPGRADE_SQL = `([\s\S]*?)`/) || [])[1] || "";
-for (const col of ["pinned", "color", "archived", "deleted_at"]) {
+for (const col of ["pinned", "color", "archived", "deleted_at", "brief_hidden"]) {
   check(`the in-app SQL covers ${col}`, new RegExp(`add column if not exists ${col}\\b`).test(sql));
 }
 check("…and every statement in it is re-runnable",

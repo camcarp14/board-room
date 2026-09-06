@@ -3,7 +3,7 @@
 // one-line capture, tap any note to edit it in place, or jump to the full tab.
 import { useState, useRef } from "react";
 import { CollapsibleCard, Button, Field, Spinner, EmptyState, Dot, useConfirm } from "../../ui/kit.jsx";
-import { IcNote, IcPin, IcPlus, IcChevronRight, IcTrash, IcUndo } from "../../ui/icons.jsx";
+import { IcNote, IcPin, IcPlus, IcChevronRight, IcTrash, IcUndo, IcEyeOff } from "../../ui/icons.jsx";
 import { createTextHistory } from "../../lib/text-history.js";
 import { NoteCardPreview, sealColor, continueListOnEnter, toggleBulletAtCaret } from "../../ui/shared.jsx";
 import { homescreenNotes, noteTint } from "../../lib/notes-shelf.js";
@@ -39,18 +39,22 @@ function mergeOrder(ids, full) {
   const seen = new Set(ids);
   return [...ids, ...orderOf(full || []).filter((id) => !seen.has(id))];
 }
-// …and `full` must stay the WHOLE note list, never the homescreen slice. The
-// archive filter above narrows what this tile draws; it must not narrow what the
-// saved order remembers, or archiving a note would drop every archived note to
-// the bottom of the Notes tab the next time you dragged a card here. Same
-// failure the docstring above describes for search, arriving through a new door.
+// …and `full` must stay the WHOLE note list, never the homescreen slice. The two
+// homescreen filters above (archived, and off-the-Brief) narrow what this tile
+// draws; they must not narrow what the saved order remembers, or archiving or
+// hiding a note would drop every archived and hidden note to the bottom of the
+// Notes tab the next time you dragged a card here. Same failure the docstring
+// above describes for search, arriving through a new door.
 
 export function NotesTile({ isMobile, refreshSignal, onOpenNotes, collapsed, onToggle, settings, updateSetting }) {
   // refreshSignal is accepted but unused here — freshness comes from the
   // useNotes query cache; the prop stays wired for parity with the other cards.
   const { data: notesData, error: notesErr } = useNotes();
   const notes = notesData?.rows ?? null; // null = loading
-  const setNotes = (u) => queryClient.setQueryData(["notes"], (old) => ({ rows: (typeof u === "function" ? u(old?.rows ?? null) : u) ?? [], legacy: old?.legacy ?? false }));
+  const canHide = notesData?.briefHidden ?? false; // 0042's column is in
+  // The whole cache entry is carried forward, or the first quick capture here
+  // would drop `briefHidden` and take the Off-the-Brief button down with it.
+  const setNotes = (u) => queryClient.setQueryData(["notes"], (old) => ({ ...(old || {}), rows: (typeof u === "function" ? u(old?.rows ?? null) : u) ?? [], legacy: old?.legacy ?? false }));
   const [err, setErr] = useState(null); // save errors; load errors come from the query
   const loadErr = notesErr ? (notesErr.message || "Couldn't load notes.") : null;
   const [quick, setQuick] = useState("");
@@ -104,7 +108,7 @@ export function NotesTile({ isMobile, refreshSignal, onOpenNotes, collapsed, onT
   // migration, and it syncs across devices. Hold a note and drag to set it.
   const noteOrder = settings?.notes_order || null;
   const saveOrder = (ids) => updateSetting?.("notes_order", ids);
-  // ARCHIVED NOTES ARE NOT ON THE HOMESCREEN, and the filter goes here — before
+  // ARCHIVED AND HIDDEN NOTES ARE NOT ON THE HOMESCREEN, and the filter goes here — before
   // the order, before the cap, before the count — so every number and every row
   // below is about the same set. Filtering later would leave "Show all 23" over
   // a list of nine, which is the same lie as showing the archived ones.
@@ -119,11 +123,12 @@ export function NotesTile({ isMobile, refreshSignal, onOpenNotes, collapsed, onT
   // below the cap — the open editor must never vanish mid-thought.
   //
   // SEARCHED IN sortedAll, NOT sorted, and the difference is the whole promise.
-  // `sorted` is now archive-filtered, so archiving this very note — from the
-  // Notes tab, from another device, or from a refetch landing mid-edit — would
-  // take it out of the list the rescue searches and the editor would disappear
-  // with whatever was typed in it. Archiving is not deleting; the words are
-  // still there and the editor should stay up to finish them.
+  // `sorted` is now filtered by both homescreen exits, so archiving or hiding
+  // this very note — from the Notes tab, from another device, from a refetch
+  // landing mid-edit, or from the button in this very editor — would take it out
+  // of the list the rescue searches and the editor would disappear with whatever
+  // was typed in it. Neither exit is a delete; the words are still there and the
+  // editor should stay up to finish them.
   let visible = showAll ? sorted : sorted.slice(0, LIST_CAP);
   if (editing && !visible.some(n => n.id === editing.id)) {
     const edited = sortedAll.find(n => n.id === editing.id);
@@ -176,6 +181,19 @@ export function NotesTile({ isMobile, refreshSignal, onOpenNotes, collapsed, onT
     /failed to fetch|networkerror|load failed|network request failed/i.test(e?.message || "")
       ? "You're offline — that didn't save."
       : (e?.message || fallback);
+
+  // OFF THE BRIEF, FROM THE BRIEF. This is where you notice a note does not
+  // belong on the homescreen, so this is where the switch has to be — the trip
+  // to the Notes tab is the reason the archive-only version went unused. The
+  // note itself is untouched: same words, same place in the Notes tab, one tap
+  // to put it back from there.
+  const hideFromBrief = async (n) => {
+    try {
+      await db.bulkUpdateNotes([n.id], { brief_hidden: true });
+      setNotes(p => (p || []).map(x => (x.id === n.id ? { ...x, brief_hidden: true } : x)));
+      setEditing(null);
+    } catch (e) { setErr(humanErr(e, "Couldn't update that.")); }
+  };
 
   const requestDelete = async (n) => {
     const label = (n.title || "").trim() || (n.body || "").trim().split("\n")[0].slice(0, 80) || "this note";
@@ -276,6 +294,12 @@ export function NotesTile({ isMobile, refreshSignal, onOpenNotes, collapsed, onT
                   <Button kind="tinted" disabled={savingEdit} onClick={saveEdit} style={{ flex: 1, minWidth: 88 }}>{savingEdit ? "Saving…" : "Save"}</Button>
                   <Button kind="quiet" onClick={() => setEditing(null)} style={{ padding: "0 13px", flex: "none" }}>Cancel</Button>
                   <Button kind="plain" onClick={() => onOpenNotes?.(n.id)} style={{ padding: "0 10px", flex: "none" }}>Open <IcChevronRight size={12} /></Button>
+                  {canHide && (
+                    <Button kind="quiet" onClick={() => hideFromBrief(n)} title="Keep it in Notes, off the Brief"
+                      aria-label="Take this note off the Brief" style={{ padding: "0 12px", flex: "none" }}>
+                      <IcEyeOff size={15} />
+                    </Button>
+                  )}
                   {/* Destructive, so it sits last and asks first. Deleting from the
                       Brief used to mean a trip to the Notes tab. */}
                   <Button kind="danger" onClick={() => requestDelete(n)} aria-label="Delete note" title="Delete note"

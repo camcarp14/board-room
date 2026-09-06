@@ -1,0 +1,43 @@
+-- ═══════════════════════════════════════════════════════════════════════════
+-- 0042 · boardroom.personal_notes — off the Brief, still in the list
+--
+-- One column, and it exists because 0036 gave the Brief exactly one exit and it
+-- was the wrong shape for half the notes people wanted off it.
+--
+-- `archived` answers "put this away": the note leaves the Brief AND leaves the
+-- Notes tab's default list, waiting behind the Archived chip. That is right for
+-- a note you are done with. It is wrong for a note you are NOT done with — the
+-- running list, the long reference, the one with forty lines in it — which you
+-- want in front of you every time you open Notes and never on the homescreen.
+-- Archiving those buries them; leaving them alone floods the Brief. There was no
+-- third answer, so the tile ended up as whatever the manual order had at the top.
+--
+-- `brief_hidden` is the third answer, and it is deliberately ORTHOGONAL to
+-- `archived` rather than a third value of it. The two say different things —
+-- WHERE a note lives (active shelf or archive) and WHETHER the Brief may draw
+-- it — and a status enum would have to invent a name for every combination of
+-- them. Archiving a note that was already hidden and then un-archiving it puts
+-- it back exactly as it was, because neither column touched the other.
+--
+-- Boolean, not null, default false: every note that exists today is on the
+-- Brief today, and stays there.
+--
+-- THE READER STILL TOLERATES ITS ABSENCE, exactly as 0008 and 0036 describe.
+-- This file arrives in the SQL editor by hand and the code arrives on a deploy,
+-- in either order, so db.loadNotes asks for this column first, steps down to
+-- 0036's column set when PostgREST says it is not there, and reports
+-- `briefHidden: false` — which is what makes the Notes panel offer the upgrade
+-- banner instead of a toggle that silently fails. Nothing else degrades: pins,
+-- seals, archiving and the bin all keep working while this column is missing.
+--
+-- NO NEW INDEX. 0036's personal_notes_user_shelf_idx already serves the only
+-- read there is ("this user's live notes, newest first"); brief_hidden is
+-- filtered in the client, over rows that were fetched anyway, because both note
+-- surfaces need the hidden ones in hand — the Notes tab lists them and the
+-- Brief's saved order has to keep counting them (see src/lib/notes-shelf.js).
+--
+-- Safe to re-run: add column if not exists.
+-- ═══════════════════════════════════════════════════════════════════════════
+
+alter table boardroom.personal_notes
+  add column if not exists brief_hidden boolean not null default false;

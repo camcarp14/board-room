@@ -12,9 +12,9 @@ import { queryClient } from "../../lib/queryClient.js";
 import { useNotes } from "../../data/notes.js";
 import { NOTE_SEALS, sealColor, NoteCardPreview, continueListOnEnter, toggleBulletAtCaret } from "../../ui/shared.jsx";
 import { Card, SectionHeader, Button, Cell, Sheet, useConfirm, EmptyState, Dot, Pill } from "../../ui/kit.jsx";
-import { IcPin, IcTrash, IcCheck, IcNote, IcChevronLeft, IcSend, IcSeal, IcPlus, IcArchive, IcUnarchive, IcRefresh, IcUndo, IcRedo } from "../../ui/icons.jsx";
+import { IcPin, IcTrash, IcCheck, IcNote, IcChevronLeft, IcSend, IcSeal, IcPlus, IcArchive, IcUnarchive, IcRefresh, IcUndo, IcRedo, IcEye, IcEyeOff } from "../../ui/icons.jsx";
 import { createTextHistory } from "../../lib/text-history.js";
-import { panelNotes, noteTint, deletedNotes, daysLeft, PURGE_AFTER_DAYS, TINT_PCT_STRONG } from "../../lib/notes-shelf.js";
+import { panelNotes, noteTint, deletedNotes, briefHiddenNotes, isBriefHidden, daysLeft, PURGE_AFTER_DAYS, TINT_PCT_STRONG } from "../../lib/notes-shelf.js";
 
 // The watch/Siri setup sheet is read once and then never again, and NotesPanel
 // deliberately rides in the first-paint chunk (see PersonalPage's import
@@ -22,16 +22,18 @@ import { panelNotes, noteTint, deletedNotes, daysLeft, PURGE_AFTER_DAYS, TINT_PC
 const CaptureSheet = lazy(() => import("./CaptureSheet.jsx"));
 
 // Copy-pasted by the user into Supabase → SQL Editor — exact text matters.
-// FOUR COLUMNS, TWO UPGRADES, ONE PASTE. pinned/color are 0008's pair; archived
-// and deleted_at are 0036's. They are offered together because the banner that
+// FIVE COLUMNS, THREE UPGRADES, ONE PASTE. pinned/color are 0008's pair; archived
+// and deleted_at are 0036's; brief_hidden is 0042's. They are offered together
+// because the banner that
 // shows this can only ever say one thing, and a reader who has run half of it
 // should be able to run the whole thing again without thinking — every statement
 // is `if not exists`, so a second paste is a no-op rather than an error.
-export const NOTES_UPGRADE_SQL = `-- Notes upgrade — seals, the shelf and the bin (safe to re-run)
+export const NOTES_UPGRADE_SQL = `-- Notes upgrade — seals, the shelf, the bin and the Brief switch (safe to re-run)
 alter table boardroom.personal_notes add column if not exists pinned boolean not null default false;
 alter table boardroom.personal_notes add column if not exists color text;
 alter table boardroom.personal_notes add column if not exists archived boolean not null default false;
-alter table boardroom.personal_notes add column if not exists deleted_at timestamptz;`;
+alter table boardroom.personal_notes add column if not exists deleted_at timestamptz;
+alter table boardroom.personal_notes add column if not exists brief_hidden boolean not null default false;`;
 // It said `alter table public.personal_notes` — a table the app does not read.
 // So the upgrade appeared to succeed, nothing changed, and this banner stayed on
 // screen for good. Authoritative shape: supabase/migrations/0008_personal_notes.sql.
@@ -55,7 +57,7 @@ alter table boardroom.personal_notes add column if not exists deleted_at timesta
 // and it only needs the answer for one sentence of copy — so it asks the same
 // question in the one place it matters rather than exporting machinery.
 const isMissingShelfError = (e) =>
-  /42703|PGRST204/.test(e?.code || "") || /archived|deleted_at/i.test(e?.message || "");
+  /42703|PGRST204/.test(e?.code || "") || /archived|deleted_at|brief_hidden/i.test(e?.message || "");
 
 function mergeOrder(ids, full) {
   const seen = new Set(ids);
@@ -66,7 +68,14 @@ export function NotesPanel({ isMobile, openSignal, settings, updateSetting }) {
   const { data: notesData, error: notesErr } = useNotes();
   const notes = notesData?.rows ?? null; // null = loading
   const legacy = notesData?.legacy ?? false; // true until pinned/color columns exist
-  const setNotes = (u) => queryClient.setQueryData(["notes"], (old) => ({ rows: (typeof u === "function" ? u(old?.rows ?? null) : u) ?? [], legacy: old?.legacy ?? false }));
+  // Whether 0042's brief_hidden is in the database. Its own flag rather than a
+  // third `legacy` value, because legacy gates pins, seals, archiving and the
+  // bin — and a database on 0036 has all four. Only the Brief switch is missing.
+  const canHide = notesData?.briefHidden ?? false;
+  // …and the whole cache entry is carried forward on every optimistic write, or
+  // the first local edit would drop `briefHidden` and the toggle would vanish
+  // mid-session with nothing having changed in the database.
+  const setNotes = (u) => queryClient.setQueryData(["notes"], (old) => ({ ...(old || {}), rows: (typeof u === "function" ? u(old?.rows ?? null) : u) ?? [], legacy: old?.legacy ?? false }));
   const loadErr = notesErr ? (notesErr.message || "Couldn't load notes.") : null;
   const [activeId, setActiveId] = useState(null);
   const [draft, setDraft] = useState({ title: "", body: "", pinned: false, color: null });
@@ -79,6 +88,9 @@ export function NotesPanel({ isMobile, openSignal, settings, updateSetting }) {
   const [actionsOpen, setActionsOpen] = useState(false); // select-mode action sheet
   const [undo, setUndo] = useState(null); // { label, rows, extraDeleteId?, soft?, rewrite? }
   const [shelf, setShelf] = useState("active"); // active | archived — which shelf the list shows
+  // A filter over the active shelf, NOT a third shelf: hidden notes live on the
+  // active shelf with everything else and this only narrows the view to them.
+  const [hiddenOnly, setHiddenOnly] = useState(false);
   const [binOpen, setBinOpen] = useState(false); // the Recently deleted sheet
   const [bin, setBin] = useState(null);          // null = not loaded / loading
   const [binBusy, setBinBusy] = useState(false);
@@ -198,9 +210,11 @@ export function NotesPanel({ isMobile, openSignal, settings, updateSetting }) {
     const q = query.trim().toLowerCase();
     return panelNotes(sorted, shelf).filter(n =>
       (!q || `${n.title || ""} ${n.body || ""}`.toLowerCase().includes(q)) &&
+      (!hiddenOnly || shelf !== "active" || isBriefHidden(n)) &&
       (sealFilter === null || (sealFilter === "none" ? !n.color : n.color === sealFilter)));
-  }, [sorted, query, sealFilter, shelf]);
+  }, [sorted, query, sealFilter, shelf, hiddenOnly]);
   const archivedCount = useMemo(() => panelNotes(notes || [], "archived").length, [notes]);
+  const hiddenCount = useMemo(() => briefHiddenNotes(notes || []).length, [notes]);
   const activeCount = useMemo(() => panelNotes(notes || [], "active").length, [notes]);
   const usedSeals = useMemo(() => NOTE_SEALS.filter(s => (notes || []).some(n => n.color === s.key)), [notes]);
   const selectedNotes = (notes || []).filter(n => selected.has(n.id));
@@ -452,6 +466,27 @@ export function NotesPanel({ isMobile, openSignal, settings, updateSetting }) {
         : (e.message || "Couldn't update."));
     }
   };
+  // OFF THE BRIEF, STILL IN THE LIST — the other exit from the homescreen, and
+  // the one that changes nothing else. Archive puts a note away; this leaves it
+  // exactly where it is in the Notes tab and only stops the Brief drawing it.
+  // Like archiving it needs no confirm and no toast: nothing is at risk and the
+  // switch flips back in one tap.
+  const setBriefHidden = async (ids, hidden) => {
+    if (!ids.length) return;
+    try { await db.bulkUpdateNotes(ids, { brief_hidden: hidden }); refresh(); }
+    catch (e) {
+      complain(isMissingShelfError(e)
+        ? "Hiding a note from the Brief needs one more column — copy the SQL from the banner on the Notes list."
+        : (e.message || "Couldn't update."));
+    }
+  };
+  const bulkHide = async () => {
+    // Same rule as bulkArchive: a mixed selection HIDES rather than toggling
+    // each row, because "get these off the Brief" is what the button is for.
+    const next = !selectedNotes.every((n) => isBriefHidden(n));
+    await setBriefHidden([...selected], next);
+    clearSelection();
+  };
   const bulkArchive = async () => {
     // Mixed selections archive rather than toggling each row: "make these go
     // away" is what the button is for, and a toggle over a mixed set would
@@ -594,6 +629,18 @@ export function NotesPanel({ isMobile, openSignal, settings, updateSetting }) {
                 <IcRedo size={17} />
               </button>
             )}
+            {/* The lighter of the two exits, and it sits before Archive for the
+                same reason Archive sits before Delete: the row reads as "keep it
+                here but off the Brief", then "put it away", then "throw it
+                away". Hidden while the note is archived — archiving already took
+                it off the Brief, so the switch would be a no-op with an opinion. */}
+            {canHide && activeNote && !activeNote.archived && (
+              <Button kind="quiet" size="sm" onClick={() => setBriefHidden([activeNote.id], !isBriefHidden(activeNote))}
+                title={isBriefHidden(activeNote) ? "Show this note on the Brief again" : "Keep it here, off the Brief"}
+                aria-pressed={isBriefHidden(activeNote)}>
+                {isBriefHidden(activeNote) ? <><IcEye size={14} /> On the Brief</> : <><IcEyeOff size={14} /> Off the Brief</>}
+              </Button>
+            )}
             {!legacy && activeNote && (
               <Button kind="quiet" size="sm" onClick={() => setArchived([activeNote.id], !activeNote.archived)}
                 title={activeNote.archived ? "Put back on the Brief" : "Keep the note, take it off the Brief"}>
@@ -627,11 +674,15 @@ export function NotesPanel({ isMobile, openSignal, settings, updateSetting }) {
           <div style={{ display: "flex", justifyContent: "space-between", marginTop: 8, flexWrap: "wrap", gap: 6 }}>
             <span className="t-cap" style={{ color: "var(--faint)" }}>{words} words · {draft.body.length} chars</span>
             <span style={{ display: "inline-flex", alignItems: "center", gap: 8 }}>
-              {activeNote?.archived && (
+              {activeNote?.archived ? (
                 <span className="t-cap" style={{ color: "var(--sub)", display: "inline-flex", alignItems: "center", gap: 4 }}>
                   <IcArchive size={12} /> Archived — not on the Brief
                 </span>
-              )}
+              ) : isBriefHidden(activeNote) ? (
+                <span className="t-cap" style={{ color: "var(--sub)", display: "inline-flex", alignItems: "center", gap: 4 }}>
+                  <IcEyeOff size={12} /> Off the Brief — still in Notes
+                </span>
+              ) : null}
               {activeNote && <span className="t-cap" style={{ color: "var(--faint)" }}>edited {fmtWhen(activeNote.updated_at)}</span>}
             </span>
           </div>
@@ -684,13 +735,15 @@ export function NotesPanel({ isMobile, openSignal, settings, updateSetting }) {
         </Suspense>
       )}
 
-      {legacy && notes !== null && (
+      {(legacy || !canHide) && notes !== null && (
         <Card pad="sm" style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
           <Dot tone="var(--amber)" size={7} />
           <span className="t-foot" style={{ flex: 1, minWidth: 180 }}>
-            {legacy === "shelf"
-              ? <>Archiving and the 30-day undo need two more columns — one paste in Supabase → SQL editor unlocks them. Until then a delete is permanent after the six-second toast.</>
-              : <>Pins, seals, archiving and the 30-day undo need four columns — one paste in Supabase → SQL editor unlocks them.</>}
+            {!legacy
+              ? <>Taking a note off the Brief without archiving it needs one more column — one paste in Supabase → SQL editor unlocks it. Everything else here already works.</>
+              : legacy === "shelf"
+              ? <>Archiving, the Brief switch and the 30-day undo need three more columns — one paste in Supabase → SQL editor unlocks them. Until then a delete is permanent after the six-second toast.</>
+              : <>Pins, seals, archiving, the Brief switch and the 30-day undo need five columns — one paste in Supabase → SQL editor unlocks them.</>}
           </span>
           <Button kind="quiet" size="sm" style={sqlCopied ? { color: "var(--green)" } : undefined}
             onClick={() => { navigator.clipboard?.writeText(NOTES_UPGRADE_SQL); setSqlCopied(true); }}>
@@ -723,14 +776,28 @@ export function NotesPanel({ isMobile, openSignal, settings, updateSetting }) {
             where one chip is always empty is chrome that never earns itself, and
             the Archived chip appears the moment the first note goes on the shelf.
             Counted, because "Archived" with no number gives you no reason to look. */}
-        {!legacy && (archivedCount > 0 || shelf === "archived") && (
+        {!legacy && (archivedCount > 0 || hiddenCount > 0 || shelf === "archived") && (
           <div style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" }}>
-            <Pill active={shelf === "active"} aria-pressed={shelf === "active"} onClick={() => setShelf("active")}>
+            <Pill active={shelf === "active" && !hiddenOnly} aria-pressed={shelf === "active" && !hiddenOnly}
+              onClick={() => { setShelf("active"); setHiddenOnly(false); }}>
               Notes{activeCount ? ` · ${activeCount}` : ""}
             </Pill>
-            <Pill active={shelf === "archived"} aria-pressed={shelf === "archived"} onClick={() => setShelf("archived")}>
-              <IcArchive size={13} /> Archived · {archivedCount}
-            </Pill>
+            {/* A FILTER, NOT A SHELF — these notes are in the list beside it, and
+                this only narrows the view to them. It appears the moment the
+                first note goes off the Brief and counts them, for the same
+                reason the Archived chip does: an uncounted chip gives you no
+                reason to tap it. */}
+            {hiddenCount > 0 && (
+              <Pill active={shelf === "active" && hiddenOnly} aria-pressed={shelf === "active" && hiddenOnly}
+                onClick={() => { setShelf("active"); setHiddenOnly(v => !(shelf === "active" && v)); }}>
+                <IcEyeOff size={13} /> Off the Brief · {hiddenCount}
+              </Pill>
+            )}
+            {(archivedCount > 0 || shelf === "archived") && (
+              <Pill active={shelf === "archived"} aria-pressed={shelf === "archived"} onClick={() => setShelf("archived")}>
+                <IcArchive size={13} /> Archived · {archivedCount}
+              </Pill>
+            )}
           </div>
         )}
         {usedSeals.length > 0 && !legacy && (
@@ -807,6 +874,11 @@ export function NotesPanel({ isMobile, openSignal, settings, updateSetting }) {
                   <div style={{ minWidth: 0, flex: 1 }}>
                     <div style={{ display: "flex", alignItems: "center", gap: 6, minWidth: 0 }}>
                       {n.pinned && <IcPin size={13} style={{ color: "var(--accent)", flex: "none" }} />}
+                      {/* Quiet, and only on the shelf where it means something —
+                          under Archived every row is off the Brief already. */}
+                      {shelf === "active" && isBriefHidden(n) && (
+                        <IcEyeOff size={13} style={{ color: "var(--faint)", flex: "none" }} />
+                      )}
                       {n.color && <Dot tone={sealColor(n.color)} size={8} />}
                       <span className="t-head" style={{ minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{displayTitle(n)}</span>
                     </div>
@@ -882,7 +954,7 @@ export function NotesPanel({ isMobile, openSignal, settings, updateSetting }) {
                       </span>
                       <span className="cell-sub">
                         {left === null ? "deleted" : left === 0 ? "goes today" : `${left} day${left === 1 ? "" : "s"} left`}
-                        {n.archived ? " · was archived" : ""}
+                        {n.archived ? " · was archived" : isBriefHidden(n) ? " · was off the Brief" : ""}
                       </span>
                     </span>
                     <span style={{ display: "inline-flex", alignItems: "center", gap: 2, flex: "none" }}>
@@ -921,6 +993,14 @@ export function NotesPanel({ isMobile, openSignal, settings, updateSetting }) {
                 {sealDots(null, (c) => { setActionsOpen(false); bulkSeal(c); }, 16, 44)}
                 <Button kind="plain" size="sm" onClick={() => { setActionsOpen(false); bulkSeal(null); }}>Clear</Button>
               </div>
+            )}
+            {canHide && (
+              <Cell
+                leading={selectedNotes.every((n) => isBriefHidden(n)) ? <IcEye size={18} /> : <IcEyeOff size={18} />}
+                title={selectedNotes.every((n) => isBriefHidden(n)) ? "Show on the Brief" : "Take off the Brief"}
+                sub={selectedNotes.every((n) => isBriefHidden(n)) ? "Back on the homescreen" : "Stays in this list — just not on the Brief"}
+                onClick={() => { setActionsOpen(false); bulkHide(); }}
+              />
             )}
             {!legacy && (
               <Cell

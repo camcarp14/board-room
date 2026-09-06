@@ -6,6 +6,10 @@
 //   WHICH NOTES ARE ON THE BRIEF. The Brief's tile took the first five of
 //   everything. There was no way to keep a note and not have it on the landing
 //   page, so the only way to clear the homescreen was to delete the note.
+//   Archiving fixed that, and then only half-fixed it: archiving also takes the
+//   note out of the Notes tab's default list, which is wrong for the notes you
+//   read most — the running list, the long reference. `brief_hidden` (0042) is
+//   the second exit, and it takes a note off the Brief and changes nothing else.
 //
 //   WHICH NOTES ARE GONE, AND FOR HOW LONG. A delete was a DELETE — the row left
 //   the table — and the only undo was a six-second toast holding the rows in
@@ -29,10 +33,33 @@
  *  `archived` is a place, not a state of being deleted. */
 export const isDeleted = (n) => !!(n && n.deleted_at);
 
-/** Archived means "keep it, but off the homescreen". A DELETED note is not
+/** Archived means "put it away": off the homescreen AND out of the Notes tab's
+ *  default list, behind the Archived chip. A DELETED note is not
  *  archived-and-deleted, it is deleted — the bin wins, so a note cannot appear
  *  in two lists at once. */
 export const isArchived = (n) => !isDeleted(n) && !!(n && n.archived);
+
+/**
+ * Hidden from the Brief — the OTHER way off the homescreen, and the one that
+ * changes nothing else.
+ *
+ * ARCHIVING AND HIDING ARE NOT THE SAME QUESTION, which is why they are two
+ * flags and not three values of one. Archiving says where a note lives; hiding
+ * says whether the Brief may draw it. The running list you consult every day is
+ * the case that needed this: you want it at the top of the Notes tab and never
+ * on the homescreen, and archiving it — the only exit that existed — buried it
+ * behind a chip.
+ *
+ * So this is deliberately NOT part of shelfOf: a hidden note is still an active
+ * note, still in the default list, still searchable, still draggable, still
+ * counted. The only thing it is not is on the Brief.
+ */
+export const isBriefHidden = (n) => !!(n && n.brief_hidden);
+
+/** May the Brief draw this note? The single question the tile asks, and the
+ *  reason both exits can be added to without the tile changing again: a note is
+ *  on the Brief when it is on the active shelf and not hidden. */
+export const onBrief = (n) => shelfOf(n) === "active" && !isBriefHidden(n);
 
 export const SHELVES = ["active", "archived", "deleted"];
 
@@ -54,20 +81,28 @@ export function onShelf(rows, shelf) {
 }
 
 /**
- * What the Brief is allowed to show. Active only — never archived, never
- * deleted.
+ * What the Brief is allowed to show. Active, and not hidden — never archived,
+ * never hidden, never deleted.
  *
- * This is the whole contract of the archive toggle, and it is one function so
- * that the toggle cannot half-work. The tile also has to stop counting what it
+ * This is the whole contract of BOTH toggles, and it is one function so that
+ * neither of them can half-work. The tile also has to stop counting what it
  * cannot show: "Show all 23" over a list of 9 is the same lie as showing the
  * archived ones.
  */
-export const homescreenNotes = (rows) => onShelf(rows, "active");
+export const homescreenNotes = (rows) => (Array.isArray(rows) ? rows.filter(onBrief) : []);
+
+/** The active notes the Brief is not drawing — what the Notes tab counts on its
+ *  "Off the Brief" chip, and the number that makes the toggle findable. */
+export const briefHiddenNotes = (rows) => onShelf(rows, "active").filter(isBriefHidden);
 
 /**
  * What the Notes tab shows for a given shelf. Same rows, different question —
  * and the panel's own search/seal filters compose on top of this rather than
  * replacing it.
+ *
+ * HIDDEN NOTES ARE IN HERE, on the active shelf with everything else. That is
+ * the entire point of the hide toggle: the note keeps its place in the list you
+ * actually read, and only the homescreen loses it.
  */
 export const panelNotes = (rows, shelf = "active") => onShelf(rows, shelf);
 

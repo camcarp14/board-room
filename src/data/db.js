@@ -737,9 +737,10 @@ export const db = {
       write(supabase.from("auditor_findings").insert(rows.map(r => ({ property: r.property, severity: r.severity, area: r.area || null, finding: r.finding, suggestion: r.suggestion }))), "the auditor findings"), opts);
   },
   // ─── notes: two column sets, and a fallback that has to cover both ────────
-  // 0008 added pinned/color; 0036 added archived/deleted_at. Both arrive in the
+  // 0008 added pinned/color; 0036 added archived/deleted_at; 0042 added
+  // brief_hidden. All three arrive in the
   // SQL editor by hand while the code arrives on a deploy, so every reader here
-  // survives either one being absent and reports `legacy` so the panel can show
+  // survives any of them being absent and reports `legacy` so the panel can show
   // its upgrade banner instead of an error. The probe order is newest-first:
   // ask for everything, and step down one column set at a time.
   //
@@ -749,34 +750,52 @@ export const db = {
   // exists to prevent — this is the other half of it: the bin never arrives in
   // the first place unless something asks for it.
   async loadNotes() {
+    // 0042's column first, on its own rung. It has to be its own step rather
+    // than another name in the line below, because falling all the way back to
+    // the pre-0036 read for a column added six migrations later would turn OFF
+    // archiving and the bin on a database that has them — a working feature
+    // disabled to report a missing one. So a database on 0036 gets everything
+    // 0036 gave it and `briefHidden: false`, which is the one flag the panel
+    // reads to offer the upgrade banner instead of a toggle that cannot save.
+    const briefed = await supabase.from("personal_notes")
+      .select("id,title,body,pinned,color,archived,brief_hidden,deleted_at,updated_at,created_at")
+      .is("deleted_at", null)
+      .order("updated_at", { ascending: false });
+    if (!briefed.error) return { rows: briefed.data || [], legacy: false, briefHidden: true };
+    if (!isMissingShelf(briefed.error)) throw briefed.error;
     const shelved = await supabase.from("personal_notes")
       .select("id,title,body,pinned,color,archived,deleted_at,updated_at,created_at")
       .is("deleted_at", null)
       .order("updated_at", { ascending: false });
-    if (!shelved.error) return { rows: shelved.data || [], legacy: false };
+    if (!shelved.error) return { rows: shelved.data || [], legacy: false, briefHidden: false };
     if (!isMissingShelf(shelved.error)) throw shelved.error;
     // 0036 not run yet. Everything below is the pre-0036 behaviour verbatim.
     const full = await supabase.from("personal_notes")
       .select("id,title,body,pinned,color,updated_at,created_at")
       .order("updated_at", { ascending: false });
     // legacy: "shelf" — the words and the seals work, the shelf and the bin do not.
-    if (!full.error) return { rows: full.data || [], legacy: "shelf" };
+    if (!full.error) return { rows: full.data || [], legacy: "shelf", briefHidden: false };
     if (!/column|pinned|color|42703/i.test(full.error.message || "")) throw full.error;
     const base = await supabase.from("personal_notes")
       .select("id,title,body,updated_at,created_at")
       .order("updated_at", { ascending: false });
     if (base.error) throw base.error;
-    return { rows: base.data || [], legacy: true };
+    return { rows: base.data || [], legacy: true, briefHidden: false };
   },
   /** The bin. Read on demand — the Notes panel asks when you open Recently
    *  deleted, so an ordinary launch never pays for rows nobody is looking at.
    *  Returns [] rather than throwing when 0036 is absent: an empty bin is the
    *  truth on a database that cannot mark anything deleted. */
   async loadDeletedNotes(limit = 100) {
-    const { data, error } = await supabase.from("personal_notes")
-      .select("id,title,body,pinned,color,archived,deleted_at,updated_at,created_at")
+    const bin = (cols) => supabase.from("personal_notes").select(cols)
       .not("deleted_at", "is", null)
       .order("deleted_at", { ascending: false }).limit(limit);
+    // Same ladder as loadNotes, one rung shorter: the bin cannot exist at all
+    // without deleted_at, so the only step down here is 0042's column.
+    const briefed = await bin("id,title,body,pinned,color,archived,brief_hidden,deleted_at,updated_at,created_at");
+    if (!briefed.error) return briefed.data || [];
+    if (!isMissingShelf(briefed.error)) throw briefed.error;
+    const { data, error } = await bin("id,title,body,pinned,color,archived,deleted_at,updated_at,created_at");
     if (error) {
       if (isMissingColumn(error, "deleted_at")) return [];
       throw error;
@@ -793,6 +812,7 @@ export const db = {
     // writes the columns it carries, so an unconditional `archived: false` here
     // would un-archive a note every time the editor autosaved a word.
     if (note.archived !== undefined) row.archived = note.archived;
+    if (note.brief_hidden !== undefined) row.brief_hidden = note.brief_hidden;
     const { data, error } = await supabase.from("personal_notes").upsert(row, { onConflict: "id" }).select().single();
     if (error) throw error;
     return data;
@@ -829,8 +849,9 @@ export const db = {
   async deleteNote(id) { return db.deleteNotes([id]); },
   async bulkDeleteNotes(ids) { return db.deleteNotes(ids); },
   /** Out of the bin, back onto whichever shelf it was on. Clearing deleted_at is
-   *  the whole restore — `archived` was never touched by the delete, so a note
-   *  archived before it was deleted comes back archived. */
+   *  the whole restore — neither `archived` nor `brief_hidden` was touched by
+   *  the delete, so a note that was archived, or hidden from the Brief, comes
+   *  back exactly that way. */
   async undeleteNotes(ids) {
     const list = (Array.isArray(ids) ? ids : [ids]).filter(Boolean);
     if (!list.length) return [];
@@ -861,11 +882,12 @@ export const db = {
     if (!rows?.length) return;
     const user_id = await db.uid();
     if (!user_id) throw new Error("Not signed in");
-    const clean = rows.map(({ id, title, body, pinned, color, archived, created_at, updated_at }) => {
+    const clean = rows.map(({ id, title, body, pinned, color, archived, brief_hidden, created_at, updated_at }) => {
       const r = { id, user_id, title, body, created_at, updated_at };
       if (pinned !== undefined) r.pinned = pinned;
       if (color !== undefined) r.color = color;
       if (archived !== undefined) r.archived = archived;
+      if (brief_hidden !== undefined) r.brief_hidden = brief_hidden;
       return r;
     });
     const { error } = await supabase.from("personal_notes").upsert(clean, { onConflict: "id" });
