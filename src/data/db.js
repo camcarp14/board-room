@@ -906,7 +906,13 @@ export const db = {
       if (res.error) throw res.error;
       return res.data?.[0] || null;
     };
-    const won = await conditional(base.updated_at, fields);
+    // Flags go out only if THIS editor changed them from its base — the same rule
+    // the rebase below keeps. Sending them unconditionally let a save that WON
+    // the compare (the editor had just adopted a fresher row from a refetch)
+    // put back a pin or seal another device had just changed.
+    const first = { ...fields };
+    for (const k of ["pinned", "color"]) if (k in first && first[k] === base[k]) delete first[k];
+    const won = await conditional(base.updated_at, first);
     if (won) return won;
 
     // Lost the compare-and-set. Look at what is there before deciding anything.

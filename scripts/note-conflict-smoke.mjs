@@ -153,6 +153,14 @@ Object.assign(table.get("n4"), { archived: true, updated_at: pg(stamp()) });
 saved = await db.saveNote({ id: "n4", title: "", body: "ideas", pinned: false, color: "blue" }, { base });
 check("a seal-only edit is not swallowed when the stamp moved under it", table.get("n4").color === "blue" && !saved.conflict);
 
+// 4b. an unchanged flag is never sent on a save that wins the compare
+reset();
+base = seed({ id: "n4b", title: "", body: "list", pinned: false });
+Object.assign(table.get("n4b"), { pinned: true, updated_at: pg(stamp()) });   // another device pins it…
+base = { ...base, pinned: true, updated_at: table.get("n4b").updated_at };     // …the editor adopts the fresh row
+saved = await db.saveNote({ id: "n4b", title: "", body: "list + more", pinned: false, color: null }, { base: { ...base, pinned: false } });
+check("a save that wins the compare doesn't put back a pin it never changed", table.get("n4b").pinned === true && table.get("n4b").body === "list + more");
+
 // 5. a REAL delete: deleted_at set, updated_at untouched (review M2)
 reset();
 base = seed({ id: "n5", title: "Ideas", body: "one" });
@@ -282,6 +290,9 @@ const panel = await readFile("src/pages/personal/NotesPanel.jsx", "utf8");
 const tile = await readFile("src/pages/brief/NotesTile.jsx", "utf8");
 check("the Notes editor saves only through the saver", /createNoteSaver\(\{ save: \(row, opts\) => db\.saveNote\(row, opts\) \}\)/.test(panel) && /saver\.enqueue\(session, row\)/.test(panel) && !/db\.saveNote\(noteRow\(\)/.test(panel));
 check("every editor open starts a new session", (panel.match(/beginSession\(\);/g) || []).length >= 4);
+check("a failed delete reopens the session instead of leaving saves to vanish",
+  (panel.match(/if \(sessionRef\.current\.cancelled\) \{ beginSession\(\);/g) || []).length === 2 &&
+  /if \(!saved\) throw new Error\(/.test(panel));
 check("a delete closes the session and drains before deleting", /sessionRef\.current\.cancelled = true;\s*\n\s*await saver\.drain\(\);/.test(panel));
 check("an emptied draft or a deleted note takes its rescue with it", /dropRescue\(\[activeId\]\)/.test(panel) && /dropRescue\(\[n\.id\]\)/.test(panel) && /dropRescue\(\[\.\.\.selected\]\)/.test(panel));
 check("a rescue never reopens under another account, or while its own tab is alive", /const foreign = r\.uid && uid && r\.uid !== uid;/.test(panel) && /r\.tab !== TAB_ID && Date\.now\(\) - \(r\.beat \|\| 0\) < 30_000/.test(panel));

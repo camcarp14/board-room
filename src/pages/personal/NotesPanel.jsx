@@ -193,7 +193,8 @@ export function NotesPanel({ isMobile, openSignal, settings, updateSetting }) {
   const persist = (row) => {
     const session = sessionRef.current;
     return saver.enqueue(session, row).then((saved) => {
-      if (!saved) return saved;
+      // Nothing was sent (a session closed for a delete). That is never "Saved".
+      if (!saved) throw new Error("This note's editor was closed before the save went out.");
       if (saved.conflict) {
         // The editor follows the draft onto its copy — but only if it is still
         // showing the note that conflicted. Arming the suppressor for an editor
@@ -314,9 +315,15 @@ export function NotesPanel({ isMobile, openSignal, settings, updateSetting }) {
     if (!n || !b || saver.stampMs(n.updated_at) <= saver.stampMs(b.updated_at)) return;
     if (draft.title !== b.title || draft.body !== b.body) return;
     saver.learn(n);
-    if ((n.title || "") === draft.title && (n.body || "") === draft.body) return;
+    // The flags come across too: nothing is unsaved here, so the draft's pin and
+    // seal are the old base's — left behind, the next save would put back a pin
+    // or seal another device had just changed.
+    const sameWords = (n.title || "") === draft.title && (n.body || "") === draft.body;
+    const sameFlags = !!n.pinned === !!draft.pinned && (n.color || null) === (draft.color || null);
+    if (sameWords && sameFlags) return;
     skipNextAutosave.current = true;
-    setDraft((d) => ({ ...d, title: n.title || "", body: n.body || "" }));
+    setDraft((d) => ({ ...d, title: n.title || "", body: n.body || "", pinned: !!n.pinned, color: n.color || null }));
+    if (sameWords) return;
     historyRef.current.reset({ title: n.title || "", body: n.body || "" });
     setHistAt(0);
   }, [notes]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -650,7 +657,14 @@ export function NotesPanel({ isMobile, openSignal, settings, updateSetting }) {
       armUndo("Note deleted", [n], { soft });
       setBin(null);
       refresh();
-    } catch (e) { complain(e.message || "Couldn't delete."); }
+    } catch (e) {
+      // THE DELETE FAILED, SO THE NOTE AND ITS EDITOR ARE STILL HERE. The session
+      // was closed for a delete that never happened; left closed, every save
+      // after this resolved to nothing and the editor painted "Saved" over
+      // words that never left the phone. Reopen it and put the rescue back.
+      if (sessionRef.current.cancelled) { beginSession(); const row = dirtyRow(); if (row) writeRescue(row); }
+      complain(e.message || "Couldn't delete.");
+    }
   };
   const clearSelection = () => { setSelected(new Set()); setSelectMode(false); setActionsOpen(false); };
   const toggleSelected = (id) => setSelected(prev => { const s = new Set(prev); s.has(id) ? s.delete(id) : s.add(id); return s; });
@@ -665,7 +679,14 @@ export function NotesPanel({ isMobile, openSignal, settings, updateSetting }) {
       armUndo(`${rows.length} deleted`, rows, { soft });
       setBin(null);
       clearSelection(); refresh();
-    } catch (e) { complain(e.message || "Couldn't delete."); }
+    } catch (e) {
+      // THE DELETE FAILED, SO THE NOTE AND ITS EDITOR ARE STILL HERE. The session
+      // was closed for a delete that never happened; left closed, every save
+      // after this resolved to nothing and the editor painted "Saved" over
+      // words that never left the phone. Reopen it and put the rescue back.
+      if (sessionRef.current.cancelled) { beginSession(); const row = dirtyRow(); if (row) writeRescue(row); }
+      complain(e.message || "Couldn't delete.");
+    }
   };
   // "PIN TO TOP" HAS TO MOVE THE NOTE. Manual order is absolute (see
   // applyNotesOrder), so the flag alone draws a hairline and changes nothing
