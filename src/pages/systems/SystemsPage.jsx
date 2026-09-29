@@ -11,7 +11,7 @@
 import { useState, useEffect } from "react";
 import {
   Card, SectionHeader, CellGroup, Cell, StatTile, Button, Pill,
-  Segmented, Field, Dot, EmptyState, useConfirm,
+  Segmented, Field, Dot, EmptyState, useConfirm, SwitchRow,
 } from "../../ui/kit.jsx";
 import { IcChevronDown } from "../../ui/icons.jsx";
 import { supabase } from "../../lib/supabase.js";
@@ -479,8 +479,29 @@ function UsageCard({ isMobile }) {
 // The obs/localStorage "Today" line went with it — it was a second, per-browser
 // spend number sitting beside the durable cross-device one, and two numbers for
 // the same question that disagree by design is worse than one.
-export function UsageTab({ isMobile }) {
-  return <UsageCard isMobile={isMobile} />;
+export function UsageTab({ isMobile, settings, settingsLoaded, updateSetting }) {
+  // The one spend switch, next to the spend it controls. Default on (what the
+  // Brief has always done); off keeps Watch This Week's event list and makes no
+  // model calls for it. Drawn only once settings have loaded — a switch painted
+  // from a missing row would show "on" and could not be trusted.
+  const on = settings?.econ_explain !== false;
+  return (
+    <>
+      {settingsLoaded && updateSetting && (
+        <CellGroup style={{ marginBottom: 12 }}>
+          <SwitchRow
+            title="Economic event explanations"
+            sub={on
+              ? "AI reads under Watch This Week: the lean before a release and what printed after. Most of this app's model spend."
+              : "Off — Watch This Week lists events and times only. No model calls."}
+            on={on}
+            onToggle={() => updateSetting("econ_explain", !on)}
+          />
+        </CellGroup>
+      )}
+      <UsageCard isMobile={isMobile} />
+    </>
+  );
 }
 
 

@@ -83,9 +83,18 @@ export function displayLine(e, actual) {
  * the string "loading", or undefined. `take` is the forward-looking take for an
  * upcoming event ("loading" / "error" / text), and is ignored once it's passed.
  */
-export function watchRowState(e, result, take, now = Date.now()) {
+export function watchRowState(e, result, take, now = Date.now(), { explain = true } = {}) {
   const r = result && typeof result === "object" ? result : null;
   const loading = result === "loading";
+
+  // EXPLANATIONS OFF (Settings → Usage): the event, its time and its numbers,
+  // and nothing that costs a model call. A number already resolved earlier is
+  // free to show, so a released print keeps its figure; no lean, no "checking",
+  // no note line at all.
+  if (!explain) {
+    const released = r?.status === "released" && r.actual;
+    return { phase: hasPassed(e, now) ? "past" : "upcoming", badge: null, bg: "var(--surface-2)", line: displayLine(e, released ? r.actual : null), note: null, pulse: false };
+  }
 
   if (!hasPassed(e, now)) {
     return {

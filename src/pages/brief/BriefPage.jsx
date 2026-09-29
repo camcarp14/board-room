@@ -145,6 +145,12 @@ export function MorningBriefPage({ btc, isMobile, settings, updateSetting, onOpe
   });
   const { data: econ } = useEconResults();   // eventId -> verdict, shared across devices
   const resolveEcon = useResolveEconEvents();
+  // Settings → Usage → "Economic event explanations". Off stops BOTH model calls
+  // behind Watch This Week — the forward lean (event_impact) and the post-print
+  // lookup (econ-resolve-background, most of the app's spend). Nothing may spend
+  // before settings have loaded, or an "off" would be ignored on every launch.
+  const econExplain = settings?.econ_explain !== false;
+  const econMaySpend = settings != null && econExplain;
   const [btcChartOpen, setBtcChartOpen] = useState(false);
   const [tickerChart, setTickerChart] = useState(null); // {key,label} of the watchlist ticker whose chart is open
   const [layoutOpen, setLayoutOpen] = useState(false);  // the Brief layout sheet (desktop-only affordance)
@@ -216,7 +222,7 @@ export function MorningBriefPage({ btc, isMobile, settings, updateSetting, onOpe
   // stop condition. A stale claim counts as unresolved: the invocation that
   // claimed it crashed, so somebody has to ask again.
   const unresolvedPast = useMemo(() => {
-    if (eventsStatus.state !== "live") return [];
+    if (eventsStatus.state !== "live" || !econMaySpend) return [];
     const now = Date.now();
     return events.filter((e) => {
       if (!hasPassed(e, now) || !isSettled(e, now)) return false;
@@ -225,7 +231,7 @@ export function MorningBriefPage({ btc, isMobile, settings, updateSetting, onOpe
       if (r.status === "claimed") return now - (r.at || 0) >= CLAIM_STALE_MS;
       return false; // released, no_number and unresolved are all final
     });
-  }, [events, eventsStatus.state, econ]);
+  }, [events, eventsStatus.state, econ, econMaySpend]);
 
   useEffect(() => {
     const fresh = unresolvedPast.filter((e) => !econTriggered.current.has(eventId(e)));
@@ -264,13 +270,13 @@ export function MorningBriefPage({ btc, isMobile, settings, updateSetting, onOpe
   };
 
   useEffect(() => {
-    if (eventsStatus.state !== "live" || !events.length) return;
+    if (eventsStatus.state !== "live" || !events.length || !econMaySpend) return;
     // Upcoming events get the cheap forward take (one Haiku call each, ~$0.0002,
     // cached in localStorage). Past events are handled by the trigger above.
     const now = Date.now();
     events.forEach((e) => { if (!hasPassed(e, now)) fetchEventTake(e); });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [eventsStatus.state, events]);
+  }, [eventsStatus.state, events, econMaySpend]);
   // Persist resolved takes (not transient loading/error) so a return to the
   // Brief reuses them instead of re-spending Haiku; cap growth at the newest ~60.
   useEffect(() => {
@@ -539,7 +545,7 @@ export function MorningBriefPage({ btc, isMobile, settings, updateSetting, onOpe
               // Every phrase, badge and tone on the row comes from one pure
               // function — see watchState.js for why the "check back after the
               // print lands" state could never resolve, and what replaced it.
-              const row = watchRowState(e, resultFor(e), eventAnalysis[takeKey(e)]);
+              const row = watchRowState(e, resultFor(e), eventAnalysis[takeKey(e)], Date.now(), { explain: econExplain });
               return (
                 // Stacked, not squeezed: the time + Result badge share the top
                 // line; the event title gets the full width below it (aligned
@@ -556,9 +562,11 @@ export function MorningBriefPage({ btc, isMobile, settings, updateSetting, onOpe
                     {row.badge && <span className="t-cap" style={{ color: row.badgeColor, fontWeight: 600, flex: "none" }}>{row.badge}</span>}
                   </div>
                   <div className="t-call" style={{ lineHeight: 1.4, paddingLeft: 17 }}>{row.line}</div>
-                  <div className="t-foot" style={{ color: "var(--faint)", paddingLeft: 17, lineHeight: 1.5 }}>
-                    {row.pulse ? <span style={{ animation: "pulse 1.4s infinite" }}>{row.note}</span> : row.note}
-                  </div>
+                  {row.note && (
+                    <div className="t-foot" style={{ color: "var(--faint)", paddingLeft: 17, lineHeight: 1.5 }}>
+                      {row.pulse ? <span style={{ animation: "pulse 1.4s infinite" }}>{row.note}</span> : row.note}
+                    </div>
+                  )}
                 </div>
               );
             })}

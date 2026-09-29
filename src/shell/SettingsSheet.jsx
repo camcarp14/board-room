@@ -173,7 +173,7 @@ export function SettingsSheet({ onClose, session, theme, calUrl, onSaveCalUrl, i
           <div key="systems" className="pagefade" style={{ display: "flex", flexDirection: "column", gap: 4 }}>
             <Segmented options={SYS_TABS} value={sys} onChange={setSys} style={{ marginBottom: 10 }} />
             <Suspense fallback={<div style={{ display: "flex", justifyContent: "center", padding: "40px 0" }}><Spinner /></div>}>
-              {sys === "usage" && <UsageTab isMobile={isMobile} />}
+              {sys === "usage" && <UsageTab isMobile={isMobile} settings={settings} settingsLoaded={settingsLoaded} updateSetting={updateSetting} />}
               {sys === "status" && <StatusTab checks={conn?.checks || {}} lastRun={conn?.lastRun} running={conn?.running} runAll={conn?.runAll} isMobile={isMobile} />}
               {sys === "deploy" && <DeployTab isMobile={isMobile} />}
               {sys === "supabase" && <SupabaseTab />}

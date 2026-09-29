@@ -101,5 +101,22 @@ check("db.uid() reads the session, not GET /auth/v1/user",
 check("the offline sign-out notice is set by App and read once by the login screen",
   /br_signout_offline/.test(app) && /sessionStorage\.removeItem\("br_signout_offline"\)/.test(boot));
 
+// ── 10. the economic-explanations switch stops every model call it names ──
+{
+  const brief = await read("src/pages/brief/BriefPage.jsx");
+  const usage = await read("src/pages/systems/SystemsPage.jsx");
+  const ws = await import(pathToFileURL(path.resolve("src/pages/brief/watchState.js")).href);
+  check("nothing on the Brief may spend before settings load, or while the switch is off",
+    /const econMaySpend = settings != null && econExplain;/.test(brief) &&
+    /if \(eventsStatus\.state !== "live" \|\| !econMaySpend\) return \[\];/.test(brief) &&
+    /if \(eventsStatus\.state !== "live" \|\| !events\.length \|\| !econMaySpend\) return;/.test(brief));
+  const past = { title: "CPI m/m", at: new Date(Date.now() - 3 * 3600e3).toISOString(), time: "7:30am" };
+  const off = ws.watchRowState(past, { status: "released", actual: "0.3%", take: "Hot." }, null, Date.now(), { explain: false });
+  check("off, a row carries no note, no badge and no pulse — just the event", off.note === null && off.badge === null && off.pulse === false);
+  check("…while a print resolved earlier (already paid for) still shows its number", /0\.3%/.test(String(off.line)));
+  check("the switch lives in Settings → Usage, drawn only once settings have loaded",
+    /settingsLoaded && updateSetting && \(/.test(usage) && /updateSetting\("econ_explain", !on\)/.test(usage));
+}
+
 if (failures) { console.log(`\n${failures} FAILURE(S)\nAUDIT FIXES SMOKE FAILED`); process.exit(1); }
 console.log("\nAUDIT FIXES SMOKE PASS");
