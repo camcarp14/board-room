@@ -471,7 +471,15 @@ export default function App() {
     try { localStorage.setItem("br_signout_local", String(Date.now())); } catch {}
     signOutLocally();
   };
-  const recheckSecondFactor = () => needsSecondFactor().then(setSecondFactor);
+  // Passing the code step changes what RLS will show without changing the user
+  // id, so nothing keyed on the account reloads by itself — and everything read
+  // before it (at aal1) came back empty and was cached. So once the code is
+  // accepted: refetch every query and reload settings.
+  const recheckSecondFactor = async () => {
+    const v = await needsSecondFactor();
+    setSecondFactor(v);
+    if (!v) { queryClient.invalidateQueries(); refreshRef.current?.(); }
+  };
   useEffect(() => {
     if (!session) { setSecondFactor(null); return; }
     let alive = true;

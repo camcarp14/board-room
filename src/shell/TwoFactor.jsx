@@ -135,11 +135,23 @@ function TwoFactorSetup({ onClose, onDone }) {
   );
 }
 
-/** Is this session short of the second factor it is required to have? */
+/** Is this session short of the second factor it is required to have?
+ *
+ *  ASK THE SERVER WHETHER A FACTOR EXISTS, NOT THE SESSION ON THIS DEVICE.
+ *  getAuthenticatorAssuranceLevel() reads `nextLevel` from the user object stored
+ *  with the session — and a device signed in BEFORE two-factor was turned on
+ *  carries a user with no factors. So it answered "nothing needed", the app
+ *  opened, and RLS (which does know) returned nothing: every note, event and
+ *  setting looked gone on the phone. listFactors() re-reads the user from the
+ *  server; the current level still comes from the token itself. Offline, the
+ *  stored answer is the best there is. */
 export async function needsSecondFactor() {
   if (!supabase) return false;
   try {
-    const { data } = await supabase.auth.mfa.getAuthenticatorAssuranceLevel();
-    return data?.nextLevel === "aal2" && data?.currentLevel !== "aal2";
+    const { data: aal } = await supabase.auth.mfa.getAuthenticatorAssuranceLevel();
+    if (aal?.currentLevel === "aal2") return false;
+    const { data: factors, error } = await supabase.auth.mfa.listFactors();
+    if (error) return aal?.nextLevel === "aal2";
+    return (factors?.totp || []).length > 0;
   } catch { return false; }
 }
