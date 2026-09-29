@@ -1034,6 +1034,57 @@ try {
     check("...and does not arm the override",
       regimeOverride({ score: youngFall.score, fearGreed: youngFall.fearGreed, domTrend: youngFall.domTrend, domSpanDays: youngFall.domSpanDays }).armed === false);
 
+    // THE SPAN IS THE AGE OF THE HIGH, NOT THE LENGTH OF THE HISTORY. The span
+    // used to be the kept history's first-to-last whenever its two endpoints
+    // agreed with the month — and endpoints are all domTrendOf compares. So a
+    // V (60.0 eighty-nine days ago → 66.0 a month ago → 59.4 today) published
+    // 89 days for a 30-day fall and armed "sell half of everything" a month
+    // early, while a straight 60-day fall whose far end happened to sit near
+    // today read flat end to end and never armed at all. Both fixtures go
+    // through seasonRead with the other two legs met, so `armed` is decided by
+    // the dominance leg alone.
+    const { domRunDays } = cron;
+    const vShape = daily(89, (ago) => (ago >= 30 ? 60 + (89 - ago) * (6 / 59) : 66 - (30 - ago) * (6.6 / 30)));
+    const vEnds = cron.domTrendOf(vShape, [], DOM_KEEP_DAYS);
+    check("the V fixture is the one the endpoint rule misread (history ends agree: falling over 89 days)",
+      vEnds.trend === "falling" && vEnds.spanDays === 89, `${vEnds.trend} ${vEnds.spanDays}`);
+    const vRead = seasonRead({
+      universe: seasonUniverse(100, 100), btcRow: BTC0, ethRow: { symbol: "ETH", chg7d: 2, chg30d: 2 },
+      fearGreed: { value: 84 }, domHistory: vShape, now: NOW,
+    });
+    check("a 30-day fall off a 60-day rise publishes 30 days, not the 89 the history spans",
+      vRead.domTrend === "falling" && vRead.domSpanDays === 30, `${vRead.domTrend} ${vRead.domSpanDays}`);
+    check("...and the V does not arm the override, with score and greed both met",
+      (() => { const o = regimeOverride({ score: vRead.score, fearGreed: vRead.fearGreed, domTrend: vRead.domTrend, domSpanDays: vRead.domSpanDays });
+        return o.armed === false && o.legs.score && o.legs.greed && !o.legs.dominance; })(),
+      JSON.stringify({ score: vRead.score, fg: vRead.fearGreed, span: vRead.domSpanDays }));
+
+    const straight = daily(90, (ago) => (ago >= 60 ? 55 + (90 - ago) * (10 / 30) : 65 - (60 - ago) * (9.5 / 60)));
+    check("the straight-fall fixture reads FLAT end to end over the kept history (why it never armed)",
+      cron.domTrendOf(straight, [], DOM_KEEP_DAYS).trend === "flat", cron.domTrendOf(straight, [], DOM_KEEP_DAYS).trend);
+    const straightRead = seasonRead({
+      universe: seasonUniverse(100, 100), btcRow: BTC0, ethRow: { symbol: "ETH", chg7d: 2, chg30d: 2 },
+      fearGreed: { value: 84 }, domHistory: straight, now: NOW,
+    });
+    check("a straight 60-day fall publishes the 60 days since its high",
+      straightRead.domTrend === "falling" && straightRead.domSpanDays === 60, `${straightRead.domTrend} ${straightRead.domSpanDays}`);
+    check("...and arms the override it was always owed",
+      regimeOverride({ score: straightRead.score, fearGreed: straightRead.fearGreed, domTrend: straightRead.domTrend, domSpanDays: straightRead.domSpanDays }).armed === true,
+      JSON.stringify({ score: straightRead.score, fg: straightRead.fearGreed, span: straightRead.domSpanDays }));
+
+    // The mirror, the tie and the noise band, straight off the helper.
+    const riseAfterLow = daily(89, (ago) => (ago >= 45 ? 50 - (89 - ago) * (10 / 44) : 40 + (45 - ago) * (5 / 45)));
+    const riseDom = cron.domTrendOf(riseAfterLow);
+    check("a rise is aged from its LOW, symmetric with a fall from its high",
+      riseDom.trend === "rising" && domRunDays(riseAfterLow, riseDom) === 45, `${riseDom.trend} ${domRunDays(riseAfterLow, riseDom)}`);
+    const plateau = daily(40, (ago) => (ago >= 20 ? 60 : 60 - (20 - ago) * 0.1));
+    check("a plateau at the top is not falling — the fall starts where it ends",
+      domRunDays(plateau, cron.domTrendOf(plateau)) === 20, String(domRunDays(plateau, cron.domTrendOf(plateau))));
+    check("a 'high' inside the noise band is no top at all — the month's own span stands",
+      domRunDays([{ t: NOW - 50 * DAY, dom: 58.4 }, { t: NOW, dom: 58.0 }], { trend: "falling", spanDays: 12 }) === 12);
+    check("a flat month has no run to age — the month's span passes through",
+      domRunDays(straight, { trend: "flat", spanDays: 29 }) === 29 && domRunDays(straight, { trend: null }) === null);
+
     // ALL THREE LEGS, NOT ANY. Each fires alone several times a cycle.
     const armed = regimeOverride({ score: 72, fearGreed: 84, domTrend: "falling", domSpanDays: 70 });
     check("the override fires only with all three legs", armed.armed === true && armed.met === 3);

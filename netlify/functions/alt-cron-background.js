@@ -796,15 +796,11 @@ function seasonRead({ universe = null, btcRow = null, ethRow = null, fearGreed =
   // first and last sample of a 30-day window, so at most 30, so the leg could
   // not arm on any feed this engine will ever produce and the book's footer
   // promised a switch that was arithmetically welded open. The direction is
-  // still the month's; the span is how far back that direction holds. When
-  // the full kept history (DOM_KEEP_DAYS, 90) reads the same way, it is the
-  // history's span; when the history disagrees, the fall is younger than the
-  // history and the month's span is the honest answer. The fact sentence is
-  // untouched — it describes the month it measured.
-  const domLong = domTrendOf(domHistory, [], DOM_KEEP_DAYS);
-  const domSpanDays = dom.trend != null && domLong.trend === dom.trend
-    ? domLong.spanDays ?? dom.spanDays ?? null
-    : dom.spanDays ?? null;
+  // still the month's; the span is how long that direction has actually held
+  // — see domRunDays for why that is the age of the extreme and not the
+  // endpoints of the kept history. The fact sentence is untouched — it
+  // describes the month it measured.
+  const domSpanDays = domRunDays(domHistory, dom);
   const ethBtc = computeEthBtc(ethRow, btcRow, facts);
   const fg = normFearGreed(fearGreed, facts);
 
@@ -946,11 +942,11 @@ function computeBreadth(universe, btcRow, facts) {
  * bounded by dates, not by a sample count: after a cron gap, "the last 30
  * samples" reaches back months and labels the result a 30-day move.
  *
- * `windowDays` defaults to the month the season scores on; seasonRead also
- * runs it over the full kept history for the span the regime override reads.
- * The span it returns is strictly under the window at daily cadence (the
- * sample exactly `windowDays` back is excluded), which is why the override's
- * 60 days can only be met by a window wider than 60.
+ * `windowDays` defaults to the month the season scores on. The span it
+ * returns is first-to-last sample of that window, so it is strictly under the
+ * window at daily cadence (the sample exactly `windowDays` back is excluded)
+ * and says nothing about how long the move has been going — that is
+ * domRunDays's question, and the override reads its answer instead.
  */
 function domTrendOf(domHistory, facts = [], windowDays = DOM_WINDOW_DAYS) {
   const rows = (Array.isArray(domHistory) ? domHistory : [])
@@ -978,6 +974,54 @@ function domTrendOf(domHistory, facts = [], windowDays = DOM_WINDOW_DAYS) {
   const over = spanDays >= 1 ? `${spanDays} day${spanDays === 1 ? "" : "s"}` : "under a day";
   facts.push(`BTC dominance ${trend}: ${signed(change, 2)} pts over the last ${over}${trend === "falling" ? " — capital is leaving BTC" : ""}`);
   return { trend, changePts: change, samples: window.length, spanDays };
+}
+
+/**
+ * HOW LONG DOMINANCE HAS BEEN MOVING THIS WAY — the span the regime override's
+ * "falling for 60+ days" leg reads (OVERRIDE_DOM_DAYS in src/lib/altLadder.js).
+ *
+ * THE AGE OF THE EXTREME, NOT THE ENDPOINTS OF THE HISTORY. This used to run
+ * domTrendOf over the full kept history and, when that agreed with the
+ * month's direction, publish the history's first-to-last span. But domTrendOf
+ * only compares the two endpoints, so any history whose ends agree with the
+ * month reported its WHOLE length as the fall. 60.0 ninety days ago → 66.0 a
+ * month ago → 59.4 today is a 30-day fall off a 60-day rise, and it published
+ * 89 days and armed "sell half of everything" a month early. The mirror hid a
+ * real one: a straight 60-day fall 65 → 55.5 off a 55 ninety days back reads
+ * flat end to end, so it fell back to the month's 29 days and could never arm.
+ * The question is "since when has it been going down", and the answer is the
+ * day it was last at the top: a fall is exactly as old as its high.
+ *
+ * So, for "falling": the newest sample holding the highest dominance in the
+ * kept history (DOM_KEEP_DAYS, windowed the way domTrendOf windows, anchored
+ * to the newest sample). The NEWEST of a tied high, because a plateau at the
+ * top is not falling — the fall starts where the plateau ends. And only if
+ * that high clears today by more than DOM_FLAT_PTS — the same strict test
+ * domTrendOf uses to call a move a move — since a "high" inside the noise band
+ * is not a top anything fell from. "rising" is the mirror, off the lowest
+ * sample. When the month is falling, its own first sample already clears that
+ * bar, so the guard's fallback (the month's span) exists for a history this
+ * function was not handed, not for any feed seasonRead produces.
+ *
+ * A flat or unknown month has no run to age: the month's span as before (the
+ * override only arms on "falling", so this is informational).
+ */
+function domRunDays(domHistory, dom) {
+  const monthSpan = (dom && dom.spanDays) ?? null;
+  if (!dom || (dom.trend !== "falling" && dom.trend !== "rising")) return monthSpan;
+  const rows = (Array.isArray(domHistory) ? domHistory : [])
+    .filter((s) => s && Number.isFinite(s.t) && Number.isFinite(s.dom))
+    .sort((a, b) => a.t - b.t);
+  if (rows.length === 0) return monthSpan;
+  const last = rows[rows.length - 1];
+  const kept = rows.filter((s) => s.t > last.t - DOM_KEEP_DAYS * DAY);
+  const falling = dom.trend === "falling";
+  // Ascending walk with >= / <=, so a tie resolves to the NEWEST extreme.
+  let ext = kept[0];
+  for (const s of kept) if (falling ? s.dom >= ext.dom : s.dom <= ext.dom) ext = s;
+  const clears = falling ? ext.dom - last.dom > DOM_FLAT_PTS : last.dom - ext.dom > DOM_FLAT_PTS;
+  if (!clears) return monthSpan;
+  return Math.max(0, Math.round((last.t - ext.t) / DAY));
 }
 
 /* ═══ step 4b — the score's own drift ════════════════════════════════════════
@@ -2110,6 +2154,7 @@ exports.transitionFlags = transitionFlags;
 exports.gateFor = gateFor;
 exports.PHASE_GATE = PHASE_GATE;
 exports.domTrendOf = domTrendOf;
+exports.domRunDays = domRunDays;
 exports.DOM_WINDOW_DAYS = DOM_WINDOW_DAYS;
 exports.DOM_KEEP_DAYS = DOM_KEEP_DAYS;
 exports.capitalLadder = capitalLadder;
