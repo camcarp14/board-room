@@ -21,7 +21,7 @@ import { useBirthdays } from "../../data/birthdays.js";
 import { useAnniversaries } from "../../data/anniversaries.js";
 import { callClaude } from "../../lib/claude.js";
 import { localDayKey, todayISO, calendarDaysBetween } from "../../lib/dates.js";
-import { importNameKey, isImportDuplicate } from "../../lib/event-draft.js";
+import { importNameKey, isImportDuplicate, draftReadback, draftToFields } from "../../lib/event-draft.js";
 import { tint } from "../../ui/styles.js";
 import { Card, SectionHeader, Button, Cell, CellGroup, Sheet, useConfirm, EmptyState, Dot, Pill, Switch } from "../../ui/kit.jsx";
 import { IcChevronLeft, IcChevronRight, IcCalendar, IcClose, IcTrash } from "../../ui/icons.jsx";
@@ -50,38 +50,11 @@ const DATE_H = 26;
 // at module scope so it survives this panel remounting on tab navigation.
 let lastHandledNewEvent = null;
 
-const shortDay = (key) => {
-  const d = key ? new Date(`${key}T00:00:00`) : null;
-  return d && !Number.isNaN(d.getTime()) ? d.toLocaleDateString("en-US", { month: "short", day: "numeric" }) : "—";
-};
-const clock = (hhmm) => {
-  const m = /^(\d{2}):(\d{2})$/.exec(hhmm || "");
-  if (!m) return null;
-  const h = Number(m[1]);
-  return `${((h + 11) % 12) + 1}:${m[2]} ${h < 12 ? "AM" : "PM"}`;
-};
-
-/** The draft's dates and times, said back as one sentence. */
-function draftReadback(f) {
-  const timed = !f.allDay && !!f.time;
-  const multi = f.endDate && f.endDate > f.date;
-  const days = multi
-    ? Math.round((new Date(`${f.endDate}T00:00:00`) - new Date(`${f.date}T00:00:00`)) / 86400000) + 1
-    : 1;
-  if (!timed) {
-    const span = multi
-      ? `All day · ${shortDay(f.date)} – ${shortDay(f.endDate)} (${days} days)`
-      : `All day · ${shortDay(f.date)}`;
-    // The switch is off but no time was typed. That saves as all-day, which is
-    // right — but it has to SAY so, or the switch reads as a promise the save
-    // then quietly breaks.
-    return f.allDay ? span : `${span} — add a start time to give it one`;
-  }
-  const from = clock(f.time);
-  const to = clock(f.endTime);
-  if (multi) return `${shortDay(f.date)} ${from} → ${shortDay(f.endDate)} ${to || from} (${days} days)`;
-  return to ? `${shortDay(f.date)} · ${from} – ${to}` : `${shortDay(f.date)} · ${from}`;
-}
+// The draft's readback sentence (draftReadback) and its conversion to a stored
+// row (draftToFields) live in lib/event-draft.js. They have to agree on where an
+// event ends — the readback promising "11:00 PM – 1:00 AM" while the save wrote
+// no end at all is the bug that moved them — and the only way to keep two
+// renderings of one rule in step is for both to call the same function.
 
 export function CalendarPanel({ isMobile, newEventSignal }) {
   const { data: events = null, error } = useEvents();
@@ -319,47 +292,9 @@ Only extract entries you can read with real confidence — skip anything blurry,
     return rule;
   };
 
-  /**
-   * Draft → the stored row. Three things this now gets right that it didn't:
-   *
-   *   A BLANK TIME IS ALL-DAY, not midnight. The switch and the empty field are
-   *   two ways of saying the same thing, and treating an empty `time` as
-   *   00:00 silently filed a lunch as a 12am appointment.
-   *
-   *   THE END CAN BE ON A DIFFERENT DAY. `end_time` used to be built from
-   *   `f.date` no matter what, which made a multi-day event unrepresentable —
-   *   not hard, unrepresentable — and an end date earlier than the start is
-   *   clamped away rather than stored as a negative duration that expandEvents
-   *   would carry into every occurrence.
-   *
-   *   AN ALL-DAY SPAN ENDS AT MIDNIGHT ON ITS LAST DAY, inclusive: the grid
-   *   keys all-day rows off the stored date string (see calendar-overlays.js),
-   *   so `${endDate}T00:00:00` is exactly the last cell it should paint.
-   */
-  const draftFields = (f) => {
-    const timed = !f.allDay && !!f.time;
-    const endDate = f.endDate && f.endDate > f.date ? f.endDate : null;
-    const start_time = timed
-      ? new Date(`${f.date}T${f.time}:00`).toISOString()
-      : new Date(`${f.date}T00:00:00`).toISOString();
-
-    let end_time = null;
-    if (timed) {
-      // A timed event's end takes the end date when there is one, and the end
-      // time when there is one; either alone is still an end.
-      if (f.endTime || endDate) {
-        end_time = new Date(`${endDate || f.date}T${f.endTime || f.time}:00`).toISOString();
-        if (new Date(end_time) < new Date(start_time)) end_time = null;
-      }
-    } else if (endDate) {
-      end_time = new Date(`${endDate}T00:00:00`).toISOString();
-    }
-
-    return {
-      title: f.title.trim(), notes: f.notes, start_time, end_time,
-      all_day: !timed, location: f.location, category: f.category,
-    };
-  };
+  // Draft → the stored row: lib/event-draft.js (draftToFields), beside the
+  // readback that has to describe exactly what it writes.
+  const draftFields = draftToFields;
 
   /**
    * The fields for a scope-"all" edit — a SHIFT of the master, never a

@@ -498,6 +498,51 @@ if (failed) { console.log(`\n${failed} recurrence check(s) failed`); process.exi
     /eventsList\.find\(e => isImportDuplicate\(e, item\)\)/.test(panel) && !/start_time\.slice\(0, 10\) === item\.date/.test(panel));
 }
 
+// ─── an overnight event ends tomorrow, and says so ────────────────────────────
+// From 23:00 to 01:00 with no end date: the readback said "11:00 PM – 1:00 AM"
+// while the save built 01:00 on the START day, found it before the start, and
+// stored end_time null. Both now read draftEnd, so they cannot disagree.
+{
+  const { draftToFields, draftReadback, draftEnd } = await import("../src/lib/event-draft.js");
+  const { spanDayKeys } = await import("../src/lib/calendar-overlays.js");
+  const { readFileSync } = await import("node:fs");
+  const draft = (o) => ({ title: "Late shift", notes: "", location: "", category: "work", date: "2026-09-28", endDate: "", time: "23:00", endTime: "01:00", allDay: false, ...o });
+
+  const late = draftToFields(draft());
+  check("23:00 → 01:00 with no end date saves an end at 1am the NEXT day, not null",
+    late.end_time === new Date(2026, 8, 29, 1, 0).toISOString(), String(late.end_time));
+  check("...a two-hour event, not a negative or missing one",
+    new Date(late.end_time) - new Date(late.start_time) === 2 * 3600000);
+  check("...and the readback names both days instead of promising a same-day 1am",
+    draftReadback(draft()) === "Sep 28 11:00 PM → Sep 29 1:00 AM (overnight)", draftReadback(draft()));
+  check("...the grid paints it on both nights it touches",
+    spanDayKeys({ ...late, all_day: false }).join(",") === "2026-09-28,2026-09-29");
+  const reopened = draft({ endDate: "2026-09-29" });
+  check("reopened for edit (end date filled in), it saves the same end and reads the same way",
+    draftToFields(reopened).end_time === late.end_time && draftReadback(reopened) === draftReadback(draft()),
+    draftReadback(reopened));
+  check("an end time equal to the start is a zero-length event on the day, not 24 hours",
+    draftToFields(draft({ endTime: "23:00" })).end_time === draftToFields(draft({ endTime: "23:00" })).start_time
+    && !draftEnd(draft({ endTime: "23:00" })).overnight);
+  check("an ordinary same-day end is unchanged",
+    draftToFields(draft({ time: "09:00", endTime: "10:00" })).end_time === new Date(2026, 8, 28, 10, 0).toISOString()
+    && draftReadback(draft({ time: "09:00", endTime: "10:00" })) === "Sep 28 · 9:00 AM – 10:00 AM",
+    draftReadback(draft({ time: "09:00", endTime: "10:00" })));
+  check("an explicit multi-day end still wins, and still counts its days",
+    draftToFields(draft({ time: "09:00", endTime: "08:00", endDate: "2026-09-30" })).end_time === new Date(2026, 8, 30, 8, 0).toISOString()
+    && draftReadback(draft({ time: "09:00", endTime: "08:00", endDate: "2026-09-30" })).endsWith("(3 days)"));
+  check("no end time and no end date is still an open-ended start",
+    draftToFields(draft({ endTime: "" })).end_time === null && draftReadback(draft({ endTime: "" })) === "Sep 28 · 11:00 PM");
+  check("an overnight across the month end rolls into the next month",
+    draftToFields(draft({ date: "2026-09-30" })).end_time === new Date(2026, 9, 1, 1, 0).toISOString());
+  check("all-day drafts ignore the clock fields entirely",
+    draftToFields(draft({ allDay: true })).end_time === null && draftToFields(draft({ allDay: true })).all_day === true);
+  const panel = readFileSync("src/pages/personal/CalendarPanel.jsx", "utf8");
+  check("CalendarPanel saves and reads back through the shared draft rules",
+    /const draftFields = draftToFields;/.test(panel) && /\{draftReadback\(form\)\}/.test(panel)
+    && !/function draftReadback/.test(panel) && /import \{[^}]*draftReadback[^}]*draftToFields[^}]*\} from "..\/..\/lib\/event-draft\.js"/.test(panel));
+}
+
 // The early exit above only guards the block before it; everything after it
 // reported PASS regardless of what it found.
 if (failed) { console.log(`\n${failed} recurrence check(s) failed`); process.exit(1); }
