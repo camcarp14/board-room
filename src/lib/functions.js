@@ -86,6 +86,12 @@ export async function callFn(name, payload, extraHeaders) {
     });
     ok = res.ok;
     if (!ok) { detail = `HTTP ${res.status}`; throw new Error(detail); }
+    // 202 IS THE WHOLE ANSWER FROM A -background FUNCTION. Netlify acknowledges
+    // the invocation with an EMPTY body before the handler runs, so res.json()
+    // threw on every successful trigger and the catch below logged it as
+    // "network error": econ-resolve-background showed 16 failures out of 16 in
+    // usage_log while every one of those runs had done its work.
+    if (res.status === 202) { ok = true; return { accepted: true }; }
     const data = await res.json();
     // `ok` IS NOT `res.ok`, IT IS "DID THE CALLER GET AN ANSWER". Those came apart
     // on exactly one path and it was the quiet one: a 200 whose body is not JSON —

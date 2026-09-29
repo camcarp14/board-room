@@ -315,8 +315,18 @@ const fakeStore = () => {
   // The same SIGNED_OUT arrives from the button and from a dead session. Only the
   // button's may purge: an expiry keeps the failed-writes queue it used to throw
   // away a moment after a write had filed itself "Not signed in".
+  // The intent is recorded twice now: the in-memory flag for this tab, and a
+  // stamp in storage for every other open tab (auth-js broadcasts SIGNED_OUT to
+  // them with their own flag down). Both before the request leaves.
   check("the button records its intent before signing out",
-    /explicitSignOut\.current = true;\s*\n\s*try \{ await supabase\.auth\.signOut/.test(app));
+    /explicitSignOut\.current = true;\s*\n\s*try \{ localStorage\.setItem\("br_signout_at"[\s\S]{0,120}\n\s*let error = null;\s*\n\s*try \{ \(\{ error \} = await supabase\.auth\.signOut/.test(app));
+  check("…and other tabs read that stamp as the button, not an expiry",
+    /const explicit = explicitSignOut\.current \|\| stamped;/.test(app) && /br_signout_at/.test(app));
+  // auth-js answers a failed revoke with { error } and KEEPS the local session.
+  check("a sign-out whose request fails still signs this device out",
+    /if \(!error\) return;[\s\S]{0,400}localStorage\.removeItem\(k\)[\s\S]{0,200}purgeRef\.current\?\.\(\);[\s\S]{0,120}window\.location\.reload\(\)/.test(app));
+  check("…and the purge clears every br_* key but the look of the app",
+    /Object\.keys\(localStorage\)\.filter\(\(k\) => k\.startsWith\("br_"\) && !KEEP\.test\(k\)\)/.test(app));
   check("…and lowers it whether or not the event came", /finally \{ explicitSignOut\.current = false; \}/.test(app));
   check("only an explicit sign-out purges the device",
     /if \(explicit\) purgeDevice\(\);\s*\n\s*else setSessionExpired\(true\);/.test(app));

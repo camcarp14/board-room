@@ -53,12 +53,27 @@ function bucketOf(stage) {
   return "prospected"; // prospected, drafted, or anything else early-funnel
 }
 
+// ONE PROJECT NOW, SO ONE KEY. CLARIFY_SUPABASE_URL points at the shared
+// Pentagon project, which is also SUPABASE_URL — so Board Room's own service key
+// already reaches this table, and the anon key never could (see the header).
+// Used only when the two URLs are the same project; a different project still
+// needs its own CLARIFY_SUPABASE_SERVICE_ROLE_KEY.
+const sameProject = (a, b) => !!a && !!b && String(a).replace(/\/+$/, "") === String(b).replace(/\/+$/, "");
+
 exports.handler = async (event) => {
   let body = {};
   try { body = JSON.parse(event.body || "{}"); } catch {}
 
   const url = process.env.CLARIFY_SUPABASE_URL;
-  const key = process.env.CLARIFY_SUPABASE_ANON_KEY;
+  // THE ANON KEY READS ZERO ROWS HERE, ALWAYS. zts.creators' only policy is
+  // `auth.uid() = user_id` for {authenticated}, so a request wearing the anon key
+  // is answered 200 with an empty list — and this card drew that as a pipeline
+  // of zeros, a failed read dressed as a quiet week. A service key reads the
+  // table past RLS, so it is scoped back to the owner by hand below.
+  const serviceKey = process.env.CLARIFY_SUPABASE_SERVICE_ROLE_KEY
+    || (sameProject(url, process.env.SUPABASE_URL) ? process.env.SUPABASE_SERVICE_ROLE_KEY : undefined);
+  const key = serviceKey || process.env.CLARIFY_SUPABASE_ANON_KEY;
+  const owner = String(process.env.BOARD_USER_ID || "").trim();
   const configured = !!(url && key);
 
   if (body.ping) return json(200, { success: true, service: "zts-pipeline", configured, missing: configured ? undefined : "CLARIFY_SUPABASE_URL / CLARIFY_SUPABASE_ANON_KEY" });
@@ -70,7 +85,8 @@ exports.handler = async (event) => {
 
   try {
     // Accept-Profile selects the `zts` schema on the shared project.
-    const res = await fetch(`${url}/rest/v1/creators?select=stage,subscriber_count`, { signal: AbortSignal.timeout(30000),
+    const scope = serviceKey && owner ? `&user_id=eq.${encodeURIComponent(owner)}` : "";
+    const res = await fetch(`${url}/rest/v1/creators?select=stage,subscriber_count${scope}`, { signal: AbortSignal.timeout(30000),
       headers: { apikey: key, Authorization: `Bearer ${key}`, "Accept-Profile": "zts" },
     });
     if (!res.ok) throw new Error(`creators query failed (${res.status}) — check the zts schema is exposed and the "creators" table has stage/subscriber_count columns`);

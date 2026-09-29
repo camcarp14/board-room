@@ -1,6 +1,7 @@
 import React from "react";
 import { createRoot } from "react-dom/client";
 import { PersistQueryClientProvider } from "@tanstack/react-query-persist-client";
+import { defaultShouldDehydrateQuery } from "@tanstack/react-query";
 import { createSyncStoragePersister } from "@tanstack/query-sync-storage-persister";
 import "./styles.css";
 import App from "./App.jsx";
@@ -82,8 +83,8 @@ const persister = createSyncStoragePersister({ storage: window.localStorage, key
 // database that the database had never agreed to.
 //
 // shouldDehydrateMutation decides what is worth writing down. shouldDehydrateQuery
-// is deliberately NOT passed, so the read half persists exactly as it did before —
-// successful queries and nothing else.
+// keeps the default (successful queries and nothing else) with one exception,
+// bank transactions — see persistOptions below.
 //
 // The hydrate scope is what makes the replay SEQUENTIAL, and it is not optional.
 // resumePausedMutations starts every paused write at once, and these writes send
@@ -99,7 +100,17 @@ const persistOptions = {
   persister,
   maxAge: 1000 * 60 * 60 * 24,
   buster: "br-rq-1",
-  dehydrateOptions: { shouldDehydrateMutation: shouldPersistMutation },
+  // BANK TRANSACTIONS ARE NOT WRITTEN TO THIS DEVICE'S DISK. Every other read
+  // persists as before (successful queries only), but ["transactions"] — up to
+  // 5,000 rows of amounts, merchants and accounts — sat in plain localStorage
+  // until an explicit sign-out, survived session expiry by design, and
+  // contradicted the privacy policy submitted to Plaid ("the only browser
+  // storage used is the session"). The cost is that Finances fetches on launch
+  // instead of painting the last copy first.
+  dehydrateOptions: {
+    shouldDehydrateMutation: shouldPersistMutation,
+    shouldDehydrateQuery: (q) => defaultShouldDehydrateQuery(q) && q.queryKey[0] !== "transactions",
+  },
   hydrateOptions: { defaultOptions: { mutations: { scope: { id: "br-outbox" } } } },
 };
 
@@ -142,10 +153,27 @@ if (import.meta.env.PROD && "serviceWorker" in navigator) {
   // doesn't bounce a first-time visitor.
   const hadController = !!navigator.serviceWorker.controller;
   let reloaded = false;
+  // Same rule checkBuild keeps below: never reload out from under something
+  // being typed. This one had no guard — open the app after a sw.js bump, start
+  // a grocery item or a note, and the new worker claimed the page a second or
+  // two later and the reload took the text. While typing, the reload waits for
+  // the field to lose focus or the app to be backgrounded (a hidden page is
+  // where Notes flushes and stores its rescue copy first).
+  const reloadWhenIdle = () => {
+    if (reloaded) return;
+    if (!typing()) { reloaded = true; window.location.reload(); return; }
+    const later = () => {
+      if (typing() && !document.hidden) return;
+      document.removeEventListener("focusout", later, true);
+      document.removeEventListener("visibilitychange", later);
+      setTimeout(reloadWhenIdle, 0);
+    };
+    document.addEventListener("focusout", later, true);
+    document.addEventListener("visibilitychange", later);
+  };
   navigator.serviceWorker.addEventListener("controllerchange", () => {
     if (reloaded || !hadController) return;
-    reloaded = true;
-    window.location.reload();
+    reloadWhenIdle();
   });
 
   // …but controllerchange ONLY fires when sw.js itself changes, and a normal

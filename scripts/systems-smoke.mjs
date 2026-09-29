@@ -492,11 +492,17 @@ check("Settings → Tabs draws nothing editable until the settings have loaded",
 check("…and the Brief's widget list waits with it",
   tabsPanel.indexOf("if (!settingsLoaded) return (") < tabsPanel.indexOf("<BriefWidgetList settings={settings}"));
 check("…with App telling it the truth, the preview excused", /settingsLoaded=\{settings != null \|\| PREVIEW\}/.test(app));
-check("updateSetting refuses a layout key while settings are null",
-  /if \(settings === null && LAYOUT_KEYS\.has\(key\)\) \{[\s\S]*?return \{ ok: false, error \};/.test(app) &&
-  /const LAYOUT_KEYS = new Set\(\[[^\]]*"navigation"[^\]]*"brief_hidden"[^\]]*\]\)/.test(app));
+// EVERY key, not only the layout ones: a budget, a taste or the Watch token
+// built from a null `settings` is a one-key object written over the saved row.
+check("updateSetting refuses EVERY key while settings are null",
+  /if \(settings === null\) \{[\s\S]*?return \{ ok: false, error \};/.test(app) && !/LAYOUT_KEYS\.has\(key\)/.test(app));
+check("…files the refusal where the unsaved-changes chip can show it, with a reload as its Retry",
+  /writeFailures\.note\(`settings-unloaded:\$\{key\}`[\s\S]{0,120}refreshData\(\)\)/.test(app));
 check("…before anything is painted",
-  app.indexOf("LAYOUT_KEYS.has(key)") < app.indexOf("setSettings(prev => ({ ...(prev || {}), [key]: value }))"));
+  app.indexOf("if (settings === null) {") > 0 &&
+  app.indexOf("if (settings === null) {") < app.indexOf("setSettings(prev => (prev ? { ...prev, [key]: value } : prev))"));
+check("…and the optimistic paint can never turn null into a one-key object",
+  !app.includes("setSettings(prev => ({ ...(prev || {}), [key]: value }))"));
 
 // ── 7. a crash is recorded, and something reads it ───────────────────────────
 // The gap this closes: ErrorBoundary wrote localStorage.br_crashes and nothing in
@@ -626,7 +632,11 @@ const dbMod = await (async () => {
   const stub = `
     export const ANTHROPIC_API_KEY = "";
     export const supabase = {
-      auth: { getUser: async () => ({ data: { user: globalThis.__srv.user() } }) },
+      auth: {
+        getUser: async () => ({ data: { user: globalThis.__srv.user() } }),
+        // db.uid() reads the local session (no round trip) since the audit fix.
+        getSession: async () => { const u = globalThis.__srv.user(); return { data: { session: u ? { user: u } : null } }; },
+      },
       from: (t) => globalThis.__srv.from(t),
       rpc: (n, a) => globalThis.__srv.rpc(n, a),
     };

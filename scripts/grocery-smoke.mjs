@@ -630,9 +630,14 @@ check("a stale write is REMOVED on restore, not replayed",
   /dropStaleOutboxMutations[\s\S]{0,600}cache\.remove\(/.test(qc));
 
 check("main.jsx persists paused mutations", /shouldDehydrateMutation: shouldPersistMutation/.test(main));
-// Left to its default on purpose: the read half of the cache must keep behaving
-// exactly as it did before the outbox existed.
-check("main.jsx leaves the query half of dehydration alone", !/shouldDehydrateQuery/.test(main));
+// The read half keeps the library's default (successful queries only) with ONE
+// exception: bank transactions are never written to localStorage (privacy policy
+// submitted to Plaid; see the note in main.jsx). Anything else in that predicate
+// would be a change to what every card paints on relaunch, so it is pinned.
+check("main.jsx keeps the default query dehydration…",
+  /shouldDehydrateQuery:\s*\(q\)\s*=>\s*defaultShouldDehydrateQuery\(q\)\s*&&/.test(main));
+check("…minus bank transactions, and nothing else",
+  /shouldDehydrateQuery:[^\n]*q\.queryKey\[0\] !== "transactions",?\s*$/m.test(main));
 check("main.jsx restores paused mutations in order", /mutations:\s*\{\s*scope:/.test(main));
 check("main.jsx resumes them after the restore", /queryClient\.resumePausedMutations\(\)/.test(main));
 check("…dropping the stale ones first",

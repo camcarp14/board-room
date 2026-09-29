@@ -31,6 +31,7 @@
 //      back to MINER_USER_ID, then to "no filter" (fine for a single-user site).
 
 const { createClient } = require("@supabase/supabase-js");
+const { timingSafeEqual } = require("node:crypto");
 
 const TZ = "America/Chicago"; // matches calendar.js / the rest of the app
 const jsonRes = (code, body, extraHeaders) => ({
@@ -413,7 +414,14 @@ exports.handler = async (event) => {
   }
 
   const token = q.token || event.headers?.["x-board-token"] || event.headers?.["X-Board-Token"];
-  if (!process.env.TRMNL_TOKEN || token !== process.env.TRMNL_TOKEN) {
+  // Constant time, the same shape as export-data's secretOk: timingSafeEqual
+  // throws on unequal lengths, so those are compared first (a length is not the
+  // secret). This was the one shared-secret check in the repo using `!==`.
+  const tokenOk = (got, want) => {
+    const a = Buffer.from(String(got || ""), "utf8"), b = Buffer.from(String(want), "utf8");
+    return a.length === b.length && timingSafeEqual(a, b);
+  };
+  if (!process.env.TRMNL_TOKEN || !tokenOk(token, process.env.TRMNL_TOKEN)) {
     return jsonRes(401, { success: false, error: "Missing or incorrect token." });
   }
   if (!process.env.SUPABASE_URL || !process.env.SUPABASE_SERVICE_ROLE_KEY) {
@@ -421,7 +429,10 @@ exports.handler = async (event) => {
   }
 
   const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SERVICE_ROLE_KEY, { db: { schema: "boardroom" } });
-  const userId = process.env.TRMNL_USER_ID || process.env.MINER_USER_ID || null;
+  // BOARD_USER_ID last, never null: a null here read EVERY user's rows with the
+  // service key, which is harmless only for as long as the shared project has
+  // exactly one account.
+  const userId = process.env.TRMNL_USER_ID || process.env.MINER_USER_ID || String(process.env.BOARD_USER_ID || "").trim() || null;
 
   try {
     const data = await loadAll(supabase, userId);
@@ -446,13 +457,17 @@ exports.handler = async (event) => {
         headers: {
           "Content-Type": "text/calendar; charset=utf-8",
           "Content-Disposition": 'inline; filename="board-room.ics"',
-          "Cache-Control": "public, max-age=900", // 15 min — TRMNL refreshes hourly anyway
+          // PRIVATE, NOT PUBLIC. This is the owner's calendar, birthdays and
+          // anniversaries, and the token can arrive in a header the cache does
+          // not vary on — `public` let a shared cache hand one token's answer to
+          // a request with no token at all. The device only needs its own copy.
+          "Cache-Control": "private, max-age=900", // 15 min — TRMNL refreshes hourly anyway
         },
         body: ics,
       };
     }
 
-    return jsonRes(200, renderJson(data), { "Cache-Control": "public, max-age=300" });
+    return jsonRes(200, renderJson(data), { "Cache-Control": "private, max-age=300" });
   } catch (e) {
     return jsonRes(500, { success: false, error: e.message });
   }

@@ -82,6 +82,20 @@ export const writeFailures = {
   clear(key) { if (failures.delete(key)) announce(); },
   clearAll() { if (failures.size) { failures.clear(); announce(); } },
   /**
+   * File a write that was REFUSED before it left the browser, so the shell shows
+   * it like any other unsaved change. `retry` is what makes another attempt
+   * possible (for a refused settings write: reload the settings), and the entry
+   * clears itself when it runs — the change itself is not replayed, because it
+   * was computed from state that was missing, which is why it was refused.
+   */
+  note(key, label, error, retry) {
+    failures.set(key, { key, label, error, at: Date.now(), retry: async () => {
+      failures.delete(key); announce();
+      try { await retry?.(); } catch (e) { console.warn(`[writeFailures] retry for ${key} failed: ${e?.message || e}`); }
+    } });
+    announce();
+  },
+  /**
    * Re-run every recorded write. Each retry goes back through reported(), so it
    * clears its own entry on success and refreshes it on failure — a partial
    * recovery leaves exactly what is still broken on screen and nothing else.
@@ -443,9 +457,18 @@ const isMissingShelf = (e) =>
 
 // ─── db — Supabase-backed memory layer (unchanged contract) ──────────────────
 export const db = {
+  // THE SESSION ON THIS DEVICE, NOT A ROUND TRIP TO ASK ABOUT IT. This used to
+  // be auth.getUser(), which in auth-js is a GET /auth/v1/user — so every write
+  // in the app made two sequential requests, and on a lossy link the first one
+  // failing came back as `user: null`, which every caller reports as "Not signed
+  // in" before the write it guards was ever attempted. That is the message the
+  // Notes quick-add showed while it dropped the words you had just typed.
+  // Identity is not decided here anyway: RLS checks auth.uid() against user_id
+  // on the server for every row this id is stamped on, so a stale or forged
+  // local value can only produce a refused write, never someone else's row.
   async uid() {
-    const { data } = await supabase.auth.getUser();
-    return data?.user?.id || null;
+    const { data } = await supabase.auth.getSession();
+    return data?.session?.user?.id || null;
   },
   async loadChat(limit = 200) {
     const { data, error } = await supabase.from("chat_messages")
@@ -802,7 +825,37 @@ export const db = {
     }
     return data || [];
   },
-  async saveNote(note) {
+  /**
+   * Save a note. With `opts.base` — the row as this editor last knew it to be on
+   * the server ({ title, body, pinned, color, updated_at }) — the write is
+   * CONDITIONAL on nobody else having written since, and the answer carries
+   * `conflict` when somebody did.
+   *
+   * WHY. An open editor never re-reads its note, and this used to upsert the
+   * whole row unconditionally. Open a note on the phone, lock it, dictate two
+   * lines into it from the Watch (note-capture appends and stamps updated_at),
+   * unlock, fix a typo: the autosave wrote the three-line draft over the
+   * five-line note and the editor said "Saved". Nothing anywhere recorded that
+   * the dictations had existed.
+   *
+   * THREE OUTCOMES when the row moved under us:
+   *  - Only its metadata moved (pinned/archived/hidden/seal from the list or
+   *    another device all stamp updated_at through bulkUpdateNotes). The words
+   *    this editor started from are still the words on the server, so there is
+   *    nothing to lose: rebase onto the new stamp and write again, sending
+   *    pinned/color only if THIS editor changed them, so the other device's
+   *    toggle survives too.
+   *  - The server already holds exactly these words (a save whose answer was
+   *    lost, a rescued draft being replayed). Nothing to write; say so.
+   *  - The words moved, or the note was binned elsewhere. Then neither version
+   *    may be thrown away, and there is no merge that is right for prose: the
+   *    draft is saved as a NEW note beside the original, and the caller is told
+   *    so it can move the editor onto the copy and say what happened.
+   *
+   * Without `base` (a brand-new note, the quick-add, or an old caller) this is
+   * the plain upsert it always was.
+   */
+  async saveNote(note, opts = {}) {
     const user_id = await db.uid();
     if (!user_id) throw new Error("Not signed in");
     const row = { id: note.id, user_id, title: note.title, body: note.body, updated_at: new Date().toISOString() };
@@ -813,9 +866,50 @@ export const db = {
     // would un-archive a note every time the editor autosaved a word.
     if (note.archived !== undefined) row.archived = note.archived;
     if (note.brief_hidden !== undefined) row.brief_hidden = note.brief_hidden;
-    const { data, error } = await supabase.from("personal_notes").upsert(row, { onConflict: "id" }).select().single();
-    if (error) throw error;
-    return data;
+    const upsert = async (r) => {
+      const { data, error } = await supabase.from("personal_notes").upsert(r, { onConflict: "id" }).select().single();
+      if (error) throw error;
+      return data;
+    };
+    const base = opts.base;
+    if (!base?.updated_at) return upsert(row);
+
+    const { id, user_id: _u, ...fields } = row;
+    const conditional = async (expected, patch) => {
+      const { data, error } = await supabase.from("personal_notes")
+        .update(patch).eq("id", id).eq("updated_at", expected).select();
+      if (error) throw error;
+      return data?.[0] || null;
+    };
+    const won = await conditional(base.updated_at, fields);
+    if (won) return won;
+
+    // Lost the compare-and-set. Look at what is there before deciding anything.
+    const { data: server, error: readErr } = await supabase.from("personal_notes")
+      .select("*").eq("id", id).maybeSingle();
+    if (readErr) throw readErr;
+    // Purged from the bin, or never saved after all: nothing to overwrite, so
+    // the words simply go back in — which is what this call always did.
+    if (!server) return upsert(row);
+    const deleted = !!server.deleted_at;
+    if (!deleted && server.title === note.title && server.body === note.body) return server;
+    if (!deleted && server.title === base.title && server.body === base.body) {
+      const patch = { title: note.title, body: note.body, updated_at: row.updated_at };
+      if (note.pinned !== undefined && note.pinned !== base.pinned) patch.pinned = note.pinned;
+      if (note.color !== undefined && note.color !== base.color) patch.color = note.color;
+      const rebased = await conditional(server.updated_at, patch);
+      if (rebased) return rebased;
+      // Moved AGAIN between the read and the write. Fall through to the copy
+      // rather than looping: a copy loses nothing, a loop can spin.
+    }
+    const title = (note.title || "").trim();
+    const copy = await upsert({
+      ...row,
+      id: crypto.randomUUID(),
+      title: title ? `${title} (conflicted copy)` : "Conflicted copy",
+      created_at: row.updated_at,
+    });
+    return { ...copy, conflict: { originalId: id, reason: deleted ? "deleted" : "changed" } };
   },
   /**
    * Delete notes — SOFT, and falling back to the hard delete when 0036 is not in
@@ -870,11 +964,15 @@ export const db = {
       .delete().in("id", list).not("deleted_at", "is", null);
     if (error) throw error;
   },
+  // Returns the new stamps. An open editor whose note was just archived or
+  // hidden from its own toolbar needs them: its next autosave is conditional on
+  // the updated_at it last saw (saveNote's `base`), and this write moved it.
   async bulkUpdateNotes(ids, patch) {
-    if (!ids?.length) return;
-    const { error } = await supabase.from("personal_notes")
-      .update({ ...patch, updated_at: new Date().toISOString() }).in("id", ids);
+    if (!ids?.length) return [];
+    const { data, error } = await supabase.from("personal_notes")
+      .update({ ...patch, updated_at: new Date().toISOString() }).in("id", ids).select("id,updated_at");
     if (error) throw error;
+    return data || [];
   },
   async restoreNotes(rows) {
     // Undo path — re-upserts previously deleted/overwritten rows exactly as
@@ -1156,21 +1254,33 @@ export const db = {
   async saveTransactions(rows) {
     const user_id = await db.uid();
     if (!user_id) throw new Error("Not signed in");
-    const payload = (rows || []).map((r) => ({
+    // category_override IS SENT ONLY BY ROWS THAT CARRY ONE. It used to be sent
+    // as null by every row, and an upsert writes every column it is handed — so
+    // re-importing a Chase export over a month you had already corrected reset
+    // every "Just this one" category in the overlap back to the lexicon's guess,
+    // the opposite of what data/finances.js promises. Parsed CSV rows never carry
+    // an override, so they now leave the column alone on conflict and a new row
+    // gets its default. Rows are batched by shape because one upsert shares one
+    // column list: a batch mixing both shapes would null the missing ones again.
+    const shape = (r) => ({
       id: r.id, user_id, account: r.account || "", date: r.date,
       amount_cents: r.amount, description: r.description || "",
       merchant: r.merchant || "", category: r.category || "other",
-      category_override: r.category_override ?? null,
-    }));
+      ...(r.category_override !== undefined ? { category_override: r.category_override } : {}),
+    });
+    const all = (rows || []).map(shape);
+    const batches = [all.filter((p) => !("category_override" in p)), all.filter((p) => "category_override" in p)];
     // Chunked: a 3,000-row export in one statement is a request big enough for
     // PostgREST to reject, and the failure looks like "import did nothing".
     const CHUNK = 500;
     let saved = 0;
-    for (let i = 0; i < payload.length; i += CHUNK) {
-      const { error } = await supabase.from("transactions")
-        .upsert(payload.slice(i, i + CHUNK), { onConflict: "user_id,id" });
-      if (error) throw error;
-      saved += Math.min(CHUNK, payload.length - i);
+    for (const payload of batches) {
+      for (let i = 0; i < payload.length; i += CHUNK) {
+        const { error } = await supabase.from("transactions")
+          .upsert(payload.slice(i, i + CHUNK), { onConflict: "user_id,id" });
+        if (error) throw error;
+        saved += Math.min(CHUNK, payload.length - i);
+      }
     }
     return saved;
   },

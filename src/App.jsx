@@ -76,12 +76,8 @@ function MigrationModal({ counts, onImport, onSkip, importing }) {
 }
 
 
-// The keys that describe a LAYOUT the account already has — which tabs sit in
-// the bar and in what order, which Brief widgets are off. Every panel that edits
-// one of these reads the saved value out of `settings`, changes one thing, and
-// writes the whole thing back, so while `settings` is still null the value it
-// would write is the default layout with one change in it. See updateSetting.
-const LAYOUT_KEYS = new Set(["navigation", "hidden_tabs", "brief_hidden", "brief_order", "brief_columns", "brief_layouts", "brief_active_layout"]);
+// (LAYOUT_KEYS lived here: the keys updateSetting refused while settings were
+// null. The refusal now covers every key — see the note above updateSetting.)
 
 // ─── Main app ────────────────────────────────────────────────────────────────
 export default function App() {
@@ -115,6 +111,9 @@ export default function App() {
   // Which account this device last held, so a DIFFERENT account arriving is the
   // moment to purge what the previous one left in the caches.
   const lastUser = useRef(null);
+  // The purge lives inside the auth subscription; Sign out needs it too when the
+  // server half of a sign-out fails (see signOut).
+  const purgeRef = useRef(null);
   const [messages, setMessages] = useState([]);
   const [seatNotes, setSeatNotes] = useState({});
   const [settings, setSettings] = useState(null);
@@ -352,10 +351,18 @@ export default function App() {
           // left here. loadSettings clears it too, but leaving it out of the purge
           // that enumerates everything else would be an omission to trip over.
           db.forgetSettings();
-          ["br_rq_cache", "br_snapshot", "br_event_takes"].forEach(k => localStorage.removeItem(k));
+          // EVERY br_* KEY BUT THE LOOK OF THE APP. This named three keys and left
+          // the rest: the pre-account chat and seat notes, an unfinished workout
+          // and guitar session (which the NEXT account would resume and save as
+          // its own), the crash log, the miner reading, a rescued note draft.
+          // Deny-by-default with a short allowlist of pure presentation, so a key
+          // added next month is purged the day it exists.
+          const KEEP = /^br_(theme|palette|ambient|chunk_reload|signout_at|[a-z]+_(collapsed|sections))$/;
+          Object.keys(localStorage).filter((k) => k.startsWith("br_") && !KEEP.test(k)).forEach((k) => localStorage.removeItem(k));
         } catch { /* storage unavailable — nothing to leak anyway */ }
         lastUser.current = null;
       };
+      purgeRef.current = purgeDevice;
       // TWO DIFFERENT THINGS ARRIVE AS SIGNED_OUT, and the purge is right for
       // exactly one of them. supabase-js sends the same event from the Sign out
       // button and from a session that simply died — a refresh token refused
@@ -372,7 +379,13 @@ export default function App() {
       // keeps the cache, since the same account is coming back, and says so over
       // the login screen instead of pretending nothing happened.
       if (event === "SIGNED_OUT") {
-        const explicit = explicitSignOut.current;
+        // Another tab's Sign out arrives here too (auth-js broadcasts it), with
+        // this tab's flag down — so it read as an expiry and kept its cache,
+        // which it could then write back to storage. The button leaves a stamp
+        // every tab can read; a SIGNED_OUT within a minute of it is that button.
+        let stamped = false;
+        try { stamped = Date.now() - Number(localStorage.getItem("br_signout_at") || 0) < 60_000; } catch {}
+        const explicit = explicitSignOut.current || stamped;
         explicitSignOut.current = false;
         if (explicit) purgeDevice();
         else setSessionExpired(true);
@@ -408,10 +421,32 @@ export default function App() {
   // subscribers inside signOut(), so the flag is still up when they run and is
   // lowered again either way — an offline sign-out that never emitted must not
   // leave it armed for an expiry hours later.
+  //
+  // A SIGN OUT THAT FAILS STILL SIGNS THIS DEVICE OUT. auth-js asks the server to
+  // revoke first and, if that request fails (no signal, a 5xx), hands back
+  // { error } WITHOUT removing the local session — so no SIGNED_OUT fired, the
+  // purge never ran, the sheet simply stayed open, and the refresh token plus the
+  // cached transactions and notes stayed on the device for whoever used it next,
+  // under a confirm that had promised the cache was cleared. On error the local
+  // half is done by hand: the stored session goes, the device is purged, and the
+  // page reloads onto the login screen. The server-side token then expires on its
+  // own schedule; the person is told that part did not go through.
   const signOut = async () => {
     explicitSignOut.current = true;
-    try { await supabase.auth.signOut({ scope: "local" }); }
+    try { localStorage.setItem("br_signout_at", String(Date.now())); } catch {}
+    let error = null;
+    try { ({ error } = await supabase.auth.signOut({ scope: "local" })); }
+    catch (e) { error = e; }
     finally { explicitSignOut.current = false; }
+    if (!error) return;
+    console.warn("[auth] server sign-out failed; signing this device out locally", error);
+    try {
+      const k = supabase.auth.storageKey;
+      if (k) { localStorage.removeItem(k); localStorage.removeItem(`${k}-code-verifier`); }
+    } catch {}
+    purgeRef.current?.();
+    try { sessionStorage.setItem("br_signout_offline", "1"); } catch {}
+    window.location.reload();
   };
 
   useEffect(() => {
@@ -518,13 +553,26 @@ export default function App() {
   // screen); this is the backstop for any surface that reaches here first. It
   // answers in reported()'s shape and paints nothing, so the caller sees a write
   // that did not happen rather than one that did.
+  //
+  // EVERY KEY, NOT ONLY THE LAYOUT ONES. The guard used to cover the tab bar and
+  // the Brief layout and nothing else, while every other panel builds its value
+  // the same way — `{ ...settings?.x, change }` — out of whatever it was handed.
+  // Handed null, that is a one-key object written over the saved row: set one
+  // budget and every other budget was deleted; add one taste and the saved likes
+  // and dislikes went; "Generate token" replaced the Watch's capture token. And
+  // the optimistic paint below then turned null into a one-key object, which made
+  // settingsLoaded true and re-armed the very tab-bar overwrite this guard exists
+  // for. So nothing is written, nothing is painted, and the refusal is filed as
+  // an unsaved change whose Retry reloads the settings — after which the change
+  // can be made again, this time against the real row.
   const updateSetting = async (key, value) => {
-    if (settings === null && LAYOUT_KEYS.has(key)) {
-      const error = new Error(`Your saved ${key.replace(/_/g, " ")} hasn't loaded yet, so this wasn't written over it.`);
+    if (settings === null) {
+      const error = new Error(`Your saved settings haven't loaded yet, so this change to ${key.replace(/_/g, " ")} wasn't saved — it would have written over them. Retry reloads them; then make the change again.`);
       console.warn(`[settings] refused ${key}: settings not loaded`);
+      writeFailures.note(`settings-unloaded:${key}`, `${key.replace(/_/g, " ")} (settings not loaded)`, error, () => refreshData());
       return { ok: false, error };
     }
-    setSettings(prev => ({ ...(prev || {}), [key]: value }));
+    setSettings(prev => (prev ? { ...prev, [key]: value } : prev));
     if (MERGING_SETTINGS[key]) return await db.mergeSetting(key, value);
     return await db.saveSetting(key, value);
   };

@@ -57,12 +57,20 @@ async function denyUnlessSignedIn(event) {
   return null;
 }
 
+// ONE PROJECT NOW, SO ONE KEY. CLARIFY_SUPABASE_URL points at the shared
+// Pentagon project, which is also SUPABASE_URL — so Board Room's own service key
+// already reaches this table, and the anon key never could (see the header).
+// Used only when the two URLs are the same project; a different project still
+// needs its own CLARIFY_SUPABASE_SERVICE_ROLE_KEY.
+const sameProject = (a, b) => !!a && !!b && String(a).replace(/\/+$/, "") === String(b).replace(/\/+$/, "");
+
 exports.handler = async (event) => {
   let body = {};
   try { body = JSON.parse(event.body || "{}"); } catch {}
 
   const url = process.env.CLARIFY_SUPABASE_URL;
-  const serviceKey = process.env.CLARIFY_SUPABASE_SERVICE_ROLE_KEY;
+  const serviceKey = process.env.CLARIFY_SUPABASE_SERVICE_ROLE_KEY
+    || (sameProject(url, process.env.SUPABASE_URL) ? process.env.SUPABASE_SERVICE_ROLE_KEY : undefined);
   const key = serviceKey || process.env.CLARIFY_SUPABASE_ANON_KEY;
   const configured = !!(url && key);
 
@@ -73,7 +81,9 @@ exports.handler = async (event) => {
   const denied = await denyUnlessSignedIn(event);
   if (denied) return denied;
 
-  const headers = { apikey: key, Authorization: `Bearer ${key}` };
+  // Accept-Profile pinned to public: outreach lives there, and on a project that
+  // exposes several schemas the default is whichever is listed first.
+  const headers = { apikey: key, Authorization: `Bearer ${key}`, "Accept-Profile": "public" };
   const count = async (query) => {
     const res = await fetch(`${url}/rest/v1/outreach?${query}&select=id`, { signal: AbortSignal.timeout(30000), headers: { ...headers, Prefer: "count=exact", Range: "0-0" } });
     // A 401/403 is the KEY being refused, not the columns — see the header. The

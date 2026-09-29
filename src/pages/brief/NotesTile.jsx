@@ -97,7 +97,10 @@ export function NotesTile({ isMobile, refreshSignal, onOpenNotes, collapsed, onT
   const beginEdit = (n) => {
     historyRef.current.reset({ title: n.title || "", body: n.body || "" });
     setHistAt(0);
-    setEditing({ id: n.id, title: n.title || "", body: n.body || "" });
+    // `base` is the row as it was when the editor opened. The save is
+    // conditional on it (see db.saveNote), so words that arrived from the Watch
+    // or another device while this sat open are never written over.
+    setEditing({ id: n.id, title: n.title || "", body: n.body || "", base: { title: n.title || "", body: n.body || "", pinned: !!n.pinned, color: n.color || null, updated_at: n.updated_at || null } });
   };
   const applyEditBody = (next, caret) => {
     editText({ body: next }, "body", caret);
@@ -150,8 +153,19 @@ export function NotesTile({ isMobile, refreshSignal, onOpenNotes, collapsed, onT
     if (savingEdit || !editing) return;
     setSavingEdit(true);
     try {
-      const saved = await db.saveNote({ id: editing.id, title: editing.title, body: editing.body });
-      setNotes(prev => (prev || []).map(n => (n.id === saved.id ? saved : n)));
+      // Nothing changed → nothing to send. Save was enabled on an untouched
+      // editor, and each press re-stamped updated_at, which reorders the list.
+      if (editing.base && editing.title === editing.base.title && editing.body === editing.base.body) { setEditing(null); setSavingEdit(false); return; }
+      const saved = await db.saveNote({ id: editing.id, title: editing.title, body: editing.body }, { base: editing.base });
+      if (saved.conflict) {
+        const { conflict, ...copy } = saved;
+        setNotes(prev => [copy, ...(prev || [])]);
+        setErr(conflict.reason === "deleted"
+          ? "That note was deleted on another device — your text was saved as a new note."
+          : "That note changed on another device — your version was saved as a separate copy, so neither is lost.");
+      } else {
+        setNotes(prev => (prev || []).map(n => (n.id === saved.id ? saved : n)));
+      }
       setEditing(null);
     } catch (e) { setErr(humanErr(e, "Couldn't save that.")); }
     setSavingEdit(false);

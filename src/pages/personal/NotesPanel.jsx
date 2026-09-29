@@ -158,7 +158,122 @@ export function NotesPanel({ isMobile, openSignal, settings, updateSetting }) {
   const quickRef = useRef(null);
 
   const refresh = () => queryClient.invalidateQueries({ queryKey: ["notes"] });
-  useEffect(() => () => { clearTimeout(saveTimer.current); clearTimeout(undoTimer.current); clearTimeout(oopsTimer.current); }, []);
+
+  // ─── what the editor knows about the server, and the one road to it ────────
+  // baseRef is the note as the server last held it, as far as this editor knows:
+  // { id, title, body, pinned, color, updated_at }. Every save is conditional on
+  // it (db.saveNote's `base`), which is what stops an old draft landing on top of
+  // words that arrived from the Watch or another device while it sat open.
+  //
+  // saveChain puts every write from this editor in single file. The autosave, a
+  // flush on close, a flush on hide and a flush on unmount can all be in flight
+  // at once on a slow link, and two conditional writes racing from one editor
+  // would each see the other's stamp and call it a conflict. In a line, each one
+  // reads the base the previous one left behind.
+  //
+  // redirectRef follows a note to its conflicted copy: a save already queued for
+  // the original, when the copy was made, must land on the copy, never go back
+  // and overwrite the version somebody else wrote.
+  const baseRef = useRef(null);
+  // Bumped on every edit. A save that finishes may only paint "Saved" if nothing
+  // was typed after it started — otherwise a slow earlier save would stamp
+  // "Saved" over newer, unsent words, and closing the editor (which trusts that
+  // state) would skip them.
+  const editSeq = useRef(0);
+  const settle = (seq, state) => { if (editSeq.current === seq) setSaveState(state); };
+  const saveChain = useRef(Promise.resolve());
+  const redirectRef = useRef(new Map());
+  const noteBase = (n) => (n ? { id: n.id, title: n.title || "", body: n.body || "", pinned: !!n.pinned, color: n.color || null, updated_at: n.updated_at || null } : null);
+  const persist = (row) => {
+    const run = async () => {
+      const target = redirectRef.current.get(row.id) || row.id;
+      const r = { ...row, id: target };
+      const base = baseRef.current?.id === target ? baseRef.current : null;
+      const saved = await db.saveNote(r, { base });
+      if (saved.conflict) {
+        redirectRef.current.set(saved.conflict.originalId, saved.id);
+        baseRef.current = noteBase(saved);
+        // The editor moves onto the copy; the effect must not read the id change
+        // as a fresh edit and fire a save of its own.
+        skipNextAutosave.current = true;
+        setActiveId((cur) => (cur === saved.conflict.originalId ? saved.id : cur));
+        complain(saved.conflict.reason === "deleted"
+          ? "That note was deleted on another device — your text was saved as a new note."
+          : "That note changed on another device (a Watch dictation?) — your version was saved as a separate copy, so neither is lost.");
+      } else {
+        baseRef.current = noteBase(saved);
+      }
+      clearRescue(row);
+      return saved;
+    };
+    const p = saveChain.current.then(run, run);
+    saveChain.current = p.catch(() => {});
+    return p;
+  };
+
+  // ─── the rescue copy ─────────────────────────────────────────────────────
+  // Every unsaved draft is also written to this device the moment it changes,
+  // and cleared once the server has it. It is what survives the cases no flush
+  // can: the PWA killed mid-save, a tab switch inside the 800 ms autosave window
+  // on a dead link, a reload from a new service worker. The next time this panel
+  // mounts it reopens the draft and saves it — conditionally, so a rescue can
+  // never overwrite newer words either.
+  const RESCUE_KEY = "br_note_rescue";
+  const writeRescue = (row) => {
+    try { localStorage.setItem(RESCUE_KEY, JSON.stringify({ row, base: baseRef.current, at: Date.now() })); } catch {}
+  };
+  const clearRescue = (row) => {
+    try {
+      const r = JSON.parse(localStorage.getItem(RESCUE_KEY) || "null");
+      if (r && r.row?.id === row.id && r.row?.body === row.body && r.row?.title === row.title) localStorage.removeItem(RESCUE_KEY);
+    } catch {}
+  };
+
+  // The latest editor state, for the two exits that happen outside a render:
+  // unmount (tab switch, pill switch) and the page being hidden.
+  const latestRef = useRef(null);
+  const dirtyRow = () => {
+    const l = latestRef.current;
+    if (!l?.activeId || (l.saveState !== "saving" && l.saveState !== "error")) return null;
+    if (!l.draft.title.trim() && !l.draft.body.trim()) return null;
+    return { id: l.activeId, title: l.draft.title, body: l.draft.body, ...(l.legacy ? {} : { pinned: l.draft.pinned, color: l.draft.color }) };
+  };
+  useEffect(() => {
+    // Hidden = the app is being switched away from, locked, or reloaded. Send
+    // the draft now instead of trusting the 800 ms timer to still exist.
+    const onHide = () => {
+      if (!document.hidden) return;
+      const row = dirtyRow();
+      if (!row) return;
+      clearTimeout(saveTimer.current);
+      const seq = editSeq.current;
+      persist(row).then(() => settle(seq, "saved"), () => settle(seq, "error"));
+    };
+    document.addEventListener("visibilitychange", onHide);
+    return () => {
+      document.removeEventListener("visibilitychange", onHide);
+      clearTimeout(saveTimer.current); clearTimeout(undoTimer.current); clearTimeout(oopsTimer.current);
+      // UNMOUNT USED TO CLEAR THE TIMER AND NOTHING ELSE, so a line typed less
+      // than 800 ms before switching tab was simply never sent. Send it; the
+      // rescue copy already holds it if this fails too.
+      const row = dirtyRow();
+      if (row) persist(row).catch(() => {});
+    };
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Reopen a draft that never reached the server (see the rescue copy above).
+  useEffect(() => {
+    let r = null;
+    try { r = JSON.parse(localStorage.getItem(RESCUE_KEY) || "null"); } catch {}
+    if (!r?.row?.id || !(r.row.title || r.row.body)) return;
+    if (Date.now() - (r.at || 0) > 14 * 86400000) { try { localStorage.removeItem(RESCUE_KEY); } catch {} return; }
+    baseRef.current = r.base && r.base.id === r.row.id ? r.base : null;
+    setActiveId(r.row.id);
+    setDraft({ title: r.row.title || "", body: r.row.body || "", pinned: !!r.row.pinned, color: r.row.color || null });
+    historyRef.current.reset({ title: r.row.title || "", body: r.row.body || "" });
+    setHistAt(0);
+    complain("Recovered a note that hadn't finished saving — saving it now.");
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   const complain = (msg) => {
     clearTimeout(oopsTimer.current);
@@ -316,6 +431,7 @@ export function NotesPanel({ isMobile, openSignal, settings, updateSetting }) {
       // note that is already saved, and newNote opens an empty draft that the
       // effect's own empty check skips anyway. This one carries content, which
       // is exactly the case that must not be skipped.
+      baseRef.current = null;
       setActiveId(id);
       setDraft({ title: "", body: t, pinned: false, color: null });
       // Seed the undo stack here too. This path opens the editor with content
@@ -332,13 +448,23 @@ export function NotesPanel({ isMobile, openSignal, settings, updateSetting }) {
     const optimistic = { id, title: "", body: t, pinned: false, color: null, created_at: new Date().toISOString(), updated_at: new Date().toISOString() };
     setNotes(list => [optimistic, ...(list || [])]);
     try { await db.saveNote({ id, title: "", body: t }); refresh(); }
-    catch (e) { setNotes(list => (list || []).filter(n => n.id !== id)); complain(e.message || "Couldn't save."); }
+    catch (e) {
+      setNotes(list => (list || []).filter(n => n.id !== id));
+      // THE WORDS GO BACK IN THE BOX. The box was cleared before the save so the
+      // next capture could start at once, which left a failed save nowhere to
+      // put what you typed but a four-second toast. Only if the box is still
+      // empty — anything typed since is newer and must not be replaced.
+      setQuick(q => (q ? q : t));
+      complain(`${e.message || "Couldn't save."} Your text is back in the box.`);
+    }
     quickRef.current?.focus();
   };
 
   // ─── editor open/close ───
   const openNote = (n) => {
     skipNextAutosave.current = true;
+    editSeq.current++;
+    baseRef.current = noteBase(n);
     setActiveId(n.id);
     setDraft({ title: n.title || "", body: n.body || "", pinned: !!n.pinned, color: n.color || null });
     // Seeded with what is SAVED, so the earliest thing undo can reach is the note
@@ -350,22 +476,42 @@ export function NotesPanel({ isMobile, openSignal, settings, updateSetting }) {
   };
   const newNote = () => {
     skipNextAutosave.current = true;
+    editSeq.current++;
+    baseRef.current = null;
     setActiveId(crypto.randomUUID());
     setDraft({ title: "", body: "", pinned: false, color: null });
     historyRef.current.reset({ title: "", body: "" });
     setHistAt(0);
     setSaveState("idle");
   };
-  const flushSave = () => {
-    if (!activeId) return;
+  // UNSAVED MEANS "saving" OR "error". This used to flush only on "saving", so
+  // after an autosave had failed and the header said "Not saved", closing the
+  // editor sent nothing at all and reset the draft — a new note vanished and an
+  // edited one reverted, with the warning on screen the moment before.
+  // Resolves true when there is nothing left to save.
+  const flushSave = async () => {
+    if (!activeId) return true;
     clearTimeout(saveTimer.current);
-    if (saveState === "saving" && (draft.title.trim() || draft.body.trim()))
-      db.saveNote(noteRow()).then(refresh).catch(() => {});
+    if (saveState !== "saving" && saveState !== "error") return true;
+    if (!draft.title.trim() && !draft.body.trim()) return true;
+    setSaveState("saving");
+    const seq = editSeq.current;
+    try { await persist(noteRow()); settle(seq, "saved"); refresh(); return true; }
+    catch { settle(seq, "error"); return false; }
   };
-  const closeEditor = () => { flushSave(); setActiveId(null); setDraft({ title: "", body: "", pinned: false, color: null }); };
+  // The editor stays open when the last save cannot be made: closing it is the
+  // one action that would take the words off the screen. They are also in the
+  // rescue copy, so leaving the tab instead does not lose them either.
+  const closeEditor = async () => {
+    const ok = await flushSave();
+    if (!ok) { complain("Couldn't save this note — it's still here. Check your connection and try again."); return; }
+    setActiveId(null);
+    setDraft({ title: "", body: "", pinned: false, color: null });
+  };
   // pinned/color are spread ONLY when the schema has them — sending those fields
   // to a pre-upgrade table would error
   const noteRow = () => ({ id: activeId, title: draft.title, body: draft.body, ...(legacy ? {} : { pinned: draft.pinned, color: draft.color }) });
+  latestRef.current = { activeId, draft, saveState, legacy };
 
   // autosave — 800ms after typing stops, only once there's something to save
   useEffect(() => {
@@ -373,11 +519,14 @@ export function NotesPanel({ isMobile, openSignal, settings, updateSetting }) {
     if (skipNextAutosave.current) { skipNextAutosave.current = false; return; }
     if (!draft.title.trim() && !draft.body.trim()) return;
     setSaveState("saving");
+    const seq = ++editSeq.current;
+    const row = noteRow();
+    writeRescue(row);
     clearTimeout(saveTimer.current);
     saveTimer.current = setTimeout(() => {
-      db.saveNote(noteRow())
-        .then(() => { setSaveState("saved"); refresh(); })
-        .catch(() => setSaveState("error"));
+      persist(row)
+        .then(() => { settle(seq, "saved"); refresh(); })
+        .catch(() => settle(seq, "error"));
     }, 800);
     return () => clearTimeout(saveTimer.current);
   }, [draft, activeId]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -457,9 +606,17 @@ export function NotesPanel({ isMobile, openSignal, settings, updateSetting }) {
   // seal, the pin and the manual order all survive, and un-archiving puts it back
   // exactly where it was. That is why it needs no confirm and no toast: nothing
   // is at risk, and the note is one tap away under Archived.
+  // This device just moved these notes' updated_at. If one of them is open, its
+  // editor's next conditional save must start from the new stamp, not collide
+  // with a write it made itself.
+  const rebaseStamps = (rows) => {
+    const b = baseRef.current;
+    const hit = b && (rows || []).find((r) => r.id === b.id);
+    if (hit) baseRef.current = { ...b, updated_at: hit.updated_at };
+  };
   const setArchived = async (ids, archived) => {
     if (!ids.length) return;
-    try { await db.bulkUpdateNotes(ids, { archived }); refresh(); }
+    try { rebaseStamps(await db.bulkUpdateNotes(ids, { archived })); refresh(); }
     catch (e) {
       complain(isMissingShelfError(e)
         ? "Archiving needs one more column — copy the SQL from the banner on the Notes list."
@@ -473,7 +630,7 @@ export function NotesPanel({ isMobile, openSignal, settings, updateSetting }) {
   // switch flips back in one tap.
   const setBriefHidden = async (ids, hidden) => {
     if (!ids.length) return;
-    try { await db.bulkUpdateNotes(ids, { brief_hidden: hidden }); refresh(); }
+    try { rebaseStamps(await db.bulkUpdateNotes(ids, { brief_hidden: hidden })); refresh(); }
     catch (e) {
       complain(isMissingShelfError(e)
         ? "Hiding a note from the Brief needs one more column — copy the SQL from the banner on the Notes list."

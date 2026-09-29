@@ -161,8 +161,14 @@ for (const [name, src] of [["the Notes tab editor", panel], ["the Brief tile edi
 // pattern-matched: the two have to move together or this fails.
 const opens = (panel.match(/setActiveId\(/g) || []).length;
 const seeds = (panel.match(/historyRef\.current\.reset\(/g) || []).length;
+// -3: the two closes pass null/clear, and the conflict redirect moves the open
+// editor onto the conflicted COPY of the words already on screen — the draft is
+// untouched, so the stack it has is still the right one (checked just below).
+const redirects = (panel.match(/setActiveId\(\(cur\) => \(cur === saved\.conflict\.originalId \? saved\.id : cur\)\)/g) || []).length;
 check("every route that opens the editor seeds the undo stack",
-  seeds >= opens - 2, `setActiveId x${opens}, reset x${seeds}`); // -2: the two closes pass null/clear
+  seeds >= opens - 2 - redirects && redirects <= 1, `setActiveId x${opens}, reset x${seeds}, redirects x${redirects}`);
+check("…and the conflict redirect changes only the id, never the words",
+  !/saved\.conflict[\s\S]{0,700}setDraft\(/.test(panel.slice(panel.indexOf("if (saved.conflict)"), panel.indexOf("clearRescue(row);"))));
 check("…including the ⇧Enter hand-off from quick capture",
   /setDraft\(\{ title: "", body: t[\s\S]{0,600}?historyRef\.current\.reset\(\{ title: "", body: t \}\)/.test(panel));
 check("the Brief tile has no setEditing that writes text behind the funnel's back",

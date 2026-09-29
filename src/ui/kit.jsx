@@ -863,6 +863,14 @@ export function Sheet({ onClose, title, headTrailing, footer, children, z = 300,
     const focusInitial = () => {
       const dialog = dialogRef.current;
       if (!dialog) return;
+      // A FIELD THAT ALREADY HAS FOCUS KEEPS IT. React implements autoFocus by
+      // calling .focus() at mount and never writes the `autofocus` attribute in
+      // the browser, so the lookup below matched nothing on every sheet that
+      // asked for a field, and this timer — firing after that mount — moved focus
+      // off the field onto the first button: the header's Close. Typing went
+      // nowhere and Enter closed the sheet (Creed line, budget, dream tile, add
+      // position).
+      if (dialog.contains(document.activeElement) && document.activeElement !== dialog) return;
       const preferred = dialog.querySelector("[autofocus]");
       (preferred || focusable()[0] || dialog).focus();
     };

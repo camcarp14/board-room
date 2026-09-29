@@ -124,6 +124,9 @@ function Mechanism({ mech }) {
 }
 
 function SourceLink({ url, label }) {
+  // These URLs come from web search and model output. React 18 renders a
+  // `javascript:` href as-is, so anything that is not http(s) is shown as text.
+  if (!/^https?:\/\//i.test(String(url || ""))) return label ? <span style={{ fontSize: 11, marginRight: 10 }}>{label}</span> : null;
   return (
     <a href={url} target="_blank" rel="noreferrer" style={{
       fontSize: 11, color: "var(--accent)", display: "inline-flex", alignItems: "center",

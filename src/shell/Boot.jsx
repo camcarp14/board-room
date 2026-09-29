@@ -135,6 +135,12 @@ export function LoginScreen() {
   // picks the copy, `message` still holds supabase's own words for a real refusal.
   const [err, setErr] = useState(null);
   const [sent, setSent] = useState(false);
+  // Set by App's signOut when the server half of a sign-out failed and this
+  // device was signed out locally instead — read once, so it shows on the login
+  // screen that sign-out reloaded onto and never again.
+  const [offlineSignOut] = useState(() => {
+    try { const v = sessionStorage.getItem("br_signout_offline"); sessionStorage.removeItem("br_signout_offline"); return !!v; } catch { return false; }
+  });
 
   // ONE ENTRY POINT FOR BOTH MODES, so the retry offered below is literally the
   // same attempt rather than a second path that can drift from this one.
@@ -213,6 +219,7 @@ export function LoginScreen() {
           ) : (
             <div className="t-foot" role="alert" style={{ color: "var(--red)" }}>{err.message || "That sign-in didn't go through."}</div>
           ))}
+          {offlineSignOut && <div className="t-foot" role="status" style={{ color: "var(--amber)", lineHeight: 1.5 }}>Signed out on this device, and its cached data was cleared. The server couldn't be reached to revoke the session, so it will expire on its own.</div>}
           {sent && <div className="t-foot" style={{ color: "var(--green)" }}>Login link sent — check your email.</div>}
           <Button kind="primary" size="lg" full disabled={disabled} onClick={submit}>
             {busy ? (mode === "password" ? "Signing in…" : "Sending…") : (mode === "password" ? "Enter the room" : "Email me a login link")}

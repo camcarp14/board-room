@@ -24,7 +24,12 @@ function parseRss(xml, source) {
     const block = m[1];
     const title = stripCdata((block.match(/<title>([\s\S]*?)<\/title>/) || [])[1]);
     const pubDate = (block.match(/<pubDate>([\s\S]*?)<\/pubDate>/) || [])[1] || "";
-    const link = stripCdata((block.match(/<link>([\s\S]*?)<\/link>/) || [])[1]);
+    const raw = stripCdata((block.match(/<link>([\s\S]*?)<\/link>/) || [])[1]);
+    // http(s) or nothing. This string becomes an <a href> on the Brief, and React
+    // 18 does not block `javascript:` URLs — so a feed that was compromised, or
+    // simply sloppy, could run script in the app's origin (where the Supabase
+    // session lives) on one tap. A dropped link costs a headline its timestamp link.
+    const link = /^https?:\/\//i.test(String(raw || "").trim()) ? String(raw).trim() : null;
     if (title) items.push({ title, pubDate, link, source });
   }
   return items;
