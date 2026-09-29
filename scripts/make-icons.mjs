@@ -1,6 +1,8 @@
 // Board Room app icons — generated, no image deps.
-// The SESSION seal: a fine gold ring and a small gold square (rotated 45°)
-// on true graphite — the mark the boot screen draws, frozen as the app icon.
+// The compass (2026-09-30): a gold dial ring with cardinal and minor ticks, and a
+// needle turned 40° toward the north-east — gold north half, darker south half —
+// on true graphite. It replaced the ring-and-diamond seal; the in-app Seal
+// (shell/Boot.jsx) is drawn separately.
 // Pure node: hand-built PNG chunks (zlib deflate + CRC32) over a supersampled
 // SDF rasterizer. Run: node scripts/make-icons.mjs
 import { deflateSync } from "node:zlib";
@@ -63,14 +65,37 @@ const BRASS_HI = hex("#EACC80");
 const BRASS_LO = hex("#C29A45");
 const GLOW = hex("#D9B45C");
 
+// ── geometry helpers (all in design units: the dial ring has radius 58) ──────
+const segDist = (px, py, ax, ay, bx, by) => {
+  const vx = bx - ax, vy = by - ay;
+  const t = Math.max(0, Math.min(1, ((px - ax) * vx + (py - ay) * vy) / (vx * vx + vy * vy)));
+  return Math.hypot(px - (ax + t * vx), py - (ay + t * vy));
+};
+const inTri = (px, py, a, b, c) => {
+  const s1 = (b[0] - a[0]) * (py - a[1]) - (b[1] - a[1]) * (px - a[0]);
+  const s2 = (c[0] - b[0]) * (py - b[1]) - (c[1] - b[1]) * (px - b[0]);
+  const s3 = (a[0] - c[0]) * (py - c[1]) - (a[1] - c[1]) * (px - c[0]);
+  return (s1 >= 0 && s2 >= 0 && s3 >= 0) || (s1 <= 0 && s2 <= 0 && s3 <= 0);
+};
+const NEEDLE_DEG = 40;
+const rot = (x, y) => {
+  const a = (NEEDLE_DEG * Math.PI) / 180;
+  return [x * Math.cos(a) - y * Math.sin(a), x * Math.sin(a) + y * Math.cos(a)];
+};
+const NORTH = [rot(0, -42), rot(9, 0), rot(-9, 0)];
+const SOUTH = [rot(0, 42), rot(9, 0), rot(-9, 0)];
+const MAJOR = [[0, -56, 0, -44], [56, 0, 44, 0], [0, 56, 0, 44], [-56, 0, -44, 0]];
+const MINOR = [[28, -49, 25, -44], [49, -28, 44, -25], [49, 28, 44, 25], [28, 49, 25, 44],
+  [-28, 49, -25, 44], [-49, 28, -44, 25], [-49, -28, -44, -25], [-28, -49, -25, -44]];
+const NEEDLE_SOUTH = hex("#A8843A");
+
 // scale: motif fits within `fit` fraction of the canvas (maskable wants ~0.62)
 function render(size, fit) {
   const px = Buffer.alloc(size * size * 4);
-  const SS = 3; // 3x3 supersampling
+  const SS = 4; // 4x4 supersampling — the needle and ticks are thin
   const c = size / 2;
-  const ringR = size * 0.335 * fit / 0.78;   // ring radius
-  const ringW = size * 0.018 * fit / 0.78;   // ring stroke
-  const diaR = size * 0.135 * fit / 0.78;    // diamond half-diagonal
+  const ringR = size * 0.335 * fit / 0.78;   // ring radius (px)
+  const u = ringR / 58;                       // px per design unit
   for (let y = 0; y < size; y++) {
     for (let x = 0; x < size; x++) {
       let r = 0, g = 0, b = 0;
@@ -84,22 +109,16 @@ function render(size, fit) {
           const dGlow = Math.hypot(X - c, Y - c * 1.05);
           const glowT = Math.max(0, 1 - dGlow / (size * 0.62));
           col = mix(col, GLOW, glowT * glowT * 0.07);
-          // brass vertical sheen shared by ring + diamond
           const brass = mix(BRASS_HI, BRASS_LO, Math.min(1, Math.max(0, (Y - (c - ringR)) / (2 * ringR))));
-          // engraved ring
-          const dRing = Math.abs(Math.hypot(X - c, Y - c) - ringR);
-          if (dRing < ringW) {
-            const aa = Math.min(1, (ringW - dRing) / (size / 512));
-            col = mix(col, brass, Math.min(1, aa));
-          }
-          // diamond seal
-          const dDia = (Math.abs(X - c) + Math.abs(Y - c)) - diaR;
-          if (dDia < 0) {
-            const aa = Math.min(1, -dDia / (size / 256));
-            // inner facet: lighter toward the top point
-            const facet = mix(brass, BRASS_HI, Math.max(0, 1 - (Y - (c - diaR)) / diaR) * 0.35);
-            col = mix(col, facet, Math.min(1, aa));
-          }
+          // design-space coordinates
+          const dx = (X - c) / u, dy = (Y - c) / u;
+          const dc = Math.hypot(dx, dy);
+          if (Math.abs(dc - 58) <= 2.6) col = brass;                                   // dial ring
+          if (MAJOR.some(([ax, ay, bx, by]) => segDist(dx, dy, ax, ay, bx, by) <= 2)) col = brass;       // N E S W ticks
+          if (MINOR.some(([ax, ay, bx, by]) => segDist(dx, dy, ax, ay, bx, by) <= 1.3)) col = BRASS_LO;  // minor ticks
+          if (inTri(dx, dy, ...SOUTH)) col = NEEDLE_SOUTH;                              // needle, south half
+          if (inTri(dx, dy, ...NORTH)) col = mix(brass, BRASS_HI, 0.25);                // needle, north half
+          if (dc <= 5) col = mix(OBSIDIAN_TOP, OBSIDIAN_BOT, ty);                       // pivot
           r += col[0]; g += col[1]; b += col[2];
         }
       }
