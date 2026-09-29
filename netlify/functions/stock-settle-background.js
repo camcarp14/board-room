@@ -991,7 +991,28 @@ function targetsFor(row) {
   const minMovePct = Math.min(12, Math.max(2, (atr != null ? atr : 2) * 1.5));
   if (t1 < price * (1 + minMovePct / 100)) t1 = price * (1 + minMovePct / 100);
   if (t2 < t1 * 1.02) t2 = t1 * 1.02;
-  if (t3 < t2 * 1.02) t3 = t2 * 1.02;
+  // T3 IS THE STRUCTURE'S OR THE LADDER DOES NOT EXIST — ported from the crypto
+  // twin (alt-cron-background.js targetsFor, commit 23ac56a), which stopped
+  // inventing its ladder and this file never followed. The T3 clamp used to
+  // lift a measured move that could not clear the clamped T2 up to T2 × 1.02,
+  // so the floor supplied T1, the step supplied T2 and the step again supplied
+  // T3 — three numbers no chart drew, frozen onto a flag and graded as if the
+  // structure had promised them. 100.5 under a 100.8 level off a 97.5 low,
+  // 1.4% ATR: the measured move tops out at 104.10, and this published
+  // 102.61 / 104.66 / 106.76. When the floor and the step would be supplying
+  // every rung there is no plan, and null says so: flagTier refuses it, the
+  // board row carries targets: null, triggerFor offers no trigger, and
+  // stock-scan's entryRead / moveRead read "no level worth trading against" /
+  // "none" — the same path a lost structure already takes.
+  //
+  // ENGINE_VERSION IS DELIBERATELY NOT BUMPED for this. A bump forces a
+  // re-settle, and a re-settle currently re-grades open flags against their own
+  // birth session (a separate, known bug), so a version bump would do more
+  // damage than a board that keeps the old rule until the next close. The new
+  // rule applies to flags born from the next settle on; flags already open keep
+  // the targets frozen onto them at flag time, which is what they are graded
+  // against either way.
+  if (t3 < t2 * 1.02) return null;
   if (!(invalidation < price * 0.99)) return null;
 
   const pctVs = (t) => Math.round((t / price - 1) * 1000) / 10;
@@ -1025,6 +1046,15 @@ function triggerFor(row) {
   const r = row && row.range20 ? row.range20 : null;
   const priorHigh = r && Number.isFinite(r.priorHigh) && r.priorHigh > 0 ? r.priorHigh : null;
   if (price == null || priorHigh == null) return null;
+  // NO LADDER, NO TRIGGER. targetsFor returns null when there is no plan to
+  // trade — a lost structure, or a measured move that cannot carry three
+  // rungs — and flagTier will not flag the name. A "needs a close over X"
+  // line under it would promise a trade the engine has already declined, on
+  // the one row that said "no level worth trading against". The crypto twin
+  // has no trigger at all, so there a null ladder shows no plan; this is the
+  // same outcome. Every caller sets targets before asking (the settle pass
+  // and boardRow), so this reads the ladder the row will actually publish.
+  if (!row.targets) return null;
   // Still under the level: the level IS the trigger, and it has to be a CLOSE
   // over it — an intraday poke is the `probing` state, not a break.
   if (price <= priorHigh) return { price: priorHigh, kind: "level" };

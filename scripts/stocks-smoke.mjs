@@ -312,19 +312,56 @@ try {
     price, atrPct: atr, windowHigh: priorHigh * 2,
     range20: { priorHigh, priorLow, freshBreak, pos: 0.8, high: priorHigh, low: priorLow, sessions: 20 },
   });
-  const quiet = targetsFor(mkRow(100, 101, 95, 1.2));
-  const wild = targetsFor(mkRow(100, 101, 95, 6));
+  // A base wide enough (101 over 80, a 21-point measured move to 122) that
+  // even the 12% floor leaves a structural T3 above the clamped T2. These
+  // fixtures used to sit on a 6-point base, where the high-volatility rows
+  // only produced a ladder because the T3 clamp invented one — see below.
+  const quiet = targetsFor(mkRow(100, 101, 80, 1.2));
+  const wild = targetsFor(mkRow(100, 101, 80, 6));
   check("a low-volatility name gets a nearer first target than a high-volatility one",
-    quiet.t1 < wild.t1, `${quiet.t1} vs ${wild.t1}`);
+    quiet && wild && quiet.t1 < wild.t1, `${quiet && quiet.t1} vs ${wild && wild.t1}`);
   check("...and the floor is clamped to a sane band at both ends",
-    targetsFor(mkRow(100, 101, 95, 0.1)).minMovePct === 2 &&
-    targetsFor(mkRow(100, 101, 95, 40)).minMovePct === 12);
+    targetsFor(mkRow(100, 101, 80, 0.1))?.minMovePct === 2 &&
+    targetsFor(mkRow(100, 101, 80, 40))?.minMovePct === 12);
   check("targets ascend with at least 2% between rungs, never merely in order",
     wild.t2 >= wild.t1 * 1.02 && wild.t3 >= wild.t2 * 1.02);
   check("an invalidation at or above price returns NO targets — the structure is already lost",
     targetsFor(mkRow(100, 101, 101, 2)) === null);
   check("a flat base returns no targets rather than dividing by a zero range",
     targetsFor(mkRow(100, 100, 100, 2)) === null);
+
+  // T3 IS THE STRUCTURE'S OR THERE IS NO LADDER — the crypto twin's rule,
+  // ported. 100.5 under a 100.8 level off a 97.5 low with a 1.4% ATR: the
+  // floor lifts T1 to 102.61, the step lifts T2 to 104.66, and the measured
+  // move tops out at 104.10 — under the clamped T2. The old clamp then lifted
+  // T3 to 106.76 and published three numbers no chart drew.
+  const spent = mkRow(100.5, 100.8, 97.5, 1.4);
+  spent.windowHigh = null;
+  check("a measured move that cannot clear the clamped T2 publishes NO targets, not a clamped T3",
+    targetsFor(spent) === null, JSON.stringify(targetsFor(spent)));
+  check("...so the 106.76 T3 the clamp used to invent is gone",
+    !(targetsFor(spent) && near(targetsFor(spent).t3, 102.6105 * 1.02 * 1.02, 1e-4)));
+  // Same row either side of the rule, so the null is what refuses it — not
+  // the score, the band or the RS leg.
+  const flagRow = (targets) => ({ score: 99, rs5: 5, band: "starting", flags: {}, price: 100.5, targets, range20: spent.range20 });
+  const roomyT = targetsFor({ ...mkRow(100.5, 100.8, 94, 1.4), windowHigh: null });
+  check("...and a null ladder is never flagged, where the same row with a real ladder is",
+    C.flagTier(flagRow(targetsFor(spent))) === null && C.flagTier(flagRow(roomyT)) != null,
+    String(C.flagTier(flagRow(roomyT))));
+  check("...and offers no morning trigger for a trade the engine declined",
+    C.triggerFor({ ...spent, targets: targetsFor(spent) }) === null);
+  const scanT = S.liveTargets(targetsFor(spent), 100.5);
+  const scanE = S.entryRead({ band: "starting", flags: {}, range20: spent.range20 }, scanT, 100.5);
+  const scanM = S.moveRead({ band: "starting", flags: {}, range20: spent.range20 }, scanT, 100.5, null);
+  check("...and stock-scan reads it as no plan: watch, 'no level worth trading against', no NaN anywhere",
+    scanT === null && scanE.state === "watch" && /no level worth trading against/.test(scanE.why) &&
+    [scanE.roomPct, scanE.nextPct, scanE.riskPct, scanE.rr].every((v) => v === null) && scanM.stage === "none",
+    JSON.stringify({ scanE, scanM }));
+  // The rule removes only invented rungs: a structural T3 that clears the
+  // clamped T2 by the 2% step still publishes, clamped T1/T2 and all.
+  const roomy = roomyT;
+  check("a measured move that DOES clear the clamped T2 still publishes its own T3",
+    roomy && near(roomy.t3, 100.8 + 6.8) && roomy.t3 >= roomy.t2 * 1.02, JSON.stringify(roomy));
 
   // ─── 7. the regime ────────────────────────────────────────────────────────
   const { regimeRead, gateFor, effectiveFloor, PHASE_GATE } = C;
