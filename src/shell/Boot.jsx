@@ -274,7 +274,7 @@ export function TwoFactorScreen({ onVerified, onSignOut }) {
           <Field value={code} onChange={(e) => setCode(e.target.value.replace(/\D/g, "").slice(0, 6))} autoFocus
             inputMode="numeric" autoComplete="one-time-code" placeholder="6-digit code" aria-label="Two-factor code" />
           {err && <div className="t-foot" role="alert" style={{ color: "var(--red)" }}>{err}</div>}
-          <Button kind="primary" size="lg" full disabled={busy || code.length < 6}>{busy ? "Checking…" : "Continue"}</Button>
+          <Button kind="primary" size="lg" full type="submit" disabled={busy || code.length < 6}>{busy ? "Checking…" : "Continue"}</Button>
         </div>
       </form>
       <button onClick={onSignOut}

@@ -146,6 +146,11 @@ check("the offline sign-out notice is set by App and read once by the login scre
   const mig = await read("supabase/migrations/0043_mfa_enforce.sql");
   check("the database asks for aal2 once a verified factor exists, on every boardroom table",
     /as restrictive for all to authenticated/.test(mig) && /\(auth\.jwt\(\) ->> 'aal'\) = 'aal2'/.test(mig) && /f\.status = 'verified'/.test(mig));
+  // The kit's Button defaults to type="button", so a button that is meant to
+  // submit its <form> must say so — both of these did nothing when tapped.
+  const tf = await read("src/shell/TwoFactor.jsx"), bootSrc = await read("src/shell/Boot.jsx");
+  check("the setup's Turn on and the sign-in's Continue actually submit their forms",
+    /<Button kind="primary" size="md" type="submit"/.test(tf) && /<Button kind="primary" size="lg" full type="submit"/.test(bootSrc));
   const appSrc = await read("src/App.jsx");
   check("the app shows the code screen, never the app, to a session that owes the code",
     /secondFactor \? <TwoFactorScreen/.test(appSrc) && /secondFactor === null \? <BootScreen \/>/.test(appSrc));

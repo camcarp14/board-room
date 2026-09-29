@@ -124,7 +124,7 @@ function TwoFactorSetup({ onClose, onDone }) {
         <form onSubmit={(e) => { e.preventDefault(); verify(); }} style={{ display: "flex", gap: 8 }}>
           <Field value={code} onChange={(e) => setCode(e.target.value.replace(/\D/g, "").slice(0, 6))}
             inputMode="numeric" autoComplete="one-time-code" placeholder="123456" style={{ flex: 1 }} />
-          <Button kind="primary" size="md" disabled={!enrolment || busy || code.length < 6}>{busy ? "Checking…" : "Turn on"}</Button>
+          <Button kind="primary" size="md" type="submit" disabled={!enrolment || busy || code.length < 6}>{busy ? "Checking…" : "Turn on"}</Button>
         </form>
         {err && <div className="t-foot" role="alert" style={{ color: "var(--red)" }}>{err}</div>}
         <div className="t-foot" style={{ color: "var(--faint)" }}>
