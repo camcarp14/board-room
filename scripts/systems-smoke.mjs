@@ -497,7 +497,10 @@ check("…with App telling it the truth, the preview excused", /settingsLoaded=\
 check("updateSetting refuses EVERY key while settings are null",
   /if \(settings === null\) \{[\s\S]*?return \{ ok: false, error \};/.test(app) && !/LAYOUT_KEYS\.has\(key\)/.test(app));
 check("…files the refusal where the unsaved-changes chip can show it, with a reload as its Retry",
-  /writeFailures\.note\(`settings-unloaded:\$\{key\}`[\s\S]{0,120}refreshData\(\)\)/.test(app));
+  /writeFailures\.note\(`settings-unloaded:\$\{key\}`[\s\S]{0,120}refreshRef\.current\?\.\(\)\)/.test(app) &&
+  /refreshRef\.current = refreshData;/.test(app));
+check("…and those refusals clear themselves once the settings arrive",
+  /startsWith\("settings-unloaded:"\)\) writeFailures\.clear\(f\.key\)/.test(app));
 check("…before anything is painted",
   app.indexOf("if (settings === null) {") > 0 &&
   app.indexOf("if (settings === null) {") < app.indexOf("setSettings(prev => (prev ? { ...prev, [key]: value } : prev))"));

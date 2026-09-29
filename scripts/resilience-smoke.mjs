@@ -324,7 +324,13 @@ const fakeStore = () => {
     /const explicit = explicitSignOut\.current \|\| stamped;/.test(app) && /br_signout_at/.test(app));
   // auth-js answers a failed revoke with { error } and KEEPS the local session.
   check("a sign-out whose request fails still signs this device out",
-    /if \(!error\) return;[\s\S]{0,400}localStorage\.removeItem\(k\)[\s\S]{0,200}purgeRef\.current\?\.\(\);[\s\S]{0,120}window\.location\.reload\(\)/.test(app));
+    /if \(!error\) return;[\s\S]{0,700}signOutLocally\(\);/.test(app) &&
+    /const signOutLocally = \(\) => \{[\s\S]{0,300}localStorage\.removeItem\(k\)[\s\S]{0,200}purgeRef\.current\?\.\(\);[\s\S]{0,160}window\.location\.reload\(\)/.test(app));
+  // The other tabs still hold the session in memory and nothing revoked it; the
+  // storage key is how the same local sign-out reaches them.
+  check("…and every other open tab signs out with it",
+    /localStorage\.setItem\("br_signout_local"/.test(app) &&
+    /e\.key === "br_signout_local" && e\.newValue\) signOutLocally\(\)/.test(app));
   check("…and the purge clears every br_* key but the look of the app",
     /Object\.keys\(localStorage\)\.filter\(\(k\) => k\.startsWith\("br_"\) && !KEEP\.test\(k\)\)/.test(app));
   check("…and lowers it whether or not the event came", /finally \{ explicitSignOut\.current = false; \}/.test(app));

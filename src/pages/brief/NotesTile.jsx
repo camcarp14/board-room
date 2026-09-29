@@ -100,7 +100,10 @@ export function NotesTile({ isMobile, refreshSignal, onOpenNotes, collapsed, onT
     // `base` is the row as it was when the editor opened. The save is
     // conditional on it (see db.saveNote), so words that arrived from the Watch
     // or another device while this sat open are never written over.
-    setEditing({ id: n.id, title: n.title || "", body: n.body || "", base: { title: n.title || "", body: n.body || "", pinned: !!n.pinned, color: n.color || null, updated_at: n.updated_at || null } });
+    // `sent` and `copyId` are this editing session's: a Save whose answer was
+    // lost is recognised as ours on the retry, and a retried conflicted copy is
+    // the same row again rather than a second one (see db.saveNote).
+    setEditing({ id: n.id, title: n.title || "", body: n.body || "", base: { title: n.title || "", body: n.body || "", pinned: !!n.pinned, color: n.color || null, updated_at: n.updated_at || null }, sent: new Set(), copyId: crypto.randomUUID() });
   };
   const applyEditBody = (next, caret) => {
     editText({ body: next }, "body", caret);
@@ -156,7 +159,11 @@ export function NotesTile({ isMobile, refreshSignal, onOpenNotes, collapsed, onT
       // Nothing changed → nothing to send. Save was enabled on an untouched
       // editor, and each press re-stamped updated_at, which reorders the list.
       if (editing.base && editing.title === editing.base.title && editing.body === editing.base.body) { setEditing(null); setSavingEdit(false); return; }
-      const saved = await db.saveNote({ id: editing.id, title: editing.title, body: editing.body }, { base: editing.base });
+      let t = Date.now();
+      for (const x of editing.sent || []) if (x >= t) t = x + 1;
+      editing.sent?.add(t);
+      const saved = await db.saveNote({ id: editing.id, title: editing.title, body: editing.body },
+        { base: editing.base, stamp: new Date(t).toISOString(), mine: editing.sent, copyId: editing.copyId });
       if (saved.conflict) {
         const { conflict, ...copy } = saved;
         setNotes(prev => [copy, ...(prev || [])]);

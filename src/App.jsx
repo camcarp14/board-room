@@ -201,6 +201,9 @@ export default function App() {
   }, []);
 
   const [briefRefreshSignal, setBriefRefreshSignal] = useState(null);
+  // Retry closures filed now run later; they reach the refresh through this
+  // ref so they call the current one, not the render they were filed from.
+  const refreshRef = useRef(null);
   const refreshData = async () => {
     if (refreshing || !supabase || !session?.user) return;
     setRefreshing(true);
@@ -253,6 +256,14 @@ export default function App() {
     setNow(Date.now());
     setRefreshing(false);
   };
+  refreshRef.current = refreshData;
+  // A refusal filed while settings were missing (see updateSetting) has nothing
+  // left to say once they arrive — the change can simply be made again.
+  const settingsArrived = settings != null;
+  useEffect(() => {
+    if (!settingsArrived) return;
+    for (const f of writeFailures.list()) if (String(f.key).startsWith("settings-unloaded:")) writeFailures.clear(f.key);
+  }, [settingsArrived]);
 
   // ─── THE BOOT HAD NO CEILING ───────────────────────────────────────────────
   // This was one line: getSession().then(set the session, mark it checked). No
@@ -440,14 +451,27 @@ export default function App() {
     finally { explicitSignOut.current = false; }
     if (!error) return;
     console.warn("[auth] server sign-out failed; signing this device out locally", error);
+    // Every other open tab still holds the session in memory, and nothing
+    // revoked its refresh token — its next auto-refresh would write the session
+    // back to storage and sign the device in again. This key is the signal they
+    // act on (the listener below): the same local sign-out, in every tab.
+    try { localStorage.setItem("br_signout_local", String(Date.now())); } catch {}
+    signOutLocally();
+  };
+  const signOutLocally = () => {
     try {
-      const k = supabase.auth.storageKey;
+      const k = supabase?.auth?.storageKey;
       if (k) { localStorage.removeItem(k); localStorage.removeItem(`${k}-code-verifier`); }
     } catch {}
     purgeRef.current?.();
     try { sessionStorage.setItem("br_signout_offline", "1"); } catch {}
     window.location.reload();
   };
+  useEffect(() => {
+    const onStorage = (e) => { if (e.key === "br_signout_local" && e.newValue) signOutLocally(); };
+    window.addEventListener("storage", onStorage);
+    return () => window.removeEventListener("storage", onStorage);
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     if (!supabase) return;
@@ -569,7 +593,7 @@ export default function App() {
     if (settings === null) {
       const error = new Error(`Your saved settings haven't loaded yet, so this change to ${key.replace(/_/g, " ")} wasn't saved — it would have written over them. Retry reloads them; then make the change again.`);
       console.warn(`[settings] refused ${key}: settings not loaded`);
-      writeFailures.note(`settings-unloaded:${key}`, `${key.replace(/_/g, " ")} (settings not loaded)`, error, () => refreshData());
+      writeFailures.note(`settings-unloaded:${key}`, `${key.replace(/_/g, " ")} (settings not loaded)`, error, () => refreshRef.current?.());
       return { ok: false, error };
     }
     setSettings(prev => (prev ? { ...prev, [key]: value } : prev));

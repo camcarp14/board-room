@@ -455,6 +455,11 @@ const isMissingShelf = (e) =>
   /column .*(?:archived|deleted_at).* does not exist/i.test(e?.message || "") ||
   (/could not find the .*column/i.test(e?.message || "") && /archived|deleted_at/i.test(e?.message || ""));
 
+// A note write that has not answered in this long has failed, as far as the
+// editor is concerned: its saves run in single file (src/lib/note-saver.js), so
+// one wedged request would otherwise hold every save behind it. See saveNote.
+const NOTE_WRITE_MS = 15_000;
+
 // ─── db — Supabase-backed memory layer (unchanged contract) ──────────────────
 export const db = {
   // THE SESSION ON THIS DEVICE, NOT A ROUND TRIP TO ASK ABOUT IT. This used to
@@ -838,27 +843,41 @@ export const db = {
    * five-line note and the editor said "Saved". Nothing anywhere recorded that
    * the dictations had existed.
    *
-   * THREE OUTCOMES when the row moved under us:
-   *  - Only its metadata moved (pinned/archived/hidden/seal from the list or
-   *    another device all stamp updated_at through bulkUpdateNotes). The words
-   *    this editor started from are still the words on the server, so there is
-   *    nothing to lose: rebase onto the new stamp and write again, sending
-   *    pinned/color only if THIS editor changed them, so the other device's
-   *    toggle survives too.
-   *  - The server already holds exactly these words (a save whose answer was
-   *    lost, a rescued draft being replayed). Nothing to write; say so.
-   *  - The words moved, or the note was binned elsewhere. Then neither version
-   *    may be thrown away, and there is no merge that is right for prose: the
-   *    draft is saved as a NEW note beside the original, and the caller is told
-   *    so it can move the editor onto the copy and say what happened.
+   * WHEN THE ROW MOVED UNDER US, the server row is read and one of two things
+   * happens:
+   *  - IT IS SAFE TO WRITE THE WORDS, and they are rebased onto the new stamp:
+   *    the stamp is one THIS SESSION sent (`opts.mine` — a save that committed
+   *    but whose answer was lost, e.g. the phone locked mid-request), or only
+   *    metadata moved (pinned/archived/hidden/seal from the list or another
+   *    device — the words this editor started from are still the server's), or
+   *    the server already holds these exact words. A flag this editor changed is
+   *    sent; a flag only the other side changed stays theirs. If there is
+   *    nothing left to send, nothing is written.
+   *  - THE WORDS MOVED, or the note was binned elsewhere. Neither version may be
+   *    thrown away and there is no merge that is right for prose, so the draft
+   *    is saved as a NEW note beside the original ("conflicted copy"), under
+   *    `opts.copyId` when given — so a retried copy is the same row again, not a
+   *    second one — and the caller is told, to move the editor onto the copy.
+   *
+   * A BINNED NOTE REFUSES THE WRITE. deleteNotes sets deleted_at and leaves
+   * updated_at alone, so a compare on the stamp alone WON against a note deleted
+   * on another device and poured the words into the bin, thirty days from gone.
+   * The conditional write also requires deleted_at is null — and steps down to
+   * the stamp alone on a database from before 0036, which has no bin.
+   *
+   * Every request here is bounded (NOTE_WRITE_MS): the editor's saves run in
+   * single file, so one wedged request used to hold every save behind it — and
+   * the close button, which waits for them — for as long as iOS let it hang.
    *
    * Without `base` (a brand-new note, the quick-add, or an old caller) this is
-   * the plain upsert it always was.
+   * the plain upsert it always was. `opts.stamp` sets updated_at, so the caller
+   * can remember what it sent (see src/lib/note-saver.js).
    */
   async saveNote(note, opts = {}) {
     const user_id = await db.uid();
     if (!user_id) throw new Error("Not signed in");
-    const row = { id: note.id, user_id, title: note.title, body: note.body, updated_at: new Date().toISOString() };
+    const stamp = opts.stamp || new Date().toISOString();
+    const row = { id: note.id, user_id, title: note.title, body: note.body, updated_at: stamp };
     if (note.pinned !== undefined) row.pinned = note.pinned;
     if (note.color !== undefined) row.color = note.color;
     // Sent only when the caller means it, like pinned/color above — an upsert
@@ -866,8 +885,12 @@ export const db = {
     // would un-archive a note every time the editor autosaved a word.
     if (note.archived !== undefined) row.archived = note.archived;
     if (note.brief_hidden !== undefined) row.brief_hidden = note.brief_hidden;
+    const bounded = (q) => {
+      const sig = typeof AbortSignal !== "undefined" && AbortSignal.timeout ? AbortSignal.timeout(NOTE_WRITE_MS) : null;
+      return sig && typeof q.abortSignal === "function" ? q.abortSignal(sig) : q;
+    };
     const upsert = async (r) => {
-      const { data, error } = await supabase.from("personal_notes").upsert(r, { onConflict: "id" }).select().single();
+      const { data, error } = await bounded(supabase.from("personal_notes").upsert(r, { onConflict: "id" }).select()).single();
       if (error) throw error;
       return data;
     };
@@ -875,39 +898,50 @@ export const db = {
     if (!base?.updated_at) return upsert(row);
 
     const { id, user_id: _u, ...fields } = row;
+    let hasBin = true;
     const conditional = async (expected, patch) => {
-      const { data, error } = await supabase.from("personal_notes")
-        .update(patch).eq("id", id).eq("updated_at", expected).select();
-      if (error) throw error;
-      return data?.[0] || null;
+      const q = () => supabase.from("personal_notes").update(patch).eq("id", id).eq("updated_at", expected);
+      let res = await bounded((hasBin ? q().is("deleted_at", null) : q()).select());
+      if (res.error && hasBin && isMissingShelf(res.error)) { hasBin = false; res = await bounded(q().select()); }
+      if (res.error) throw res.error;
+      return res.data?.[0] || null;
     };
     const won = await conditional(base.updated_at, fields);
     if (won) return won;
 
     // Lost the compare-and-set. Look at what is there before deciding anything.
-    const { data: server, error: readErr } = await supabase.from("personal_notes")
-      .select("*").eq("id", id).maybeSingle();
+    const { data: server, error: readErr } = await bounded(supabase.from("personal_notes")
+      .select("*").eq("id", id)).maybeSingle();
     if (readErr) throw readErr;
     // Purged from the bin, or never saved after all: nothing to overwrite, so
     // the words simply go back in — which is what this call always did.
     if (!server) return upsert(row);
     const deleted = !!server.deleted_at;
-    if (!deleted && server.title === note.title && server.body === note.body) return server;
-    if (!deleted && server.title === base.title && server.body === base.body) {
-      const patch = { title: note.title, body: note.body, updated_at: row.updated_at };
-      if (note.pinned !== undefined && note.pinned !== base.pinned) patch.pinned = note.pinned;
-      if (note.color !== undefined && note.color !== base.color) patch.color = note.color;
-      const rebased = await conditional(server.updated_at, patch);
-      if (rebased) return rebased;
-      // Moved AGAIN between the read and the write. Fall through to the copy
-      // rather than looping: a copy loses nothing, a loop can spin.
+    if (!deleted) {
+      const ours = !!opts.mine && opts.mine.has(Date.parse(server.updated_at));
+      const sameWords = server.title === note.title && server.body === note.body;
+      const baseWords = server.title === base.title && server.body === base.body;
+      if (ours || sameWords || baseWords) {
+        const patch = {};
+        if (!sameWords) { patch.title = note.title; patch.body = note.body; }
+        for (const k of ["pinned", "color"]) {
+          if (note[k] === undefined || note[k] === server[k]) continue;
+          if (ours || note[k] !== base[k]) patch[k] = note[k];
+        }
+        if (!Object.keys(patch).length) return server;
+        const rebased = await conditional(server.updated_at, { ...patch, updated_at: stamp });
+        if (rebased) return rebased;
+        // Moved AGAIN between the read and the write. Fall through to the copy
+        // rather than looping: a copy loses nothing, a loop can spin.
+      }
     }
     const title = (note.title || "").trim();
+    const { archived: _a, brief_hidden: _h, ...copyRow } = row;
     const copy = await upsert({
-      ...row,
-      id: crypto.randomUUID(),
+      ...copyRow,
+      id: opts.copyId || crypto.randomUUID(),
       title: title ? `${title} (conflicted copy)` : "Conflicted copy",
-      created_at: row.updated_at,
+      created_at: stamp,
     });
     return { ...copy, conflict: { originalId: id, reason: deleted ? "deleted" : "changed" } };
   },
@@ -964,15 +998,11 @@ export const db = {
       .delete().in("id", list).not("deleted_at", "is", null);
     if (error) throw error;
   },
-  // Returns the new stamps. An open editor whose note was just archived or
-  // hidden from its own toolbar needs them: its next autosave is conditional on
-  // the updated_at it last saw (saveNote's `base`), and this write moved it.
   async bulkUpdateNotes(ids, patch) {
-    if (!ids?.length) return [];
-    const { data, error } = await supabase.from("personal_notes")
-      .update({ ...patch, updated_at: new Date().toISOString() }).in("id", ids).select("id,updated_at");
+    if (!ids?.length) return;
+    const { error } = await supabase.from("personal_notes")
+      .update({ ...patch, updated_at: new Date().toISOString() }).in("id", ids);
     if (error) throw error;
-    return data || [];
   },
   async restoreNotes(rows) {
     // Undo path — re-upserts previously deleted/overwritten rows exactly as
