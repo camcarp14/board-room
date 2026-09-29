@@ -118,5 +118,38 @@ check("the offline sign-out notice is set by App and read once by the login scre
     /settingsLoaded && updateSetting && \(/.test(usage) && /updateSetting\("econ_explain", !on\)/.test(usage));
 }
 
+// ── 11. two-factor, enforced at every door ──────────────────────────────────
+{
+  const { readdir } = await import("node:fs/promises");
+  const gated = ["audit","auto-fix","calendar-events","clarify-pipeline","claude","db-admin","deploy","econ-resolve-background",
+    "fetch-page","gsc","mini-worker","plaid","shopify","site-status","stock-settle-background","zts-pipeline"];
+  const srcs = await Promise.all(gated.map((f) => read(`netlify/functions/${f}.js`)));
+  const store = await read("netlify/lib/upstream/store.js");
+  check("every session-gated function (and the upstream store) runs the two-factor check",
+    srcs.every((t) => (t.match(/mfaShort\(/g) || []).length >= 2) && /!mfaShort\(user, accessToken\)/.test(store));
+  const fns = await readdir("netlify/functions");
+  const sessionGated = [];
+  for (const f of fns) { const t = await read(`netlify/functions/${f}`); if (/auth\/v1\/user/.test(t)) sessionGated.push(f.replace(/\.js$/, "")); }
+  const missed = sessionGated.filter((f) => !gated.includes(f) && !["note-capture", "workout-import"].includes(f));
+  check("…and no function that resolves a session was left out", missed.length === 0, missed);
+  // RUN the helper exactly as it is written in claude.js.
+  const claudeSrc = srcs[gated.indexOf("claude")];
+  const body = claudeSrc.slice(claudeSrc.indexOf("function mfaShort("));
+  const mfaShort = new Function(`${body}; return mfaShort;`)();
+  const tok = (aal) => `x.${Buffer.from(JSON.stringify({ aal })).toString("base64url")}.y`;
+  const enrolled = { factors: [{ status: "verified" }] };
+  check("no factor enrolled: nothing is refused", mfaShort({ factors: [] }, tok("aal1")) === false && mfaShort({}, tok("aal1")) === false);
+  check("enrolled: a password-only (aal1) token is refused", mfaShort(enrolled, tok("aal1")) === true);
+  check("enrolled: a token that passed the code step (aal2) goes through", mfaShort(enrolled, tok("aal2")) === false);
+  check("enrolled: a token whose claims can't be read is refused, not waved through", mfaShort(enrolled, "garbage") === true);
+  check("an unverified (abandoned) setup refuses nothing", mfaShort({ factors: [{ status: "unverified" }] }, tok("aal1")) === false);
+  const mig = await read("supabase/migrations/0043_mfa_enforce.sql");
+  check("the database asks for aal2 once a verified factor exists, on every boardroom table",
+    /as restrictive for all to authenticated/.test(mig) && /\(auth\.jwt\(\) ->> 'aal'\) = 'aal2'/.test(mig) && /f\.status = 'verified'/.test(mig));
+  const appSrc = await read("src/App.jsx");
+  check("the app shows the code screen, never the app, to a session that owes the code",
+    /secondFactor \? <TwoFactorScreen/.test(appSrc) && /secondFactor === null \? <BootScreen \/>/.test(appSrc));
+}
+
 if (failures) { console.log(`\n${failures} FAILURE(S)\nAUDIT FIXES SMOKE FAILED`); process.exit(1); }
 console.log("\nAUDIT FIXES SMOKE PASS");

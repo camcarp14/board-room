@@ -35,6 +35,7 @@ exports.handler = async (event) => {
   if (!who.ok) return json(401, { error: "session expired — refresh and try again" });
   const user = await who.json().catch(() => null);
   if (user?.id !== owner) return json(403, { error: "this account is not allowed to use Board Room" });
+  if (mfaShort(user, token)) return json(403, { error: "two-factor code needed — sign in again and enter your code" });
 
   if (!ALLOWED_MODELS.has(body.model)) return json(400, { error: "unsupported model" });
 
@@ -67,3 +68,17 @@ exports.handler = async (event) => {
     return json(502, { error: "upstream request failed: " + e.message });
   }
 };
+
+
+// TWO-FACTOR, WHEN THE ACCOUNT HAS IT. /auth/v1/user proves the token is real
+// and who it belongs to; it does not say whether the code step was passed. Once
+// the account has a verified factor, a token still at aal1 (password only — or
+// a session minted by one of the other apps on this shared project) is refused.
+// With no factor enrolled this never refuses anything. Inlined per function on
+// purpose — see the note on shared modules in functions-smoke.
+function mfaShort(user, token) {
+  const enrolled = Array.isArray(user?.factors) && user.factors.some((f) => f?.status === "verified");
+  if (!enrolled) return false;
+  try { return JSON.parse(Buffer.from(String(token).split(".")[1], "base64url").toString("utf8")).aal !== "aal2"; }
+  catch { return true; }
+}

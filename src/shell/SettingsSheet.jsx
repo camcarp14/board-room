@@ -26,6 +26,7 @@ import { NAV } from "./nav.js";
 import { Sheet, Cell, CellGroup, Button, Field, SectionHeader, Switch, SwitchRow, Segmented, Spinner, useConfirm } from "../ui/kit.jsx";
 import { IcSun, IcMoon, IcAutoTheme, IcCheck } from "../ui/icons.jsx";
 import { BriefWidgetList } from "../ui/BriefWidgetList.jsx";
+import { TwoFactorRow } from "./TwoFactor.jsx";
 import { PALETTES } from "../design/palettes.js";
 
 // Lazy, and deliberately so: this sheet is imported eagerly by App (it has to be
@@ -217,6 +218,7 @@ export function SettingsSheet({ onClose, session, theme, calUrl, onSaveCalUrl, i
                     sub="Synced across every device on this account"
                     titleStyle={{ fontSize: 14.5 }}
                   />
+                  <TwoFactorRow />
                   <Cell title="Sign out" destructive onClick={signOut} />
                 </CellGroup>
               </>

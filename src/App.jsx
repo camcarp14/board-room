@@ -10,7 +10,8 @@ import { useThemeController, useIsMobile, useBitcoinPrice } from "./hooks/index.
 import { NAV } from "./shell/nav.js";
 import { MobileShell } from "./shell/MobileShell.jsx";
 import { SidebarShell } from "./shell/SidebarShell.jsx";
-import { BootScreen, LoginScreen, SetupNotice } from "./shell/Boot.jsx";
+import { BootScreen, LoginScreen, SetupNotice , TwoFactorScreen } from "./shell/Boot.jsx";
+import { needsSecondFactor } from "./shell/TwoFactor.jsx";
 import { WriteFailures } from "./shell/TopStatus.jsx";
 import { Ambient } from "./shell/Ambient.jsx";
 import { SettingsSheet } from "./shell/SettingsSheet.jsx";
@@ -114,6 +115,9 @@ export default function App() {
   // The purge lives inside the auth subscription; Sign out needs it too when the
   // server half of a sign-out fails (see signOut).
   const purgeRef = useRef(null);
+  // Two-factor: null until this session's assurance level is known, then
+  // whether it still owes the code step (see shell/TwoFactor.jsx).
+  const [secondFactor, setSecondFactor] = useState(null);
   const [messages, setMessages] = useState([]);
   const [seatNotes, setSeatNotes] = useState({});
   const [settings, setSettings] = useState(null);
@@ -458,6 +462,13 @@ export default function App() {
     try { localStorage.setItem("br_signout_local", String(Date.now())); } catch {}
     signOutLocally();
   };
+  const recheckSecondFactor = () => needsSecondFactor().then(setSecondFactor);
+  useEffect(() => {
+    if (!session) { setSecondFactor(null); return; }
+    let alive = true;
+    needsSecondFactor().then((v) => { if (alive) setSecondFactor(v); });
+    return () => { alive = false; };
+  }, [session]);
   const signOutLocally = () => {
     try {
       const k = supabase?.auth?.storageKey;
@@ -938,6 +949,12 @@ export default function App() {
     // second attempt reads as an attempt rather than as a button that did nothing.
     !authChecked && !PREVIEW ? <BootScreen key={authAttempt} stalled={authStalled} onRetry={retryAuth} /> :
     !session && !PREVIEW ? <LoginScreen /> :
+    // A session that has not passed the code step on an account with two-factor
+    // on gets the code screen, never the app — the app's reads would be refused
+    // by RLS anyway (0043_mfa_enforce.sql). The boot seal covers the one frame it
+    // takes to read the level, so the app never flashes before the question.
+    session && !PREVIEW && secondFactor === null ? <BootScreen /> :
+    session && !PREVIEW && secondFactor ? <TwoFactorScreen onVerified={recheckSecondFactor} onSignOut={signOut} /> :
     null;
   // The session ended on its own (see the SIGNED_OUT handler). The queue of
   // failed writes was kept for exactly this, so the line says what is waiting;

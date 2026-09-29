@@ -103,7 +103,9 @@ exports.handler = async (event) => {
   const who = await fetch(`${supaUrl}/auth/v1/user`, { signal: AbortSignal.timeout(30000), headers: { apikey: service, Authorization: `Bearer ${token}` } });
   if (!who.ok) return json(401, { error: "session expired — refresh and try again" });
   let userId = null;
-  try { userId = (await who.json())?.id || null; } catch { return json(401, { error: "session expired — refresh and try again" }); }
+  let whoUser = null;
+  try { whoUser = await who.json(); userId = whoUser?.id || null; } catch { return json(401, { error: "session expired — refresh and try again" }); }
+  if (userId && mfaShort(whoUser, token)) return json(403, { error: "two-factor code needed — sign in again and enter your code" });
   if (userId !== owner) return json(403, { error: "this account is not allowed to use Board Room" });
 
   if (!body.repo) return json(400, { error: "repo is required" });
@@ -178,3 +180,17 @@ exports.handler = async (event) => {
     return json(502, { error: e.message });
   }
 };
+
+
+// TWO-FACTOR, WHEN THE ACCOUNT HAS IT. /auth/v1/user proves the token is real
+// and who it belongs to; it does not say whether the code step was passed. Once
+// the account has a verified factor, a token still at aal1 (password only — or
+// a session minted by one of the other apps on this shared project) is refused.
+// With no factor enrolled this never refuses anything. Inlined per function on
+// purpose — see the note on shared modules in functions-smoke.
+function mfaShort(user, token) {
+  const enrolled = Array.isArray(user?.factors) && user.factors.some((f) => f?.status === "verified");
+  if (!enrolled) return false;
+  try { return JSON.parse(Buffer.from(String(token).split(".")[1], "base64url").toString("utf8")).aal !== "aal2"; }
+  catch { return true; }
+}

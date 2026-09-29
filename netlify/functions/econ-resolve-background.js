@@ -142,7 +142,7 @@ async function verifyUser(token) {
   const res = await fetch(`${SUPA}/auth/v1/user`, { signal: AbortSignal.timeout(20000), headers: { apikey: SERVICE, Authorization: `Bearer ${token}` } });
   if (!res.ok) return null;
   const u = await res.json().catch(() => null);
-  return u?.id || null;
+  return u?.id && !mfaShort(u, token) ? u.id : null;
 }
 
 async function readStore(userId) {
@@ -261,3 +261,17 @@ export default async (req) => {
 
   return json(202, { accepted: todo.length });
 };
+
+
+// TWO-FACTOR, WHEN THE ACCOUNT HAS IT. /auth/v1/user proves the token is real
+// and who it belongs to; it does not say whether the code step was passed. Once
+// the account has a verified factor, a token still at aal1 (password only — or
+// a session minted by one of the other apps on this shared project) is refused.
+// With no factor enrolled this never refuses anything. Inlined per function on
+// purpose — see the note on shared modules in functions-smoke.
+function mfaShort(user, token) {
+  const enrolled = Array.isArray(user?.factors) && user.factors.some((f) => f?.status === "verified");
+  if (!enrolled) return false;
+  try { return JSON.parse(Buffer.from(String(token).split(".")[1], "base64url").toString("utf8")).aal !== "aal2"; }
+  catch { return true; }
+}

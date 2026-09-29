@@ -233,3 +233,54 @@ export function LoginScreen() {
     </div>
   );
 }
+
+// ─── The second step of sign-in, when the account has two-factor on ─────────
+// Shown by App's gate instead of the app while the session is aal1 and the
+// account has a verified factor (see shell/TwoFactor.jsx). Same seal, same card
+// as the login screen: this is the same act, one step further.
+export function TwoFactorScreen({ onVerified, onSignOut }) {
+  const [code, setCode] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState(null);
+  const submit = async () => {
+    if (busy || code.length < 6) return;
+    setBusy(true); setErr(null);
+    try {
+      const { data: listed, error: listErr } = await supabase.auth.mfa.listFactors();
+      if (listErr) throw listErr;
+      const factor = (listed?.totp || [])[0];
+      if (!factor) { onVerified?.(); return; }
+      const { error } = await supabase.auth.mfa.challengeAndVerify({ factorId: factor.id, code });
+      if (error) throw error;
+      onVerified?.();
+    } catch (e) {
+      setErr(isNetworkAuthFailure(e) ? "Couldn't reach the server — the code wasn't checked. Try again."
+        : /invalid|expired/i.test(e?.message || "") ? "That code didn't match — use the one your authenticator shows now."
+        : (e?.message || "That didn't go through."));
+      setCode("");
+    } finally { setBusy(false); }
+  };
+  return (
+    <div className="entrance" style={{ color: "var(--ink)" }}>
+      <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 14 }}>
+        <Seal size={80} />
+        <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 6 }}>
+          <span className="boot-title">Board Room</span>
+          <span className="boot-sub">enter the code from your authenticator</span>
+        </div>
+      </div>
+      <form className="entrance-card" onSubmit={(e) => { e.preventDefault(); submit(); }}>
+        <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+          <Field value={code} onChange={(e) => setCode(e.target.value.replace(/\D/g, "").slice(0, 6))} autoFocus
+            inputMode="numeric" autoComplete="one-time-code" placeholder="6-digit code" aria-label="Two-factor code" />
+          {err && <div className="t-foot" role="alert" style={{ color: "var(--red)" }}>{err}</div>}
+          <Button kind="primary" size="lg" full disabled={busy || code.length < 6}>{busy ? "Checking…" : "Continue"}</Button>
+        </div>
+      </form>
+      <button onClick={onSignOut}
+        style={{ display: "block", width: "100%", background: "none", border: "none", fontSize: 12.5, color: "var(--sub)", textAlign: "center", marginTop: 16, cursor: "pointer", padding: 6 }}>
+        Sign out
+      </button>
+    </div>
+  );
+}

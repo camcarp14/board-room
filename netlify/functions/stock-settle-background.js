@@ -2147,6 +2147,7 @@ async function ownerDenied(event) {
     if (!who.ok) return json(401, { error: "session expired — refresh and try again" });
     const user = await who.json().catch(() => null);
     if (user?.id !== owner) return json(403, { error: "this account is not allowed to use Board Room" });
+    if (mfaShort(user, auth)) return json(403, { error: "two-factor code needed — sign in again and enter your code" });
   } catch {
     return json(503, { error: "couldn't verify your session — try again in a moment" });
   }
@@ -2262,3 +2263,17 @@ exports.aboutSymbol = aboutSymbol;
 exports.EQUITIES = EQUITIES;
 exports.flagAgeSessions = flagAgeSessions;
 exports.dropFormingBar = dropFormingBar;
+
+
+// TWO-FACTOR, WHEN THE ACCOUNT HAS IT. /auth/v1/user proves the token is real
+// and who it belongs to; it does not say whether the code step was passed. Once
+// the account has a verified factor, a token still at aal1 (password only — or
+// a session minted by one of the other apps on this shared project) is refused.
+// With no factor enrolled this never refuses anything. Inlined per function on
+// purpose — see the note on shared modules in functions-smoke.
+function mfaShort(user, token) {
+  const enrolled = Array.isArray(user?.factors) && user.factors.some((f) => f?.status === "verified");
+  if (!enrolled) return false;
+  try { return JSON.parse(Buffer.from(String(token).split(".")[1], "base64url").toString("utf8")).aal !== "aal2"; }
+  catch { return true; }
+}
