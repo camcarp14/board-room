@@ -278,19 +278,43 @@ export function deleteOccurrence(master, day) {
   return { update: [{ id: master.id, exdates }], delete: [] };
 }
 
-/** Occurrence → the writes that end the series the day before it. */
-export function deleteFuture(master, day) {
+/**
+ * Occurrence → the writes that end the series the day before it.
+ *
+ * `allRows` is optional. When it is passed, occurrences that were edited one
+ * at a time (standalone rows editOccurrence wrote, still carrying the series'
+ * id) on or after the cut go with it. Without that, "this and all following"
+ * deleted every future occurrence EXCEPT the ones the user had bothered to
+ * touch, which are exactly the ones they would notice surviving. Only
+ * non-repeating members are swept: a master split off by an earlier "future"
+ * edit is its own run of history and is left for "all events" to remove.
+ */
+export function deleteFuture(master, day, allRows) {
   const d = parseDayKey(day);
   const startDay = startOfDay(new Date(master.start_time));
   // Cutting at or before the first occurrence removes the series outright —
   // an "until" earlier than the start would otherwise leave a row that can
   // never render, which reads to the user as a delete that silently failed.
-  if (!d || d <= startDay) return { update: [], delete: [master.id] };
+  if (!d || d <= startDay) return { update: [], delete: [master.id, ...detachedOnOrAfter(master, d, allRows)] };
   const until = dayKey(addDays(d, -1));
   return {
     update: [{ id: master.id, rrule: { ...normalizeRule(master.rrule), until, count: null } }],
-    delete: [],
+    delete: detachedOnOrAfter(master, d, allRows),
   };
+}
+
+// The standalone rows of `master`'s series that start on or after local day
+// `d` (every one of them when `d` is null). Never the master itself, never a
+// repeating row.
+function detachedOnOrAfter(master, d, allRows) {
+  const sid = master.series_id || master.id;
+  return (Array.isArray(allRows) ? allRows : [])
+    .filter((r) => r && r.id !== master.id && !normalizeRule(r.rrule) && r.series_id === sid && r.start_time)
+    .filter((r) => {
+      const s = new Date(r.start_time);
+      return !Number.isNaN(s.getTime()) && (!d || startOfDay(s) >= d);
+    })
+    .map((r) => r.id);
 }
 
 /** The whole series, including masters split off by earlier "future" edits. */
@@ -307,27 +331,102 @@ export function deleteSeries(master, allRows) {
  * row in its place. A separate row rather than an overrides blob keyed by
  * date — the blob has to be merged on every read, and every consumer that
  * forgets is a place the edit silently doesn't apply.
+ *
+ * THE STANDALONE ROW STAYS IN THE SERIES. It was written with series_id null,
+ * so "delete all events in the series" — which finds members by series_id —
+ * swept every occurrence except the ones you had edited, and those lingered on
+ * the grid as orphans with no series left to belong to. Linking it is safe for
+ * rendering: the row carries rrule null, so expandEvents treats it as a one-off
+ * and never re-expands it, and its day is in the master's exdates, so the
+ * master never draws a second copy on top of it. Nothing else reads
+ * series_id — deleteSeries and deleteFuture are its only consumers, and
+ * CalendarPanel's plain save now carries it through rather than clearing it.
  */
 export function editOccurrence(master, day, patch, newId) {
   const exdates = [...new Set([...(Array.isArray(master.exdates) ? master.exdates : []), day])];
   return {
     update: [{ id: master.id, exdates }],
-    insert: [{ ...master, ...patch, id: newId, rrule: null, exdates: [], series_id: null }],
+    insert: [{ ...master, ...patch, id: newId, rrule: null, exdates: [], series_id: master.series_id || master.id }],
   };
 }
 
-/** Editing this and every later one: cap the old master, start a new series. */
+/**
+ * How many occurrences of `master`'s rule fall strictly before local day `d`,
+ * exdated ones INCLUDED — `count` counts scheduled slots, not surviving ones
+ * (see "an exdate still consumes its slot" in the smoke), so a deletion before
+ * the split must still use up its slot.
+ */
+function occurrencesBefore(master, d) {
+  const startDay = startOfDay(new Date(master.start_time));
+  if (Number.isNaN(startDay.getTime()) || d <= startDay) return 0;
+  return occurrenceDays({ ...master, exdates: [] }, startDay, addDays(d, -1)).length;
+}
+
+/**
+ * Editing this and every later one: cap the old master, start a new series.
+ *
+ * Three things the new master used to lose at the seam, each of which put
+ * back something the user had already dealt with:
+ *
+ *   ITS DELETIONS. It was written with `exdates: []`, so every occurrence the
+ *   user had deleted on or after the split came back the moment they edited
+ *   anything from an earlier one — and every occurrence they had edited one at
+ *   a time came back as a DUPLICATE beside its standalone row. The master's
+ *   exdates on or after the split day now move across. If the edit also moves
+ *   the event by N days, they move N days with it: an exdate names an
+ *   occurrence, and the occurrence it named now lands N days later. The old
+ *   master keeps its own list untouched; entries past its new `until` are
+ *   simply never reached.
+ *
+ *   ITS COUNT. "10 sessions", edited from the 5th, capped the old master at 4
+ *   and started a new master with count 10 — fourteen sessions. The count the
+ *   form shows is the SERIES total (it was seeded from this master), so the
+ *   new master gets that total less the occurrences already spent before the
+ *   split, never fewer than one: the occurrence being edited exists. The old
+ *   master is capped by both `until` and its own spent count, which agree, and
+ *   which makes its label read "· 4 times" rather than claiming ten. A count
+ *   the master never had is the user's own, typed in this edit — "ends after
+ *   5" chosen while editing from occurrence 20 means five more, so it is left
+ *   as typed.
+ *
+ *   Its series is kept, as before.
+ */
 export function editFuture(master, day, patch, newId) {
   const d = parseDayKey(day);
   const startDay = startOfDay(new Date(master.start_time));
-  const next = { ...master, ...patch, id: newId, exdates: [], series_id: master.series_id || master.id };
   if (!d || d <= startDay) {
     // The split lands on the first occurrence — there is no "before" to keep,
     // so this is just an edit of the whole series.
     return { update: [{ ...master, ...patch }], insert: [], delete: [] };
   }
+
+  const oldRule = normalizeRule(master.rrule);
+  const spent = occurrencesBefore(master, d);
+
+  // The new master's rule: the edit's, when the edit carried one (null is a
+  // real answer — "does not repeat" from here on), else the master's own.
+  const nextRuleIn = Object.prototype.hasOwnProperty.call(patch || {}, "rrule") ? patch.rrule : master.rrule;
+  let nextRule = nextRuleIn ? { ...nextRuleIn } : null;
+  const nextNorm = normalizeRule(nextRule);
+  if (nextRule && nextNorm && nextNorm.count != null && oldRule && oldRule.count != null) {
+    nextRule = { ...nextRule, count: Math.max(1, nextNorm.count - spent) };
+  }
+
+  // How far the edit moved the occurrence, in whole local days.
+  const newStart = patch && patch.start_time ? new Date(patch.start_time) : null;
+  const shiftDays = newStart && !Number.isNaN(newStart.getTime())
+    ? Math.round((startOfDay(newStart) - d) / 86400000) : 0;
+  const exdates = nextRule
+    ? [...new Set((Array.isArray(master.exdates) ? master.exdates : [])
+      .map(String)
+      .filter((k) => k >= dayKey(d))
+      .map((k) => (shiftDays ? dayKey(addDays(parseDayKey(k) || d, shiftDays)) : k)))]
+    : [];
+
+  const next = { ...master, ...patch, id: newId, rrule: nextRule, exdates, series_id: master.series_id || master.id };
+  const capped = { ...oldRule, until: dayKey(addDays(d, -1)), count: oldRule && oldRule.count != null && spent > 0 ? spent : null };
   return {
-    update: [{ id: master.id, rrule: { ...normalizeRule(master.rrule), until: dayKey(addDays(d, -1)), count: null } }],
+    update: [{ id: master.id, rrule: capped }],
     insert: [next],
     delete: [],
   };

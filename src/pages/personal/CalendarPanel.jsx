@@ -435,7 +435,12 @@ Only extract entries you can read with real confidence — skip anything blurry,
     saveMut.mutate({
       id: form.id, ...fields, rrule,
       exdates: master ? master.exdates : [],
-      series_id: rrule ? (master && master.series_id) || form.id : null,
+      // A row that already belongs to a series keeps it, repeating or not. The
+      // one-off case matters: an occurrence edited on its own (editOccurrence)
+      // is a standalone row linked to its series, and re-saving it here used
+      // to write series_id null — so the next "delete all events in the
+      // series" left it behind. A brand-new one-off still belongs to nothing.
+      series_id: (master && master.series_id) || (rrule ? form.id : null),
     }, {
       onSuccess: () => { setSaving(false); closeForm(); },
       onError: (e) => { setSaving(false); setSaveErr(e.message || "Couldn't save."); },
@@ -459,7 +464,9 @@ Only extract entries you can read with real confidence — skip anything blurry,
     const { mode, master, day, fields, rrule } = scopeAsk;
     if (mode === "delete") {
       if (scope === "one") return runPlan(deleteOccurrence(master, day));
-      if (scope === "future") return runPlan(deleteFuture(master, day));
+      // The rows go along so occurrences edited one at a time after the cut
+      // are removed with the rest of "this and all following".
+      if (scope === "future") return runPlan(deleteFuture(master, day, events || []));
       return runPlan(deleteSeries(master, events || []));
     }
     if (scope === "one") return runPlan(editOccurrence(master, day, fields, crypto.randomUUID()));

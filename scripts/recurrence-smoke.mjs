@@ -183,6 +183,103 @@ check("editing future FROM the first occurrence is just an edit of the whole ser
   editFuture(master, "2026-08-03", { title: "X" }, "new3").insert.length === 0 &&
   editFuture(master, "2026-08-03", { title: "X" }, "new3").update[0].title === "X");
 
+// ─── "This and all following" must not undo what the user already did ───────
+// editFuture used to start the new master with `exdates: []` and the old
+// master's full count, and editOccurrence wrote its standalone row with
+// series_id null. Reproduced under TZ=America/Chicago: deleted Mondays after
+// the split came back, a 10-session series edited from #5 grew to 14, and
+// "delete all in series" left every separately-edited occurrence behind.
+{
+  const all = (rows, f = D(2026, 7, 1), t = D(2027, 6, 30)) => expandEvents(rows, f, t).map((o) => o.occurrenceDay);
+  const apply = (rows, plan) => {
+    let out = rows.map((r) => {
+      const u = (plan.update || []).find((x) => x.id === r.id);
+      return u ? { ...r, ...u } : r;
+    });
+    out = out.concat(plan.insert || []);
+    return out.filter((r) => !(plan.delete || []).includes(r.id));
+  };
+  const weekly = ev({ rrule: { freq: "weekly", interval: 1 }, exdates: ["2026-08-10", "2026-08-24"] });
+
+  // (a) deletions on or after the split survive it
+  const fa = editFuture(weekly, "2026-08-17", { title: "Renamed", start_time: at(2026, 8, 17) }, "n1");
+  check("editFuture carries the exdates on or after the split to the new master",
+    fa.insert[0].exdates.join(",") === "2026-08-24", JSON.stringify(fa.insert[0].exdates));
+  check("...and a Monday deleted after the split stays deleted",
+    !all(apply([weekly], fa), D(2026, 8, 1), D(2026, 9, 7)).includes("2026-08-24")
+    && all(apply([weekly], fa), D(2026, 8, 1), D(2026, 9, 7)).join(",") === "2026-08-03,2026-08-17,2026-08-31,2026-09-07",
+    all(apply([weekly], fa), D(2026, 8, 1), D(2026, 9, 7)).join(","));
+  const fShift = editFuture(weekly, "2026-08-17", { title: "Moved", start_time: at(2026, 8, 18) }, "n2");
+  check("...and when the edit moves the occurrence a day, the deletion moves with it",
+    fShift.insert[0].exdates.join(",") === "2026-08-25"
+    && !all(apply([weekly], fShift), D(2026, 8, 1), D(2026, 9, 8)).includes("2026-08-25"),
+    JSON.stringify(fShift.insert[0].exdates));
+  {
+    const one = editOccurrence(weekly, "2026-08-31", { title: "Special", start_time: at(2026, 8, 31, 15) }, "solo");
+    const rows1 = apply([weekly], one);
+    const fut = editFuture(rows1[0], "2026-08-17", { title: "Renamed", start_time: at(2026, 8, 17) }, "n3");
+    const days = all(apply(rows1, fut), D(2026, 8, 1), D(2026, 9, 7));
+    check("...and an occurrence edited on its own is not drawn twice after a later future-edit",
+      days.filter((k) => k === "2026-08-31").length === 1, days.join(","));
+  }
+
+  // (b) a count-limited series keeps its total across the split
+  const ten = ev({ rrule: { freq: "weekly", interval: 1, count: 10 } });
+  check("a 10-session weekly series has ten sessions to begin with", all([ten]).length === 10);
+  // #5 of the Mondays from Aug 3 is Aug 31. The form hands back the series'
+  // own rule, count included, exactly as CalendarPanel does.
+  const fb = editFuture(ten, "2026-08-31", { title: "Moved room", start_time: at(2026, 8, 31), rrule: { freq: "weekly", interval: 1, count: 10 } }, "n4");
+  check("editFuture from session #5 still yields ten sessions, not fourteen",
+    all(apply([ten], fb)).length === 10, String(all(apply([ten], fb)).length));
+  check("...the new master carries the six that remain",
+    fb.insert[0].rrule.count === 6, JSON.stringify(fb.insert[0].rrule));
+  check("...and the old master is capped at the four it already had, by count and by date",
+    fb.update[0].rrule.count === 4 && fb.update[0].rrule.until === "2026-08-30"
+    && all([{ ...ten, rrule: fb.update[0].rrule }]).length === 4
+    && describeRule(fb.update[0].rrule).endsWith("· 4 times"),
+    JSON.stringify(fb.update[0].rrule));
+  check("...with no rule in the patch the master's own count is converted too",
+    editFuture(ten, "2026-08-31", { title: "x", start_time: at(2026, 8, 31) }, "n5").insert[0].rrule.count === 6);
+  check("...a deleted session before the split still used up its slot",
+    editFuture({ ...ten, exdates: ["2026-08-10"] }, "2026-08-31", { title: "x", start_time: at(2026, 8, 31) }, "n6").insert[0].rrule.count === 6
+    && all(apply([{ ...ten, exdates: ["2026-08-10"] }], editFuture({ ...ten, exdates: ["2026-08-10"] }, "2026-08-31", { title: "x", start_time: at(2026, 8, 31) }, "n6"))).length === 9);
+  check("...a count the master never had is the user's own and is left as typed",
+    editFuture(weekly, "2026-08-31", { rrule: { freq: "weekly", interval: 1, count: 5 } }, "n7").insert[0].rrule.count === 5
+    && editFuture(weekly, "2026-08-31", { rrule: { freq: "weekly", interval: 1, count: 5 } }, "n7").update[0].rrule.count === null);
+  check("...and a total cut below what is already spent still keeps the edited session",
+    editFuture(ten, "2026-08-31", { rrule: { freq: "weekly", interval: 1, count: 2 } }, "n8").insert[0].rrule.count === 1);
+
+  // (c) an occurrence edited on its own stays in the series
+  const oc = editOccurrence(weekly, "2026-08-17", { title: "Solo", start_time: at(2026, 8, 17, 15) }, "solo2");
+  check("editOccurrence links the standalone row to its series",
+    oc.insert[0].series_id === "e1" && oc.insert[0].rrule === null, String(oc.insert[0].series_id));
+  check("...keeps the series id of a master that was itself split off",
+    editOccurrence({ ...weekly, id: "m2", series_id: "e1" }, "2026-08-17", {}, "s3").insert[0].series_id === "e1");
+  const rowsC = apply([weekly], oc);
+  check("...is drawn exactly once, not re-expanded and not doubled by the master",
+    all(rowsC, D(2026, 8, 1), D(2026, 8, 31)).filter((k) => k === "2026-08-17").length === 1
+    && expandEvents(rowsC, D(2026, 8, 1), D(2026, 8, 31)).filter((o) => o.masterId === "solo2").length === 1);
+  check("...and 'delete all in series' now takes it too",
+    deleteSeries(weekly, rowsC).delete.sort().join(",") === "e1,solo2");
+  {
+    const early = editOccurrence(weekly, "2026-08-03", { title: "Early", start_time: at(2026, 8, 3, 15) }, "early").insert[0];
+    const late = oc.insert[0];
+    const plan = deleteFuture(weekly, "2026-08-17", [weekly, early, late, { id: "other", series_id: null, start_time: at(2026, 9, 1) }]);
+    check("deleteFuture removes occurrences edited on their own on or after the cut, and only those",
+      plan.delete.join(",") === "solo2", plan.delete.join(","));
+    check("...and without the rows it behaves exactly as before",
+      deleteFuture(weekly, "2026-08-17").delete.length === 0);
+  }
+  {
+    const { readFileSync } = await import("node:fs");
+    const panel = readFileSync("src/pages/personal/CalendarPanel.jsx", "utf8");
+    check("CalendarPanel's plain save keeps a row's series_id instead of clearing it for a one-off",
+      /series_id: \(master && master\.series_id\) \|\| \(rrule \? form\.id : null\)/.test(panel));
+    check("CalendarPanel hands deleteFuture the rows",
+      /deleteFuture\(master, day, events \|\| \[\]\)/.test(panel));
+  }
+}
+
 // ─── plain English ───────────────────────────────────────────────────────────
 check("a one-off says so", describeRule(null) === "Does not repeat");
 check("daily reads plainly", describeRule({ freq: "daily", interval: 1 }) === "Every day");
@@ -367,4 +464,7 @@ if (failed) { console.log(`\n${failed} recurrence check(s) failed`); process.exi
   check("…and the insert carries none either", confirm.length > 0 && /year: null/.test(confirm) && !/r\.year/.test(confirm));
 }
 
+// The early exit above only guards the block before it; everything after it
+// reported PASS regardless of what it found.
+if (failed) { console.log(`\n${failed} recurrence check(s) failed`); process.exit(1); }
 console.log("\nRECURRENCE SMOKE PASS");
