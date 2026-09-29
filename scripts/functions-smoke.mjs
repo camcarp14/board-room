@@ -257,6 +257,94 @@ globalThis.fetch = (...args) => {
 // Netlify only reads `handler`, so a function may export a pure helper purely so
 // it can be asserted here. Keep these to logic that would otherwise be
 // untestable — anything richer belongs in src/ with its own smoke.
+
+// ─── Recurring meetings on a linked ICS feed ─────────────────────────────────
+// parseIcs read only DTSTART, so a weekly standup that began in June — one
+// VEVENT dated June 1 — never reached a 14-day window in September. It is
+// expanded now (DAILY/WEEKLY, INTERVAL, BYDAY, WKST, COUNT, UNTIL, EXDATE,
+// RECURRENCE-ID). Everything is run through the handler's own pipeline —
+// parseIcs with the handler's window, then inWindow, then formatWhen — so the
+// labels asserted are the ones the Brief would print. "Now" is 7am CDT on
+// Monday 28 September 2026.
+function calendarRecurrenceChecks(mod) {
+  const { parseIcs, inWindow, formatWhen, expandRrule } = mod;
+  if (typeof parseIcs !== "function" || typeof expandRrule !== "function") {
+    return [["calendar-events exports parseIcs + expandRrule", false, "not exported"]];
+  }
+  const NOW = Date.parse("2026-09-28T12:00:00Z");
+  const END = NOW + 14 * 86400000;
+  const feed = (...events) => ["BEGIN:VCALENDAR", "VERSION:2.0", ...events.flatMap((e) => ["BEGIN:VEVENT", ...e, "END:VEVENT"]), "END:VCALENDAR"].join("\r\n");
+  // Exactly what the handler does with the text, minus the fetch.
+  const card = (ics, now = NOW) => parseIcs(ics, now - 86400000, now + 14 * 86400000)
+    .filter((e) => inWindow(e, now, now + 14 * 86400000))
+    .sort((a, b) => new Date(a.start) - new Date(b.start))
+    .map((e) => `${e.title} @ ${formatWhen(e)}`);
+
+  const STANDUP = [
+    "UID:standup-1@example.com", "SUMMARY:Standup",
+    "DTSTART;TZID=America/Chicago:20260601T090000", "DTEND;TZID=America/Chicago:20260601T091500",
+    "RRULE:FREQ=WEEKLY;BYDAY=MO,WE",
+    // Wed 30 Sep was cancelled.
+    "EXDATE;TZID=America/Chicago:20260930T090000",
+  ];
+  // Mon 5 Oct was moved to Tue 6 Oct at 2pm.
+  const MOVED = [
+    "UID:standup-1@example.com", "SUMMARY:Standup (moved)",
+    "RECURRENCE-ID;TZID=America/Chicago:20261005T090000",
+    "DTSTART;TZID=America/Chicago:20261006T140000", "DTEND;TZID=America/Chicago:20261006T141500",
+  ];
+  const standup = card(feed(STANDUP, MOVED));
+  const want = ["Standup @ Mon, Sep 28, 9:00 AM", "Standup (moved) @ Tue, Oct 6, 2:00 PM", "Standup @ Wed, Oct 7, 9:00 AM"];
+
+  const weekdays = card(feed(["UID:wd", "SUMMARY:Sync", "DTSTART;TZID=America/Chicago:20200106T083000", "RRULE:FREQ=DAILY;BYDAY=MO,TU,WE,TH,FR"]));
+  const oldDaily = card(feed(["UID:od", "SUMMARY:Meds", "DTSTART;TZID=America/Chicago:20190301T090000", "RRULE:FREQ=DAILY"]));
+  const biweekly = card(feed(["UID:bw", "SUMMARY:1:1", "DTSTART;TZID=America/Chicago:20260603T100000", "RRULE:FREQ=WEEKLY;INTERVAL=2;BYDAY=MO,WE"]));
+  const count18 = card(feed(["UID:c", "SUMMARY:Course", "DTSTART;TZID=America/Chicago:20260601T180000", "RRULE:FREQ=WEEKLY;COUNT=18"]));
+  const count17 = card(feed(["UID:c", "SUMMARY:Course", "DTSTART;TZID=America/Chicago:20260601T180000", "RRULE:FREQ=WEEKLY;COUNT=17"]));
+  const until = card(feed(["UID:u", "SUMMARY:Pilot", "DTSTART;TZID=America/Chicago:20260601T090000", "RRULE:FREQ=WEEKLY;BYDAY=MO,WE;UNTIL=20260930T140000Z"]));
+  const untilDate = card(feed(["UID:ud", "SUMMARY:Pilot", "DTSTART;TZID=America/Chicago:20260601T090000", "RRULE:FREQ=WEEKLY;BYDAY=MO,WE;UNTIL=20260929"]));
+  const allDay = card(feed(["UID:ad", "SUMMARY:Bins out", "DTSTART;VALUE=DATE:20260601", "RRULE:FREQ=WEEKLY", "EXDATE;VALUE=DATE:20261005"]));
+  const cancelled = card(feed(STANDUP, ["UID:standup-1@example.com", "SUMMARY:Standup", "STATUS:CANCELLED", "RECURRENCE-ID;TZID=America/Chicago:20261007T090000", "DTSTART;TZID=America/Chicago:20261007T090000"]));
+  const monthly = parseIcs(feed(["UID:m", "SUMMARY:Board", "DTSTART;TZID=America/Chicago:20260115T090000", "RRULE:FREQ=MONTHLY"]), NOW - 86400000, END);
+  const utcAnchored = card(feed(["UID:z", "SUMMARY:Ops", "DTSTART:20260601T140000Z", "RRULE:FREQ=WEEKLY;BYDAY=MO"]));
+  // Across the fall-back: 9am Chicago is 14:00Z in October and 15:00Z in November.
+  const DST_NOW = Date.parse("2026-10-25T12:00:00Z");
+  const dst = parseIcs(feed(["UID:dst", "SUMMARY:Standup", "DTSTART;TZID=America/Chicago:20260601T090000", "RRULE:FREQ=WEEKLY;BYDAY=MO"]), DST_NOW, DST_NOW + 14 * 86400000).map((e) => e.start);
+
+  // A feed built to spin: every day since 1900, a count that never ends, and a
+  // BYDAY filter that forces the COUNT walk from DTSTART rather than a seek.
+  const t0 = Date.now();
+  const hostile = parseIcs(feed(["UID:h", "SUMMARY:x", "DTSTART:19000101T000000Z", "RRULE:FREQ=DAILY;INTERVAL=0;COUNT=999999999;BYDAY=MO"]), NOW - 86400000, END);
+  const hostileWide = expandRrule(
+    { date: new Date(Date.UTC(1900, 0, 1)), allDay: false, wall: { y: 1900, mo: 1, d: 1, h: 0, mi: 0, s: 0 }, zone: "UTC" },
+    "FREQ=DAILY", Date.UTC(1900, 0, 1), Date.UTC(2100, 0, 1), new Set(), new Set());
+  const elapsed = Date.now() - t0;
+
+  const handlerSrc = readFileSync("netlify/functions/calendar-events.js", "utf8").split("exports.handler = async")[1] || "";
+
+  return [
+    ["ICS: a weekly Mon/Wed standup from June is on the card in late September", standup.length === 3 && standup.join(" | ") === want.join(" | "), standup.join(" | ")],
+    ["ICS: …its EXDATE (Wed Sep 30) is skipped", !standup.some((r) => /Sep 30/.test(r)), standup.join(" | ")],
+    ["ICS: …the moved Monday is gone from Monday and shows once, at its new time", !standup.some((r) => /Oct 5/.test(r)) && standup.filter((r) => /Oct 6, 2:00 PM/.test(r)).length === 1, standup.join(" | ")],
+    ["ICS: …and Mon Oct 12, just past the 14-day window, is not", !standup.some((r) => /Oct 12/.test(r))],
+    ["ICS: every-weekday (DAILY+BYDAY) from 2020 fills the fortnight's ten weekdays", weekdays.length === 10 && !weekdays.some((r) => /Sat|Sun/.test(r)), weekdays.join(" | ")],
+    ["ICS: a daily series from 2019 still reaches today (the walk seeks; no step cap from DTSTART)", oldDaily.length === 14 && /Sep 28, 9:00 AM/.test(oldDaily[0]) && /Oct 11, 9:00 AM/.test(oldDaily[13]), `${oldDaily.length}: ${oldDaily[0]}`],
+    ["ICS: INTERVAL=2 on Mon/Wed keeps week alignment from a Wednesday start", biweekly.join(" | ") === "1:1 @ Mon, Oct 5, 10:00 AM | 1:1 @ Wed, Oct 7, 10:00 AM", biweekly.join(" | ")],
+    ["ICS: COUNT is counted from DTSTART — the 18th Monday is Sep 28, and a 17-count series is over", count18.join(" | ") === "Course @ Mon, Sep 28, 6:00 PM" && count17.length === 0, `${count18.join(" | ")} / ${count17.join(" | ")}`],
+    ["ICS: a date-time UNTIL is inclusive", until.join(" | ") === "Pilot @ Mon, Sep 28, 9:00 AM | Pilot @ Wed, Sep 30, 9:00 AM", until.join(" | ")],
+    ["ICS: a date-only UNTIL ends on that day", untilDate.join(" | ") === "Pilot @ Mon, Sep 28, 9:00 AM", untilDate.join(" | ")],
+    ["ICS: an all-day weekly series lands on its Chicago days and honours a date-only EXDATE", allDay.join(" | ") === "Bins out @ Mon, Sep 28 | Bins out @ Mon, Oct 12", allDay.join(" | ")],
+    ["ICS: a STATUS:CANCELLED override deletes its instance rather than drawing it", cancelled.join(" | ") === "Standup @ Mon, Sep 28, 9:00 AM | Standup @ Mon, Oct 5, 9:00 AM", cancelled.join(" | ")],
+    ["ICS: a Z-anchored rule repeats in UTC", utcAnchored.join(" | ") === "Ops @ Mon, Sep 28, 9:00 AM | Ops @ Mon, Oct 5, 9:00 AM", utcAnchored.join(" | ")],
+    ["ICS: a weekly 9am keeps 9am across the fall-back (14:00Z, then 15:00Z)", dst.join(",") === "2026-10-26T14:00:00.000Z,2026-11-02T15:00:00.000Z", dst.join(",")],
+    ["ICS: MONTHLY is not half-expanded — it falls back to its DTSTART as before", monthly.length === 1 && monthly[0].start === "2026-01-15T15:00:00.000Z", JSON.stringify(monthly)],
+    ["ICS: a hostile rule terminates, bounded, and fast", Array.isArray(hostile) && hostile.length <= 400 && Array.isArray(hostileWide) && hostileWide.length === 400 && elapsed < 2000, `${hostile.length} / ${hostileWide?.length} in ${elapsed}ms`],
+    ["ICS: the handler still gates on the owner's session before it fetches", /denyUnlessSignedIn\(event\)[\s\S]*fetchPublicUrl\(url/.test(handlerSrc)],
+    ["ICS: …and keeps its URL guard, size cap and 10s timeout", /badUrl\(url\)/.test(handlerSrc) && /readTextLimited\(res\)/.test(handlerSrc) && /controller\.abort\(\), 10000\)/.test(handlerSrc) && !/redirect: "follow"/.test(readFileSync("netlify/functions/calendar-events.js", "utf8"))],
+    ["ICS: …and hands parseIcs its own window", /parseIcs\(text, now - 86400000, windowEnd\)/.test(handlerSrc)],
+  ];
+}
+
 const EXTRA = {
   // The econ feed has no `actual` field, so the only thing calendar.js can say
   // about a released event is what KIND of event it was. Get that wrong and the
@@ -363,6 +451,7 @@ const EXTRA = {
       ["…and gone once its Chicago day is over", !inWindow(allDay, T("2026-09-04T05:30:00Z"), T("2026-09-04T05:30:00Z") + 14 * 86400000)],
       ["a timed event keeps its hour of grace", inWindow({ start: "2026-09-03T19:00:00.000Z", allDay: false }, T("2026-09-03T19:50:00Z"), T("2026-09-03T19:50:00Z") + 14 * 86400000)
         && !inWindow({ start: "2026-09-03T19:00:00.000Z", allDay: false }, T("2026-09-03T20:10:00Z"), T("2026-09-03T20:10:00Z") + 14 * 86400000)],
+      ...calendarRecurrenceChecks(mod),
     ];
   },
   "site-status": (mod) => {

@@ -5,6 +5,11 @@
 // public HTML calendar page (not an .ics link) won't parse here.
 // Dependency-free regex-based parsing, consistent with the rest of this
 // codebase (see wire.js for the same approach with RSS).
+//
+// Recurring meetings are expanded into the window (expandRrule below): a
+// weekly standup is ONE VEVENT dated the first week it ever ran, and reading
+// only its DTSTART meant every standing meeting older than the 14-day window
+// never reached the card at all.
 const json = (code, body) => ({ statusCode: code, headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
 
 // The viewer's zone. Netlify runs this in UTC and netlify.toml sets no TZ, so
@@ -164,9 +169,13 @@ function parseIcsDate(raw, tzid) {
   const m = raw.match(/^(\d{4})(\d{2})(\d{2})(?:T(\d{2})(\d{2})(\d{2})(Z)?)?$/);
   if (!m) return null;
   const [, y, mo, d, h, mi, s, z] = m;
-  if (h === undefined) return { date: zoned(y, mo, d, 0, 0, 0, TZ), allDay: true };
-  if (z) return { date: new Date(`${y}-${mo}-${d}T${h}:${mi}:${s}Z`), allDay: false };
-  return { date: zoned(y, mo, d, h, mi, s, tzid || TZ), allDay: false };
+  // `wall` and `zone` ride along for expandRrule: a recurrence repeats the WALL
+  // time in the event's own zone ("9am Chicago, every Monday"), not a fixed
+  // number of milliseconds, which would slide an hour at each DST change.
+  const wall = { y: Number(y), mo: Number(mo), d: Number(d), h: Number(h || 0), mi: Number(mi || 0), s: Number(s || 0) };
+  if (h === undefined) return { date: zoned(y, mo, d, 0, 0, 0, TZ), allDay: true, wall, zone: TZ };
+  if (z) return { date: new Date(`${y}-${mo}-${d}T${h}:${mi}:${s}Z`), allDay: false, wall, zone: "UTC" };
+  return { date: zoned(y, mo, d, h, mi, s, tzid || TZ), allDay: false, wall, zone: tzid || TZ };
 }
 
 /**
@@ -193,11 +202,174 @@ function inWindow(e, now, windowEnd) {
   return end > now && t <= windowEnd;
 }
 
-function parseIcs(ics) {
+/* ══ recurrence ═════════════════════════════════════════════════════════════
+ * Ported from the expansion on claude/board-room-audit-sxzy38 (86241f5 +
+ * 09e3a6a) — the expansion only; that branch's handler had no sign-in check
+ * and followed redirects unchecked, and this file's handler is unchanged. What
+ * changed in the port: every instant goes through zoned()/TZ above, the walk
+ * SEEKS to the window instead of stepping from DTSTART (the branch's
+ * 1,500-step cap from DTSTART silently dropped a daily meeting after four
+ * years, the same bug recurrence.js once had), and a date-only EXDATE or
+ * RECURRENCE-ID matches by day.
+ *
+ * Supported: FREQ=DAILY and FREQ=WEEKLY, with INTERVAL, BYDAY (a filter on
+ * DAILY — "every weekday" — and the days of the week on WEEKLY), WKST, COUNT,
+ * UNTIL, EXDATE, and RECURRENCE-ID overrides. MONTHLY and YEARLY are rare for
+ * meetings and fall back to their literal DTSTART, exactly as before, rather
+ * than being half-supported.
+ *
+ * Days are counted as whole UTC day numbers (the date arithmetic only — never
+ * an instant), so stepping is immune to DST; each day is then turned into an
+ * instant with the event's own wall time in its own zone.
+ */
+const DOW = { SU: 0, MO: 1, TU: 2, WE: 3, TH: 4, FR: 5, SA: 6 };
+const DAY_MS = 86400000;
+// A hostile or broken feed must not be able to spin this function. PERIODS
+// bounds the walk (a period is one day for DAILY, one INTERVAL of weeks for
+// WEEKLY) and OUT bounds what one VEVENT can emit; the card shows ten.
+const MAX_RRULE_PERIODS = 3000;
+const MAX_RRULE_OUT = 400;
+
+const dayNumOf = (w) => Math.floor(Date.UTC(w.y, w.mo - 1, w.d) / DAY_MS);
+const wallOfDayNum = (n) => { const t = new Date(n * DAY_MS); return { y: t.getUTCFullYear(), mo: t.getUTCMonth() + 1, d: t.getUTCDate() }; };
+const dowOfDayNum = (n) => (((n + 4) % 7) + 7) % 7; // day 0 (1970-01-01) was a Thursday
+
+/** RRULE text → { freq, interval, count, until, byday, wkst }, or null when it can't be expanded. */
+function parseRrule(raw) {
+  const parts = {};
+  for (const kv of String(raw || "").split(";")) {
+    const i = kv.indexOf("=");
+    if (i > 0) parts[kv.slice(0, i).trim().toUpperCase()] = kv.slice(i + 1).trim();
+  }
+  const freq = String(parts.FREQ || "").toUpperCase();
+  if (freq !== "DAILY" && freq !== "WEEKLY") return null;
+  const interval = Math.min(1000, Math.max(1, parseInt(parts.INTERVAL || "1", 10) || 1));
+  const count = parts.COUNT ? Math.max(1, parseInt(parts.COUNT, 10) || 1) : null;
+  // "MO", "1MO" and "-1MO" all name Monday; the ordinal only means anything
+  // for MONTHLY/YEARLY, which are not expanded here.
+  const byday = parts.BYDAY
+    ? [...new Set(parts.BYDAY.split(",").map((t) => DOW[t.trim().slice(-2).toUpperCase()]).filter((n) => n !== undefined))]
+    : [];
+  const wkst = DOW[String(parts.WKST || "MO").toUpperCase()] ?? 1;
+  return { freq, interval, count, until: parts.UNTIL || null, byday, wkst };
+}
+
+/**
+ * The instants of one recurring VEVENT inside [winStart, winEnd] (ms).
+ *
+ * `start` is its parsed DTSTART. `exMs` holds excluded instants (EXDATE, and
+ * occurrences replaced by a RECURRENCE-ID override); `exDays` holds day
+ * numbers excluded by a date-only value. Returns null for a rule this cannot
+ * expand, so the caller can fall back to the literal DTSTART.
+ *
+ * COUNT is counted from DTSTART, not from the window — the seek below credits
+ * every occurrence it skips, so a window late in a COUNT=10 series still ends
+ * on the tenth.
+ */
+function expandRrule(start, rruleRaw, winStart, winEnd, exMs, exDays) {
+  const rule = parseRrule(rruleRaw);
+  if (!rule || !start || !start.wall) return null;
+  const { wall, zone } = start;
+  const startDay = dayNumOf(wall);
+  const startMs = start.date.getTime();
+  const at = (dayNum) => {
+    const w = wallOfDayNum(dayNum);
+    if (start.allDay) return zoned(w.y, w.mo, w.d, 0, 0, 0, TZ).getTime();
+    if (zone === "UTC") return Date.UTC(w.y, w.mo - 1, w.d, wall.h, wall.mi, wall.s);
+    return zoned(w.y, w.mo, w.d, wall.h, wall.mi, wall.s, zone).getTime();
+  };
+
+  // UNTIL is inclusive. A date-only UNTIL ends on that DAY; a date-time one at
+  // that instant (Z, or wall time in the event's zone when it has none).
+  let untilDay = null, untilMs = null;
+  if (rule.until) {
+    const u = parseIcsDate(rule.until, zone === "UTC" ? null : zone);
+    if (u && u.allDay) untilDay = dayNumOf(u.wall);
+    else if (u) untilMs = u.date.getTime();
+  }
+
+  let base0, offsets, periodDays, filter = null;
+  if (rule.freq === "WEEKLY") {
+    // Periods start on WKST (Monday by default, RFC 5545) — not on DTSTART's
+    // own weekday: striding 14 days from a Wednesday start put a bi-weekly
+    // Mon/Wed meeting's Mondays in the off weeks (09e3a6a's fix, kept).
+    const startDow = dowOfDayNum(startDay);
+    base0 = startDay - ((startDow - rule.wkst + 7) % 7);
+    offsets = (rule.byday.length ? rule.byday : [startDow]).map((dw) => (dw - rule.wkst + 7) % 7).sort((a, b) => a - b);
+    periodDays = 7 * rule.interval;
+  } else {
+    base0 = startDay;
+    offsets = [0];
+    periodDays = rule.interval;
+    if (rule.byday.length) filter = new Set(rule.byday);
+  }
+
+  // Seek to the period just before the window. With a DAILY+BYDAY filter the
+  // number of occurrences skipped is not a closed form, so a COUNT-limited one
+  // walks from DTSTART instead (COUNT then bounds the walk).
+  const firstPeriod = offsets.filter((o) => base0 + o >= startDay).length;
+  const winStartDay = Math.floor(winStart / DAY_MS) - 2; // slack for any zone's offset
+  let p = Math.max(0, Math.floor((winStartDay - base0) / periodDays));
+  if (filter && rule.count != null) p = 0;
+  let produced = p === 0 ? 0 : firstPeriod + (p - 1) * offsets.length;
+
+  const out = [];
+  for (let walked = 0; walked < MAX_RRULE_PERIODS; walked++, p++) {
+    for (const off of offsets) {
+      const day = base0 + p * periodDays + off;
+      if (day < startDay) continue;                          // before the series began
+      if (filter && !filter.has(dowOfDayNum(day))) continue;
+      const ms = at(day);
+      if (!Number.isFinite(ms) || ms < startMs) continue;
+      produced += 1;
+      if (rule.count != null && produced > rule.count) return out;
+      if (untilDay != null && day > untilDay) return out;
+      if (untilMs != null && ms > untilMs) return out;
+      if (ms > winEnd) return out;
+      if (ms >= winStart && !exMs.has(ms) && !exDays.has(day)) {
+        out.push(ms);
+        if (out.length >= MAX_RRULE_OUT) return out;
+      }
+    }
+  }
+  return out;
+}
+
+/**
+ * Every EXDATE (or RECURRENCE-ID) value in a VEVENT body, split into exact
+ * instants and whole days. A property may repeat and may carry several
+ * comma-separated values, each read with that line's own TZID.
+ */
+function icsInstants(body, prop) {
+  const ms = new Set(), days = new Set();
+  for (const m of body.matchAll(new RegExp(`^${prop}((?:;[^:\\n]*)?):(.*)$`, "gm"))) {
+    const tzid = ((m[1] || "").match(/;TZID=([^;:]+)/) || [])[1] || null;
+    for (const v of m[2].split(",")) {
+      const d = parseIcsDate(v.trim(), tzid);
+      if (!d) continue;
+      if (d.allDay) days.add(dayNumOf(d.wall));
+      else ms.add(d.date.getTime());
+    }
+  }
+  return { ms, days };
+}
+
+/**
+ * Feed text → [{ title, location, start, allDay }].
+ *
+ * A one-off VEVENT comes back as it always did, wherever it falls — the
+ * handler's inWindow decides. A recurring one comes back as its occurrences
+ * inside [winStart, winEnd] (default: the day before now to two weeks out, the
+ * handler's own window with its all-day grace); there is no finite answer
+ * without a window. An override (a VEVENT with RECURRENCE-ID) replaces the
+ * occurrence it names and is emitted through its own DTSTART like a one-off —
+ * unless it is STATUS:CANCELLED, which is how some feeds delete one instance.
+ */
+function parseIcs(ics, winStart = Date.now() - DAY_MS, winEnd = Date.now() + 14 * DAY_MS) {
   const text = unfold(ics);
-  const events = [];
-  const blocks = text.split("BEGIN:VEVENT").slice(1);
-  for (const block of blocks) {
+  const blocks = [];
+  const replaced = new Map(); // UID → { ms, days } of occurrences an override replaces
+  for (const block of text.split("BEGIN:VEVENT").slice(1)) {
     const body = block.split("END:VEVENT")[0];
     const get = (prop) => {
       const m = body.match(new RegExp(`^${prop}(?:;[^:\\n]*)?:(.*)$`, "m"));
@@ -209,12 +381,37 @@ function parseIcs(ics) {
     const tzid = ((dtstartLine[1] || "").match(/;TZID=([^;:]+)/) || [])[1] || null;
     const parsed = parseIcsDate(dtstartRaw?.trim(), tzid);
     if (!parsed) continue;
-    events.push({
+    const uid = get("UID");
+    const rid = icsInstants(body, "RECURRENCE-ID");
+    const isOverride = rid.ms.size + rid.days.size > 0;
+    if (isOverride && uid) {
+      const r = replaced.get(uid) || { ms: new Set(), days: new Set() };
+      rid.ms.forEach((x) => r.ms.add(x));
+      rid.days.forEach((x) => r.days.add(x));
+      replaced.set(uid, r);
+    }
+    blocks.push({
+      uid, parsed, isOverride,
+      cancelled: /^CANCELLED$/i.test(get("STATUS") || ""),
+      rrule: isOverride ? null : get("RRULE"),
+      ex: icsInstants(body, "EXDATE"),
       title: get("SUMMARY") || "(untitled)",
       location: get("LOCATION"),
-      start: parsed.date.toISOString(),
-      allDay: parsed.allDay,
     });
+  }
+
+  const events = [];
+  for (const b of blocks) {
+    const push = (ms) => events.push({ title: b.title, location: b.location, start: new Date(ms).toISOString(), allDay: b.parsed.allDay });
+    if (b.isOverride && b.cancelled) continue;               // a deleted instance
+    if (b.rrule) {
+      const r = (b.uid && replaced.get(b.uid)) || { ms: new Set(), days: new Set() };
+      const occ = expandRrule(b.parsed, b.rrule, winStart, winEnd,
+        new Set([...b.ex.ms, ...r.ms]), new Set([...b.ex.days, ...r.days]));
+      if (occ) { occ.forEach(push); continue; }
+      // An unsupported FREQ falls through to its literal DTSTART.
+    }
+    push(b.parsed.date.getTime());
   }
   return events;
 }
@@ -247,7 +444,9 @@ exports.handler = async (event) => {
 
     const now = Date.now();
     const windowEnd = now + 14 * 86400000;
-    const events = parseIcs(text)
+    // Recurrences are expanded from a day back — inWindow's all-day grace —
+    // to the window's end; inWindow then trims exactly as it always has.
+    const events = parseIcs(text, now - 86400000, windowEnd)
       .filter(e => inWindow(e, now, windowEnd))
       .sort((a, b) => new Date(a.start) - new Date(b.start))
       .slice(0, 10)
@@ -269,3 +468,4 @@ exports.parseIcs = parseIcs;
 exports.parseIcsDate = parseIcsDate;
 exports.formatWhen = formatWhen;
 exports.inWindow = inWindow;
+exports.expandRrule = expandRrule;
