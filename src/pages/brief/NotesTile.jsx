@@ -56,7 +56,9 @@ export function NotesTile({ isMobile, refreshSignal, onOpenNotes, collapsed, onT
   // would drop `briefHidden` and take the Off-the-Brief button down with it.
   const setNotes = (u) => queryClient.setQueryData(["notes"], (old) => ({ ...(old || {}), rows: (typeof u === "function" ? u(old?.rows ?? null) : u) ?? [], legacy: old?.legacy ?? false }));
   const [err, setErr] = useState(null); // save errors; load errors come from the query
-  const loadErr = notesErr ? (notesErr.message || "Couldn't load notes.") : null;
+  // Only a load with nothing in hand replaces the list; a failed background
+  // refetch keeps the notes already on screen (TanStack holds the last good rows).
+  const loadErr = notesErr && notes == null ? (notesErr.message || "Couldn't load notes.") : null;
   const [quick, setQuick] = useState("");
   const [savingQuick, setSavingQuick] = useState(false);
   const [editing, setEditing] = useState(null); // { id, title, body }

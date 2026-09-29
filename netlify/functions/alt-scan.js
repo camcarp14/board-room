@@ -48,7 +48,7 @@ const MARKETS_URL =
   "https://api.coingecko.com/api/v3/coins/markets?vs_currency=usd&order=market_cap_desc&per_page=250&page=1&sparkline=false&price_change_percentage=1h%2C24h%2C7d%2C30d";
 
 async function fetchLiveRows() {
-  const res = await fetch(MARKETS_URL, { signal: AbortSignal.timeout(8000) });
+  const res = await fetch(MARKETS_URL, { signal: AbortSignal.timeout(8000), headers: cgHeaders(MARKETS_URL) });
   if (!res.ok) throw new Error(`CoinGecko ${res.status}`);
   const rows = await res.json();
   if (!Array.isArray(rows)) throw new Error("CoinGecko: unexpected shape");
@@ -732,3 +732,15 @@ exports.moveRead = moveRead;
 exports.cohortExcess = cohortExcess;
 exports.liveTargets = liveTargets;
 exports.flagStats = flagStats;
+
+// COINGECKO'S KEY, WHEN THERE IS ONE. On 2026-09-29 around 04:00 UTC CoinGecko
+// began refusing keyless calls to /coins/markets and /simple/price (a CloudFront
+// "Request blocked" 403, from Netlify and from home alike) while /global,
+// /categories, /market_chart and /ohlc kept answering. A free Demo key
+// (COINGECKO_API_KEY in Netlify) restores them; it is sent only to CoinGecko's
+// own host, never to the other feeds that share a fetch helper. Inlined per
+// function on purpose — see the note on shared modules in functions-smoke.
+function cgHeaders(url) {
+  const key = process.env.COINGECKO_API_KEY;
+  return key && /(^|\/\/)api\.coingecko\.com\//.test(String(url)) ? { "x-cg-demo-api-key": key } : {};
+}

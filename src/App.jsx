@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, lazy, Suspense } from "react";
+import { useState, useEffect, useLayoutEffect, useRef, lazy, Suspense } from "react";
 import { supabase } from "./lib/supabase.js";
 import { isNetworkAuthFailure } from "./lib/authErrors.js";
 import { sm } from "./lib/storage.js";
@@ -36,6 +36,13 @@ const UpstreamPage = lazy(() => import("./pages/upstream/UpstreamPage.jsx").then
 // library, a verified chord table and the DSP for the tuner and the synthesised
 // backing tracks. None of it belongs in the bundle that has to paint the Brief.
 const GuitarPage = lazy(() => import("./pages/guitar/GuitarPage.jsx").then(m => ({ default: m.GuitarPage })));
+// The same modules, fetched ahead of the first tap (see "WARM THE TABS").
+const PAGE_WARMERS = [
+  () => import("./pages/personal/PersonalPage.jsx"), () => import("./pages/train/TrainPage.jsx"),
+  () => import("./pages/grocery/GroceryPage.jsx"), () => import("./pages/finances/FinancesPage.jsx"),
+  () => import("./pages/creed/CreedPage.jsx"), () => import("./pages/markets/MarketsPage.jsx"),
+  () => import("./pages/guitar/GuitarPage.jsx"),
+];
 
 // ════════════════════════════════════════════════════════════════════════════
 // THE BOARD ROOM — SESSION edition.
@@ -115,6 +122,8 @@ export default function App() {
   // The purge lives inside the auth subscription; Sign out needs it too when the
   // server half of a sign-out fails (see signOut).
   const purgeRef = useRef(null);
+  // Set by goToPage when the page changes, consumed by a layout effect.
+  const arriveAtTop = useRef(false);
   // Two-factor: null until this session's assurance level is known, then
   // whether it still owes the code step (see shell/TwoFactor.jsx).
   const [secondFactor, setSecondFactor] = useState(null);
@@ -699,7 +708,13 @@ export default function App() {
     const from = visibleNav.findIndex(n => n.key === page);
     const to = visibleNav.findIndex(n => n.key === key);
     setNavDir(to > from ? "l" : to < from ? "r" : null);
-    setPage(key);
+    // A DIFFERENT PAGE ARRIVES AT ITS TOP, not at the old page's scroll offset.
+    // #page-scroll is shared, so the new page used to paint mid-way down (Brief
+    // scrolled to the Wire, tap Personal, land in the Notes list) and then glide
+    // up for 400ms under its own slide. The reset now happens in a layout effect,
+    // before that first paint (see below). Re-tapping the tab you're on keeps the
+    // smooth scroll-to-top, which is what that tap means.
+    if (key !== page) { arriveAtTop.current = true; setPage(key); return; }
     requestAnimationFrame(() => {
       const el = document.getElementById("page-scroll");
       if (!el || el.scrollTop <= 0) return;
@@ -721,6 +736,28 @@ export default function App() {
   // regions, or at the screen edges (those belong to iOS's history gesture).
   const pageRef = useRef(page);
   pageRef.current = page;
+  useLayoutEffect(() => {
+    if (!arriveAtTop.current) return;
+    arriveAtTop.current = false;
+    const el = document.getElementById("page-scroll");
+    if (el) el.scrollTop = 0;
+  }, [page]);
+
+  // WARM THE TABS. Every page but the Brief is its own chunk, fetched the first
+  // time its tab is opened — so on each launch (and iOS evicts the PWA
+  // constantly) the first visit to every tab slid in a skeleton and then cut to
+  // the page. A moment after sign-in, while the network is idle, fetch them all:
+  // the same import() the lazy() calls make, so the tab finds its module already
+  // there. Failures are ignored — the lazy() on the tab is still the real path.
+  useEffect(() => {
+    if (!session || PREVIEW) return;
+    const t = setTimeout(() => {
+      if (typeof navigator !== "undefined" && navigator.onLine === false) return;
+      for (const load of PAGE_WARMERS) load().catch(() => {});
+    }, 1500);
+    return () => clearTimeout(t);
+  }, [!!session]); // eslint-disable-line react-hooks/exhaustive-deps
+
   const goToPageRef = useRef(null);
   goToPageRef.current = goToPage;
   // The swipe handler is a native listener mounted once — it reads the

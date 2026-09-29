@@ -57,7 +57,7 @@ let lastHandledNewEvent = null;
 // renderings of one rule in step is for both to call the same function.
 
 export function CalendarPanel({ isMobile, newEventSignal }) {
-  const { data: events = null, error } = useEvents();
+  const { data: events = null, error, refetch } = useEvents();
   // Birthdays ride along as an overlay — they are their own table, they repeat
   // by construction, and nothing here writes to them. A failed birthdays load
   // must not take the calendar with it, so this reads the data and ignores the
@@ -67,7 +67,11 @@ export function CalendarPanel({ isMobile, newEventSignal }) {
   // own panel (Personal → Anniversaries), read-only here, and a failed load
   // costs the grid nothing but those rows.
   const { data: anniversaries = null } = useAnniversaries();
-  const loadErr = error ? (error.message || "Couldn't load your calendar.") : null;
+  // Only "nothing to show" gets the error card. A refresh that failed with the
+  // month already in hand keeps the grid and says so in one line above it — it
+  // used to replace the whole calendar with "Couldn't load your calendar".
+  const loadErr = error && events == null ? (error.message || "Couldn't load your calendar.") : null;
+  const staleErr = error && events != null;
   const saveMut = useSaveEvent();
   const delMut = useDeleteEvent();
   const planMut = useApplyEventPlan();
@@ -654,8 +658,15 @@ Only extract entries you can read with real confidence — skip anything blurry,
         </Card>
       )}
 
+      {staleErr && (
+        <Card pad="md" style={{ display: "flex", alignItems: "center", gap: 10 }}>
+          <span className="t-cap" style={{ color: "var(--red)", flex: 1 }}>Couldn't refresh — showing what was already loaded.</span>
+          <Button kind="tinted" size="sm" onClick={() => refetch()}>Retry</Button>
+        </Card>
+      )}
       {loadErr && (
-        <Card pad="md"><EmptyState icon={<IcCalendar size={26} />} title="Couldn't load your calendar" sub={loadErr} /></Card>
+        <Card pad="md"><EmptyState icon={<IcCalendar size={26} />} title="Couldn't load your calendar" sub={loadErr}
+          action={<Button kind="tinted" size="sm" onClick={() => refetch()}>Retry</Button>} /></Card>
       )}
       {!loadErr && events === null && (
         <Card pad="md">

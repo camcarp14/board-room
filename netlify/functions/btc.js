@@ -23,23 +23,31 @@ exports.handler = async (event) => {
   }
 
   try {
+    const PRICE_URL = "https://api.coingecko.com/api/v3/simple/price?ids=bitcoin&vs_currencies=usd&include_24hr_change=true";
+    const CHART_URL = "https://api.coingecko.com/api/v3/coins/bitcoin/market_chart?vs_currency=usd&days=1";
     const [priceRes, chartRes] = await Promise.all([
-      fetch("https://api.coingecko.com/api/v3/simple/price?ids=bitcoin&vs_currencies=usd&include_24hr_change=true", { signal: AbortSignal.timeout(8000) }),
-      fetch("https://api.coingecko.com/api/v3/coins/bitcoin/market_chart?vs_currency=usd&days=1", { signal: AbortSignal.timeout(8000) }),
+      fetch(PRICE_URL, { signal: AbortSignal.timeout(8000), headers: cgHeaders(PRICE_URL) }).catch(() => null),
+      fetch(CHART_URL, { signal: AbortSignal.timeout(8000), headers: cgHeaders(CHART_URL) }),
     ]);
-    if (!priceRes.ok || !chartRes.ok) throw new Error(`upstream ${priceRes.status}/${chartRes.status}`);
-    const priceData = await priceRes.json();
+    // THE CHART CARRIES THE PRICE TOO. /simple/price started answering keyless
+    // callers with a 403 on 2026-09-29 (see cgHeaders) while /market_chart did
+    // not, and requiring both took the whole BTC tile down. The chart's last
+    // point is at most ~5 minutes old and its first is 24h back, which is price
+    // and 24h change; /simple/price is used when it answers, and only then.
+    if (!chartRes.ok) throw new Error(`upstream chart ${chartRes.status}`);
     const chartData = await chartRes.json();
+    const priceData = priceRes && priceRes.ok ? await priceRes.json().catch(() => null) : null;
     const raw = (chartData.prices || []).map(([, p]) => p);
     const step = Math.max(1, Math.floor(raw.length / 48));
     const points = raw.filter((_, i) => i % step === 0);
     const high24 = raw.length ? Math.max(...raw) : null;
     const low24 = raw.length ? Math.min(...raw) : null;
 
+    const first = raw.length ? raw[0] : null, last = raw.length ? raw[raw.length - 1] : null;
     const payload = {
       success: true,
-      price: priceData.bitcoin?.usd ?? null,
-      changePct: priceData.bitcoin?.usd_24h_change ?? null,
+      price: priceData?.bitcoin?.usd ?? last,
+      changePct: priceData?.bitcoin?.usd_24h_change ?? (first && last ? ((last - first) / first) * 100 : null),
       points,
       high24,
       low24,
@@ -52,3 +60,15 @@ exports.handler = async (event) => {
     return json(502, { success: false, error: e.message });
   }
 };
+
+// COINGECKO'S KEY, WHEN THERE IS ONE. On 2026-09-29 around 04:00 UTC CoinGecko
+// began refusing keyless calls to /coins/markets and /simple/price (a CloudFront
+// "Request blocked" 403, from Netlify and from home alike) while /global,
+// /categories, /market_chart and /ohlc kept answering. A free Demo key
+// (COINGECKO_API_KEY in Netlify) restores them; it is sent only to CoinGecko's
+// own host, never to the other feeds that share a fetch helper. Inlined per
+// function on purpose — see the note on shared modules in functions-smoke.
+function cgHeaders(url) {
+  const key = process.env.COINGECKO_API_KEY;
+  return key && /(^|\/\/)api\.coingecko\.com\//.test(String(url)) ? { "x-cg-demo-api-key": key } : {};
+}

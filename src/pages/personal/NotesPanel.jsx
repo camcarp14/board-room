@@ -88,7 +88,13 @@ export function NotesPanel({ isMobile, openSignal, settings, updateSetting }) {
   // the first local edit would drop `briefHidden` and the toggle would vanish
   // mid-session with nothing having changed in the database.
   const setNotes = (u) => queryClient.setQueryData(["notes"], (old) => ({ ...(old || {}), rows: (typeof u === "function" ? u(old?.rows ?? null) : u) ?? [], legacy: old?.legacy ?? false }));
-  const loadErr = notesErr ? (notesErr.message || "Couldn't load notes.") : null;
+  // A FAILED REFRESH IS NOT A MISSING LIST. TanStack keeps the rows it already
+  // had when a background refetch fails, but this checked `error` first and
+  // swapped the whole list for an error card — pull to refresh in a dead spot
+  // and your notes vanished. With data in hand the list stays and a line above
+  // it says the refresh failed; the card is only for having nothing to show.
+  const loadErr = notesErr && notes == null ? (notesErr.message || "Couldn't load notes.") : null;
+  const staleErr = notesErr && notes != null ? (notesErr.message || "Couldn't refresh.") : null;
   const [activeId, setActiveId] = useState(null);
   const [draft, setDraft] = useState({ title: "", body: "", pinned: false, color: null });
   const [saveState, setSaveState] = useState("idle"); // idle | saving | saved | error
@@ -1071,8 +1077,15 @@ export function NotesPanel({ isMobile, openSignal, settings, updateSetting }) {
         )}
       </Card>
 
+      {staleErr && (
+        <Card pad="md" style={{ display: "flex", alignItems: "center", gap: 10 }}>
+          <span className="t-cap" style={{ color: "var(--red)", flex: 1 }}>Couldn't refresh — showing what was already loaded.</span>
+          <Button kind="tinted" size="sm" onClick={refresh}>Retry</Button>
+        </Card>
+      )}
       {loadErr && (
-        <Card pad="md"><EmptyState icon={<IcNote size={26} />} title="Couldn't load notes" sub={loadErr} /></Card>
+        <Card pad="md"><EmptyState icon={<IcNote size={26} />} title="Couldn't load notes" sub={loadErr}
+          action={<Button kind="tinted" size="sm" onClick={refresh}>Retry</Button>} /></Card>
       )}
       {!loadErr && notes === null && (
         // mirror the loaded layout: 2-col masonry on tablet, single column on phone

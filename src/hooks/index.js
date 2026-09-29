@@ -116,18 +116,23 @@ export function useBitcoinPrice() {
     let alive = true;
     const fetchDirect = async () => {
       const [priceRes, chartRes] = await Promise.all([
-        fetch("https://api.coingecko.com/api/v3/simple/price?ids=bitcoin&vs_currencies=usd&include_24hr_change=true"),
+        fetch("https://api.coingecko.com/api/v3/simple/price?ids=bitcoin&vs_currencies=usd&include_24hr_change=true").catch(() => null),
         fetch("https://api.coingecko.com/api/v3/coins/bitcoin/market_chart?vs_currency=usd&days=1"),
       ]);
-      // Without these, a CoinGecko 429/5xx (common on rate-limited mobile IPs —
+      // Without this, a CoinGecko 429/5xx (common on rate-limited mobile IPs —
       // the very reason the proxy exists) parses to price:null and would be
       // written straight through updateSnapshot, destroying the last-good seed.
-      if (!priceRes.ok || !chartRes.ok) throw new Error(`coingecko ${priceRes.status}/${chartRes.status}`);
-      const priceData = await priceRes.json();
+      // Only the chart is required: it carries price and 24h change as its last
+      // and first points, and /simple/price has refused keyless callers since
+      // 2026-09-29 (see netlify/functions/btc.js).
+      if (!chartRes.ok) throw new Error(`coingecko chart ${chartRes.status}`);
       const chartData = await chartRes.json();
+      const priceData = priceRes && priceRes.ok ? await priceRes.json().catch(() => null) : null;
       const raw = (chartData.prices || []).map(([, p]) => p);
       const step = Math.max(1, Math.floor(raw.length / 48));
-      return { price: priceData.bitcoin?.usd ?? null, changePct: priceData.bitcoin?.usd_24h_change ?? null, points: raw.filter((_, i) => i % step === 0), high24: raw.length ? Math.max(...raw) : null, low24: raw.length ? Math.min(...raw) : null };
+      const first = raw.length ? raw[0] : null, last = raw.length ? raw[raw.length - 1] : null;
+      if (last == null && priceData?.bitcoin?.usd == null) throw new Error("coingecko: no price");
+      return { price: priceData?.bitcoin?.usd ?? last, changePct: priceData?.bitcoin?.usd_24h_change ?? (first && last ? ((last - first) / first) * 100 : null), points: raw.filter((_, i) => i % step === 0), high24: raw.length ? Math.max(...raw) : null, low24: raw.length ? Math.min(...raw) : null };
     };
     const load = async () => {
       // Prefer the server-side proxy — same-origin, immune to the visitor's

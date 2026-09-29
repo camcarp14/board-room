@@ -74,6 +74,14 @@
   to = "/index.html"
   status = 200
 
+# The webfont, likewise: every launch used to revalidate it over the network,
+# and on a weak signal the page painted in the system font and then reflowed
+# every line into Inter a beat later. The filename changes if the font does.
+[[headers]]
+  for = "/fonts/*"
+  [headers.values]
+    Cache-Control = "public, max-age=31536000, immutable"
+
 # Hashed build assets are immutable by filename — let browsers keep them.
 [[headers]]
   for = "/assets/*"

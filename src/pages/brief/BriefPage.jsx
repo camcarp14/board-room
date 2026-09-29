@@ -315,6 +315,29 @@ export function MorningBriefPage({ btc, isMobile, settings, updateSetting, onOpe
   const refreshGen = useRef(0);
   // Unmounting counts as a new generation, so nothing writes into a dead tree.
   useEffect(() => () => { refreshGen.current += 1; }, []);
+  // BUSINESS MEETINGS WAIT FOR THE SETTINGS THAT SAY WHERE THEY COME FROM.
+  // Settings are null on the first render of every launch, so this card said
+  // "Not connected — add your calendar's iCal link" until they arrived, and the
+  // arrival of calendar_url then re-ran the WHOLE Brief refresh — every feed
+  // fetched twice per launch, the first pass's answers thrown away. Now the
+  // refresh reads the URL through a ref and leaves Meetings loading while
+  // settings are missing, and the effect below fetches Meetings alone once they
+  // land (or when the URL changes), never twice for the same URL.
+  const calRef = useRef({ ready: false, url: null });
+  calRef.current = { ready: settings != null, url: settings?.calendar_url || null };
+  const meetingsFor = useRef(undefined); // the URL Meetings last loaded for
+  const loadMeetings = async (alive, keepIfLive) => {
+    const { ready, url } = calRef.current;
+    if (!ready) return;
+    meetingsFor.current = url;
+    if (!url) { if (alive()) setMeetingsStatus({ state: "notconfigured", detail: "Add your calendar's iCal (.ics) link in Settings to see meetings here." }); return; }
+    const res = await callFnFull("calendar-events", { url });
+    if (!alive()) return;
+    if (res.ok && res.data?.success) { setMeetings(res.data.events || []); setMeetingsStatus(liveStatus(!!res.data.stale)); }
+    else if (keepIfLive) setMeetingsStatus(keepIfLive(res));
+    else setMeetingsStatus((prev) => (prev?.state === "live" ? { ...prev, stale: true } : { state: "error", detail: res.data?.error || (res.status ? `HTTP ${res.status}` : "unreachable") }));
+  };
+
   const refreshBrief = useCallback(async () => {
     const gen = refreshGen.current + 1;
     refreshGen.current = gen;
@@ -387,27 +410,34 @@ export function MorningBriefPage({ btc, isMobile, settings, updateSetting, onOpe
         // A failed anniversaries read is not "no anniversaries": [] would be a
         // quiet lie in the card. null keeps the merged list honest — see the
         // card's own note on partial loads.
-      }).catch(() => { if (alive()) setAnniversaries(null); }),
+      // A failed REFRESH keeps what was already drawn — it used to wipe a list
+      // that had loaded fine a minute earlier. A first load that fails stays
+      // null, which is the honest "couldn't read" the card already handles.
+      }).catch(() => {}),
       db.loadEvents().then(rows => {
         if (!alive()) return;
         setMiniEvents(rows);
         const soon = (rows || []).filter(ev => { const days = (new Date(ev.start_time) - new Date()) / 86400000; return days >= -0.5 && days <= 3; }).map(ev => ({ title: ev.title }));
         updateSnapshot({ todayEvents: soon });
-      }).catch(() => { if (alive()) setMiniEvents([]); }),
+      // Same rule for the mini calendar: a failed refresh used to empty the
+      // month's pills with no sign anything had gone wrong.
+      }).catch(() => {}),
       loadOpen("calendar", (d) => setEvents(d.events || []), setEventsStatus),
-      (async () => {
-        if (!settings?.calendar_url) { if (alive()) setMeetingsStatus({ state: "notconfigured", detail: "Add your calendar's iCal (.ics) link in Settings to see meetings here." }); return; }
-        const res = await callFnFull("calendar-events", { url: settings.calendar_url });
-        if (!alive()) return;
-        if (res.ok && res.data?.success) { setMeetings(res.data.events || []); setMeetingsStatus(liveStatus(!!res.data.stale)); }
-        else setMeetingsStatus(keepIfLive(res));
-      })(),
+      loadMeetings(alive, keepIfLive),
     ]);
     if (alive()) setBriefRefreshedAt(Date.now());
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [settings?.calendar_url]);
+  }, []);
 
   useEffect(() => { refreshBrief(); }, [refreshBrief]);
+  // Declared AFTER the mount refresh on purpose: effects run in order, so when
+  // settings are already loaded the refresh has marked Meetings as fetched for
+  // this URL by the time this runs, and it doesn't fetch them a second time.
+  const calKey = settings == null ? undefined : (settings.calendar_url || null);
+  useEffect(() => {
+    if (calKey === undefined || calKey === meetingsFor.current) return;
+    loadMeetings(() => true);
+  }, [calKey]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     if (refreshSignal) refreshBrief();
