@@ -158,6 +158,68 @@ check("income and transfers are not spend",
 check("SPEND_CATEGORIES excludes exactly those two",
   SPEND_CATEGORIES.length === CATEGORIES.length - 2);
 
+// ─── 6b. WHOLE WORDS, NOT SUBSTRINGS ─────────────────────────────────────────
+// The lexicon used to match with `includes` after trimming every entry — which
+// deleted the trailing spaces that were the only guard on "max ", "amc ", "bp "
+// and "cta ". Each row below was reproduced filed in the wrong place, and each
+// wrong filing is a bar on the breakdown that looks exactly like a right one.
+// No Chase label on any of them: this is the checking/Plaid path, where the
+// lexicon is all there is.
+{
+  const cat = (description, amount = -2500) => categorise({ description, amount });
+  // "max" inside MAXX. TJ Maxx is a discount clothing shop.
+  check("TJ MAXX is Shopping, not Entertainment", cat("TJ MAXX #0412") === "shopping", cat("TJ MAXX #0412"));
+  // "max" inside OFFICEMAX. An office-supply store is a shop.
+  check("OFFICEMAX is Shopping, not Entertainment",
+    cat("OFFICEMAX/OFFICEDEPOT #6543") === "shopping", cat("OFFICEMAX/OFFICEDEPOT #6543"));
+  // "amc" inside CAMCO. A finance company is not a cinema — and nothing in the
+  // name says what the debit WAS (a loan? a fee?), so the honest answer for an
+  // unrecognised debit is Other, which is what you'd recategorise from.
+  check("CAMCO FINANCIAL is Other, not Entertainment", cat("CAMCO FINANCIAL") === "other", cat("CAMCO FINANCIAL"));
+  // "rent" — a whole word here, because a hyphen is a boundary. A car rental is
+  // Travel (Chase's own card label and Plaid's TRAVEL_RENTAL_CARS agree), and
+  // the longer "rent-a-car" wins before "rent" is ever tried.
+  check("ENTERPRISE RENT-A-CAR is Travel, not Housing",
+    cat("ENTERPRISE RENT-A-CAR") === "travel", cat("ENTERPRISE RENT-A-CAR"));
+  // "rent" inside paRENT. A PTA payment is a donation or a school fee — Chase
+  // files gifts & donations and education under Other too (see CHASE_MAP).
+  check("a Parent Teacher Assoc payment is Other, not Housing",
+    cat("Parent Teacher Assoc") === "other", cat("Parent Teacher Assoc"));
+  // "hoa" inside HOAgie. It's a sandwich shop.
+  check("HOAGIE HAVEN is Dining, not Housing", cat("HOAGIE HAVEN") === "dining", cat("HOAGIE HAVEN"));
+
+  // …AND THE HITS THOSE SHORT WORDS EXIST FOR STILL LAND. A fix that cured the
+  // false positives by dropping "max" or "hoa" would pass every check above.
+  check("HBO MAX is still Entertainment", cat("HBO MAX") === "entertainment", cat("HBO MAX"));
+  check("a bare MAX charge is still Entertainment", cat("MAX 855-442-6629") === "entertainment", cat("MAX 855-442-6629"));
+  check("AMC THEATRES is still Entertainment", cat("AMC THEATRES #2150") === "entertainment", cat("AMC THEATRES #2150"));
+  check("BP #1234 is still Transport", cat("BP #1234") === "transport", cat("BP #1234"));
+  check("CTA VENTRA is still Transport", cat("CTA VENTRA") === "transport", cat("CTA VENTRA"));
+  check("RENT PAYMENT is still Housing", cat("RENT PAYMENT") === "housing", cat("RENT PAYMENT"));
+  check("HOA DUES is still Housing", cat("HOA DUES") === "housing", cat("HOA DUES"));
+  // Plurals and possessives — every one of these the substring match caught and
+  // a bare word boundary would have dropped to Other.
+  check("MCDONALD'S and MCDONALDS are both Dining",
+    cat("MCDONALD'S F1234") === "dining" && cat("MCDONALDS 4567") === "dining",
+    `${cat("MCDONALD'S F1234")} / ${cat("MCDONALDS 4567")}`);
+  check("UNITED AIRLINES is still Travel", cat("UNITED AIRLINES") === "travel", cat("UNITED AIRLINES"));
+  check("TRADER JOES without the apostrophe is still Groceries", cat("TRADER JOES #702") === "groceries", cat("TRADER JOES #702"));
+  // Glued spellings the substring match only caught by accident.
+  check("EXXONMOBIL is still Transport", cat("EXXONMOBIL 4567") === "transport", cat("EXXONMOBIL 4567"));
+  check("IL TOLLWAY is still Transport", cat("IL TOLLWAY AUTOREPLEN") === "transport", cat("IL TOLLWAY AUTOREPLEN"));
+  check("punctuated entries still match — AT&T, booking.com",
+    cat("AT&T*BILL PAYMENT") === "bills" && cat("BOOKING.COM HOTEL") === "travel",
+    `${cat("AT&T*BILL PAYMENT")} / ${cat("BOOKING.COM HOTEL")}`);
+  // Longest-first survives the rewrite: "uber eats" beats "uber".
+  check("longest phrase still wins — UBER EATS is Dining, UBER TRIP is Transport",
+    cat("UBER *EATS") === "dining" && cat("UBER *TRIP") === "transport",
+    `${cat("UBER *EATS")} / ${cat("UBER *TRIP")}`);
+  // The lexicon ships in the client bundle, and Safari before 16.4 throws on a
+  // lookbehind at PARSE time — the whole Finances module would fail to load.
+  check("the categoriser uses no lookbehind",
+    !/\(\?<[!=]/.test(readFileSync("src/features/finances/financeLogic.js", "utf8")));
+}
+
 // ─── 7. THE DEDUPE KEY ───────────────────────────────────────────────────────
 // Two identical coffees on one day are two transactions; re-importing an
 // overlapping export is one. A key that gets either wrong loses or invents money.

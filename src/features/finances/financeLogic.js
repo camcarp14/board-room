@@ -234,24 +234,68 @@ const CHASE_MAP = {
 // Longest phrase first, same reasoning as the grocery lexicon: "whole foods" is
 // groceries and "foods" alone is nothing; "chase credit crd autopay" is a
 // transfer and "chase" alone is not enough to say.
+//
+// EVERY ENTRY IS A WHOLE WORD OR PHRASE — see MATCHERS below. That is what lets
+// three-letter entries like "max", "amc", "bp", "cta" and "hoa" exist at all,
+// and it has a price: a merchant that writes a lexicon word glued to another
+// ("EXXONMOBIL", "IL TOLLWAY", "DISNEYPLUS") no longer matches the shorter word
+// inside it. The substring matcher caught those by accident, alongside TJ MAXX
+// and HOAGIE HAVEN, so the glued spellings real bank strings actually use are
+// listed as entries of their own rather than bought back with a looser match.
 const LEXICON = {
   transfer: ["payment thank you", "autopay", "auto pay", "credit crd", "card payment", "online transfer", "transfer to", "transfer from", "zelle", "venmo", "cash app", "paypal transfer", "atm withdrawal", "withdrawal"],
   income: ["payroll", "direct dep", "direct deposit", "salary", "dividend", "interest payment", "refund", "reimbursement", "tax refund"],
   housing: ["rent", "mortgage", "hoa", "property mgmt", "apartment", "landlord", "leasing"],
   bills: ["comed", "peoples gas", "electric", "water bill", "internet", "comcast", "xfinity", "at&t", "verizon", "t-mobile", "spectrum", "utility", "insurance", "geico", "state farm", "progressive"],
   groceries: ["whole foods", "trader joe", "jewel osco", "jewel-osco", "mariano", "costco", "aldi", "safeway", "kroger", "target", "walmart", "grocery", "fresh market", "sprouts"],
-  dining: ["starbucks", "dunkin", "blue bottle", "chipotle", "sweetgreen", "mcdonald", "restaurant", "coffee", "cafe", "pizza", "sushi", "doordash", "uber eats", "grubhub", "seamless", "bar & grill", "brewing", "tavern"],
-  transport: ["uber", "lyft", "shell", "bp ", "exxon", "mobil", "chevron", "citgo", "marathon", "parking", "cta ", "metra", "divvy", "toll", "gas station"],
-  shopping: ["amazon", "amzn", "best buy", "apple store", "nike", "lululemon", "rei", "home depot", "lowes", "ikea", "etsy", "ebay", "nordstrom", "zara", "uniqlo"],
+  // "hoagie", "sandwich" and "deli" because HOAGIE HAVEN is a sandwich shop, and
+  // until word boundaries it was filed as Housing on the strength of "hoa".
+  dining: ["starbucks", "dunkin", "blue bottle", "chipotle", "sweetgreen", "mcdonald", "restaurant", "coffee", "cafe", "pizza", "sushi", "doordash", "uber eats", "ubereats", "grubhub", "seamless", "bar & grill", "brewing", "tavern", "hoagie", "sandwich", "deli"],
+  transport: ["uber", "lyft", "shell", "bp", "exxon", "exxonmobil", "mobil", "chevron", "citgo", "marathon", "parking", "cta", "metra", "divvy", "toll", "tollway", "gas station"],
+  // "tj maxx" and "officemax" are here because both used to be Entertainment:
+  // "max" was a substring of each. They are shops, so they say so.
+  shopping: ["amazon", "amzn", "best buy", "apple store", "nike", "lululemon", "rei", "home depot", "lowes", "ikea", "etsy", "ebay", "nordstrom", "zara", "uniqlo", "tj maxx", "officemax", "office max", "office depot"],
   health: ["cvs", "walgreens", "pharmacy", "dental", "dentist", "clinic", "hospital", "medical", "gym", "fitness", "equinox", "planet fitness", "physical therapy"],
-  entertainment: ["netflix", "spotify", "hulu", "disney", "hbo", "max ", "youtube premium", "steam", "playstation", "xbox", "cinema", "amc ", "regal", "ticketmaster", "concert"],
-  travel: ["airline", "united air", "american air", "delta air", "southwest", "airbnb", "hotel", "marriott", "hilton", "hyatt", "expedia", "booking.com", "amtrak"],
+  entertainment: ["netflix", "spotify", "hulu", "disney", "disneyplus", "hbo", "hbomax", "max", "youtube premium", "steam", "steamgames", "playstation", "xbox", "cinema", "cinemark", "amc", "regal", "ticketmaster", "concert"],
+  // A car rental is Travel — it is what Chase's own card label and Plaid's
+  // TRAVEL_RENTAL_CARS both say — and the entries exist because a hyphen is a
+  // word boundary: "ENTERPRISE RENT-A-CAR" still contains the whole word "rent",
+  // so without a longer phrase to win first it would be Housing.
+  travel: ["airline", "united air", "american air", "delta air", "southwest", "airbnb", "hotel", "marriott", "hilton", "hyatt", "expedia", "booking.com", "amtrak", "rent-a-car", "rent a car", "car rental"],
   fees: ["service fee", "annual fee", "late fee", "overdraft", "interest charge", "atm fee", "foreign transaction"],
 };
 
+// Flattened and sorted longest-first, once, at module load, then WORD-BOUNDARY
+// anchored — the same shape as the grocery lexicon's MATCHERS, and for the
+// reason that one gives: "ice" must not match inside "juice".
+//
+// THE SUBSTRING VERSION FILED REAL MONEY IN THE WRONG PLACE. It ran
+// `hay.includes(word)` after trimming every entry, which quietly deleted the
+// trailing spaces that were the only thing guarding "max ", "amc ", "bp " and
+// "cta " — so TJ MAXX and OFFICEMAX were Entertainment ("max"), CAMCO FINANCIAL
+// was Entertainment ("amc"), and ENTERPRISE RENT-A-CAR, a Parent Teacher Assoc
+// and HOAGIE HAVEN were all Housing ("rent", "rent", "hoa"). A Housing bar that
+// includes a sandwich looks exactly like a Housing bar.
+//
+// The boundary is "not a letter or digit" rather than \b, because entries like
+// "at&t", "booking.com" and "bar & grill" contain punctuation and \b's idea of
+// a word edge changes depending on which side of it a symbol sits. The haystack
+// is already lowercased, so [a-z0-9] is the whole alphabet that matters. The
+// leading edge is a group — (?:^|[^a-z0-9]) — and NOT a lookbehind: this module
+// is in the client bundle, and Safari before 16.4 throws a SyntaxError on
+// lookbehind at parse time, which would take the whole Finances tab with it.
+//
+// An optional "s" or "'s" is allowed on the end, as the grocery list allows a
+// plural: "mcdonald" has to keep matching "MCDONALDS" and "McDonald's", "airline"
+// "UNITED AIRLINES", "trader joe" "TRADER JOES" — every one of which the
+// substring match caught and a bare boundary would drop.
 const MATCHERS = Object.entries(LEXICON)
-  .flatMap(([cat, words]) => words.map((w) => ({ cat, w: w.trim() })))
-  .sort((a, b) => b.w.length - a.w.length);
+  .flatMap(([cat, words]) => words.map((w) => ({ cat, w: w.trim().toLowerCase() })))
+  .sort((a, b) => b.w.length - a.w.length)
+  .map(({ cat, w }) => ({
+    cat, w,
+    re: new RegExp(`(?:^|[^a-z0-9])${w.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}(?:'?s)?(?![a-z0-9])`),
+  }));
 
 /**
  * What is this transaction?
@@ -269,8 +313,8 @@ export function categorise(tx, overrides) {
   if (ov && BY_KEY[ov]) return ov;
   const chase = CHASE_MAP[String(tx.chaseCat ?? "").trim().toLowerCase()];
   if (chase) return chase;
-  const hay = ` ${merchantOf(tx.description).toLowerCase()} `;
-  for (const m of MATCHERS) if (hay.includes(m.w)) return m.cat;
+  const hay = merchantOf(tx.description).toLowerCase();
+  for (const m of MATCHERS) if (m.re.test(hay)) return m.cat;
   return (tx.amount ?? 0) > 0 ? "income" : "other";
 }
 
