@@ -165,6 +165,33 @@ const FORMATS = [
   },
 ];
 
+/**
+ * The Chase `Type` values that mean "money moved between your own accounts".
+ *
+ * THE BANK ALREADY SAYS WHICH ROWS ARE CARD PAYMENTS, and this column was parsed
+ * on every row and then never read. Pay off $1,200 of groceries and Chase writes
+ * the payment twice — "AUTOMATIC PAYMENT - THANK", +1,200, Type `Payment`, on the
+ * card; "Payment to Chase card ending in 4321", −1,200, Type `LOAN_PMT`, on
+ * checking — with no Category on either. Neither description is in the lexicon,
+ * so the sign rule filed the card side as INCOME and the checking side as
+ * OTHER: a month of $1,200 of groceries summarised as {spent: 2400, income:
+ * 1200}. Nothing threw; every figure was a plausible figure.
+ *
+ * So Type beats description. A card's `Payment` is a card payment by definition
+ * (purchases are `Sale`, refunds `Return`, charges `Fee`/`Adjustment`), and on
+ * checking `ACCT_XFER` is a transfer between your own accounts and `LOAN_PMT` is
+ * what Chase writes when checking pays a Chase card or loan. One set covers both
+ * formats because the vocabularies don't overlap: no checking Type is `PAYMENT`.
+ *
+ * The cost, named: LOAN_PMT is also how checking pays a Chase AUTO LOAN or
+ * MORTGAGE, and those land in Transfers too. That is the lesser error — the
+ * principal is a debt moving, not a purchase, exactly like a card payment — and
+ * a merchant rule or a per-row change still moves one back to Housing, since
+ * both outrank the stored category (see effectiveCategory).
+ */
+const TRANSFER_TYPES = new Set(["payment", "loan_pmt", "acct_xfer"]);
+const isTransferType = (type) => TRANSFER_TYPES.has(String(type ?? "").trim().toLowerCase());
+
 export function detectFormat(headerRow) {
   const cols = (headerRow || []).map((h) => String(h).trim().toLowerCase());
   return FORMATS.find((f) => f.has.every((h) => cols.includes(h))) || null;
@@ -243,7 +270,17 @@ const CHASE_MAP = {
 // and HOAGIE HAVEN, so the glued spellings real bank strings actually use are
 // listed as entries of their own rather than bought back with a looser match.
 const LEXICON = {
-  transfer: ["payment thank you", "autopay", "auto pay", "credit crd", "card payment", "online transfer", "transfer to", "transfer from", "zelle", "venmo", "cash app", "paypal transfer", "atm withdrawal", "withdrawal"],
+  // The card-payment spellings are the ones Chase actually writes, on BOTH sides
+  // of one payment: "AUTOMATIC PAYMENT - THANK" / "Payment Thank You - Web" on the
+  // card (money in) and "Payment to Chase card ending in 4321" on checking (money
+  // out). A CSV row is caught by its Type column before it ever gets here (see
+  // TRANSFER_TYPES), but a Plaid row arrives stored as "other" with nothing but
+  // the name and is re-categorised through this list at read time — so a
+  // spelling missing here is a payment counted as income on one side and as
+  // spend on the other. "payment - thank" rather than a bare "automatic
+  // payment": checking also writes "GEICO AUTOMATIC PAYMENT", which is a real
+  // bill, and longest-first would file it as a transfer.
+  transfer: ["payment thank you", "payment - thank", "payment to chase card", "autopay", "auto pay", "credit crd", "card payment", "online transfer", "transfer to", "transfer from", "zelle", "venmo", "cash app", "paypal transfer", "atm withdrawal", "withdrawal"],
   income: ["payroll", "direct dep", "direct deposit", "salary", "dividend", "interest payment", "refund", "reimbursement", "tax refund"],
   housing: ["rent", "mortgage", "hoa", "property mgmt", "apartment", "landlord", "leasing"],
   bills: ["comed", "peoples gas", "electric", "water bill", "internet", "comcast", "xfinity", "at&t", "verizon", "t-mobile", "spectrum", "utility", "insurance", "geico", "state farm", "progressive"],
@@ -302,15 +339,20 @@ const MATCHERS = Object.entries(LEXICON)
  *
  * Priority, and the order is load-bearing:
  *   1. YOUR override. You recategorised it; nothing gets to argue.
- *   2. Chase's own label, when the export has one.
- *   3. The lexicon, on the merchant name.
- *   4. Sign — an unrecognised deposit is income, an unrecognised debit is other.
+ *   2. Chase's Type column, when it says the row is a payment or a transfer
+ *      (see TRANSFER_TYPES). That is a statement about what the money DID, and
+ *      it outranks a label about what it was spent on — a card payment is
+ *      never spending, whatever its Category cell says.
+ *   3. Chase's own label, when the export has one.
+ *   4. The lexicon, on the merchant name.
+ *   5. Sign — an unrecognised deposit is income, an unrecognised debit is other.
  *      Better than filing every paycheque under "Other" and showing a month
  *      where you apparently earned nothing.
  */
 export function categorise(tx, overrides) {
   const ov = overrides?.[merchantKey(tx.description)];
   if (ov && BY_KEY[ov]) return ov;
+  if (isTransferType(tx.chaseType)) return "transfer";
   const chase = CHASE_MAP[String(tx.chaseCat ?? "").trim().toLowerCase()];
   if (chase) return chase;
   const hay = merchantOf(tx.description).toLowerCase();
@@ -395,7 +437,10 @@ export function parseChaseCsv(text, { account = "", overrides } = {}) {
       skipped.push({ line: i + 1, reason: !date ? "no date" : amount === null ? "no amount" : "no description", raw: rows[i].join(",").slice(0, 80) });
       continue;
     }
-    const base = { account, date, amount, description, chaseCat: m.chaseCat, merchant: merchantOf(description) };
+    // chaseType rides along only so categorise can read it, as chaseCat does.
+    // Neither is a stored column (db.saveTransactions picks its own), and txKey
+    // doesn't read either, so the ids — and re-import idempotency — are unchanged.
+    const base = { account, date, amount, description, chaseCat: m.chaseCat, chaseType: m.type, merchant: merchantOf(description) };
     // Occurrence index — see txKey. Counted per identical (date, amount,
     // merchant) triple so a genuine repeat survives and a re-import doesn't.
     const dupKey = txKey(base, 0);

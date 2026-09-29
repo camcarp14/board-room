@@ -281,6 +281,75 @@ const ALL = [...card.rows, ...bank.rows];
   check("summarise tolerates an empty ledger",
     summarise([], "2026-08").spent === 0 && summarise(null, null).count === 0);
 }
+// ─── 8b. A CARD PAYMENT THE WAY CHASE REALLY WRITES IT ───────────────────────
+// The fixture above files its payment through Category "Payment". Chase's real
+// exports leave Category BLANK on a payment and say so in the Type column
+// instead — which was parsed on every row and never read. With no label and
+// descriptions the lexicon didn't know, the sign rule filed the card's +1,200 as
+// income and checking's −1,200 as spend: $1,200 of groceries, paid off, came out
+// as {spent: 2400, income: 1200}.
+{
+  const PAID_CARD = `Transaction Date,Post Date,Description,Category,Type,Amount,Memo
+08/03/2026,08/04/2026,WHOLE FOODS MARKET #10234,Groceries,Sale,-1200.00,
+08/12/2026,08/12/2026,AUTOMATIC PAYMENT - THANK,,Payment,1200.00,
+`;
+  const PAID_BANK = `Details,Posting Date,Description,Amount,Type,Balance,Check or Slip #
+DEBIT,08/12/2026,Payment to Chase card ending in 4321 08/12,-1200.00,LOAN_PMT,3000.00,
+`;
+  const c = parseChaseCsv(PAID_CARD, { account: "Freedom" });
+  const k = parseChaseCsv(PAID_BANK, { account: "Checking" });
+  const s = summarise([...c.rows, ...k.rows], "2026-08");
+  check("$1,200 of groceries paid off through the card is $1,200 spent, not $2,400",
+    s.spent === 120000, `${s.spent} (${money(s.spent)})`);
+  check("…and the card payment is not income", s.income === 0, money(s.income));
+  check("…both sides of the payment are transfers", s.transfers === 240000, money(s.transfers));
+  check("the card's Type=Payment row is filed as a transfer at parse time",
+    c.rows.find((r) => r.amount > 0)?.category === "transfer", c.rows.find((r) => r.amount > 0)?.category);
+  check("checking's Type=LOAN_PMT row is filed as a transfer at parse time",
+    k.rows[0]?.category === "transfer", k.rows[0]?.category);
+  // Per account, where one-sided bugs can't cancel out.
+  check("the card alone: spent 1200, income 0",
+    summarise(c.rows, "2026-08").spent === 120000 && summarise(c.rows, "2026-08").income === 0);
+  check("checking alone: the card payment spends nothing", summarise(k.rows, "2026-08").spent === 0);
+
+  // It is the TYPE doing this, not the description — a name nothing recognises
+  // still files correctly when the bank has said what the row is.
+  check("Type=Payment wins even when the description means nothing",
+    categorise({ description: "ZZZ UNKNOWN", chaseType: "Payment", amount: 50000 }) === "transfer");
+  check("Type=ACCT_XFER coming IN is a transfer, not income",
+    categorise({ description: "ZZZ FROM SAV", chaseType: "ACCT_XFER", amount: 50000 }) === "transfer");
+  check("Type=LOAN_PMT is a transfer",
+    categorise({ description: "ZZZ", chaseType: "LOAN_PMT", amount: -50000 }) === "transfer");
+  check("…and it outranks a Chase spending label",
+    categorise({ description: "X", chaseCat: "Shopping", chaseType: "Payment", amount: 1000 }) === "transfer");
+  check("a Sale is still whatever it was", categorise({ description: "WHOLE FOODS", chaseType: "Sale", amount: -1000 }) === "groceries");
+  check("your merchant rule still beats the Type",
+    categorise({ description: "MORTGAGE CO", chaseType: "LOAN_PMT", amount: -1000 }, { [merchantKey("MORTGAGE CO")]: "housing" }) === "housing");
+  // The ids must not move: they are the dedupe key, and a Type-aware id would
+  // make every existing import double on its next re-import.
+  check("reading the Type doesn't change the row ids",
+    c.rows[0].id === txKey({ account: "Freedom", date: "2026-08-03", amount: -120000, description: "WHOLE FOODS MARKET #10234" }, 0),
+    c.rows[0].id);
+
+  // THE PLAID PATH HAS NO TYPE COLUMN. Synced rows arrive stored as "other" and
+  // are re-read through the lexicon, so the lexicon has to know Chase's spellings.
+  const synced = [
+    { id: "plaid:g", account: "Freedom ••4321", date: "2026-08-03", amount: -120000, description: "WHOLE FOODS MARKET", category: "other", category_override: null },
+    { id: "plaid:p", account: "Freedom ••4321", date: "2026-08-12", amount: 120000, description: "AUTOMATIC PAYMENT - THANK", category: "other", category_override: null },
+    { id: "plaid:q", account: "Checking ••1234", date: "2026-08-12", amount: -120000, description: "Payment to Chase card ending in 4321 08/12", category: "other", category_override: null },
+    { id: "plaid:r", account: "Freedom ••4321", date: "2026-08-13", amount: 5000, description: "PAYMENT - THANK YOU", category: "other", category_override: null },
+    { id: "plaid:s", account: "Checking ••1234", date: "2026-08-13", amount: -5000, description: "PAYMENT TO CHASE CARD ENDING IN 4321", category: "other", category_override: null },
+  ];
+  const sv = summarise(synced, "2026-08", {});
+  check("synced: the same $1,200 month is spent 1200, income 0",
+    sv.spent === 120000 && sv.income === 0, `spent ${sv.spent} income ${sv.income}`);
+  check("synced: every payment spelling is a transfer", sv.transfers === 250000, money(sv.transfers));
+  // Why the lexicon says "payment - thank" and not "automatic payment": this is
+  // a bill, and longest-first would otherwise file it as a transfer.
+  check("GEICO AUTOMATIC PAYMENT is still a bill, not a transfer",
+    categorise({ description: "GEICO AUTOMATIC PAYMENT", amount: -12000 }) === "bills",
+    categorise({ description: "GEICO AUTOMATIC PAYMENT", amount: -12000 }));
+}
 check("months come back newest first", monthsOf(ALL).join() === "2026-08");
 {
   const july = [{ date: "2026-07-04", amount: -10000, description: "WHOLE FOODS", category: "groceries" }];
