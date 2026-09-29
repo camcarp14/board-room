@@ -21,6 +21,7 @@ import { useBirthdays } from "../../data/birthdays.js";
 import { useAnniversaries } from "../../data/anniversaries.js";
 import { callClaude } from "../../lib/claude.js";
 import { localDayKey, todayISO, calendarDaysBetween } from "../../lib/dates.js";
+import { importNameKey, isImportDuplicate } from "../../lib/event-draft.js";
 import { tint } from "../../ui/styles.js";
 import { Card, SectionHeader, Button, Cell, CellGroup, Sheet, useConfirm, EmptyState, Dot, Pill, Switch } from "../../ui/kit.jsx";
 import { IcChevronLeft, IcChevronRight, IcCalendar, IcClose, IcTrash } from "../../ui/icons.jsx";
@@ -116,7 +117,8 @@ export function CalendarPanel({ isMobile, newEventSignal }) {
   const [bulkShowAll, setBulkShowAll] = useState(false); // review list starts capped in-page
 
   // ─── Bulk import from calendar screenshots ───
-  const normName = (s) => (s || "").toLowerCase().replace(/'s birthday|birthday|bday|born/gi, "").replace(/[^a-z0-9]/g, "").trim();
+  // The duplicate rules live in lib/event-draft.js, where the smoke can run them.
+  const normName = importNameKey;
 
   const addImages = (fileList) => {
     Array.from(fileList).forEach(file => {
@@ -200,7 +202,9 @@ Only extract entries you can read with real confidence — skip anything blurry,
           month: m, day: d, year: null,
         };
       }
-      const dupEvent = eventsList.find(e => normName(e.title) === normName(item.title) && e.start_time.slice(0, 10) === item.date);
+      // Same title on the same LOCAL day. This compared the UTC day, so every
+      // evening event re-imported as a duplicate — see isImportDuplicate.
+      const dupEvent = eventsList.find(e => isImportDuplicate(e, item));
       return {
         tempId: crypto.randomUUID(), title: item.title, date: item.date, time: item.time, allDay: !!item.all_day,
         kind: dupEvent ? "duplicate_event" : "event",

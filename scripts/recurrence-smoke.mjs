@@ -22,6 +22,13 @@ import {
   describeRule,
 } from "../src/lib/recurrence.js";
 
+// The zone is pinned. Most of what follows is zone-independent local-calendar
+// math, but the UTC-vs-local bugs this file pins (an evening event read as
+// tomorrow) only exist west of Greenwich, and a CI box in UTC would pass them
+// vacuously. Chicago, because it is the owner's zone and the one every other
+// date path is written for (lib/dates.js). Set before any Date is built.
+process.env.TZ = "America/Chicago";
+
 let failed = 0;
 const check = (name, cond, detail = "") => {
   if (cond) console.log(`ok: ${name}`);
@@ -462,6 +469,33 @@ if (failed) { console.log(`\n${failed} recurrence check(s) failed`); process.exi
   check("…without a birth year taken from the screenshot", /month: m, day: d, year: null,/.test(review) && !/year: y\b/.test(review));
   const confirm = panel.match(/const toBirthdays = [\s\S]*?\}\)\);/)?.[0] || "";
   check("…and the insert carries none either", confirm.length > 0 && /year: null/.test(confirm) && !/r\.year/.test(confirm));
+}
+
+// ─── the bulk import recognises an evening event it already has ──────────────
+// The duplicate check compared start_time.slice(0, 10) — the UTC day — to the
+// screenshot's local date. 7pm CDT is midnight UTC, so every evening event was
+// "new" on every re-import and went in twice.
+{
+  const { isImportDuplicate, importNameKey } = await import("../src/lib/event-draft.js");
+  const { readFileSync } = await import("node:fs");
+  const panel = readFileSync("src/pages/personal/CalendarPanel.jsx", "utf8");
+  // 7pm CDT on Sep 28 is midnight UTC on the 29th — the stored stamp's own
+  // date is the next day, which is the whole bug.
+  const dinner = { id: "d1", title: "Dinner w/ Sam", start_time: "2026-09-29T00:00:00.000Z", all_day: false };
+  check("a 7pm CDT event is recognised as a duplicate of the screenshot's same local day",
+    isImportDuplicate(dinner, { title: "dinner w/ sam", date: "2026-09-28" }), dinner.start_time);
+  check("...and is NOT matched against the UTC day it would have been filed under",
+    !isImportDuplicate(dinner, { title: "Dinner w/ Sam", date: "2026-09-29" }));
+  check("...an all-day row matches on its own day",
+    isImportDuplicate({ title: "Trip", start_time: new Date(2026, 8, 28).toISOString(), all_day: true }, { title: "trip", date: "2026-09-28" }));
+  check("...a different title on the same day is not a duplicate",
+    !isImportDuplicate(dinner, { title: "Lunch", date: "2026-09-28" }));
+  check("...a row with no start is never a duplicate rather than a throw",
+    !isImportDuplicate({ title: "x" }, { title: "x", date: "2026-09-28" }));
+  check("the name key folds the birthday words the screenshots add",
+    importNameKey("Sam's Birthday") === importNameKey("sam bday"));
+  check("CalendarPanel's import review uses the local-day check, not the UTC slice",
+    /eventsList\.find\(e => isImportDuplicate\(e, item\)\)/.test(panel) && !/start_time\.slice\(0, 10\) === item\.date/.test(panel));
 }
 
 // The early exit above only guards the block before it; everything after it
