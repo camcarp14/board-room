@@ -63,6 +63,39 @@ check("money formats with separators", money(123456) === "$1,234.56", money(1234
 check("negatives use a real minus, which aligns", money(-4567).startsWith("−"), money(-4567));
 check("signed money marks income", money(10000, { signed: true }) === "+$100.00");
 check("zero is zero", money(0) === "$0.00");
+// WHOLE DOLLARS ROUND; THEY USED TO CHOP. Every whole-dollar figure on the tab
+// read low by up to 99 cents — $1,234.99 showed as "$1,234" and a budget 50
+// cents over showed "$0 over", in red.
+{
+  const whole = (c) => money(c, { centsShown: false });
+  check("whole dollars round to nearest — $1,234.99 is $1,235", whole(123499) === "$1,235", whole(123499));
+  check("…$1,234.49 is $1,234", whole(123449) === "$1,234", whole(123449));
+  check("…half a dollar rounds up", whole(123450) === "$1,235", whole(123450));
+  check("50 cents is $1, not $0", whole(50) === "$1", whole(50));
+  check("negatives round on the magnitude — −$1,234.50 is −$1,235, not −$1,234",
+    whole(-123450) === "−$1,235" && whole(-123449) === "−$1,234", `${whole(-123450)} / ${whole(-123449)}`);
+  check("rounding carries through the thousands separator", whole(99999950) === "$1,000,000", whole(99999950));
+  check("a figure that rounds to zero carries no sign",
+    whole(-30) === "$0" && money(30, { signed: true, centsShown: false }) === "$0",
+    `${whole(-30)} / ${money(30, { signed: true, centsShown: false })}`);
+  check("with cents shown, nothing is rounded", money(123499) === "$1,234.99" && money(-50) === "−$0.50",
+    `${money(123499)} / ${money(-50)}`);
+  check("zero with cents is still unsigned", money(0, { signed: true }) === "$0.00", money(0, { signed: true }));
+  // The verdict is in cents, never in the string: 50 cents over is over, and a
+  // display change cannot move a budget across the line.
+  const s = { categories: [{ key: "dining", cents: 10050 }, { key: "groceries", cents: 9950 }] };
+  const b = budgetStatus(s, { dining: 10000, groceries: 10000 });
+  const d = b.rows.find((r) => r.key === "dining"), g = b.rows.find((r) => r.key === "groceries");
+  check("50 cents over is over, and reads $1 over", d.over === true && whole(d.spent - d.limit) === "$1",
+    `${d.over} ${whole(d.spent - d.limit)}`);
+  check("50 cents under is not over", g.over === false && g.left === 50);
+  // Under a dollar over, rounding would still print "$0 over"; the panel shows
+  // the cents instead. Read from the source because it is a render decision.
+  const ui = readFileSync("src/features/finances/FinancesPanel.jsx", "utf8");
+  check("the panel shows cents on an overage under a dollar",
+    /money\(r\.spent - r\.limit, \{ centsShown: r\.spent - r\.limit < 100 \}\)/.test(ui));
+  check("…which is how 30 cents over reads", money(30) === "$0.30");
+}
 
 // ─── 3. dates ────────────────────────────────────────────────────────────────
 check("Chase's MM/DD/YYYY", toISO("08/01/2026") === "2026-08-01", toISO("08/01/2026"));

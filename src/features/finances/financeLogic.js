@@ -114,16 +114,40 @@ export function toCents(v) {
   return neg ? -cents : cents;
 }
 
-/** Cents → "$1,234.56". `signed` prints a leading + for money coming in. */
+/**
+ * Cents → "$1,234.56". `signed` prints a leading + for money coming in.
+ *
+ * WITHOUT CENTS, IT ROUNDS; IT USED TO CHOP. `Math.floor(abs / 100)` served
+ * both modes, which is right when the cents are printed beside it and wrong
+ * when they are dropped: $1,234.99 of spending read "$1,234", and a budget 50
+ * cents over read "$0 over" in red — a verdict with no amount. Every
+ * whole-dollar figure on the tab (Spent, In, Net, the budget bars, the
+ * breakdown) under-read by up to 99 cents, and always in the flattering
+ * direction.
+ *
+ * Half-up on the MAGNITUDE, with the sign put back afterwards, so −$1,234.50
+ * and +$1,234.50 both show $1,235 — the same distance from zero in both
+ * directions, which a plain Math.round on the signed value (−1234.5 → −1234)
+ * would not give. It is integer arithmetic on integer cents: (abs + 50) / 100
+ * floored, no float rounding to go wrong.
+ *
+ * A figure that SHOWS as zero carries no sign. −30 cents rounded is "$0", and
+ * "−$0" reads as a glitch — as does "+$0" on a figure that is nothing.
+ *
+ * Nothing decides on the printed string: budgetStatus's `over` and `left` are
+ * computed in cents before money() ever sees them, so rounding the display
+ * cannot move a budget from under to over or back.
+ */
 export function money(cents, { signed = false, centsShown = true } = {}) {
   const n = Number.isFinite(cents) ? cents : 0;
-  const neg = n < 0;
   const abs = Math.abs(n);
-  const whole = Math.floor(abs / 100);
+  const whole = centsShown ? Math.floor(abs / 100) : Math.floor((abs + 50) / 100);
   const frac = String(abs % 100).padStart(2, "0");
   const grouped = String(whole).replace(/\B(?=(\d{3})+(?!\d))/g, ",");
   const body = centsShown ? `$${grouped}.${frac}` : `$${grouped}`;
-  if (neg) return `−${body}`;              // U+2212, not a hyphen: it aligns
+  const shownZero = centsShown ? abs === 0 : whole === 0;
+  if (shownZero) return body;
+  if (n < 0) return `−${body}`;            // U+2212, not a hyphen: it aligns
   return signed ? `+${body}` : body;
 }
 

@@ -171,9 +171,12 @@ function Budgets({ status, onEdit }) {
           <div style={{ display: "flex", alignItems: "baseline", gap: 8, marginBottom: 6 }}>
             <Dot tone={r.tone} size={7} />
             <span className="t-call" style={{ flex: 1, minWidth: 0 }}>{r.label}</span>
+            {/* Under a dollar over, the cents are shown. `over` is decided in
+                cents, so a 30-cent overage IS over — and rounded to whole
+                dollars it printed "$0 over" in red, a verdict with no amount. */}
             <span className="t-cap t-num" style={{ color: r.over ? "var(--red)" : "var(--faint)", flex: "none" }}>
               {r.limit == null ? "no budget"
-                : r.over ? `${money(r.spent - r.limit, { centsShown: false })} over`
+                : r.over ? `${money(r.spent - r.limit, { centsShown: r.spent - r.limit < 100 })} over`
                 : `${money(r.left, { centsShown: false })} left`}
             </span>
           </div>
