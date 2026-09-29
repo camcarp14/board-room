@@ -22,6 +22,7 @@
 
 import { holidaysBetween } from "./holidays.js";
 import { anniversaryLine, isValidDate, normalizeKind } from "./anniversaries.js";
+import { annualDate } from "./dates.js";
 
 const pad = (n) => String(n).padStart(2, "0");
 const dayKeyOf = (d) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
@@ -103,8 +104,11 @@ export function spanPosition(ev, day) {
  * occurrence — null when no birth year is recorded, because a guessed age on
  * somebody's birthday is worse than no age at all.
  *
- * Feb 29 lands on Mar 1 in common years: Date(y, 1, 29) rolls over on its own,
- * and rolling forward is what almost everyone does with the date in practice.
+ * Feb 29 lands on Feb 28 in common years (annualDate in lib/dates.js). It used
+ * to roll to Mar 1 here — Date(y, 1, 29) does that on its own — while the
+ * Brief, the Birthdays list and TRMNL clamped to Feb 28, so one person's
+ * birthday sat on two different days depending on which screen you read. The
+ * clamp won because it keeps the day in the person's own month.
  */
 export function birthdayOccurrences(birthdays, from, to) {
   const a = from instanceof Date ? from : new Date(from);
@@ -116,7 +120,7 @@ export function birthdayOccurrences(birthdays, from, to) {
     for (const p of birthdays) {
       const m = Number(p && p.month), d = Number(p && p.day);
       if (!Number.isFinite(m) || !Number.isFinite(d) || m < 1 || m > 12 || d < 1 || d > 31) continue;
-      const when = new Date(y, m - 1, d);
+      const when = annualDate(y, m, d);
       const key = dayKeyOf(when);
       if (key < lo || key > hi) continue;
       const born = Number(p.year);
@@ -166,7 +170,8 @@ export function anniversaryOccurrences(anniversaries, from, to) {
     for (const r of anniversaries) {
       if (!isValidDate(r)) continue;
       const m = Number(r.month), d = Number(r.day);
-      const key = dayKeyOf(new Date(y, m - 1, d));
+      // Feb 29 → Feb 28 in a common year, the same as birthdays above.
+      const key = dayKeyOf(annualDate(y, m, d));
       if (key < lo || key > hi) continue;
       out.push({
         id: `anniversary:${r.id || `${m}-${d}-${r.name}`}:${y}`,

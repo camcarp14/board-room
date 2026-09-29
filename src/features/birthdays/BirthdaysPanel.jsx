@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { callClaude } from "../../lib/claude.js";
-import { nextBirthdayOccurrence, MONTH_NAMES } from "../../lib/dates.js";
+import { nextBirthdayOccurrence, MONTH_NAMES, isValidMonthDay, placeholderYear } from "../../lib/dates.js";
 import { useBirthdays, useSaveBirthday, useDeleteBirthday, useSaveBirthdaysBulk } from "../../data/birthdays.js";
 import { Card, SectionHeader, CellGroup, Cell, Button, Field, TextArea, Switch, EmptyState, useConfirm } from "../../ui/kit.jsx";
 import { IcGift, IcClose, IcChevronLeft } from "../../ui/icons.jsx";
@@ -33,7 +33,11 @@ export function BirthdaysPanel({ isMobile }) {
   };
   const openEdit = (b) => {
     setSaveErr(null);
-    const y = b.year || new Date().getFullYear();
+    // An untracked year still needs one for the date input — and it has to be
+    // a year the day EXISTS in. The current year was used blind, so a leap-day
+    // birthday opened as "2026-02-29", which the input refuses: the field came
+    // up empty and saving without re-picking failed "Pick a date."
+    const y = b.year || placeholderYear(b.month, b.day);
     const mm = String(b.month).padStart(2, "0"), dd = String(b.day).padStart(2, "0");
     setForm({ id: b.id, name: b.name, date: `${y}-${mm}-${dd}`, unknownYear: !b.year, notes: b.notes || "" });
   };
@@ -66,7 +70,11 @@ export function BirthdaysPanel({ isMobile }) {
       const cleaned = text.trim().replace(/^```(json)?/i, "").replace(/```$/, "").trim();
       const parsed = JSON.parse(cleaned);
       if (!Array.isArray(parsed)) throw new Error("not an array");
-      const valid = parsed.filter(r => r && typeof r.name === "string" && r.name.trim() && Number(r.month) >= 1 && Number(r.month) <= 12 && Number(r.day) >= 1 && Number(r.day) <= 31);
+      // A real date, not merely a day 1–31: "Feb 31" or "Apr 31" used to pass,
+      // and the calendar then drew it in the following month. Feb 29 passes
+      // with no year or a leap year, and not with a stated common one.
+      const valid = parsed.filter(r => r && typeof r.name === "string" && r.name.trim()
+        && isValidMonthDay(Number(r.month), Number(r.day), r.year ? Number(r.year) : null));
       if (!valid.length) { setBulkErr("Didn't find any birthdays in that text — try a clearer format, e.g. one per line: \"Name — Month Day\"."); return; }
       setBulkPreview(valid.map(r => ({ tempId: crypto.randomUUID(), name: r.name.trim(), month: Number(r.month), day: Number(r.day), year: r.year ? Number(r.year) : null })));
     } catch {

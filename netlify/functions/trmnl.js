@@ -93,6 +93,15 @@ function ymdIn(ms) {
   const get = (t) => Number(parts.find((p) => p.type === t).value);
   return { y: get("year"), m: get("month"), d: get("day") };
 }
+// An annual (month, day) in year `y`, as a UTC-midnight stamp, with a day the
+// month lacks that year CLAMPED to its last day: Feb 29 is Feb 28 in a common
+// year. The inline twin of annualDate in src/lib/dates.js (this file cannot
+// import it — see "DUPLICATED, NOT IMPORTED" below), and it must agree with
+// it: Date.UTC(y, 1, 29) rolls to Mar 1 on its own, which put a leap-day
+// birthday on Mar 1 here while the Brief and the calendar said Feb 28.
+// scripts/anniversaries-smoke.mjs runs both over the same rows.
+const lastDayOf = (y, m) => new Date(Date.UTC(y, m, 0)).getUTCDate();
+const annualUTC = (y, m, d) => Date.UTC(y, m - 1, Math.min(d, lastDayOf(y, m)));
 // A calendar date as a comparable stamp (UTC midnight of that Y-M-D). Only ever
 // compared with another stamp, so the zone it is nominally in does not matter.
 const dayStamp = ({ y, m, d }) => Date.UTC(y, m - 1, d);
@@ -180,6 +189,23 @@ async function loadAll(supabase, userId) {
 }
 
 // ── ICS view ─────────────────────────────────────────────────────────────────
+// One yearly all-day row for an annual (month, day). The plain case is
+// FREQ=YEARLY from this year's date. Feb 29 is not: in a common year
+// icsDate(2026, 2, 29) is "20260229", a DTSTART that does not exist, and a
+// strict RFC 5545 client skips a YEARLY instance on a date the year lacks, so
+// the day appeared at best once every four years. BYMONTHDAY=-1 in February is
+// "the last day of February" — the 29th in a leap year, the 28th otherwise —
+// which is exactly the app's clamp, expressed in the rule itself.
+function yearlyIcs(year, month, day) {
+  if (Number(month) === 2 && Number(day) === 29) {
+    const last = lastDayOf(year, 2);
+    const nx = addDaysYMD(year, 2, last, 1);
+    return { start: icsDate(year, 2, last), end: icsDate(nx.y, nx.m, nx.d), rrule: "FREQ=YEARLY;BYMONTH=2;BYMONTHDAY=-1" };
+  }
+  const nx = addDaysYMD(year, month, day, 1);
+  return { start: icsDate(year, month, day), end: icsDate(nx.y, nx.m, nx.d), rrule: "FREQ=YEARLY" };
+}
+
 function renderIcs({ events = [], birthdays = [], anniversaries = [], upkeep = [] }, include) {
   const out = [];
 
@@ -218,11 +244,10 @@ function renderIcs({ events = [], birthdays = [], anniversaries = [], upkeep = [
     const thisYear = new Date().getUTCFullYear();
     for (const b of birthdays) {
       if (!b.month || !b.day) continue;
-      const start = icsDate(thisYear, b.month, b.day);
-      const nx = addDaysYMD(thisYear, b.month, b.day, 1);
+      const { start, end, rrule } = yearlyIcs(thisYear, b.month, b.day);
       out.push({
-        uid: `birthday-${b.id}@boardroom`, allDay: true, start, end: icsDate(nx.y, nx.m, nx.d),
-        rrule: "FREQ=YEARLY",
+        uid: `birthday-${b.id}@boardroom`, allDay: true, start, end,
+        rrule,
         summary: `${b.name}${/birthday/i.test(b.name || "") ? "" : "'s Birthday"}`,
         categories: "birthday",
       });
@@ -233,8 +258,7 @@ function renderIcs({ events = [], birthdays = [], anniversaries = [], upkeep = [
     const thisYear = new Date().getUTCFullYear();
     for (const a of anniversaries) {
       if (!a.month || !a.day) continue;
-      const start = icsDate(thisYear, a.month, a.day);
-      const nx = addDaysYMD(thisYear, a.month, a.day, 1);
+      const { start, end, rrule } = yearlyIcs(thisYear, a.month, a.day);
       // NO YEAR COUNT IN THE SUMMARY, deliberately, and this is the one place
       // the app's wording is NOT reused. These are FREQ=YEARLY events: the
       // summary is written once and redrawn every year by the device, so a
@@ -243,8 +267,8 @@ function renderIcs({ events = [], birthdays = [], anniversaries = [], upkeep = [
       // for exactly this reason. The JSON view below, which is regenerated on
       // every poll, does carry the count.
       out.push({
-        uid: `anniversary-${a.id}@boardroom`, allDay: true, start, end: icsDate(nx.y, nx.m, nx.d),
-        rrule: "FREQ=YEARLY",
+        uid: `anniversary-${a.id}@boardroom`, allDay: true, start, end,
+        rrule,
         summary: anniversaryKindOf(a.kind) === "passing" ? `In memory: ${a.name}` : a.name || "Anniversary",
         categories: "anniversary",
       });
@@ -324,8 +348,8 @@ function renderJson({ events = [], birthdays = [], anniversaries = [], upkeep = 
   const upBirthdays = (birthdays || [])
     .filter(b => b.month && b.day)
     .map(b => {
-      let occ = Date.UTC(yearNow, b.month - 1, b.day);
-      if (relDays(occ) < 0) occ = Date.UTC(yearNow + 1, b.month - 1, b.day);
+      let occ = annualUTC(yearNow, b.month, b.day);
+      if (relDays(occ) < 0) occ = annualUTC(yearNow + 1, b.month, b.day);
       return { b, occ };
     })
     .filter(({ occ }) => relDays(occ) <= 60)
@@ -348,8 +372,8 @@ function renderJson({ events = [], birthdays = [], anniversaries = [], upkeep = 
   const upAnniversaries = (anniversaries || [])
     .filter(a => a.month && a.day)
     .map(a => {
-      let occ = Date.UTC(yearNow, a.month - 1, a.day);
-      if (relDays(occ) < 0) occ = Date.UTC(yearNow + 1, a.month - 1, a.day);
+      let occ = annualUTC(yearNow, a.month, a.day);
+      if (relDays(occ) < 0) occ = annualUTC(yearNow + 1, a.month, a.day);
       return { a, occ };
     })
     .filter(({ occ }) => relDays(occ) <= 60)

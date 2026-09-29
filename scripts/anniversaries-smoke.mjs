@@ -94,10 +94,12 @@ check("a bad window returns nothing rather than throwing",
   && anniversaryOccurrences(null, from, to).length === 0
   && anniversaryOccurrences([DAD], to, from).length === 0);
 
-// Feb 29 rolls to Mar 1 in a common year, exactly as birthdays do — the date
-// still arrives, which is the whole point of an annual remembrance.
+// Feb 29 lands on Feb 28 in a common year, exactly as birthdays do — the date
+// still arrives, which is the whole point of an annual remembrance. (It used
+// to roll to Mar 1 here while the Brief said Feb 28; see the leap-day block
+// below for every surface held to the one answer.)
 const leap = anniversaryOccurrences([{ id: "l", name: "Leap", kind: "milestone", month: 2, day: 29 }], new Date(2027, 0, 1), new Date(2027, 11, 31));
-check("Feb 29 in a common year still lands", leap.length === 1 && startDayKey(leap[0]) === "2027-03-01");
+check("Feb 29 in a common year still lands, on Feb 28", leap.length === 1 && startDayKey(leap[0]) === "2027-02-28", leap[0] && startDayKey(leap[0]));
 
 // ── merged with everything else the calendar draws ───────────────────────────
 const real = { id: "e1", title: "9am standup", start_time: "2026-03-04T09:00:00", end_time: null, all_day: false, category: "work" };
@@ -210,7 +212,10 @@ check("…and counts them", /anniversaries: upAnniversaries\.length/.test(trmnl)
 check("the recurring ICS summary carries NO year count (it would be stale by next year)",
   /summary: anniversaryKindOf\(a\.kind\) === "passing" \? `In memory: \$\{a\.name\}`/.test(trmnl)
   && !/summary:.*anniversaryNote/.test(trmnl));
-check("the ICS rows repeat yearly like birthdays", /uid: `anniversary-\$\{a\.id\}@boardroom`[\s\S]{0,120}rrule: "FREQ=YEARLY"/.test(trmnl));
+check("the ICS rows repeat yearly like birthdays",
+  /const \{ start, end, rrule \} = yearlyIcs\(thisYear, a\.month, a\.day\);[\s\S]{0,1200}uid: `anniversary-\$\{a\.id\}@boardroom`[\s\S]{0,120}rrule,/.test(trmnl)
+  && /const \{ start, end, rrule \} = yearlyIcs\(thisYear, b\.month, b\.day\);/.test(trmnl)
+  && /rrule: "FREQ=YEARLY" \};/.test(trmnl));
 check("the Liquid layout renders them", /\{% for a in anniversaries/.test(src("trmnl/board-brief.liquid")));
 // Liquid's comment is {% comment %}…{% endcomment %}. A Jinja-style brace-hash
 // note is not a comment to Liquid — it is text, and the device printed a
@@ -332,7 +337,86 @@ for (const [name, re] of [
       /DTSTART;VALUE=DATE:20260910\r\nDTEND;VALUE=DATE:20260914/.test(ics), ics.match(/DT(START|END)[^\r]*/g)?.join(" "));
     check("a single all-day event still ends the next day",
       /DTSTART;VALUE=DATE:20260920\r\nDTEND;VALUE=DATE:20260921/.test(ics), ics.match(/DT(START|END)[^\r]*/g)?.join(" "));
+
+    // LEAP DAY ON THE WALL. The JSON brief built Date.UTC(2027, 1, 29) — Mar 1
+    // — while the Brief clamped to Feb 28. And the ICS wrote DTSTART 20270229,
+    // a date that does not exist, under a plain FREQ=YEARLY that a strict
+    // client only honours in leap years.
+    const LEAP_B = { id: "lb", name: "Leap kid", month: 2, day: 29, year: null };
+    const LEAP_A = { id: "la", name: "Leap shop", kind: "milestone", month: 2, day: 29, year: 2020 };
+    const feb20 = fn.renderJson({ birthdays: [LEAP_B], anniversaries: [LEAP_A] }, Date.parse("2027-02-20T18:00:00Z"));
+    check("TRMNL: a Feb 29 birthday lands on Feb 28 in a common year, not Mar 1",
+      feb20.birthdays[0]?.when === "Feb 28" && feb20.birthdays[0]?.days_until === 8, JSON.stringify(feb20.birthdays));
+    check("TRMNL: …and so does a Feb 29 anniversary",
+      feb20.anniversaries[0]?.when === "Feb 28" && feb20.anniversaries[0]?.days_until === 8, JSON.stringify(feb20.anniversaries));
+    check("TRMNL: …and in a leap year it is the 29th",
+      fn.renderJson({ birthdays: [LEAP_B] }, Date.parse("2028-02-20T18:00:00Z")).birthdays[0]?.when === "Feb 29");
+    const leapIcs = fn.renderIcs({ birthdays: [LEAP_B], anniversaries: [LEAP_A] }, new Set(["birthdays", "anniversaries"]));
+    const yNow = new Date().getUTCFullYear();
+    const lastFeb = new Date(Date.UTC(yNow, 2, 0)).getUTCDate();
+    check("TRMNL ICS: a leap-day row repeats on the last day of February, every year",
+      (leapIcs.match(/RRULE:FREQ=YEARLY;BYMONTH=2;BYMONTHDAY=-1/g) || []).length === 2, leapIcs);
+    check("TRMNL ICS: …from a DTSTART that exists this year",
+      (leapIcs.match(new RegExp(`DTSTART;VALUE=DATE:${yNow}02${lastFeb}`, "g")) || []).length === 2
+      && (lastFeb === 29 || !/DTSTART;VALUE=DATE:\d{4}0229/.test(leapIcs)), leapIcs.match(/DTSTART[^\r]*/g)?.join(" "));
+    check("TRMNL ICS: an ordinary birthday is still plain FREQ=YEARLY",
+      /RRULE:FREQ=YEARLY\r\n/.test(fn.renderIcs({ birthdays: [{ id: "x", name: "X", month: 3, day: 4 }] }, new Set(["birthdays"]))));
   }
+}
+
+// ── Feb 29 is ONE day everywhere, and the importer knows Feb has no 31st ─────
+// The calendar grid rolled a leap-day birthday or anniversary to Mar 1 in a
+// common year (Date(y, 1, 29) does that on its own) while lib/dates.js — the
+// Brief, the Birthdays list, TRMNL's twin — clamped to Feb 28. Same person, two
+// days. The clamp won; annualDate is the rule and every surface calls it.
+{
+  const D = await import("../src/lib/dates.js");
+  const { birthdayOccurrences } = await import("../src/lib/calendar-overlays.js");
+  const LEAP = { id: "lp", name: "Leap kid", month: 2, day: 29, year: null };
+  const y27 = [new Date(2027, 0, 1), new Date(2027, 11, 31)];
+  check("dates: annualDate clamps Feb 29 to Feb 28 in a common year",
+    D.annualDate(2027, 2, 29).getDate() === 28 && D.annualDate(2027, 2, 29).getMonth() === 1);
+  check("dates: …and keeps the 29th in a leap year", D.annualDate(2028, 2, 29).getDate() === 29);
+  check("dates: nextBirthdayOccurrence lands Feb 29 on Feb 28 in 2027",
+    D.nextBirthdayOccurrence(2, 29, new Date(2027, 1, 1)).next.getDate() === 28
+    && D.nextBirthdayOccurrence(2, 29, new Date(2027, 1, 1)).next.getMonth() === 1);
+  const grid = birthdayOccurrences([LEAP], ...y27);
+  check("calendar grid: a Feb 29 birthday is on 2027-02-28, not Mar 1",
+    grid.length === 1 && startDayKey(grid[0]) === "2027-02-28", grid[0] && startDayKey(grid[0]));
+  check("calendar grid: …and on 2028-02-29 in a leap year",
+    startDayKey(birthdayOccurrences([LEAP], new Date(2028, 0, 1), new Date(2028, 11, 31))[0] || {}) === "2028-02-29");
+  const brief = upcomingDates({ birthdays: [LEAP], anniversaries: [{ ...LEAP, id: "la", kind: "milestone" }], from: new Date(2027, 1, 20), withinDays: 30 });
+  const gridAnn = anniversaryOccurrences([{ ...LEAP, id: "la", kind: "milestone" }], ...y27);
+  check("the Brief, the grid and the anniversary overlay all agree on the day",
+    brief.length === 2 && brief.every((r) => r.next.getMonth() === 1 && r.next.getDate() === 28)
+    && startDayKey(gridAnn[0] || {}) === "2027-02-28",
+    JSON.stringify(brief.map((r) => r.next)));
+
+  check("import: Feb 31 is not a date", !D.isValidMonthDay(2, 31) && !D.isValidMonthDay(2, 30));
+  check("import: …nor Apr 31, Jun 31, Sep 31, Nov 31",
+    [4, 6, 9, 11].every((m) => !D.isValidMonthDay(m, 31) && D.isValidMonthDay(m, 30)));
+  check("import: Feb 29 with no year is a real birthday", D.isValidMonthDay(2, 29));
+  check("import: …and in a leap year, but not a stated common one",
+    D.isValidMonthDay(2, 29, 2000) && D.isValidMonthDay(2, 29, 2024) && !D.isValidMonthDay(2, 29, 1990) && !D.isValidMonthDay(2, 29, 1900));
+  check("import: the usual bounds still hold",
+    D.isValidMonthDay(1, 31) && D.isValidMonthDay(12, 31) && !D.isValidMonthDay(13, 1) && !D.isValidMonthDay(0, 1)
+    && !D.isValidMonthDay(1, 0) && !D.isValidMonthDay(1, 1.5) && !D.isValidMonthDay("x", 1));
+  check("edit form: an unknown-year Feb 29 opens in a leap year, not 2026-02-29",
+    D.placeholderYear(2, 29, new Date(2026, 5, 1)) === 2024, String(D.placeholderYear(2, 29, new Date(2026, 5, 1))));
+  check("edit form: …an ordinary day keeps the current year",
+    D.placeholderYear(3, 4, new Date(2026, 5, 1)) === 2026 && D.placeholderYear(2, 29, new Date(2028, 5, 1)) === 2028);
+  check("edit form: …and 2100, which is not a leap year, reaches back to 2096",
+    D.placeholderYear(2, 29, new Date(2101, 0, 1)) === 2096);
+
+  const panel = readFileSync("src/features/birthdays/BirthdaysPanel.jsx", "utf8");
+  check("BirthdaysPanel's bulk import validates against the month's length",
+    /isValidMonthDay\(Number\(r\.month\), Number\(r\.day\), r\.year \? Number\(r\.year\) : null\)/.test(panel)
+    && !/Number\(r\.day\) <= 31/.test(panel));
+  check("BirthdaysPanel's edit form takes a placeholder year the day exists in",
+    /const y = b\.year \|\| placeholderYear\(b\.month, b\.day\);/.test(panel));
+  check("calendar-overlays lands both annual overlays through annualDate",
+    (src("src/lib/calendar-overlays.js").match(/annualDate\(y, m, d\)/g) || []).length === 2
+    && !/new Date\(y, m - 1, d\)/.test(src("src/lib/calendar-overlays.js")));
 }
 
 console.log(failed ? `\n${failed} check(s) failed` : "\nAll anniversary checks passed");
