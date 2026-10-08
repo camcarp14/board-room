@@ -86,7 +86,7 @@ check("dayKey is the local calendar day",
 check("dayKey changes across midnight",
   dayKey(new Date(2026, 7, 1, 23, 59)) !== dayKey(new Date(2026, 7, 2, 0, 1)));
 
-// ─── 4. counts and filtering drive the pills ─────────────────────────────────
+// ─── 4. counts and filtering drive the kind groups ───────────────────────────
 const rows = [
   { id: "1", kind: "creed", text: "A" },
   { id: "2", kind: "proof", text: "B" },

@@ -4,6 +4,9 @@ import { useAffirmations, useSaveAffirmation, useDeleteAffirmation, useRestoreAf
 import { Card, SectionHeader, CellGroup, Button, TextArea, PillRow, Pill, Sheet, EmptyState, useConfirm, IcCheck, closeSheet } from "../../ui/kit.jsx";
 import { KINDS, kindMeta, splitQuote, dailyIndex, dayKey, countsByKind, filterByKind, STARTERS } from "./creedLogic.js";
 
+// A full-width row button that wears the kit's .cell anatomy.
+const rowBtn = { background: "none", border: 0, margin: 0, font: "inherit", color: "inherit", textAlign: "left", cursor: "pointer", width: "100%" };
+
 // ─── Creed — the room where Cameron grounds himself ──────────────────────────
 // One statement at a time, engraved large, a breathing seal above it. Tap the
 // plate to turn to the next.
@@ -20,6 +23,13 @@ import { KINDS, kindMeta, splitQuote, dailyIndex, dayKey, countsByKind, filterBy
 // room you open for grounding that reshuffles on every glance isn't grounding;
 // it's a slot machine. Tapping still turns the page — the daily pick is where
 // you START, not a cage.
+//
+// THREE THINGS, TOP TO BOTTOM: the plate, your entries grouped by kind, and one
+// Add. It used to also carry a filter row, a View button on every row and an
+// "Add to the room" section of five cards with their own Add buttons and
+// starter pills — more than a phone screen of chrome under three entries, and
+// seven different ways to add one. The kind picker, its hint and the starters
+// all live in the add sheet now, where you are already choosing what to write.
 // `boardroom`, not `public`: supabase.js pins the client to that schema, so a
 // table created in public is one this app can never see. This block said public
 // for as long as it has existed — harmless only because the live table predates
@@ -63,9 +73,6 @@ const roman = (n) => {
 // (The old needs-setup branch referenced `mono` without importing it and
 // white-screened; the SQL block now resolves the token via var() directly.)
 const sqlPre = { background: "var(--surface-2)", borderRadius: 12, padding: "12px 14px", fontSize: 11, fontFamily: "var(--font-mono)", lineHeight: 1.6, overflowX: "auto", whiteSpace: "pre", color: "var(--sub)", margin: 0 };
-// Reset that lets a <button> wear the kit's .cell-body anatomy (rows keep a
-// separate View button, so the whole cell can't be one <button> itself).
-const rowBtn = { background: "none", border: 0, padding: 0, margin: 0, font: "inherit", color: "inherit", textAlign: "left", cursor: "pointer", alignSelf: "stretch", justifyContent: "center" };
 const diamond = (size, color, extra) => ({ width: size, height: size, flex: "none", transform: "rotate(45deg)", borderRadius: size > 8 ? 2.5 : 1.5, background: color, ...extra });
 
 const entered = (ts) => ts ? new Date(ts).toLocaleDateString("en-US", { month: "short", year: "numeric" }) : "";
@@ -78,15 +85,10 @@ export function CreedPanel({ isMobile }) {
   const delMut = useDeleteAffirmation();
   const restoreMut = useRestoreAffirmation();
   const [copied, setCopied] = useState(false);
-  const [kind, setKind] = useState("");        // filter — "" is everything
   const [turned, setTurned] = useState(0);     // how many times you've tapped the plate
   const [form, setForm] = useState(null);      // { id, text, kind, isNew }
   const [saving, setSaving] = useState(false);
   const [saveErr, setSaveErr] = useState(null);
-  // Starters save from the room itself, with no sheet open — so their failure
-  // cannot share `saveErr`, which only the sheet draws. This one is drawn under
-  // "Add to the room", where the tap happened.
-  const [starterErr, setStarterErr] = useState(null);
   // ─── undo ───
   // The delete is a soft one (deleted_at, see db.deleteAffirmation), so the id
   // is the whole undo: useRestoreAffirmation clears the stamp and the line comes
@@ -105,11 +107,11 @@ export function CreedPanel({ isMobile }) {
   };
   const [confirmEl, confirm] = useConfirm();
 
-  const all = rows || [];
-  const counts = useMemo(() => countsByKind(all), [all]);
-  // The plate follows the filter: pick Goal and it becomes a goal you're
-  // looking at, not a goal you have to hunt for in the list underneath.
-  const list = useMemo(() => filterByKind(all, kind), [all, kind]);
+  const list = rows || [];
+  const counts = useMemo(() => countsByKind(list), [list]);
+  // The entries, one group per kind that has any, in the KINDS order. Grouping
+  // is what the filter row used to approximate, without a control to operate.
+  const groups = useMemo(() => KINDS.map((k) => ({ k, items: filterByKind(list, k.key) })).filter((g) => g.items.length), [list]);
   // The day decides where you start; your taps move from there. Recomputed per
   // render is fine and correct — it only changes at midnight.
   const start = dailyIndex(list.length, dayKey(new Date()));
@@ -120,11 +122,13 @@ export function CreedPanel({ isMobile }) {
   const body = quote ? quote.body : current?.text || "";
 
   const turn = () => { if (list.length > 1) setTurned((t) => t + 1); };
-  const pick = (k) => { setKind(k); setTurned(0); };
 
-  const openNew = (seedKind, seedText) => {
+  // A new entry starts on the first kind you have nothing in yet, so an empty
+  // room's first Add lands on Creed and a later one nudges you toward the gaps.
+  const openNew = () => {
     setSaveErr(null);
-    setForm({ id: crypto.randomUUID(), text: seedText || "", kind: seedKind || kind || "creed", isNew: true });
+    const firstEmpty = KINDS.find((k) => !counts[k.key]);
+    setForm({ id: crypto.randomUUID(), text: "", kind: (firstEmpty || KINDS[0]).key, isNew: true });
   };
   // Populated by the Sheet below while it is mounted. See closeSheet in ui/kit.jsx.
   const sheetClose = useRef(null);
@@ -156,20 +160,6 @@ export function CreedPanel({ isMobile }) {
       onError: (e) => { setSaving(false); setSaveErr(e.message || "Couldn't delete."); },
     });
   };
-  // The pills are disabled while a save is in flight (below): each tap minted a
-  // fresh id, so a second tap on a slow connection engraved the same line twice.
-  const addStarter = (k, text) => {
-    setStarterErr(null);
-    saveMut.mutate({ id: crypto.randomUUID(), text, kind: k }, { onError: (e) => setStarterErr(e.message || "Couldn't save.") });
-  };
-  // Jump the plate to a specific entry — both scrolls are needed: window for
-  // mobile, #page-scroll for the app shell's scroll container.
-  const view = (i) => {
-    setTurned(((i - start) % list.length + list.length) % list.length);
-    window.scrollTo?.(0, 0);
-    document.getElementById("page-scroll")?.scrollTo({ top: 0, behavior: "smooth" });
-  };
-
   if (needsSetup) return (
     <Card pad="md" style={{ display: "flex", flexDirection: "column", gap: 10 }}>
       <span className="t-head">One-time setup</span>
@@ -213,8 +203,7 @@ export function CreedPanel({ isMobile }) {
           <EmptyState title="Couldn't load the creed" sub={loadErr}
             action={<Button kind="quiet" size="md" onClick={(e) => { e.stopPropagation(); refetch(); }}>Retry</Button>} />
         ) : !current ? (
-          <EmptyRoom kind={kind} total={counts[""]} onAdd={(e) => { e.stopPropagation(); openNew(kind || "creed"); }}
-            onClear={(e) => { e.stopPropagation(); pick(""); }} />
+          <EmptyRoom onAdd={(e) => { e.stopPropagation(); openNew(); }} />
         ) : (
           /* keyed + pagefade so every turn re-runs the entrance */
           <div key={`${current.id}-${turned}`} className="pagefade" style={{ display: "flex", flexDirection: "column", alignItems: "center", maxWidth: 560, width: "100%" }}>
@@ -253,94 +242,34 @@ export function CreedPanel({ isMobile }) {
         )}
       </Card>
 
-      {rows !== null && !loadErr && (
-        <>
-          {/* ── what you're looking at. Counts, because a filter that can only
-                say "nothing here" can't say "and there are six goals". ── */}
-          {counts[""] > 0 && (
-            <PillRow
-              options={[
-                { key: "", label: `All ${counts[""]}` },
-                ...KINDS.filter((k) => counts[k.key] > 0).map((k) => ({ key: k.key, label: `${k.label} ${counts[k.key]}` })),
-              ]}
-              value={kind}
-              onChange={pick}
-            />
-          )}
+      {/* ── the entries, grouped by kind; a row opens its editor ── */}
+      {rows !== null && !loadErr && groups.map(({ k, items }) => (
+        <div key={k.key}>
+          <SectionHeader title={k.label} trailing={items.length} />
+          <CellGroup>
+            {items.map((a) => {
+              const q = k.key === "quote" ? splitQuote(a.text) : null;
+              const sub = q?.author || (k.key === "proof" && a.created_at ? `Entered ${entered(a.created_at)}` : "");
+              return (
+                <button key={a.id} className="cell tappable has-leading" onClick={() => openEdit(a)} style={rowBtn}>
+                  <span className="cell-leading" aria-hidden><span style={diamond(7, k.tone)} /></span>
+                  <span className="cell-body">
+                    <span className="t-call" style={{ lineHeight: 1.5, overflow: "hidden", display: "-webkit-box", WebkitLineClamp: 3, WebkitBoxOrient: "vertical" }}>
+                      {q ? q.body : a.text}
+                    </span>
+                    {sub && <span className="cell-sub">{q ? `— ${sub}` : sub}</span>}
+                  </span>
+                </button>
+              );
+            })}
+          </CellGroup>
+        </div>
+      ))}
 
-          {/* ── the entries ── */}
-          <div>
-            <SectionHeader
-              title={kind ? kindMeta(kind).label : "The entries"}
-              trailing={
-                <button className="sec-link" style={{ padding: "10px 8px", margin: "-10px -8px" }} onClick={() => openNew()}>Add</button>
-              }
-            />
-            {list.length ? (
-              <CellGroup>
-                {list.map((a, i) => {
-                  const m = kindMeta(a.kind);
-                  const q = m.key === "quote" ? splitQuote(a.text) : null;
-                  return (
-                    <div key={a.id} className="cell has-leading" style={{ paddingRight: 10 }}>
-                      <span className="cell-leading" aria-hidden><span style={diamond(7, m.tone)} /></span>
-                      <button className="cell-body" onClick={() => openEdit(a)} style={rowBtn}>
-                        <span className="t-call" style={{ lineHeight: 1.5, overflow: "hidden", display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical" }}>
-                          {q ? q.body : a.text}
-                        </span>
-                        <span className="cell-sub">
-                          {m.label}
-                          {q?.author ? ` · ${q.author}` : ""}
-                          {m.key === "proof" && a.created_at ? ` · entered ${entered(a.created_at)}` : ""}
-                        </span>
-                      </button>
-                      <Button kind="quiet" size="sm" onClick={() => view(i)} style={{ height: 38, flex: "none" }}>View</Button>
-                    </div>
-                  );
-                })}
-              </CellGroup>
-            ) : (
-              <Card pad="md">
-                <span className="t-foot" style={{ color: "var(--faint)", lineHeight: 1.6 }}>Entries you add appear here — tap one to edit it.</span>
-              </Card>
-            )}
-          </div>
-
-          {/* ── what else this room can hold. Not a help text: every line is a
-                one-tap add, because "options for what I can include" is only
-                useful if choosing one is the same gesture as reading it. ── */}
-          <div>
-            <SectionHeader title="Add to the room" />
-            {starterErr && <div className="t-foot" style={{ color: "var(--red)", padding: "0 4px 8px" }}>{starterErr}</div>}
-            <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-              {KINDS.map((k) => (
-                <Card key={k.key} pad="md" style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-                  <div style={{ display: "flex", alignItems: "center", gap: 9 }}>
-                    <span aria-hidden style={diamond(8, k.tone)} />
-                    <span className="t-call" style={{ fontWeight: 650 }}>{k.label}</span>
-                    <span className="t-cap" style={{ color: "var(--faint)", flex: 1, minWidth: 0 }}>{k.blurb}</span>
-                    <Button kind="tinted" size="sm" onClick={() => openNew(k.key)} style={{ flex: "none" }}>Add</Button>
-                  </div>
-                  <span className="t-foot" style={{ color: "var(--sub)", lineHeight: 1.55 }}>{k.hint}</span>
-                  {/* Starters are only offered for kinds you haven't started —
-                      once you have your own, suggestions are clutter. They may
-                      shrink (the kit's .pill is flex: none) or a sentence-long
-                      proof runs past the card edge instead of wrapping. */}
-                  {counts[k.key] === 0 && (
-                    <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
-                      {(STARTERS[k.key] || []).map((text, i) => (
-                        <Pill key={i} onClick={() => addStarter(k.key, text)} disabled={saveMut.isPending}
-                          style={{ textAlign: "left", height: "auto", minHeight: 34, padding: "7px 12px", whiteSpace: "normal", lineHeight: 1.45, flex: "0 1 auto", ...(saveMut.isPending ? { opacity: 0.45, cursor: "default" } : null) }}>
-                          {splitQuote(text).body}
-                        </Pill>
-                      ))}
-                    </div>
-                  )}
-                </Card>
-              ))}
-            </div>
-          </div>
-        </>
+      {/* One way to add, whatever the kind — the sheet asks which. The empty
+          room's plate already carries its own Add, so this waits for a first entry. */}
+      {rows !== null && !loadErr && list.length > 0 && (
+        <Button kind="tinted" size="md" full onClick={openNew}>Add an entry</Button>
       )}
 
       {/* ── engrave / edit — a sheet, not an inline box ── */}
@@ -361,6 +290,23 @@ export function CreedPanel({ isMobile }) {
             <TextArea value={form.text} onChange={(e) => setForm((f) => ({ ...f, text: e.target.value }))} autoFocus rows={4}
               placeholder={kindMeta(form.kind).prompt}
               style={{ lineHeight: 1.6, resize: "vertical" }} />
+            {/* Starters for a kind you haven't started, while the box is still
+                empty. A tap fills the box rather than saving, so you can make it
+                yours first and a double tap can't engrave it twice. flex 0 1 auto:
+                the kit's .pill is flex: none and would run past the sheet edge. */}
+            {form.isNew && !form.text.trim() && !counts[form.kind] && STARTERS[form.kind]?.length > 0 && (
+              <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+                <span className="t-cap" style={{ color: "var(--faint)" }}>Or start from one of these</span>
+                <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+                  {STARTERS[form.kind].map((text, i) => (
+                    <Pill key={i} onClick={() => setForm((f) => ({ ...f, text }))}
+                      style={{ textAlign: "left", height: "auto", minHeight: 34, padding: "7px 12px", whiteSpace: "normal", lineHeight: 1.45, flex: "0 1 auto" }}>
+                      {splitQuote(text).body}
+                    </Pill>
+                  ))}
+                </div>
+              </div>
+            )}
             {saveErr && <div className="t-foot" style={{ color: "var(--red)" }}>{saveErr}</div>}
           </div>
         </Sheet>
@@ -382,25 +328,15 @@ export function CreedPanel({ isMobile }) {
   );
 }
 
-/* Empty is two different states and they need different answers: a room with
-   nothing in it at all, and a filter you've narrowed to nothing. Showing the
-   "start here" copy for the second one would be telling you the room is empty
-   while eleven entries sit one tap away. */
-function EmptyRoom({ kind, total, onAdd, onClear }) {
-  const m = kind ? kindMeta(kind) : null;
+function EmptyRoom({ onAdd }) {
   return (
     <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 8, maxWidth: 420, width: "100%" }}>
-      <span aria-hidden style={diamond(13, m?.tone || "var(--accent)", { marginBottom: 10, animation: "breathe 4s ease-in-out infinite" })} />
-      <span className="t-head">{m ? `No ${m.label.toLowerCase()} yet.` : "Nothing engraved yet."}</span>
+      <span aria-hidden style={diamond(13, "var(--accent)", { marginBottom: 10, animation: "breathe 4s ease-in-out infinite" })} />
+      <span className="t-head">Nothing engraved yet.</span>
       <span className="t-foot" style={{ lineHeight: 1.65, marginBottom: 8 }}>
-        {m
-          ? `${m.blurb[0].toUpperCase()}${m.blurb.slice(1)}. ${m.hint}`
-          : "This room holds what's true about you when the week says otherwise — what you hold, what you've done, where you're going, and who it's for. Pick a kind below to start."}
+        This room holds what's true about you when the week says otherwise — what you hold, what you've done, where you're going, and who it's for.
       </span>
-      <div style={{ display: "flex", gap: 8 }}>
-        <Button kind="primary" size="md" onClick={onAdd}>{m ? `Add a ${m.label.toLowerCase()}` : "Add your first"}</Button>
-        {total > 0 && <Button kind="quiet" size="md" onClick={onClear}>Show all {total}</Button>}
-      </div>
+      <Button kind="primary" size="md" onClick={onAdd}>Add your first</Button>
     </div>
   );
 }

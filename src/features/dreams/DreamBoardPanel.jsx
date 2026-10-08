@@ -261,13 +261,15 @@ export function DreamBoardPanel({ isMobile, settings, updateSetting }) {
 
   return (
     <section style={{ display: "flex", flexDirection: "column", gap: 12, minWidth: 0 }}>
-      {/* ── which board. The + is the last chip, so making another one is in the
-            same place you switch between them rather than in a menu. ── */}
+      {/* ── which board. "New board" is the last chip, so making another one is
+            in the same place you switch between them rather than in a menu. It
+            said only "+", and the chips carried tile counts — a number you can
+            already see on the wall underneath. ── */}
       {(boards.length > 0 || boardForm) && (
         <PillRow
           options={[
-            ...boards.map((b) => ({ key: b, label: counts[b] ? `${b} ${counts[b]}` : b })),
-            { key: NEW_BOARD, label: "+" },
+            ...boards.map((b) => ({ key: b, label: b })),
+            { key: NEW_BOARD, label: "+ New board" },
           ]}
           value={active}
           onChange={(k) => (k === NEW_BOARD ? openNewBoard() : setBoard(k))}
