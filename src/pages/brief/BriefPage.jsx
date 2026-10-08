@@ -91,7 +91,7 @@ function ShowMore({ open, count, onToggle }) {
   );
 }
 
-export function MorningBriefPage({ btc, isMobile, settings, updateSetting, onOpenCalendar, onAddEvent, onOpenNotes, onOpenQueue, onOpenBirthdays, onOpenAnniversaries, refreshSignal }) {
+export function MorningBriefPage({ btc, isMobile, settings, layout, updateSetting, onOpenCalendar, onAddEvent, onOpenNotes, onOpenQueue, onOpenBirthdays, onOpenAnniversaries, refreshSignal }) {
   // Column count follows the width: 1 (phone / tablet portrait), 2 (desktop &
   // tablet landscape ≥1024 — below this the market tiles truncated to "$…"),
   // 3 (wide desktop ≥1440, where a 2-column layout left big empty gutters).
@@ -325,10 +325,19 @@ export function MorningBriefPage({ btc, isMobile, settings, updateSetting, onOpe
   // land (or when the URL changes), never twice for the same URL.
   const calRef = useRef({ ready: false, url: null });
   calRef.current = { ready: settings != null, url: settings?.calendar_url || null };
+  // HIDDEN CARDS DON'T FETCH. Every refresh — launch, the 5-minute tick, a pull
+  // — used to call every card's function whether or not the card was on
+  // screen, so a switched-off Clarify, ZTS, Shopify or Meetings card still cost
+  // a function call and a usage_log row each pass, and the slowest of them held
+  // up "Updated". `layout` is App's last-seen copy, so this holds from the first
+  // pass of a launch; switching a card back on refreshes (effect below).
+  const hiddenNow = hiddenBriefCards(settings ?? layout);
+  const hiddenRef = useRef(hiddenNow);
+  hiddenRef.current = hiddenNow;
   const meetingsFor = useRef(undefined); // the URL Meetings last loaded for
   const loadMeetings = async (alive, keepIfLive) => {
     const { ready, url } = calRef.current;
-    if (!ready) return;
+    if (!ready || hiddenRef.current.has("meetings")) return;
     meetingsFor.current = url;
     if (!url) { if (alive()) setMeetingsStatus({ state: "notconfigured", detail: "Add your calendar's iCal (.ics) link in Settings to see meetings here." }); return; }
     const res = await callFnFull("calendar-events", { url });
@@ -379,18 +388,21 @@ export function MorningBriefPage({ btc, isMobile, settings, updateSetting, onOpe
       if (res.ok && res.data?.success) { apply(res.data); setStatus(liveStatus(!!res.data.stale)); }
       else setStatus(keepIfLive(res));
     };
+    // Only feeds whose data no other card reads are skipped; the econ calendar
+    // ("calendar") also drives the explanations, so it always runs.
+    const on = (id) => !hiddenRef.current.has(id);
     await Promise.all([
       // Each of these also writes into the live snapshot the board seats read,
       // so an advisor sees the current pipeline/store/search numbers automatically.
-      loadCredentialed("gsc", { site: "zerotosecure.com", days: 14 }, (d) => { setGsc(d); updateSnapshot({ gsc: d }); }, setGscStatus,
+      on("gsc") && loadCredentialed("gsc", { site: "zerotosecure.com", days: 14 }, (d) => { setGsc(d); updateSnapshot({ gsc: d }); }, setGscStatus,
         (m) => `Add ${m || "GSC_CLIENT_EMAIL + GSC_PRIVATE_KEY"} in Netlify env vars, share the Search Console property with the service account, then redeploy.`),
-      loadCredentialed("clarify-pipeline", {}, (d) => { setClarify(d); updateSnapshot({ clarify: d }); }, setClarifyStatus,
+      on("clarify") && loadCredentialed("clarify-pipeline", {}, (d) => { setClarify(d); updateSnapshot({ clarify: d }); }, setClarifyStatus,
         (m) => `Add ${m || "CLARIFY_SUPABASE_URL + CLARIFY_SUPABASE_SERVICE_ROLE_KEY"} in Netlify env vars, then redeploy.`),
-      loadCredentialed("zts-pipeline", {}, (d) => { setZtsPipe(d); updateSnapshot({ zts: d }); }, setZtsPipeStatus,
+      on("zts") && loadCredentialed("zts-pipeline", {}, (d) => { setZtsPipe(d); updateSnapshot({ zts: d }); }, setZtsPipeStatus,
         (m) => `Add ${m || "CLARIFY_SUPABASE_URL + CLARIFY_SUPABASE_ANON_KEY"} in Netlify env vars (ZTS now shares the Pentagon Supabase project), then redeploy.`),
-      loadOpen("markets", (d) => { setStocks(d); updateSnapshot({ stocks: d }); }, setStocksStatus),
-      loadOpen("wire", (d) => { setWire(d.wire || []); updateSnapshot({ wire: d.wire || [] }); }, setWireStatus),
-      loadCredentialed("shopify", { days: 14 }, (d) => { setShopify(d); updateSnapshot({ shopify: d }); }, setShopifyStatus,
+      on("markets") && loadOpen("markets", (d) => { setStocks(d); updateSnapshot({ stocks: d }); }, setStocksStatus),
+      on("wire") && loadOpen("wire", (d) => { setWire(d.wire || []); updateSnapshot({ wire: d.wire || [] }); }, setWireStatus),
+      on("shopify") && loadCredentialed("shopify", { days: 14 }, (d) => { setShopify(d); updateSnapshot({ shopify: d }); }, setShopifyStatus,
         (m) => `Add ${m || "SHOPIFY_SHOP + SHOPIFY_CLIENT_ID + SHOPIFY_CLIENT_SECRET"} in Netlify env vars, then redeploy.`),
       db.loadBirthdays().then(rows => {
         if (!alive()) return;
@@ -430,6 +442,15 @@ export function MorningBriefPage({ btc, isMobile, settings, updateSetting, onOpe
   }, []);
 
   useEffect(() => { refreshBrief(); }, [refreshBrief]);
+  // A card switched back on has nothing fresh to show, since its feed was being
+  // skipped — so turning one on refreshes. Turning one off needs nothing.
+  const hiddenKey = [...hiddenNow].sort().join(",");
+  const prevHidden = useRef(hiddenKey);
+  useEffect(() => {
+    const was = prevHidden.current.split(",").filter(Boolean);
+    prevHidden.current = hiddenKey;
+    if (was.some((id) => !hiddenRef.current.has(id))) refreshBrief();
+  }, [hiddenKey]); // eslint-disable-line react-hooks/exhaustive-deps
   // Declared AFTER the mount refresh on purpose: effects run in order, so when
   // settings are already loaded the refresh has marked Meetings as fetched for
   // this URL by the time this runs, and it doesn't fetch them a second time.
@@ -914,7 +935,7 @@ export function MorningBriefPage({ btc, isMobile, settings, updateSetting, onOpe
   // Widgets you've switched off in Settings → Tabs (or in the Layout sheet)
   // never reach the packer, so the ones that are left close over the gap
   // instead of holding an empty slot in a column.
-  const hiddenCards = hiddenBriefCards(settings);
+  const hiddenCards = hiddenNow;
   const liveCards = visibleBriefCards(BRIEF_CARDS, hiddenCards)
     .filter((c) => NODES[c.id])
     .map((c) => ({ ...c, c: NODES[c.id] }));
@@ -922,15 +943,15 @@ export function MorningBriefPage({ btc, isMobile, settings, updateSetting, onOpe
   // saved order has never seen keeps its default slot instead of jumping to top;
   // ids in that order for cards you've hidden are simply not matched here, which
   // is what keeps a hidden card's place warm until you switch it back on.
-  const cards = applyBriefOrder(liveCards, settings?.brief_order);
+  const cards = applyBriefOrder(liveCards, (settings ?? layout)?.brief_order);
   // Layout profiles are a DESKTOP concern (they're named after screens — "Mac",
   // "iPad"); the phone always renders the one-column glance order. The default
   // arrangement honors the stored column-count override; a named profile deals
   // cards into its authored columns and turns the drag off — its arrangement is
   // edited in the sheet, and a drag that silently rewrote an authored column
   // would be data loss wearing a gesture.
-  const layoutProfile = !isMobile ? activeLayout(settings) : null;
-  const briefCols = isMobile ? 1 : layoutProfile ? layoutColumnCount(layoutProfile) : defaultColumnCount(settings, nCols);
+  const layoutProfile = !isMobile ? activeLayout(settings ?? layout) : null;
+  const briefCols = isMobile ? 1 : layoutProfile ? layoutColumnCount(layoutProfile) : defaultColumnCount(settings ?? layout, nCols);
   return (
     <div style={{ flex: 1, padding: isMobile ? "2px 12px 20px" : "6px 0 0", minWidth: 0 }}>
       {!isMobile && (

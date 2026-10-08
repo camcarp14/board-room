@@ -134,5 +134,40 @@ for (const id of ALL) {
     ok && new Set(round).size === BRIEF_CARDS.length && round.length === BRIEF_CARDS.length);
 }
 
+// ─── hidden cards don't fetch, and launch paints the saved shape ─────────────
+// Source checks, like the other render-path pins in this directory: the Brief
+// component can't run here, so what is asserted is that the gate exists where
+// the refresh calls each card-only feed, and that the layout copy App paints
+// from can never reach a write.
+{
+  const brief = readFileSync("src/pages/brief/BriefPage.jsx", "utf8");
+  for (const [id, fn] of [["gsc", "loadCredentialed(\"gsc\""], ["clarify", "loadCredentialed(\"clarify-pipeline\""], ["zts", "loadCredentialed(\"zts-pipeline\""], ["shopify", "loadCredentialed(\"shopify\""], ["markets", "loadOpen(\"markets\""], ["wire", "loadOpen(\"wire\""]]) {
+    check(`a hidden ${id} card skips its feed`, brief.includes(`on("${id}") && ${fn}`));
+  }
+  check("a hidden Meetings card skips its feed", /if \(!ready \|\| hiddenRef\.current\.has\("meetings"\)\) return;/.test(brief));
+  check("the econ calendar always runs — the explanations read it", /^\s+loadOpen\("calendar",/m.test(brief));
+  check("switching a card back on refreshes", /was\.some\(\(id\) => !hiddenRef\.current\.has\(id\)\)\) refreshBrief\(\)/.test(brief));
+
+  const app = readFileSync("src/App.jsx", "utf8");
+  check("the layout copy is display-only: updateSetting still refuses on null settings",
+    /const updateSetting = async \(key, value\) => \{\s*if \(settings === null\)/.test(app));
+  check("…and the cached copy is only read while settings are null", /const layout = settings \?\? \(session \? layoutCache : null\);/.test(app));
+  check("…and it is written only from loaded settings", /if \(settings\) writeLayoutCache\(settings\)/.test(app));
+  check("…and the sign-out purge keep-list doesn't spare it", !/br_layout_cache|layout_cache/.test((app.match(/const KEEP = [^\n]+/) || [""])[0]));
+
+  const store = new Map();
+  globalThis.localStorage = { getItem: (k) => (store.has(k) ? store.get(k) : null), setItem: (k, v) => store.set(k, String(v)) };
+  const { readLayoutCache, writeLayoutCache } = await import("../src/lib/layout-cache.js");
+  check("no copy reads as null", readLayoutCache() === null);
+  writeLayoutCache({ navigation: { order: ["brief"], hidden: ["guitar"] }, brief_hidden: ["shopify"], calendar_url: "https://x.example/cal.ics", ponder_items: ["private"] });
+  const got = readLayoutCache();
+  check("the copy keeps the shape fields", got?.navigation?.hidden?.[0] === "guitar" && got?.brief_hidden?.[0] === "shopify");
+  check("…and nothing else", !("calendar_url" in got) && !("ponder_items" in got), JSON.stringify(got));
+  store.set("br_layout_cache", "{not json");
+  check("a corrupt copy reads as null", readLayoutCache() === null);
+  store.set("br_layout_cache", "[1,2]");
+  check("an array reads as null", readLayoutCache() === null);
+}
+
 console.log(failed ? `\n${failed} check(s) failed` : "\nAll brief-card checks passed");
 process.exit(failed ? 1 : 0);

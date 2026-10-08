@@ -18,6 +18,7 @@ import { SettingsSheet } from "./shell/SettingsSheet.jsx";
 import { useConnections } from "./pages/systems/connections.js";
 import { ErrorBoundary } from "./shell/ErrorBoundary.jsx";
 import { Sheet, Button, useConfirm } from "./ui/kit.jsx";
+import { readLayoutCache, writeLayoutCache } from "./lib/layout-cache.js";
 // The Brief is the landing tab — keep it in the main chunk so first paint is
 // immediate. The other four pages (and their heavier panels) split into their
 // own chunks and load the first time you open that tab.
@@ -130,6 +131,12 @@ export default function App() {
   const [messages, setMessages] = useState([]);
   const [seatNotes, setSeatNotes] = useState({});
   const [settings, setSettings] = useState(null);
+  // The dock and the Brief's arrangement paint from the last-seen copy of your
+  // layout until the real settings land (lib/layout-cache.js). Display only:
+  // everything that writes still reads `settings`, which stays null until then.
+  const [layoutCache] = useState(readLayoutCache);
+  useEffect(() => { if (settings) writeLayoutCache(settings); }, [settings]);
+  const layout = settings ?? (session ? layoutCache : null);
   const [input, setInput] = useState("");
   const [thinking, setThinking] = useState(false);
   const [editSeat, setEditSeat] = useState(null);
@@ -638,10 +645,10 @@ export default function App() {
   // landing page and the bar's one guaranteed way home. Hiding a tab removes
   // its BAR SLOT, not the destination: deep links still reach the page; the
   // bar just shows no active tab while you're there.
-  const navSetting = settings?.navigation || {};
+  const navSetting = layout?.navigation || {};
   const hiddenTabs = new Set(
     Array.isArray(navSetting.hidden) ? navSetting.hidden
-      : Array.isArray(settings?.hidden_tabs) ? settings.hidden_tabs : []);
+      : Array.isArray(layout?.hidden_tabs) ? layout.hidden_tabs : []);
   const orderedNav = (() => {
     const order = Array.isArray(navSetting.order) ? navSetting.order : [];
     if (!order.length) return NAV;
@@ -1024,7 +1031,7 @@ export default function App() {
 
   const renderPageInner = (key) => {
     switch (key) {
-      case "brief": return <MorningBriefPage btc={btc} isMobile={isMobile} settings={settings} updateSetting={updateSetting} onOpenCalendar={goToCalendar} onAddEvent={(date) => jumpTo({ page: "personal", sub: "calendar", newEventDate: date })} onOpenNotes={(noteId) => jumpTo({ page: "personal", sub: "notes", noteId })} onOpenBirthdays={() => jumpTo({ page: "personal", sub: "birthdays" })} onOpenAnniversaries={() => jumpTo({ page: "personal", sub: "anniversaries" })} refreshSignal={briefRefreshSignal} />;
+      case "brief": return <MorningBriefPage btc={btc} isMobile={isMobile} settings={settings} layout={layout} updateSetting={updateSetting} onOpenCalendar={goToCalendar} onAddEvent={(date) => jumpTo({ page: "personal", sub: "calendar", newEventDate: date })} onOpenNotes={(noteId) => jumpTo({ page: "personal", sub: "notes", noteId })} onOpenBirthdays={() => jumpTo({ page: "personal", sub: "birthdays" })} onOpenAnniversaries={() => jumpTo({ page: "personal", sub: "anniversaries" })} refreshSignal={briefRefreshSignal} />;
       case "personal": return <PersonalPage isMobile={isMobile} jumpSignal={personalJumpTo} jump={jump} settings={settings} updateSetting={updateSetting} />;
       case "train": return <TrainPage isMobile={isMobile} settings={settings} updateSetting={updateSetting} jump={jump} />;
       case "creed": return <CreedPage isMobile={isMobile} settings={settings} updateSetting={updateSetting} jump={jump} />;
