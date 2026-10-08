@@ -911,6 +911,17 @@ async function harness() {
     check("boundary · …and does not offer the button that cannot possibly work",
       !text(stale).includes("Try again") && text(stale).includes("Reload app"),
       `got ${JSON.stringify(text(stale))}`);
+    // Offline, the same chunk failure is not a deploy: say so, and still never
+    // offer Try again (React.lazy keeps the failed import, so it cannot work).
+    {
+      const had = Object.getOwnPropertyDescriptor(globalThis, "navigator");
+      Object.defineProperty(globalThis, "navigator", { value: { onLine: false }, configurable: true });
+      const off = card("Failed to fetch dynamically imported module: /assets/MarketsPage-a1b2c3.js");
+      if (had) Object.defineProperty(globalThis, "navigator", had); else delete globalThis.navigator;
+      check("boundary · offline, a missing chunk says it isn't downloaded, not that a version is live",
+        text(off).includes("isn't on your phone yet") && !text(off).includes("newer version") && !text(off).includes("Try again"),
+        `got ${JSON.stringify(text(off).slice(0, 160))}`);
+    }
     check("boundary · a stale shell does not ask for a bug report about a deploy",
       !text(stale).includes("send it over") && text(stale).includes("nothing you've saved is affected"));
     // Amber, not red: it is the app's own "served, but something is off" tone

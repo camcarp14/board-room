@@ -3,7 +3,7 @@ import { isMissingTable } from "../../data/db.js";
 import {
   useDreamItems, useSaveDreamItem, useDeleteDreamItem, useRenameDreamBoard, useDeleteDreamBoard, useRestoreDreamItems,
 } from "../../data/dreams.js";
-import { Card, Button, Field, TextArea, Sheet, EmptyState, PillRow, Pill, useConfirm, IcCheck, closeSheet } from "../../ui/kit.jsx";
+import { Card, StaleNotice, Button, Field, TextArea, Sheet, EmptyState, PillRow, Pill, useConfirm, IcCheck, closeSheet } from "../../ui/kit.jsx";
 import { IcClose, IcChevronDown } from "../../ui/icons.jsx";
 import {
   DEFAULT_BOARD, SETUP_SQL, DREAM_STARTERS,
@@ -86,7 +86,8 @@ function Tile({ it, onOpen }) {
 export function DreamBoardPanel({ isMobile, settings, updateSetting }) {
   const { data: rows = null, error, refetch } = useDreamItems();
   const needsSetup = !!error && isMissingTable(error, "dream_items");
-  const loadErr = error && !needsSetup ? (error.message || "Couldn't load your boards.") : null;
+  const loadErr = error && !needsSetup && rows == null ? (error.message || "Couldn't load your boards.") : null;
+  const staleErr = !!error && !needsSetup && rows != null;
   const saveMut = useSaveDreamItem();
   const delMut = useDeleteDreamItem();
   const renameMut = useRenameDreamBoard();
@@ -261,6 +262,7 @@ export function DreamBoardPanel({ isMobile, settings, updateSetting }) {
 
   return (
     <section style={{ display: "flex", flexDirection: "column", gap: 12, minWidth: 0 }}>
+      {staleErr && <StaleNotice onRetry={() => refetch()} />}
       {/* ── which board. "New board" is the last chip, so making another one is
             in the same place you switch between them rather than in a menu. It
             said only "+", and the chips carried tile counts — a number you can

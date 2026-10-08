@@ -449,6 +449,37 @@ export function EmptyState({ icon, title, sub, action, style }) {
   );
 }
 
+/* A refresh that failed with data already on screen. The data stays, this says
+   so in one line, and Retry is right there. The error card is only for when
+   there is nothing to show; it used to replace a list that had loaded fine a
+   minute earlier. Same words as the Calendar and Notes versions. */
+export function StaleNotice({ onRetry, style }) {
+  return (
+    <Card pad="md" style={{ display: "flex", alignItems: "center", gap: 10, ...style }}>
+      <span className="t-cap" style={{ color: "var(--red)", flex: 1 }}>Couldn't refresh — showing what was already loaded.</span>
+      {onRetry && <Button kind="tinted" size="sm" onClick={onRetry}>Retry</Button>}
+    </Card>
+  );
+}
+
+/* A short red toast for a write that failed away from any form — a delete from
+   a list row, where there is no sheet to print the error in. Returns
+   [element, show(text)]; render the element once, anywhere in the panel. */
+export function useErrorToast(ms = 5000) {
+  const [text, setText] = useState(null);
+  const timer = useRef(null);
+  useEffect(() => () => clearTimeout(timer.current), []);
+  const show = useCallback((t) => {
+    clearTimeout(timer.current);
+    setText(t);
+    timer.current = setTimeout(() => setText(null), ms);
+  }, [ms]);
+  const el = text ? (
+    <div className="toasts"><div className="toast err" role="alert"><span className="tdot" /><span>{text}</span></div></div>
+  ) : null;
+  return [el, show];
+}
+
 /* ── sheets ────────────────────────────────────────────────────────────────── */
 // Open sheets, oldest→newest. Only the top-most handles Escape, so a confirm
 // layered over a form sheet doesn't dismiss both on one keypress.

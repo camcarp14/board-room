@@ -2,7 +2,7 @@
 // Same personal_notes table the Notes tab owns: recent notes at a glance,
 // one-line capture, tap any note to edit it in place, or jump to the full tab.
 import { useState, useRef } from "react";
-import { CollapsibleCard, Button, Field, Spinner, EmptyState, Dot, useConfirm } from "../../ui/kit.jsx";
+import { CollapsibleCard, Button, Field, EmptyState, Dot, useConfirm } from "../../ui/kit.jsx";
 import { IcNote, IcPin, IcPlus, IcChevronRight, IcTrash, IcUndo, IcEyeOff } from "../../ui/icons.jsx";
 import { createTextHistory } from "../../lib/text-history.js";
 import { NoteCardPreview, sealColor, continueListOnEnter, toggleBulletAtCaret } from "../../ui/shared.jsx";
@@ -60,7 +60,6 @@ export function NotesTile({ isMobile, refreshSignal, onOpenNotes, collapsed, onT
   // refetch keeps the notes already on screen (TanStack holds the last good rows).
   const loadErr = notesErr && notes == null ? (notesErr.message || "Couldn't load notes.") : null;
   const [quick, setQuick] = useState("");
-  const [savingQuick, setSavingQuick] = useState(false);
   const [editing, setEditing] = useState(null); // { id, title, body }
   const [savingEdit, setSavingEdit] = useState(false);
   const [showAll, setShowAll] = useState(false);
@@ -143,16 +142,26 @@ export function NotesTile({ isMobile, refreshSignal, onOpenNotes, collapsed, onT
     if (edited) visible = [...visible, edited];
   }
 
+  // Optimistic, like the Notes tab's quick add: the row appears and the box
+  // clears on the tap, and the save catches up. It used to wait for the network
+  // with a spinner in the button, which on a weak signal is the moment you
+  // wanted to have already moved on. A failed save takes the row back off and
+  // puts the words back in the box, unless you've typed something newer there.
   const addQuick = async () => {
     const text = quick.trim();
-    if (!text || savingQuick) return;
-    setSavingQuick(true);
+    if (!text) return;
+    const id = crypto.randomUUID();
+    const now = new Date().toISOString();
+    setQuick("");
+    setNotes(prev => [{ id, title: "", body: text, pinned: false, color: null, created_at: now, updated_at: now }, ...(prev || [])]);
     try {
-      const saved = await db.saveNote({ id: crypto.randomUUID(), title: "", body: text });
-      setQuick("");
-      setNotes(prev => [saved, ...(prev || [])]);
-    } catch (e) { setErr(humanErr(e, "Couldn't save that.")); }
-    setSavingQuick(false);
+      const saved = await db.saveNote({ id, title: "", body: text });
+      setNotes(prev => (prev || []).map(n => (n.id === id ? saved : n)));
+    } catch (e) {
+      setNotes(prev => (prev || []).filter(n => n.id !== id));
+      setQuick(q => (q ? q : text));
+      setErr(`${humanErr(e, "Couldn't save that.")} Your text is back in the box.`);
+    }
   };
   const saveEdit = async () => {
     if (savingEdit || !editing) return;
@@ -243,9 +252,9 @@ export function NotesTile({ isMobile, refreshSignal, onOpenNotes, collapsed, onT
       <div style={{ display: "flex", gap: 8, marginBottom: 6 }}>
         <Field value={quick} onChange={e => setQuick(e.target.value)} onKeyDown={e => { if (e.key === "Enter") addQuick(); }}
           placeholder="Capture a thought…" style={{ flex: 1, minWidth: 0 }} />
-        <Button kind={quick.trim() ? "primary" : "quiet"} disabled={!quick.trim() || savingQuick} onClick={addQuick}
+        <Button kind={quick.trim() ? "primary" : "quiet"} disabled={!quick.trim()} onClick={addQuick}
           aria-label="Save note" style={{ width: 48, padding: 0, flex: "none" }}>
-          {savingQuick ? <Spinner size={16} /> : <IcPlus size={19} />}
+          <IcPlus size={19} />
         </Button>
       </div>
 

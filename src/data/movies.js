@@ -1,5 +1,6 @@
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { db } from "./db.js";
+import { useOptimisticDelete } from "./optimistic.js";
 
 // Movies data, cached under one key. Mutations invalidate that key so every
 // view of the list refetches once — no manual refresh() plumbing per caller.
@@ -18,10 +19,4 @@ export function useSaveMovie() {
   });
 }
 
-export function useDeleteMovie() {
-  const qc = useQueryClient();
-  return useMutation({
-    mutationFn: (id) => db.deleteMovie(id),
-    onSuccess: () => qc.invalidateQueries({ queryKey: KEY }),
-  });
-}
+export const useDeleteMovie = () => useOptimisticDelete(KEY, (id) => db.deleteMovie(id));

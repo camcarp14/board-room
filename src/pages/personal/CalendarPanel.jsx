@@ -23,7 +23,7 @@ import { callClaude } from "../../lib/claude.js";
 import { localDayKey, todayISO, calendarDaysBetween } from "../../lib/dates.js";
 import { importNameKey, isImportDuplicate, draftReadback, draftToFields } from "../../lib/event-draft.js";
 import { tint } from "../../ui/styles.js";
-import { Card, SectionHeader, Button, Cell, CellGroup, Sheet, useConfirm, EmptyState, Dot, Pill, Switch } from "../../ui/kit.jsx";
+import { Card, SectionHeader, Button, Cell, CellGroup, Sheet, useConfirm, EmptyState, Dot, Pill, Switch, useErrorToast } from "../../ui/kit.jsx";
 import { IcChevronLeft, IcChevronRight, IcCalendar, IcClose, IcTrash } from "../../ui/icons.jsx";
 
 // The four categories moved to lib/eventCategories.js — a leaf with no imports
@@ -76,6 +76,7 @@ export function CalendarPanel({ isMobile, newEventSignal }) {
   const delMut = useDeleteEvent();
   const planMut = useApplyEventPlan();
   const [confirmEl, confirm] = useConfirm();
+  const [delErrEl, showDelErr] = useErrorToast();
   const [form, setForm] = useState(null); // null = closed; object = open (new or editing)
   const [saving, setSaving] = useState(false);
   const [saveErr, setSaveErr] = useState(null);
@@ -399,7 +400,10 @@ Only extract entries you can read with real confidence — skip anything blurry,
       return;
     }
     if (!(await confirm({ title: "Delete this event?", confirmLabel: "Delete", destructive: true }))) return;
-    delMut.mutate(occ.masterId || occ.id, { onSuccess: () => { if (form?.id === (occ.masterId || occ.id)) closeForm(); } });
+    delMut.mutate(occ.masterId || occ.id, {
+      onSuccess: () => { if (form?.id === (occ.masterId || occ.id)) closeForm(); },
+      onError: (e) => showDelErr(`Couldn't delete ${master?.title ? `"${master.title}"` : "that event"}: ${e.message || "the write didn't land"}. It's back.`),
+    });
   };
 
   // One of "one" | "future" | "all", answered in the scope sheet.
@@ -1087,6 +1091,8 @@ Only extract entries you can read with real confidence — skip anything blurry,
       )}
 
       {confirmEl}
+
+      {delErrEl}
     </section>
   );
 }

@@ -1,7 +1,7 @@
 import { useState, useMemo, useRef, useEffect } from "react";
 import { isMissingTable } from "../../data/db.js";
 import { useAffirmations, useSaveAffirmation, useDeleteAffirmation, useRestoreAffirmation } from "../../data/creed.js";
-import { Card, SectionHeader, CellGroup, Button, TextArea, PillRow, Pill, Sheet, EmptyState, useConfirm, IcCheck, closeSheet } from "../../ui/kit.jsx";
+import { Card, StaleNotice, SectionHeader, CellGroup, Button, TextArea, PillRow, Pill, Sheet, EmptyState, useConfirm, IcCheck, closeSheet } from "../../ui/kit.jsx";
 import { KINDS, kindMeta, splitQuote, dailyIndex, dayKey, countsByKind, filterByKind, STARTERS } from "./creedLogic.js";
 
 // A full-width row button that wears the kit's .cell anatomy.
@@ -80,7 +80,8 @@ const entered = (ts) => ts ? new Date(ts).toLocaleDateString("en-US", { month: "
 export function CreedPanel({ isMobile }) {
   const { data: rows = null, error, refetch } = useAffirmations();
   const needsSetup = !!error && isMissingTable(error, "affirmations");
-  const loadErr = error && !needsSetup ? (error.message || "Couldn't load the creed.") : null;
+  const loadErr = error && !needsSetup && rows == null ? (error.message || "Couldn't load the creed.") : null;
+  const staleErr = !!error && !needsSetup && rows != null;
   const saveMut = useSaveAffirmation();
   const delMut = useDeleteAffirmation();
   const restoreMut = useRestoreAffirmation();
@@ -178,6 +179,7 @@ export function CreedPanel({ isMobile }) {
 
   return (
     <section style={{ display: "flex", flexDirection: "column", gap: 12, minWidth: 0 }}>
+      {staleErr && <StaleNotice onRetry={() => refetch()} />}
       {/* ── the sanctum: one statement, engraved ── */}
       {/* SIZED TO ITS CONTENT, not to a fixed 340px. It used to reserve most of a
           phone screen to centre nine words in it, which pushed the filters and

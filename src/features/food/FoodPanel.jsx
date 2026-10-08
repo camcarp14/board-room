@@ -2,7 +2,7 @@ import { useState, useRef } from "react";
 import { tint } from "../../ui/styles.js";
 import { callClaude } from "../../lib/claude.js";
 import { useSavedRecipes, useSaveRecipe, useDeleteRecipe } from "../../data/food.js";
-import { Card, CellGroup, Button, Field, Pill, Grid, Sheet, useConfirm, closeSheet } from "../../ui/kit.jsx";
+import { Card, StaleNotice, CellGroup, Button, Field, Pill, Grid, Sheet, useConfirm, closeSheet } from "../../ui/kit.jsx";
 import { IcClose, IcSpark } from "../../ui/icons.jsx";
 
 // Full-bleed list inside a pad-md card: the group sheds its own surface and
@@ -138,7 +138,7 @@ export function FoodPanel({ isMobile, settings, updateSetting }) {
             )}
           </div>
         )}
-        {recipesError && (
+        {recipesError && savedRecipes == null && (
           <div>
             <span className="t-label" style={{ display: "block", padding: "2px 0 8px" }}>Saved</span>
             <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "0 4px" }}>
@@ -147,7 +147,8 @@ export function FoodPanel({ isMobile, settings, updateSetting }) {
             </div>
           </div>
         )}
-        {!recipesError && (savedRecipes || []).length > 0 && (
+        {recipesError && savedRecipes != null && <StaleNotice onRetry={() => refetchRecipes()} />}
+        {(savedRecipes || []).length > 0 && (
           <div>
             <span className="t-label" style={{ display: "block", padding: "2px 0 8px" }}>Saved</span>
             <CellGroup style={inCardGroup}>

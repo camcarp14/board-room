@@ -1,5 +1,6 @@
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { db } from "./db.js";
+import { useOptimisticDelete } from "./optimistic.js";
 
 // One cache key, read by two screens: the panel that edits the list and the
 // calendar that draws it. Sharing the key is what makes an anniversary added in
@@ -17,4 +18,4 @@ function useInvalidatingMutation(mutationFn) {
 }
 
 export const useSaveAnniversary = () => useInvalidatingMutation((a) => db.saveAnniversary(a));
-export const useDeleteAnniversary = () => useInvalidatingMutation((id) => db.deleteAnniversary(id));
+export const useDeleteAnniversary = () => useOptimisticDelete(ANNIVERSARIES_KEY, (id) => db.deleteAnniversary(id));

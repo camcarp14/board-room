@@ -2,13 +2,14 @@ import { useState } from "react";
 import { callClaude } from "../../lib/claude.js";
 import { nextBirthdayOccurrence, MONTH_NAMES, isValidMonthDay, placeholderYear } from "../../lib/dates.js";
 import { useBirthdays, useSaveBirthday, useDeleteBirthday, useSaveBirthdaysBulk } from "../../data/birthdays.js";
-import { Card, SectionHeader, CellGroup, Cell, Button, Field, TextArea, Switch, EmptyState, useConfirm } from "../../ui/kit.jsx";
+import { Card, StaleNotice, SectionHeader, CellGroup, Cell, Button, Field, TextArea, Switch, EmptyState, useConfirm, useErrorToast } from "../../ui/kit.jsx";
 import { IcGift, IcClose, IcChevronLeft } from "../../ui/icons.jsx";
 
 // ─── Birthdays — sorted by days-until, with Claude-powered bulk paste ─────────
 export function BirthdaysPanel({ isMobile }) {
   const { data: rows = null, error, refetch } = useBirthdays();
-  const loadErr = error ? (error.message || "Couldn't load birthdays.") : null;
+  const loadErr = error && rows == null ? (error.message || "Couldn't load birthdays.") : null;
+  const staleErr = !!error && rows != null;
   const saveMut = useSaveBirthday();
   const delMut = useDeleteBirthday();
   const bulkMut = useSaveBirthdaysBulk();
@@ -16,6 +17,7 @@ export function BirthdaysPanel({ isMobile }) {
   const [saving, setSaving] = useState(false);
   const [saveErr, setSaveErr] = useState(null);
   const [confirmEl, confirm] = useConfirm();
+  const [delErrEl, showDelErr] = useErrorToast();
 
   const [bulkOpen, setBulkOpen] = useState(false);
   const [bulkText, setBulkText] = useState("");
@@ -55,7 +57,10 @@ export function BirthdaysPanel({ isMobile }) {
   };
   const removeBirthday = async (id, name) => {
     if (!(await confirm({ title: `Delete ${name || "this birthday"}?`, confirmLabel: "Delete", destructive: true }))) return;
-    delMut.mutate(id, { onSuccess: () => { if (form?.id === id) closeForm(); } });
+    delMut.mutate(id, {
+      onSuccess: () => { if (form?.id === id) closeForm(); },
+      onError: (e) => showDelErr(`Couldn't delete ${name || "that birthday"}: ${e.message || "the write didn't land"}. It's back.`),
+    });
   };
 
   // ─── Bulk parse via Claude ───
@@ -117,6 +122,7 @@ export function BirthdaysPanel({ isMobile }) {
           </div>
         </Card>
         {confirmEl}
+        {delErrEl}
       </section>
     );
   }
@@ -184,6 +190,7 @@ export function BirthdaysPanel({ isMobile }) {
         </Card>
       )}
 
+      {staleErr && <StaleNotice onRetry={() => refetch()} />}
       {loadErr && (
         <Card pad="md">
           <EmptyState icon={<IcGift size={24} />} title="Couldn't load birthdays" sub={loadErr}
@@ -221,6 +228,7 @@ export function BirthdaysPanel({ isMobile }) {
         </div>
       ))}
       {confirmEl}
+      {delErrEl}
     </section>
   );
 }

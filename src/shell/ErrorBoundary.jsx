@@ -18,14 +18,21 @@ const BUILD = typeof __BUILD__ !== "undefined" ? __BUILD__ : "dev";
 export class ErrorBoundary extends Component {
   constructor(props) {
     super(props);
-    this.state = { error: null, stale: false };
+    this.state = { error: null, stale: false, offline: false };
   }
   // `stale` rides in the state because it is what the CARD needs — render has no
   // other way to know which of the two situations it is drawing. componentDidCatch
   // asks the same predicate of the error it is handed rather than reading this
   // back; one function, two callers, and neither depends on the other having run.
   static getDerivedStateFromError(error) {
-    return { error, stale: isChunkLoadError(error) };
+    // OFFLINE IS NOT A NEWER VERSION. A chunk that won't load with no signal is
+    // a part of the app this phone never downloaded, not a deploy that moved it —
+    // reloading can't fetch it either, and saying "a newer version is live" sent
+    // you looking for an update that wasn't there. `offline` gets its own words,
+    // keeps the one-reload budget unspent, and reloads when the signal is back.
+    const stale = isChunkLoadError(error);
+    const offline = stale && typeof navigator !== "undefined" && navigator.onLine === false;
+    return { error, stale, offline };
   }
   // Two records of the same crash, because they fail in opposite conditions.
   //
@@ -66,6 +73,11 @@ export class ErrorBoundary extends Component {
     // state before this method runs, so reading it would work today; the argument
     // is right by construction, and a recovery that quietly depends on the order
     // of two lifecycle methods is a recovery nobody will re-verify.
+    if (isChunkLoadError(error) && this.state.offline) {
+      // React.lazy remembers a failed import, so only a reload can retry it.
+      window.addEventListener("online", this.onBackOnline, { once: true });
+      return;
+    }
     if (isChunkLoadError(error) && claimChunkReload(BUILD)) { window.location.reload(); return; }
     // Best-effort breadcrumb; never throws itself.
     try {
@@ -84,7 +96,9 @@ export class ErrorBoundary extends Component {
       });
     } catch {}
   }
-  reset = () => this.setState({ error: null, stale: false });
+  onBackOnline = () => { if (claimChunkReload(BUILD)) window.location.reload(); };
+  componentWillUnmount() { window.removeEventListener("online", this.onBackOnline); }
+  reset = () => this.setState({ error: null, stale: false, offline: false });
   render() {
     if (!this.state.error) return this.props.children;
     const msg = String(this.state.error?.message || this.state.error);
@@ -107,6 +121,7 @@ export class ErrorBoundary extends Component {
     // incapable of working, which is worse than absent, because a control that
     // does nothing teaches you not to trust the one beside it that does.
     const stale = !!this.state.stale;
+    const offline = !!this.state.offline;
     const card = (
       <div style={{ background: "var(--surface)", borderRadius: 18, boxShadow: "var(--shadow-card)", padding: 20, maxWidth: 440, width: "100%", color: "var(--ink)" }}>
         <div style={{ display: "flex", alignItems: "center", gap: 9, marginBottom: 8 }}>
@@ -121,14 +136,17 @@ export class ErrorBoundary extends Component {
               label, where it belongs, and the nameless case gets its own sentence
               rather than borrowing half of this one. */}
           <span className="t-head">
-            {stale ? "A newer version is live"
+            {offline ? "This part isn't on your phone yet"
+              : stale ? "A newer version is live"
               : full ? "Something broke"
                 : this.props.label ? `The ${this.props.label} tab hit an error`
                   : "This panel hit an error"}
           </span>
         </div>
         <div className="t-foot" style={{ color: "var(--sub)", lineHeight: 1.5, marginBottom: 12 }}>
-          {stale
+          {offline
+            ? "You're offline, and this part of the app hasn't been downloaded since the last update. It reloads by itself when your signal is back — nothing you've saved is affected."
+            : stale
             ? "This tab is running an older build, and the part of the app you just opened isn't on the server any more. Reloading picks up the current one — nothing you've saved is affected."
             : full
               ? "The app caught an error before it could show a blank screen. Reload usually clears it — if not, screenshot the detail below and send it over."

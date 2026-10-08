@@ -14,7 +14,7 @@
 import { useMemo, useState } from "react";
 import {
   Card, SectionHeader, CellGroup, Cell, Button, Segmented, Sheet, Field, TextArea,
-  EmptyState, useConfirm, PillRow, Grid,
+  EmptyState, StaleNotice, useConfirm, PillRow, Grid,
 } from "../../ui/kit.jsx";
 import { IcCheck, IcGuitar, IcPlus } from "../../ui/icons.jsx";
 import { STRUM_PATTERNS, strumByKey, chartChords, parseBars } from "../../lib/guitar/library.js";
@@ -212,7 +212,7 @@ function SongEditor({ song, onClose, onSave, onDelete, isMobile }) {
 export function SongsPanel({ isMobile, settings, updateSetting }) {
   const gs = settings?.guitar || {};
   const tuning = tuningByKey(gs.tuning || "standard").midi;
-  const { songs, isPending, error, refetch, setup } = useGuitarSongs();
+  const { songs, data, isPending, error, refetch, setup } = useGuitarSongs();
   const saveSong = useSaveGuitarSong();
   const removeSong = useDeleteGuitarSong();
   const [confirmEl, confirm] = useConfirm();
@@ -309,7 +309,7 @@ export function SongsPanel({ isMobile, settings, updateSetting }) {
     catch (e) { setToast({ tone: "var(--red)", text: `Couldn't delete: ${e.message || "the write didn't land"}` }); }
   };
 
-  if (error) {
+  if (error && data == null) {
     return (
       <EmptyState icon={<IcGuitar size={24} />} title="Couldn't load your songs"
         sub={error.message || "The read didn't come back. Nothing you've saved is affected."}
@@ -322,6 +322,7 @@ export function SongsPanel({ isMobile, settings, updateSetting }) {
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
       {confirmEl}
+      {error && <StaleNotice onRetry={() => refetch()} />}
 
       <Segmented options={STATUSES.map((s) => ({ key: s.key, label: s.label, sub: String((byStatus[s.key] || []).length) }))}
         value={filter} onChange={setFilter} />

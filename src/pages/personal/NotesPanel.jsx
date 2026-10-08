@@ -660,6 +660,9 @@ export function NotesPanel({ isMobile, openSignal, settings, updateSetting }) {
       dropRescue([n.id]);
       const { soft } = await db.deleteNotes([n.id]);
       if (activeId === n.id) { setActiveId(null); setDraft({ title: "", body: "", pinned: false, color: null }); }
+      // Off the list now that the delete has landed, so the row is gone by the
+      // time the Undo toast says it is — it used to wait for the refetch below.
+      setNotes(list => (list || []).filter(x => x.id !== n.id));
       armUndo("Note deleted", [n], { soft });
       setBin(null);
       refresh();
@@ -682,6 +685,7 @@ export function NotesPanel({ isMobile, openSignal, settings, updateSetting }) {
       await saver.drain();
       dropRescue([...selected]);
       const { soft } = await db.deleteNotes([...selected]);
+      setNotes(list => (list || []).filter(x => !selected.has(x.id)));
       armUndo(`${rows.length} deleted`, rows, { soft });
       setBin(null);
       clearSelection(); refresh();

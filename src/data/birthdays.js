@@ -1,5 +1,6 @@
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { db } from "./db.js";
+import { useOptimisticDelete } from "./optimistic.js";
 
 const KEY = ["birthdays"];
 
@@ -13,5 +14,5 @@ function useInvalidatingMutation(mutationFn) {
 }
 
 export const useSaveBirthday = () => useInvalidatingMutation((b) => db.saveBirthday(b));
-export const useDeleteBirthday = () => useInvalidatingMutation((id) => db.deleteBirthday(id));
+export const useDeleteBirthday = () => useOptimisticDelete(KEY, (id) => db.deleteBirthday(id));
 export const useSaveBirthdaysBulk = () => useInvalidatingMutation((rows) => db.saveBirthdaysBulk(rows));

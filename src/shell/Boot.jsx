@@ -35,7 +35,7 @@ export function Seal({ size = 92 }) {
 // stopwatch to agree.
 const STALL_AFTER_MS = 6000;
 
-export function BootScreen({ stalled = false, onRetry }) {
+export function BootScreen({ stalled = false, onRetry, leaving = false }) {
   const [late, setLate] = useState(false);
   useEffect(() => {
     const t = setTimeout(() => setLate(true), STALL_AFTER_MS);
@@ -43,7 +43,7 @@ export function BootScreen({ stalled = false, onRetry }) {
   }, []);
   const stuck = stalled || late;
   return (
-    <div className="boot">
+    <div className={leaving ? "boot leaving" : "boot"} aria-hidden={leaving || undefined}>
       <Seal size={88} />
       <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 7 }}>
         <div className="boot-title">Board Room</div>

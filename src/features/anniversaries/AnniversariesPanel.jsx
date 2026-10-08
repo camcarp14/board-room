@@ -21,7 +21,7 @@ import {
   sortByNextOccurrence, filterByKind,
 } from "../../lib/anniversaries.js";
 import { useAnniversaries, useSaveAnniversary, useDeleteAnniversary } from "../../data/anniversaries.js";
-import { Card, SectionHeader, CellGroup, Cell, Button, Field, TextArea, Segmented, Switch, EmptyState, useConfirm } from "../../ui/kit.jsx";
+import { Card, StaleNotice, SectionHeader, CellGroup, Cell, Button, Field, TextArea, Segmented, Switch, EmptyState, useConfirm, useErrorToast } from "../../ui/kit.jsx";
 import { IcHeart, IcChevronLeft } from "../../ui/icons.jsx";
 
 const FILTERS = [{ key: "all", label: "All" }, ...ANNIVERSARY_KINDS.map((k) => ({ key: k.key, label: k.plural }))];
@@ -31,7 +31,8 @@ const untilLabel = (d) => (d === 0 ? "Today" : d === 1 ? "Tomorrow" : `in ${d}d`
 
 export function AnniversariesPanel({ isMobile }) {
   const { data: rows = null, error, refetch } = useAnniversaries();
-  const loadErr = error ? (error.message || "Couldn't load anniversaries.") : null;
+  const loadErr = error && rows == null ? (error.message || "Couldn't load anniversaries.") : null;
+  const staleErr = !!error && rows != null;
   const saveMut = useSaveAnniversary();
   const delMut = useDeleteAnniversary();
   const [filter, setFilter] = useState("all");
@@ -39,6 +40,7 @@ export function AnniversariesPanel({ isMobile }) {
   const [saving, setSaving] = useState(false);
   const [saveErr, setSaveErr] = useState(null);
   const [confirmEl, confirm] = useConfirm();
+  const [delErrEl, showDelErr] = useErrorToast();
 
   const openNew = () => {
     setSaveErr(null);
@@ -71,7 +73,10 @@ export function AnniversariesPanel({ isMobile }) {
   };
   const remove = async (id, name) => {
     if (!(await confirm({ title: `Delete ${name || "this date"}?`, body: "It stops appearing on the calendar.", confirmLabel: "Delete", destructive: true }))) return;
-    delMut.mutate(id, { onSuccess: () => { if (form?.id === id) closeForm(); } });
+    delMut.mutate(id, {
+      onSuccess: () => { if (form?.id === id) closeForm(); },
+      onError: (e) => showDelErr(`Couldn't delete ${name || "that date"}: ${e.message || "the write didn't land"}. It's back.`),
+    });
   };
 
   // ─── Form view — replaces the list, same page-swap as Birthdays ───
@@ -113,6 +118,7 @@ export function AnniversariesPanel({ isMobile }) {
           </div>
         </Card>
         {confirmEl}
+        {delErrEl}
       </section>
     );
   }
@@ -142,6 +148,7 @@ export function AnniversariesPanel({ isMobile }) {
           fastest way to say what KIND the next thing you add should be. */}
       <Segmented options={FILTERS} value={filter} onChange={setFilter} />
 
+      {staleErr && <StaleNotice onRetry={() => refetch()} />}
       {loadErr && (
         <Card pad="md">
           <EmptyState icon={<IcHeart size={24} />} title="Couldn't load anniversaries" sub={loadErr}
@@ -186,6 +193,7 @@ export function AnniversariesPanel({ isMobile }) {
         </div>
       )}
       {confirmEl}
+      {delErrEl}
     </section>
   );
 }

@@ -224,6 +224,10 @@ export default function App() {
   // Retry closures filed now run later; they reach the refresh through this
   // ref so they call the current one, not the render they were filed from.
   const refreshRef = useRef(null);
+  // The Brief registers its own refresh here while it is mounted (see
+  // MorningBriefPage's refreshRef), so a pull on the Brief waits for its feeds
+  // too, not just the query cache.
+  const briefRefreshRef = useRef(null);
   const refreshData = async () => {
     if (refreshing || !supabase || !session?.user) return;
     setRefreshing(true);
@@ -246,7 +250,11 @@ export default function App() {
     // Held rather than awaited HERE so it runs alongside the three reads instead
     // of in front of them; both go into the settle below.
     const queries = queryClient.invalidateQueries();
-    setBriefRefreshSignal(Date.now()); // legacy per-page signal — retired as each card moves onto the query cache
+    // The Brief's GSC, Clarify, ZTS, Markets, Wire and econ cards are not in the
+    // query cache, so the pull used to retract while they were still loading.
+    // Its refresh goes into the same settle now.
+    const brief = briefRefreshRef.current ? briefRefreshRef.current() : null;
+    setBriefRefreshSignal(Date.now()); // still read by NotesTile; the Brief ignores it while registered above
     // THE STAMP IS THE FRESHNESS PILL, and it used to be set unconditionally
     // after a catch that swallowed everything — so a refresh with no signal, or
     // against a Supabase that was refusing reads, still turned the pill green
@@ -267,7 +275,7 @@ export default function App() {
     // which some cards refetched and some failed has no single answer to give it,
     // and each of those cards already draws its own error state.
     const [chatR, notesR, setsR] = await Promise.allSettled([
-      db.loadChat(), db.loadSeatNotes(), db.loadSettings(), queries,
+      db.loadChat(), db.loadSeatNotes(), db.loadSettings(), queries, brief,
     ]);
     if (chatR.status === "fulfilled") setMessages(chatR.value);
     if (notesR.status === "fulfilled") setSeatNotes(notesR.value);
@@ -1005,7 +1013,7 @@ export default function App() {
     // on gets the code screen, never the app — the app's reads would be refused
     // by RLS anyway (0043_mfa_enforce.sql). The boot seal covers the one frame it
     // takes to read the level, so the app never flashes before the question.
-    session && !PREVIEW && secondFactor === null ? <BootScreen /> :
+    session && !PREVIEW && secondFactor === null ? <BootScreen key={authAttempt} /> :
     session && !PREVIEW && secondFactor ? <TwoFactorScreen onVerified={recheckSecondFactor} onSignOut={signOut} /> :
     null;
   // The session ended on its own (see the SIGNED_OUT handler). The queue of
@@ -1025,13 +1033,35 @@ export default function App() {
       </div>
     </div>
   ) : null;
-  if (gate) return <>{ambient}{gate}{expiredNote}</>;
+  // THE SEAL LEAVES; IT DOESN'T VANISH. The boot screen used to unmount the frame
+  // the app was ready, a hard cut from the seal to the page. Now the same
+  // BootScreen instance stays mounted for one --dur-3 with .boot.leaving (a fade
+  // components.css always had and nothing applied) while the page's own pagein
+  // fade brings the app up underneath, so the two cross. Same instance on
+  // purpose: a remount would restart the seal's draw. That is why bootLayer sits
+  // at the same position in every return below, and why both boot phases share
+  // key={authAttempt} (which also stops the seal restarting between them).
+  const bootGate = gate?.type === BootScreen ? gate : null;
+  const [bootExit, setBootExit] = useState(false);
+  const [wasBoot, setWasBoot] = useState(!!bootGate);
+  if (wasBoot !== !!bootGate) {
+    setWasBoot(!!bootGate);
+    if (wasBoot && !bootGate && !gate) setBootExit(true);
+  }
+  useEffect(() => {
+    if (!bootExit) return;
+    const t = setTimeout(() => setBootExit(false), 480);
+    return () => clearTimeout(t);
+  }, [bootExit]);
+  const bootLayer = bootGate || (bootExit && !gate ? <BootScreen key={authAttempt} leaving /> : null);
+
+  if (gate) return <>{ambient}{bootLayer}{bootGate ? null : gate}{expiredNote}</>;
 
   const calUrl = settings?.calendar_url || "";
 
   const renderPageInner = (key) => {
     switch (key) {
-      case "brief": return <MorningBriefPage btc={btc} isMobile={isMobile} settings={settings} layout={layout} updateSetting={updateSetting} onOpenCalendar={goToCalendar} onAddEvent={(date) => jumpTo({ page: "personal", sub: "calendar", newEventDate: date })} onOpenNotes={(noteId) => jumpTo({ page: "personal", sub: "notes", noteId })} onOpenBirthdays={() => jumpTo({ page: "personal", sub: "birthdays" })} onOpenAnniversaries={() => jumpTo({ page: "personal", sub: "anniversaries" })} refreshSignal={briefRefreshSignal} />;
+      case "brief": return <MorningBriefPage btc={btc} isMobile={isMobile} settings={settings} layout={layout} refreshRef={briefRefreshRef} updateSetting={updateSetting} onOpenCalendar={goToCalendar} onAddEvent={(date) => jumpTo({ page: "personal", sub: "calendar", newEventDate: date })} onOpenNotes={(noteId) => jumpTo({ page: "personal", sub: "notes", noteId })} onOpenBirthdays={() => jumpTo({ page: "personal", sub: "birthdays" })} onOpenAnniversaries={() => jumpTo({ page: "personal", sub: "anniversaries" })} refreshSignal={briefRefreshSignal} />;
       case "personal": return <PersonalPage isMobile={isMobile} jumpSignal={personalJumpTo} jump={jump} settings={settings} updateSetting={updateSetting} />;
       case "train": return <TrainPage isMobile={isMobile} settings={settings} updateSetting={updateSetting} jump={jump} />;
       case "creed": return <CreedPage isMobile={isMobile} settings={settings} updateSetting={updateSetting} jump={jump} />;
@@ -1126,6 +1156,7 @@ export default function App() {
     return (
       <>
         {ambient}
+        {bootLayer}
         <WriteFailures.Provider value={writeFailureValue}>
           <MobileShell {...shellProps} navDir={navDir}>{renderPage(page)}</MobileShell>
         </WriteFailures.Provider>
@@ -1136,6 +1167,7 @@ export default function App() {
   return (
     <>
       {ambient}
+      {bootLayer}
       <WriteFailures.Provider value={writeFailureValue}>
         <SidebarShell
           {...shellProps}

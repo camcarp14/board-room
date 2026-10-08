@@ -91,7 +91,7 @@ function ShowMore({ open, count, onToggle }) {
   );
 }
 
-export function MorningBriefPage({ btc, isMobile, settings, layout, updateSetting, onOpenCalendar, onAddEvent, onOpenNotes, onOpenQueue, onOpenBirthdays, onOpenAnniversaries, refreshSignal }) {
+export function MorningBriefPage({ btc, isMobile, settings, layout, refreshRef, updateSetting, onOpenCalendar, onAddEvent, onOpenNotes, onOpenQueue, onOpenBirthdays, onOpenAnniversaries, refreshSignal }) {
   // Column count follows the width: 1 (phone / tablet portrait), 2 (desktop &
   // tablet landscape ≥1024 — below this the market tiles truncated to "$…"),
   // 3 (wide desktop ≥1440, where a 2-column layout left big empty gutters).
@@ -456,8 +456,16 @@ export function MorningBriefPage({ btc, isMobile, settings, layout, updateSettin
     loadMeetings(() => true);
   }, [calKey]); // eslint-disable-line react-hooks/exhaustive-deps
 
+  // App awaits this directly on a pull or a Refresh, so the gesture stays up
+  // until the Brief's own feeds have answered. The signal below is the fallback
+  // for a parent that doesn't pass a ref; with both, every pull would fetch twice.
   useEffect(() => {
-    if (refreshSignal) refreshBrief();
+    if (!refreshRef) return;
+    refreshRef.current = refreshBrief;
+    return () => { if (refreshRef.current === refreshBrief) refreshRef.current = null; };
+  }, [refreshRef, refreshBrief]);
+  useEffect(() => {
+    if (refreshSignal && !refreshRef) refreshBrief();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [refreshSignal]);
 

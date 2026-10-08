@@ -132,7 +132,18 @@ const fakeStore = () => {
   // The promise has to be KEPT and then SETTLED. Keeping it without awaiting is
   // the bug wearing a variable name, so both halves are checked.
   check("invalidateQueries' promise is kept", /const queries = queryClient\.invalidateQueries\(\)/.test(app));
-  check("…and settled with the direct reads", /Promise\.allSettled\(\[[\s\S]{0,160}?queries,?\s*\]\)/.test(app));
+  check("…and settled with the direct reads", /Promise\.allSettled\(\[[\s\S]{0,160}?queries, brief,?\s*\]\)/.test(app));
+  // The Brief's own feeds (GSC, Markets, Wire, econ…) are not in the query cache,
+  // so the pull gauge retracted while they were still loading. The Brief
+  // registers its refresh in a ref and the same settle waits for it.
+  check("…and the Brief's own refresh rides in the same settle",
+    /const brief = briefRefreshRef\.current \? briefRefreshRef\.current\(\) : null;/.test(app)
+    && /refreshRef=\{briefRefreshRef\}/.test(app));
+  {
+    const briefSrc = readFileSync("src/pages/brief/BriefPage.jsx", "utf8");
+    check("…which the Brief registers while mounted, and doesn't run twice",
+      /refreshRef\.current = refreshBrief;/.test(briefSrc) && /if \(refreshSignal && !refreshRef\) refreshBrief\(\);/.test(briefSrc));
+  }
   // It must NOT feed the freshness pill: a cache in which some queries refetched
   // and some failed has no single answer, and each of those cards draws its own
   // error state already.
@@ -342,7 +353,17 @@ const fakeStore = () => {
   check("a different account arriving gets the purge instead",
     /if \(lastUser\.current && lastUser\.current !== s\.user\.id\) purgeDevice\(\);/.test(app));
   check("an expiry is said over the login screen, with what is waiting",
-    /Your session expired\./.test(app) && /unsaved change/.test(app) && /\{ambient\}\{gate\}\{expiredNote\}/.test(app));
+    /Your session expired\./.test(app) && /unsaved change/.test(app) && /\{ambient\}\{bootLayer\}\{bootGate \? null : gate\}\{expiredNote\}/.test(app));
+  // The boot seal fades out over the arriving app instead of cutting. It only
+  // works if it is the SAME BootScreen instance (a remount restarts the seal's
+  // draw), so bootLayer has to hold the same slot in every return and both boot
+  // phases have to share one key.
+  check("the boot seal crossfades into the app rather than cutting",
+    /const bootLayer = bootGate \|\| \(bootExit && !gate \? <BootScreen key=\{authAttempt\} leaving \/> : null\);/.test(app)
+    && (app.match(/\{ambient\}\s*\{bootLayer\}/g) || []).length === 3
+    && (app.match(/<BootScreen key=\{authAttempt\}/g) || []).length === 3);
+  check("…and the fading seal can't swallow a tap",
+    /\.boot\.leaving \{[^}]*pointer-events: none/.test(readFileSync("src/design/components.css", "utf8")));
 }
 
 // ══ 6. the tab bar that vanished in landscape ════════════════════════════════

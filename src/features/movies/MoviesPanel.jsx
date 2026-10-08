@@ -1,7 +1,7 @@
 import { useState, useRef } from "react";
 import { callFnFull } from "../../lib/functions.js";
 import { useMovies, useSaveMovie, useDeleteMovie } from "../../data/movies.js";
-import { Card, SectionHeader, CellGroup, Button, Field, Spinner, EmptyState, Dot, useConfirm } from "../../ui/kit.jsx";
+import { Card, StaleNotice, SectionHeader, CellGroup, Button, Field, Spinner, EmptyState, Dot, useConfirm, useErrorToast } from "../../ui/kit.jsx";
 import { IcSearch, IcClose, IcFilm } from "../../ui/icons.jsx";
 
 // Reset that lets a <button> wear the kit's .cell-body anatomy (rows keep a
@@ -9,7 +9,9 @@ import { IcSearch, IcClose, IcFilm } from "../../ui/icons.jsx";
 const rowBtn = { background: "none", border: 0, padding: 0, margin: 0, font: "inherit", color: "inherit", textAlign: "left", cursor: "pointer", alignSelf: "stretch", justifyContent: "center" };
 
 export function MoviesPanel({ isMobile }) {
-  const { data: movies, error: loadErr, isLoading, refetch } = useMovies();
+  const { data: movies, error, isLoading, refetch } = useMovies();
+  const loadErr = error && movies == null ? error : null;
+  const staleErr = !!error && movies != null;
   const saveMut = useSaveMovie();
   const delMut = useDeleteMovie();
   const [editingId, setEditingId] = useState(null); // null = adding new, otherwise editing this movie
@@ -23,6 +25,7 @@ export function MoviesPanel({ isMobile }) {
   const [searchResults, setSearchResults] = useState(null);
   const [saveErr, setSaveErr] = useState(null);
   const [confirmEl, confirm] = useConfirm();
+  const [delErrEl, showDelErr] = useErrorToast();
   const formRef = useRef(null);
 
   // Purely optional — just fills in a poster + confirms the year/title
@@ -61,7 +64,7 @@ export function MoviesPanel({ isMobile }) {
   };
   const removeMovie = async (m) => {
     if (!(await confirm({ title: `Delete "${m.title}"?`, confirmLabel: "Delete", destructive: true }))) return;
-    delMut.mutate(m.id);
+    delMut.mutate(m.id, { onError: (e) => showDelErr(`Couldn't delete "${m.title}": ${e.message || "the write didn't land"}. It's back.`) });
   };
   const scoreColor = (s) => s == null ? "var(--faint)" : s >= 70 ? "var(--green)" : s >= 40 ? "var(--amber)" : "var(--red)";
   const hasBothScores = trueScore !== "" && cameronScore !== "";
@@ -127,6 +130,7 @@ export function MoviesPanel({ isMobile }) {
         </div>
       ) : (
         <>
+          {staleErr && <StaleNotice onRetry={() => refetch()} />}
           {watchlist.length > 0 && (
             <div>
               <SectionHeader title="Watchlist" trailing={String(watchlist.length)} />
@@ -200,6 +204,7 @@ export function MoviesPanel({ isMobile }) {
         {lists}
       </div>
       {confirmEl}
+      {delErrEl}
     </section>
   );
 }

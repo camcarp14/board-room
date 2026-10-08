@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { tint } from "../../ui/styles.js";
-import { Card, SectionHeader, CellGroup, Button, Field, Dot, EmptyState, useConfirm, IcCheck } from "../../ui/kit.jsx";
+import { Card, StaleNotice, SectionHeader, CellGroup, Button, Field, Dot, EmptyState, useConfirm, IcCheck } from "../../ui/kit.jsx";
 import { IcWrench } from "../../ui/icons.jsx";
 import { Chips } from "../../ui/primitives.jsx";
 import { isMissingTable } from "../../data/db.js";
@@ -67,7 +67,8 @@ const sqlPre = { background: "var(--surface-2)", borderRadius: 12, padding: "12p
 export function UpkeepPanel({ isMobile }) {
   const { data: rows = null, error, refetch } = useUpkeep();
   const needsSetup = !!error && isMissingTable(error, "upkeep_items");
-  const loadErr = error && !needsSetup ? (error.message || "Couldn't load upkeep items.") : null;
+  const loadErr = error && !needsSetup && rows == null ? (error.message || "Couldn't load upkeep items.") : null;
+  const staleErr = !!error && !needsSetup && rows != null;
   const saveMut = useSaveUpkeepItem();
   const delMut = useDeleteUpkeepItem();
   const markDoneMut = useMarkUpkeepDone();
@@ -189,6 +190,7 @@ export function UpkeepPanel({ isMobile }) {
         </Card>
       )}
 
+      {staleErr && <StaleNotice onRetry={() => refetch()} />}
       {rows === null && !loadErr ? (
         <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
           <div className="sk" style={{ height: 56, borderRadius: 18 }} />
