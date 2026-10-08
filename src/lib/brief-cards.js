@@ -55,7 +55,6 @@ export const BRIEF_CARDS = [
   { id: "meetings", w: 2, label: "Meetings" },
   { id: "clarify", w: 1.5, label: "Clarify" },
   { id: "zts", w: 1.5, label: "ZTS" },
-  { id: "shopify", w: 1.5, label: "Shopify" },
 ];
 
 /** The ids you've switched off, as a Set. Tolerant of anything: a missing key,

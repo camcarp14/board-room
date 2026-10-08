@@ -26,7 +26,7 @@ export const CONN_GROUPS = [
   { title: "Core", keys: ["supabase_env", "supabase_auth", "supabase_db"] },
   { title: "AI", keys: ["anthropic"] },
   { title: "Market data", keys: ["coingecko"] },
-  { title: "Netlify functions", keys: ["fn_health", "fn_mini", "fn_btc", "fn_btc_candles", "fn_markets", "fn_ticker_candles", "fn_wire", "fn_tmdb", "fn_export_data", "fn_calendar", "fn_calendar_events", "fn_site_status", "fn_gsc", "fn_shopify", "fn_clarify_pipeline", "fn_zts_pipeline", "fn_deploy", "fn_dbadmin", "fn_audit", "fn_autofix"] },
+  { title: "Netlify functions", keys: ["fn_health", "fn_mini", "fn_btc", "fn_btc_candles", "fn_markets", "fn_ticker_candles", "fn_wire", "fn_tmdb", "fn_export_data", "fn_calendar", "fn_calendar_events", "fn_site_status", "fn_gsc", "fn_clarify_pipeline", "fn_zts_pipeline", "fn_deploy", "fn_dbadmin", "fn_audit", "fn_autofix"] },
 ];
 export const CONN_META = {
   supabase_env: { name: "Supabase · config", desc: "VITE_SUPABASE_URL + anon key present at build time" },
@@ -48,7 +48,6 @@ export const CONN_META = {
   fn_zts_pipeline: { name: "zts-pipeline", desc: "ZTS creator pipeline stats (the shared Pentagon Supabase project, zts schema)" },
   fn_site_status: { name: "site-status", desc: "uptime check behind the Properties page's live/down pill" },
   fn_gsc: { name: "gsc", desc: "Search Console · zerotosecure.com last 14d" },
-  fn_shopify: { name: "shopify", desc: "Shopify Admin API · orders last 14d" },
   fn_wire: { name: "wire", desc: "CoinDesk + Cointelegraph RSS · tagged headlines" },
   fn_ticker_candles: { name: "ticker-candles", desc: "Yahoo OHLC history for the watchlist tickers · Brief chart taps" },
   fn_tmdb: { name: "tmdb", desc: "movie search for poster/year lookup — optional, not required for Movies tab" },
@@ -130,7 +129,7 @@ export function useConnections({ session, btc }) {
     // Netlify functions — this key→name mapping must stay in sync with
     // CONN_GROUPS keys and CONN_META. (fn_btc_candles used to be missing
     // here, leaving its row stuck on "checking" forever — fixed.)
-    const fns = [["fn_health", "health"], ["fn_mini", "mini-worker"], ["fn_btc", "btc"], ["fn_btc_candles", "btc-candles"], ["fn_markets", "markets"], ["fn_ticker_candles", "ticker-candles"], ["fn_wire", "wire"], ["fn_tmdb", "tmdb"], ["fn_export_data", "export-data"], ["fn_calendar", "calendar"], ["fn_econ_result", "econ-resolve-background"], ["fn_calendar_events", "calendar-events"], ["fn_site_status", "site-status"], ["fn_gsc", "gsc"], ["fn_shopify", "shopify"], ["fn_clarify_pipeline", "clarify-pipeline"], ["fn_zts_pipeline", "zts-pipeline"], ["fn_deploy", "deploy"], ["fn_dbadmin", "db-admin"], ["fn_audit", "audit"], ["fn_autofix", "auto-fix"]];
+    const fns = [["fn_health", "health"], ["fn_mini", "mini-worker"], ["fn_btc", "btc"], ["fn_btc_candles", "btc-candles"], ["fn_markets", "markets"], ["fn_ticker_candles", "ticker-candles"], ["fn_wire", "wire"], ["fn_tmdb", "tmdb"], ["fn_export_data", "export-data"], ["fn_calendar", "calendar"], ["fn_econ_result", "econ-resolve-background"], ["fn_calendar_events", "calendar-events"], ["fn_site_status", "site-status"], ["fn_gsc", "gsc"], ["fn_clarify_pipeline", "clarify-pipeline"], ["fn_zts_pipeline", "zts-pipeline"], ["fn_deploy", "deploy"], ["fn_dbadmin", "db-admin"], ["fn_audit", "audit"], ["fn_autofix", "auto-fix"]];
     if (!IS_DEPLOYED) {
       // netlify dev serves functions locally; try health first to decide —
       // if it's dead, mark ALL fns "local" instead of hammering 20 dead

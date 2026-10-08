@@ -122,7 +122,7 @@ check("the offline sign-out notice is set by App and read once by the login scre
 {
   const { readdir } = await import("node:fs/promises");
   const gated = ["audit","auto-fix","calendar-events","clarify-pipeline","claude","db-admin","deploy","econ-resolve-background",
-    "fetch-page","gsc","mini-worker","plaid","shopify","site-status","stock-settle-background","zts-pipeline"];
+    "fetch-page","gsc","mini-worker","plaid","site-status","stock-settle-background","zts-pipeline"];
   const srcs = await Promise.all(gated.map((f) => read(`netlify/functions/${f}.js`)));
   const store = await read("netlify/lib/upstream/store.js");
   check("every session-gated function (and the upstream store) runs the two-factor check",

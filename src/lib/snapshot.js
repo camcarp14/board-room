@@ -5,7 +5,7 @@
 // read it back out into a compact context block. Module-level on purpose —
 // this is a single-instance app, and it avoids threading every page's state
 // through the whole component tree just so the chat can see it.
-const siteSnapshot = { btc: null, stocks: null, wire: null, todayEvents: null, todayBirthdays: null, todayAnniversaries: null, clarify: null, zts: null, shopify: null, gsc: null, updatedAt: null };
+const siteSnapshot = { btc: null, stocks: null, wire: null, todayEvents: null, todayBirthdays: null, todayAnniversaries: null, clarify: null, zts: null, gsc: null, updatedAt: null };
 
 // Persisted so the Brief can paint last-known market/pipeline data instantly on
 // reopen (instead of skeletons), and so the board seats have real numbers even
@@ -28,8 +28,8 @@ export function updateSnapshot(patch) {
 // Macro/career lean on the general markets block already in every seat prompt.
 const SEAT_VENTURE = {
   clarify: ["clarify"],
-  zts: ["zts", "shopify", "gsc"],
-  ops: ["clarify", "zts", "shopify", "gsc"],
+  zts: ["zts", "gsc"],
+  ops: ["clarify", "zts", "gsc"],
   macro: [],
   career: [],
 };
@@ -41,8 +41,6 @@ export function formatSnapshotForSeat(seatKey) {
   if (wants.includes("clarify") && c) lines.push(`Clarify outreach pipeline: ${c.prospected ?? "—"} prospected, ${c.drafts ?? "—"} drafts, ${c.sent ?? "—"} sent, ${c.replied ?? "—"} replied`);
   const z = siteSnapshot.zts;
   if (wants.includes("zts") && z) lines.push(`Zero To Secure creator pipeline: ${z.prospected ?? "—"} prospected, ${z.sent ?? "—"} sent, ${z.replied ?? "—"} replied, ${z.collab ?? "—"} collabs`);
-  const s = siteSnapshot.shopify;
-  if (wants.includes("shopify") && s) lines.push(`ZTS Shopify store (last 14d): ${s.orders ?? "—"} orders, ${s.visits ?? "—"} visits`);
   const g = siteSnapshot.gsc;
   if (wants.includes("gsc") && g) lines.push(`ZTS Search Console (last 14d): ${g.impressions ?? "—"} impressions, ${g.clicks ?? "—"} clicks, avg position ${g.pos ?? "—"}`);
   if (!lines.length) return general;

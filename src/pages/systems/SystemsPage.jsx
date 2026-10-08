@@ -95,7 +95,8 @@ const USAGE_META = {
   "calendar-events": { label: "Meetings from your iCal" },
   "econ-resolve-background": { label: "Econ prints resolved" },
   gsc: { label: "Search Console · zerotosecure.com", tool: "Zero To Secure" },
-  shopify: { label: "Shopify orders + visits", tool: "Zero To Secure" },
+  // shopify.js was removed in 2026-10; the label stays so its past usage rows still read.
+  shopify: { label: "Shopify orders + visits (removed)", tool: "Zero To Secure" },
   "zts-pipeline": { label: "ZTS creator pipeline", tool: "Zero To Secure" },
   "clarify-pipeline": { label: "Clarify outreach pipeline", tool: "Clarify Paid Search" },
   "site-status": { label: "Property uptime checks" },

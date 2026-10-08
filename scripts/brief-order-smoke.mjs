@@ -31,7 +31,7 @@ const CARDS = [
   { id: "notes", w: 3 }, { id: "minicalendar", w: 2.5 }, { id: "birthdays", w: 1.5 },
   { id: "markets", w: 2.5 }, { id: "watch", w: 3 }, { id: "wire", w: 4.5 },
   { id: "gsc", w: 2.5 }, { id: "meetings", w: 2 }, { id: "clarify", w: 1.5 },
-  { id: "zts", w: 1.5 }, { id: "shopify", w: 1.5 },
+  { id: "zts", w: 1.5 },
 ];
 const DEFAULT_IDS = ids(CARDS);
 
@@ -41,7 +41,7 @@ check("no saved order leaves the default arrangement alone",
 check("an empty saved order leaves the default alone",
   ids(applyBriefOrder(CARDS, [])) === DEFAULT_IDS);
 
-const moved = ["wire", "markets", "notes", "minicalendar", "birthdays", "watch", "gsc", "meetings", "clarify", "zts", "shopify"];
+const moved = ["wire", "markets", "notes", "minicalendar", "birthdays", "watch", "gsc", "meetings", "clarify", "zts"];
 check("a saved order is applied exactly",
   ids(applyBriefOrder(CARDS, moved)) === moved.join(","));
 check("applying an order is idempotent",

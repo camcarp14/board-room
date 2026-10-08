@@ -95,7 +95,7 @@ check("…while still recording the card you actually switched",
 // ── a hidden card keeps its place ────────────────────────────────────────────
 // The scenario in full: an arrangement, one card put away, the rest dragged
 // around, then the card switched back on. It must come back where it was.
-const arrangement = ["wire", "notes", "gsc", "markets", "minicalendar", "birthdays", "watch", "meetings", "clarify", "zts", "shopify"];
+const arrangement = ["wire", "notes", "gsc", "markets", "minicalendar", "birthdays", "watch", "meetings", "clarify", "zts"];
 const hidGsc = hiddenBriefCards({ brief_hidden: ["gsc"] });
 const visible = applyBriefOrder(visibleBriefCards(BRIEF_CARDS, hidGsc), arrangement);
 check("the visible cards follow the saved arrangement",
@@ -134,6 +134,19 @@ for (const id of ALL) {
     ok && new Set(round).size === BRIEF_CARDS.length && round.length === BRIEF_CARDS.length);
 }
 
+// ─── a removed card in a saved order or hidden list is harmless ─────────────
+// The Shopify card was deleted (2026-10), and the saved brief_order and
+// brief_hidden on the live account still name it. A stale id must neither draw
+// a hole nor drop or duplicate a real card.
+{
+  const saved = ["notes", "birthdays", "minicalendar", "markets", "wire", "watch", "gsc", "clarify", "meetings", "zts", "shopify"];
+  const hid = hiddenBriefCards({ brief_hidden: ["meetings", "clarify", "zts", "shopify"] });
+  const drawn = ids(applyBriefOrder(visibleBriefCards(BRIEF_CARDS, hid), saved));
+  check("no card is called shopify any more", !ALL.includes("shopify"));
+  check("a saved order naming the removed card draws the live ones in order",
+    drawn === "notes,birthdays,minicalendar,markets,wire,watch,gsc", drawn);
+}
+
 // ─── hidden cards don't fetch, and launch paints the saved shape ─────────────
 // Source checks, like the other render-path pins in this directory: the Brief
 // component can't run here, so what is asserted is that the gate exists where
@@ -141,7 +154,7 @@ for (const id of ALL) {
 // from can never reach a write.
 {
   const brief = readFileSync("src/pages/brief/BriefPage.jsx", "utf8");
-  for (const [id, fn] of [["gsc", "loadCredentialed(\"gsc\""], ["clarify", "loadCredentialed(\"clarify-pipeline\""], ["zts", "loadCredentialed(\"zts-pipeline\""], ["shopify", "loadCredentialed(\"shopify\""], ["markets", "loadOpen(\"markets\""], ["wire", "loadOpen(\"wire\""]]) {
+  for (const [id, fn] of [["gsc", "loadCredentialed(\"gsc\""], ["clarify", "loadCredentialed(\"clarify-pipeline\""], ["zts", "loadCredentialed(\"zts-pipeline\""], ["markets", "loadOpen(\"markets\""], ["wire", "loadOpen(\"wire\""]]) {
     check(`a hidden ${id} card skips its feed`, brief.includes(`on("${id}") && ${fn}`));
   }
   check("a hidden Meetings card skips its feed", /if \(!ready \|\| hiddenRef\.current\.has\("meetings"\)\) return;/.test(brief));

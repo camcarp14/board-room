@@ -123,7 +123,6 @@ const OWNER_GATED = {
   "mini-worker": "runs queued model tasks against the owner's key",
   "note-capture": "writes into personal_notes on the owner's behalf",
   plaid: "holds PLAID_SECRET and the bank access tokens it buys",
-  shopify: "reads the ZTS store's orders and customers",
   "site-status": "fetches an arbitrary URL the caller names",
   "upstream-run-background": "runs the UPSTREAM engines — minutes of model time",
   "workout-import": "writes workouts from the watch seam",
@@ -186,9 +185,6 @@ const FAKE_ENV = {
   PLAID_CLIENT_ID: "smoke-plaid-client",
   PLAID_SECRET: "smoke-plaid-secret",
   PLAID_ENV: "sandbox",
-  SHOPIFY_CLIENT_ID: "smoke-shopify-client",
-  SHOPIFY_CLIENT_SECRET: "smoke-shopify-secret",
-  SHOPIFY_SHOP: "smoke.myshopify.com",
   TMDB_API_KEY: "smoke-tmdb-key",
   CLARIFY_SUPABASE_URL: "https://clarify.smoke.invalid",
   CLARIFY_SUPABASE_ANON_KEY: "smoke-clarify-anon",
@@ -216,8 +212,8 @@ for (const [k, v] of Object.entries(FAKE_ENV)) process.env[k] = v;
 // ONE DOOR OPENS, AS NARROWLY AS IT CAN BE WRITTEN. Knocks 2 and 3 present a
 // wrong credential, and an owner gate cannot refuse a wrong bearer token without
 // asking Supabase whose token it is — that call IS the gate working, so refusing
-// to answer it would only test the catch block around it (plaid.js and shopify.js
-// turn a thrown verify into a 503, which would have made every one of those knocks
+// to answer it would only test the catch block around it (plaid.js turns
+// a thrown verify into a 503, which would have made every one of those knocks
 // pass for the wrong reason). So when `identity` is set, and only then, exactly two
 // URL shapes answer: the auth endpoint that resolves a bearer token to a user, and
 // the app_settings row that resolves a Shortcut capture/import token to one.

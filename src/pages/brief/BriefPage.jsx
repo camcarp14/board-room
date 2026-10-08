@@ -128,8 +128,6 @@ export function MorningBriefPage({ btc, isMobile, settings, layout, updateSettin
   const [ztsPipeStatus, setZtsPipeStatus] = useState(cachedStatus(boot.zts));
   const [wire, setWire] = useState(boot.wire || []);
   const [wireStatus, setWireStatus] = useState(cachedStatus(boot.wire && boot.wire.length ? boot.wire : null));
-  const [shopify, setShopify] = useState(boot.shopify || null);
-  const [shopifyStatus, setShopifyStatus] = useState(cachedStatus(boot.shopify));
   const [meetings, setMeetings] = useState([]);
   const [meetingsStatus, setMeetingsStatus] = useState({ state: "loading" });
   const [birthdays, setBirthdays] = useState(null); // null = loading
@@ -327,7 +325,7 @@ export function MorningBriefPage({ btc, isMobile, settings, layout, updateSettin
   calRef.current = { ready: settings != null, url: settings?.calendar_url || null };
   // HIDDEN CARDS DON'T FETCH. Every refresh — launch, the 5-minute tick, a pull
   // — used to call every card's function whether or not the card was on
-  // screen, so a switched-off Clarify, ZTS, Shopify or Meetings card still cost
+  // screen, so a switched-off Clarify, ZTS or Meetings card still cost
   // a function call and a usage_log row each pass, and the slowest of them held
   // up "Updated". `layout` is App's last-seen copy, so this holds from the first
   // pass of a launch; switching a card back on refreshes (effect below).
@@ -402,8 +400,6 @@ export function MorningBriefPage({ btc, isMobile, settings, layout, updateSettin
         (m) => `Add ${m || "CLARIFY_SUPABASE_URL + CLARIFY_SUPABASE_ANON_KEY"} in Netlify env vars (ZTS now shares the Pentagon Supabase project), then redeploy.`),
       on("markets") && loadOpen("markets", (d) => { setStocks(d); updateSnapshot({ stocks: d }); }, setStocksStatus),
       on("wire") && loadOpen("wire", (d) => { setWire(d.wire || []); updateSnapshot({ wire: d.wire || [] }); }, setWireStatus),
-      on("shopify") && loadCredentialed("shopify", { days: 14 }, (d) => { setShopify(d); updateSnapshot({ shopify: d }); }, setShopifyStatus,
-        (m) => `Add ${m || "SHOPIFY_SHOP + SHOPIFY_CLIENT_ID + SHOPIFY_CLIENT_SECRET"} in Netlify env vars, then redeploy.`),
       db.loadBirthdays().then(rows => {
         if (!alive()) return;
         setBirthdays(rows);
@@ -679,24 +675,6 @@ export function MorningBriefPage({ btc, isMobile, settings, layout, updateSettin
     </CollapsibleCard>
   );
 
-  /* ── Shopify store ─────────────────────────────────────────────────────── */
-  const card_shopify = (
-    <CollapsibleCard {...coll("shopify")} pad={pad} title="Zero To Secure · Store" trailing={<StatusTag status={shopifyStatus} />}>
-      {shopifyStatus.state === "live" ? (
-        <>
-          {/* No delta line here — it added a third row to each tile and made
-              this card taller than the pipeline cards above it; value + label
-              keeps it the same height. */}
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(2, minmax(0, 1fr))", gap: 8, marginBottom: 6 }}>
-            <StatTile value={String(shopify.orders)} label="Orders" />
-            <StatTile value={shopify.visits} label="Visits" />
-          </div>
-          {freshOrStale(shopifyStatus)}
-        </>
-      ) : <FeedFallbackRow status={shopifyStatus} />}
-    </CollapsibleCard>
-  );
-
   /* ── Mini calendar — tap a day to add an event on it; "Open" for the full tab ── */
   const miniCatColor = (key) => (EVENT_CATEGORIES.find(c => c.key === key) || EVENT_CATEGORIES[0]).color;
   // One pill has to speak for the whole day, so a second event becomes "+1"
@@ -930,7 +908,7 @@ export function MorningBriefPage({ btc, isMobile, settings, layout, updateSettin
     notes: card_notes, minicalendar: card_minicalendar, birthdays: card_birthdays,
     markets: card_markets, watch: card_watch, wire: card_wire,
     gsc: card_gsc, meetings: card_meetings, clarify: card_clarify,
-    zts: card_zts, shopify: card_shopify,
+    zts: card_zts,
   };
   // Widgets you've switched off in Settings → Tabs (or in the Layout sheet)
   // never reach the packer, so the ones that are left close over the gap
