@@ -155,7 +155,47 @@ check("the offline sign-out notice is set by App and read once by the login scre
     /const \{ data: factors, error \} = await supabase\.auth\.mfa\.listFactors\(\);/.test(tf) && /return \(factors\?\.totp \|\| \[\]\)\.length > 0;/.test(tf));
   const appSrc = await read("src/App.jsx");
   check("the app shows the code screen, never the app, to a session that owes the code",
-    /secondFactor \? <TwoFactorScreen/.test(appSrc) && /secondFactor === null \? <BootScreen \/>/.test(appSrc));
+    /secondFactor \? <TwoFactorScreen/.test(appSrc) && /secondFactor === null \? <BootScreen( key=\{authAttempt\})? \/>/.test(appSrc));
+}
+
+// ─── Supabase key migration: new keys go on apikey only ─────────────────────
+// Legacy anon/service_role keys are JWTs and stop working at the end of 2026.
+// The sb_secret_/sb_publishable_ keys that replace them are not, and are refused
+// as a Bearer token — so no function may put an API key on Authorization itself.
+// Each file that talks to PostgREST with the service key carries the same one-line
+// apiKeyHeaders (inline, never a shared require: functions-smoke.mjs says why).
+{
+  const { readdirSync } = await import("node:fs");
+  const files = [
+    ...readdirSync("netlify/functions").filter((f) => f.endsWith(".js")).map((f) => `netlify/functions/${f}`),
+    ...readdirSync("netlify/lib/upstream").filter((f) => f.endsWith(".js")).map((f) => `netlify/lib/upstream/${f}`),
+  ];
+  const DEF = /^const apiKeyHeaders = .+;$/m;
+  const defs = new Map();
+  const offenders = [];
+  for (const f of files) {
+    const src = await read(f);
+    if (src.includes("apiKeyHeaders(")) defs.set(f, (src.match(DEF) || [""])[0]);
+    // An API key on Authorization looks like `apikey: X, Authorization: \`Bearer ${X}\``
+    // with the same X; a user's token on Authorization (a different variable) is fine.
+    for (const m of src.replace(DEF, "").matchAll(/apikey:\s*([A-Za-z_.]+),\s*Authorization:\s*`Bearer \$\{([A-Za-z_.]+)\}`/g)) {
+      if (m[1] === m[2]) offenders.push(`${f}: ${m[1]}`);
+    }
+  }
+  check("no function sends its API key as a Bearer token", offenders.length === 0, offenders);
+  const lines = [...new Set(defs.values())];
+  check("every file that uses apiKeyHeaders defines it, and all copies are the same line",
+    defs.size >= 11 && lines.length === 1 && lines[0] !== "", [...defs].filter(([, l]) => l !== lines[0]).map(([f]) => f));
+  // eslint-disable-next-line no-new-func
+  const apiKeyHeaders = new Function(`${lines[0]}\nreturn apiKeyHeaders;`)();
+  const legacy = "eyJhbGciOiJIUzI1NiJ9.legacy.sig";
+  const fresh = "sb_secret_abcdefghijklmnopqrstuv_12345678";
+  check("a legacy key still goes on apikey and Bearer",
+    apiKeyHeaders(legacy).apikey === legacy && apiKeyHeaders(legacy).Authorization === `Bearer ${legacy}`);
+  check("a secret key goes on apikey only",
+    apiKeyHeaders(fresh).apikey === fresh && !("Authorization" in apiKeyHeaders(fresh)));
+  check("a publishable key goes on apikey only", !("Authorization" in apiKeyHeaders("sb_publishable_x")));
+  check("an empty key is not mistaken for a new one", "Authorization" in apiKeyHeaders(""));
 }
 
 if (failures) { console.log(`\n${failures} FAILURE(S)\nAUDIT FIXES SMOKE FAILED`); process.exit(1); }

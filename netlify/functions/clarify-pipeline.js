@@ -31,6 +31,13 @@
 // queries, and nothing from the request body reaches the query string. The anon
 // key remains the fallback so a project that DOES grant anon keeps working, and
 // the 401/403 branch now names the real problem instead of the columns.
+// Supabase API key headers, inline like everything else in this directory (a
+// required helper is how exports.handler gets clobbered — functions-smoke.mjs).
+// A new sb_secret_/sb_publishable_ key goes on apikey ONLY: it isn't a JWT and is
+// refused as a Bearer token. A legacy JWT key keeps both headers, as before, so
+// swapping the env var's value is the whole migration. Same line in every file
+// that talks to PostgREST with the service key; audit-fixes-smoke checks they match.
+const apiKeyHeaders = (k) => (/^sb_(secret|publishable)_/.test(String(k || "")) ? { apikey: k } : { apikey: k, Authorization: `Bearer ${k}` });
 const json = (code, body) => ({ statusCode: code, headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
 
 // Session gate, inlined ON PURPOSE. Under this repo's "type":"module" + esbuild
@@ -84,7 +91,7 @@ exports.handler = async (event) => {
 
   // Accept-Profile pinned to public: outreach lives there, and on a project that
   // exposes several schemas the default is whichever is listed first.
-  const headers = { apikey: key, Authorization: `Bearer ${key}`, "Accept-Profile": "public" };
+  const headers = { ...apiKeyHeaders(key), "Accept-Profile": "public" };
   const count = async (query) => {
     const res = await fetch(`${url}/rest/v1/outreach?${query}&select=id`, { signal: AbortSignal.timeout(30000), headers: { ...headers, Prefer: "count=exact", Range: "0-0" } });
     // A 401/403 is the KEY being refused, not the columns — see the header. The

@@ -9,6 +9,13 @@
 //   · badUrl() — http(s) only, no private/loopback/link-local hosts. Same guard
 //     fetch-page has carried all along; this function was missing it entirely.
 //   · a 10s abort timer, because there wasn't one.
+// Supabase API key headers, inline like everything else in this directory (a
+// required helper is how exports.handler gets clobbered — functions-smoke.mjs).
+// A new sb_secret_/sb_publishable_ key goes on apikey ONLY: it isn't a JWT and is
+// refused as a Bearer token. A legacy JWT key keeps both headers, as before, so
+// swapping the env var's value is the whole migration. Same line in every file
+// that talks to PostgREST with the service key; audit-fixes-smoke checks they match.
+const apiKeyHeaders = (k) => (/^sb_(secret|publishable)_/.test(String(k || "")) ? { apikey: k } : { apikey: k, Authorization: `Bearer ${k}` });
 const json = (code, body) => ({ statusCode: code, headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
 
 // Session gate, inlined ON PURPOSE. Under this repo's "type":"module" + esbuild
@@ -73,7 +80,7 @@ function logSpend(userId, { modelKey, usage, ms, ok, detail }) {
   try {
     fetch(`${url}/rest/v1/usage_log`, {
       method: "POST",
-      headers: { apikey: service, Authorization: `Bearer ${service}`, "Content-Type": "application/json", "Content-Profile": "boardroom", Prefer: "return=minimal" },
+      headers: { ...apiKeyHeaders(service), "Content-Type": "application/json", "Content-Profile": "boardroom", Prefer: "return=minimal" },
       body: JSON.stringify({ user_id: userId, fn: "audit", kind: "anthropic", model: modelKey, in_tokens: inTok, out_tokens: outTok, cost_usd: estCost(modelKey, u.input_tokens || 0, outTok, cacheWrite, cacheRead), ms, ok, detail: detail ? String(detail).slice(0, 500) : undefined }),
     }).catch(() => {});
   } catch { /* accounting is best-effort */ }

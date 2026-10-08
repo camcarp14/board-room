@@ -35,6 +35,13 @@
 // of workout-import.js and scripts/functions-smoke.mjs for why a required
 // helper's module.exports silently deletes this function's handler.
 
+// Supabase API key headers, inline like everything else in this directory (a
+// required helper is how exports.handler gets clobbered — functions-smoke.mjs).
+// A new sb_secret_/sb_publishable_ key goes on apikey ONLY: it isn't a JWT and is
+// refused as a Bearer token. A legacy JWT key keeps both headers, as before, so
+// swapping the env var's value is the whole migration. Same line in every file
+// that talks to PostgREST with the service key; audit-fixes-smoke checks they match.
+const apiKeyHeaders = (k) => (/^sb_(secret|publishable)_/.test(String(k || "")) ? { apikey: k } : { apikey: k, Authorization: `Bearer ${k}` });
 const TZ = "America/Chicago"; // matches trmnl.js / calendar.js / the rest of the app
 
 const json = (statusCode, data) =>
@@ -61,7 +68,7 @@ function rest(c, path, opts = {}) {
     signal: AbortSignal.timeout(8000),
     ...opts,
     headers: {
-      apikey: c.service, Authorization: `Bearer ${c.service}`, "Content-Type": "application/json",
+      ...apiKeyHeaders(c.service), "Content-Type": "application/json",
       "Accept-Profile": "boardroom", "Content-Profile": "boardroom", ...(opts.headers || {}),
     },
   });

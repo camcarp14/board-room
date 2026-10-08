@@ -2,6 +2,13 @@
 // leaves this function. Arbitrary SQL is deliberately NOT supported; only the
 // allowlisted commands below run. Extend the map when you need a new op.
 // Needs: SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY.
+// Supabase API key headers, inline like everything else in this directory (a
+// required helper is how exports.handler gets clobbered — functions-smoke.mjs).
+// A new sb_secret_/sb_publishable_ key goes on apikey ONLY: it isn't a JWT and is
+// refused as a Bearer token. A legacy JWT key keeps both headers, as before, so
+// swapping the env var's value is the whole migration. Same line in every file
+// that talks to PostgREST with the service key; audit-fixes-smoke checks they match.
+const apiKeyHeaders = (k) => (/^sb_(secret|publishable)_/.test(String(k || "")) ? { apikey: k } : { apikey: k, Authorization: `Bearer ${k}` });
 const json = (code, body) => ({ statusCode: code, headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
 
 exports.handler = async (event) => {
@@ -32,7 +39,7 @@ exports.handler = async (event) => {
 
   const rest = (path, opts = {}) => fetch(`${url}/rest/v1/${path}`, { signal: AbortSignal.timeout(15000),
     ...opts,
-    headers: { apikey: key, Authorization: `Bearer ${key}`, "Content-Type": "application/json", "Accept-Profile": "boardroom", "Content-Profile": "boardroom", Prefer: "count=exact", ...(opts.headers || {}) },
+    headers: { ...apiKeyHeaders(key), "Content-Type": "application/json", "Accept-Profile": "boardroom", "Content-Profile": "boardroom", Prefer: "count=exact", ...(opts.headers || {}) },
   });
 
   const cmd = String(body.command || "").trim().toLowerCase();

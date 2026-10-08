@@ -2,6 +2,14 @@
 // Uses the service-role key, which bypasses RLS —
 // every row is stamped with the verified caller's user_id so client RLS reads work.
 
+// Supabase API key headers, inline like everything else in this directory (a
+// required helper is how exports.handler gets clobbered — functions-smoke.mjs).
+// A new sb_secret_/sb_publishable_ key goes on apikey ONLY: it isn't a JWT and is
+// refused as a Bearer token. A legacy JWT key keeps both headers, as before, so
+// swapping the env var's value is the whole migration. Same line in every file
+// that talks to PostgREST with the service key; audit-fixes-smoke checks they match.
+const apiKeyHeaders = (k) => (/^sb_(secret|publishable)_/.test(String(k || "")) ? { apikey: k } : { apikey: k, Authorization: `Bearer ${k}` });
+
 // ─── the deadline every other outbound fetch in this repo already had ────────
 // Every fetch under netlify/functions carries AbortSignal.timeout — that was
 // done deliberately, in one pass, for a reason worth restating: a fetch with no
@@ -48,8 +56,7 @@ async function rest(path, { method = 'GET', body, prefer } = {}) {
     method,
     signal: AbortSignal.timeout(REST_TIMEOUT_MS),
     headers: {
-      apikey: c.key,
-      Authorization: `Bearer ${c.key}`,
+      ...apiKeyHeaders(c.key),
       'Content-Type': 'application/json',
       // Board Room's tables live in the `boardroom` schema on the shared
       // Pentagon project. Accept-Profile selects it for reads, Content-Profile

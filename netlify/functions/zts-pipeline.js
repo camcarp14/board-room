@@ -17,6 +17,13 @@
 // either add a policy allowing anon SELECT or point the anon var at a
 // service-role key.
 
+// Supabase API key headers, inline like everything else in this directory (a
+// required helper is how exports.handler gets clobbered — functions-smoke.mjs).
+// A new sb_secret_/sb_publishable_ key goes on apikey ONLY: it isn't a JWT and is
+// refused as a Bearer token. A legacy JWT key keeps both headers, as before, so
+// swapping the env var's value is the whole migration. Same line in every file
+// that talks to PostgREST with the service key; audit-fixes-smoke checks they match.
+const apiKeyHeaders = (k) => (/^sb_(secret|publishable)_/.test(String(k || "")) ? { apikey: k } : { apikey: k, Authorization: `Bearer ${k}` });
 const json = (code, body) => ({ statusCode: code, headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
 
 // Session gate, inlined ON PURPOSE. Under this repo's "type":"module" + esbuild
@@ -88,7 +95,7 @@ exports.handler = async (event) => {
     // Accept-Profile selects the `zts` schema on the shared project.
     const scope = serviceKey && owner ? `&user_id=eq.${encodeURIComponent(owner)}` : "";
     const res = await fetch(`${url}/rest/v1/creators?select=stage,subscriber_count${scope}`, { signal: AbortSignal.timeout(30000),
-      headers: { apikey: key, Authorization: `Bearer ${key}`, "Accept-Profile": "zts" },
+      headers: { ...apiKeyHeaders(key), "Accept-Profile": "zts" },
     });
     if (!res.ok) throw new Error(`creators query failed (${res.status}) — check the zts schema is exposed and the "creators" table has stage/subscriber_count columns`);
     const rows = await res.json();

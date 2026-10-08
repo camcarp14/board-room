@@ -92,7 +92,7 @@ const sb = (path, opts = {}) => withTimeout(`${SUPABASE_URL}/rest/v1/${path}`, {
   ...opts,
   headers: {
     apikey: SERVICE_KEY,
-    Authorization: `Bearer ${SERVICE_KEY}`,
+    ...(SERVICE_KEY.startsWith("sb_") ? {} : { Authorization: `Bearer ${SERVICE_KEY}` }),
     "Content-Type": "application/json",
     ...(opts.headers || {}),
   },

@@ -30,6 +30,13 @@
 // Verified against Netlify's own bundler; btc.js/mini-worker.js work
 // precisely because they are self-contained. (tmdb.js has this same latent
 // bug from an earlier commit.)
+// Supabase API key headers, inline like everything else in this directory (a
+// required helper is how exports.handler gets clobbered — functions-smoke.mjs).
+// A new sb_secret_/sb_publishable_ key goes on apikey ONLY: it isn't a JWT and is
+// refused as a Bearer token. A legacy JWT key keeps both headers, as before, so
+// swapping the env var's value is the whole migration. Same line in every file
+// that talks to PostgREST with the service key; audit-fixes-smoke checks they match.
+const apiKeyHeaders = (k) => (/^sb_(secret|publishable)_/.test(String(k || "")) ? { apikey: k } : { apikey: k, Authorization: `Bearer ${k}` });
 const json = (statusCode, data) => ({ statusCode, headers: { "Content-Type": "application/json" }, body: JSON.stringify(data) });
 const error = (statusCode, message) => json(statusCode, { error: message });
 const randomUUID = () => globalThis.crypto.randomUUID();
@@ -40,7 +47,7 @@ function cfg() {
 function rest(c, path, opts = {}) {
   return fetch(`${c.url}/rest/v1/${path}`, { signal: AbortSignal.timeout(8000),
     ...opts,
-    headers: { apikey: c.service, Authorization: `Bearer ${c.service}`, "Content-Type": "application/json", "Accept-Profile": "boardroom", "Content-Profile": "boardroom", ...(opts.headers || {}) },
+    headers: { ...apiKeyHeaders(c.service), "Content-Type": "application/json", "Accept-Profile": "boardroom", "Content-Profile": "boardroom", ...(opts.headers || {}) },
   });
 }
 

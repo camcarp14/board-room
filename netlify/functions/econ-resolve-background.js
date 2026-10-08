@@ -47,6 +47,13 @@
 // is try/catch'd so accounting can never fail a run.
 import { searchCall, MODELS, parseJsonLoose, makeLedger, ledgerTotal } from "../lib/upstream/llm.js";
 import { makeStore } from "../lib/upstream/store.js";
+// Supabase API key headers, inline like everything else in this directory (a
+// required helper is how exports.handler gets clobbered — functions-smoke.mjs).
+// A new sb_secret_/sb_publishable_ key goes on apikey ONLY: it isn't a JWT and is
+// refused as a Bearer token. A legacy JWT key keeps both headers, as before, so
+// swapping the env var's value is the whole migration. Same line in every file
+// that talks to PostgREST with the service key; audit-fixes-smoke checks they match.
+const apiKeyHeaders = (k) => (/^sb_(secret|publishable)_/.test(String(k || "")) ? { apikey: k } : { apikey: k, Authorization: `Bearer ${k}` });
 
 const json = (status, body) => new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
 
@@ -147,7 +154,7 @@ async function verifyUser(token) {
 
 async function readStore(userId) {
   const url = `${SUPA}/rest/v1/app_settings?select=setting_value&user_id=eq.${userId}&setting_key=eq.${RESULT_KEY}`;
-  const res = await fetch(url, { signal: AbortSignal.timeout(20000), headers: { apikey: SERVICE, Authorization: `Bearer ${SERVICE}`, "Accept-Profile": "boardroom" } });
+  const res = await fetch(url, { signal: AbortSignal.timeout(20000), headers: { ...apiKeyHeaders(SERVICE), "Accept-Profile": "boardroom" } });
   if (!res.ok) return {};
   const rows = await res.json().catch(() => []);
   const v = rows?.[0]?.setting_value;
@@ -158,7 +165,7 @@ async function writeStore(userId, store) {
   await fetch(`${SUPA}/rest/v1/app_settings?on_conflict=user_id,setting_key`, { signal: AbortSignal.timeout(20000),
     method: "POST",
     headers: {
-      apikey: SERVICE, Authorization: `Bearer ${SERVICE}`,
+      ...apiKeyHeaders(SERVICE),
       "Content-Type": "application/json", "Content-Profile": "boardroom",
       Prefer: "resolution=merge-duplicates",
     },
