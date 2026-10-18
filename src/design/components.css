@@ -300,6 +300,19 @@ button:active:not(:disabled) { transform: scale(0.97); }
    cut in half by a clipping rectangle. */
 .dock-label { font-size: 10px; font-weight: 600; letter-spacing: 0.01em; line-height: 1; white-space: nowrap; max-width: 100%; overflow: hidden; text-overflow: ellipsis; }
 .lbx .dock-tab { padding: 6px 0 5px; } /* letterboxed standalone — OS already cleared the indicator */
+/* NINE TABS: A FLOOR UNDER THE GAP BETWEEN LABELS. Equal columns spend their
+   slack evenly, so at nine "Plan" sits in 41px with 20 to spare while "Markets"
+   and "Finances" got 0.5px between them on a 375pt phone and read as one word —
+   nothing clipped, which was the only thing the eight-tab measurement checked.
+   3px inside each tab raises every tab's minimum to its label plus 6px, and
+   flex then takes that width back from the short labels: measured in Chromium
+   on the real CSS, every gap is ≥6px at 320, 375 and 390pt and nothing clips.
+   The price is columns that are no longer identical (36.7–50.5px at 375pt),
+   which is what 320pt already looked like at eight. Only on a bar of nine or
+   more (MobileShell sets the class from the count), so hiding a tab in
+   Settings → Tabs returns the bar to even columns. Longhands, so the .lbx
+   rule above keeps its vertical padding. */
+.dock.dock-crowded .dock-tab { padding-left: 3px; padding-right: 3px; }
 
 /* ═══ CHROME — sidebar (tablet / desktop) ════════════════════════════════════ */
 /* A 236px rail, not 300: four destinations in a flat list (no section headers —

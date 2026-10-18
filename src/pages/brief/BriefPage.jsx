@@ -30,6 +30,7 @@ import { nextBirthdayOccurrence } from "../../lib/dates.js";
 import { expandEvents } from "../../lib/recurrence.js";
 import { spanDayKeys } from "../../lib/calendar-overlays.js";
 import { NotesTile } from "./NotesTile.jsx";
+import { PlanTile } from "./PlanTile.jsx";
 import { eventId, takeKey, hasPassed, isSettled, watchRowState, POLL_EVERY_MS, POLL_MAX, CLAIM_STALE_MS } from "./watchState.js";
 import { useEconResults, useResolveEconEvents } from "../../data/econ.js";
 // The canonical category → colour map (mini-calendar pills). Taken from the leaf
@@ -91,7 +92,7 @@ function ShowMore({ open, count, onToggle }) {
   );
 }
 
-export function MorningBriefPage({ btc, isMobile, settings, layout, refreshRef, updateSetting, onOpenCalendar, onAddEvent, onOpenNotes, onOpenQueue, onOpenBirthdays, onOpenAnniversaries, refreshSignal }) {
+export function MorningBriefPage({ btc, isMobile, settings, layout, refreshRef, updateSetting, onOpenCalendar, onAddEvent, onOpenNotes, onOpenQueue, onOpenBirthdays, onOpenAnniversaries, onOpenPlan, refreshSignal }) {
   // Column count follows the width: 1 (phone / tablet portrait), 2 (desktop &
   // tablet landscape ≥1024 — below this the market tiles truncated to "$…"),
   // 3 (wide desktop ≥1440, where a 2-column layout left big empty gutters).
@@ -895,6 +896,9 @@ export function MorningBriefPage({ btc, isMobile, settings, layout, refreshRef, 
   // "Brief" large-title header at the top of the page. (birthdays/events are
   // still loaded above; they feed the snapshot the board seats read.)
   const card_notes = <NotesTile {...coll("notes")} isMobile={isMobile} refreshSignal={refreshSignal} onOpenNotes={onOpenNotes} settings={settings} updateSetting={updateSetting} />;
+  // The day's plan — reads app_settings.daily_plan, which `settings` already
+  // carries, so this card never fetches. See PlanTile for why it leads.
+  const card_plan = <PlanTile {...coll("plan")} isMobile={isMobile} settings={settings} onOpenPlan={onOpenPlan} />;
 
   // Column count + container width scale with the viewport so a wide desktop
   // fills the space instead of stranding two narrow columns in a sea of black:
@@ -913,6 +917,7 @@ export function MorningBriefPage({ btc, isMobile, settings, layout, refreshRef, 
   // Anything absent from NODES is skipped rather than drawn as a hole, so a
   // catalogue entry that arrives before its card does can't blank a column.
   const NODES = {
+    plan: card_plan,
     notes: card_notes, minicalendar: card_minicalendar, birthdays: card_birthdays,
     markets: card_markets, watch: card_watch, wire: card_wire,
     gsc: card_gsc, meetings: card_meetings, clarify: card_clarify,

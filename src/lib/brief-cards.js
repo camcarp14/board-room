@@ -41,6 +41,12 @@
 // `label` is what the layout sheet and the settings switches call the card —
 // the card's own title, not a second name for it.
 export const BRIEF_CARDS = [
+  // FIRST, which is the one deliberate exception to lib/brief-order.js keeping
+  // new cards out of the way: a card that has never been in a saved order lands
+  // at its default index, and this one's job only works at the top. It is the
+  // guardrail you see before you open the laptop, not after (pages/brief/
+  // PlanTile.jsx has the rest). Movable and hideable like every other card.
+  { id: "plan", w: 2.5, label: "Today's Plan" },
   { id: "notes", w: 3, label: "Notes" },
   { id: "minicalendar", w: 2.5, label: "Calendar" },
   // Birthdays AND anniversaries — one card, because they answer the same

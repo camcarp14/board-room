@@ -326,8 +326,37 @@ export const IcGuitarFill = (p = {}) => (
     <path d="m17.3 5.2 1.3-1.3a1.6 1.6 0 0 1 2.3 0l.2.2a1.6 1.6 0 0 1 0 2.3l-1.3 1.3z" fill="currentColor" />
   </svg>
 );
+// The day as a timeline: a rail with three stops, each with a block of a
+// different length beside it. Not a clock — IcClock already means "a time" all
+// over the app, and this tab is about the ORDER of the day more than the hour.
+// Not a checklist either, which would read as Notes or a to-do list; nothing
+// here gets ticked off. The rail is broken around each stop so the outline
+// stays three clean rings at 25px instead of a line threaded through beads.
+export const IcPlan = (p = {}) => (
+  <svg {...base(p)}>
+    <circle cx="6" cy="5.5" r="2" />
+    <circle cx="6" cy="12" r="2" />
+    <circle cx="6" cy="18.5" r="2" />
+    <path d="M6 7.5v2.5M6 14v2.5" />
+    <path d="M11 5.5h9M11 12h6M11 18.5h8" />
+  </svg>
+);
+export const IcPlanFill = (p = {}) => (
+  // Same object, solid: the stops fill and the blocks thicken into bars, so the
+  // active tab reads as this icon pressed rather than as a different shape.
+  <svg {...base(p)}>
+    <circle cx="6" cy="5.5" r="2.2" fill="currentColor" stroke="none" />
+    <circle cx="6" cy="12" r="2.2" fill="currentColor" stroke="none" />
+    <circle cx="6" cy="18.5" r="2.2" fill="currentColor" stroke="none" />
+    <path d="M6 7.5v2.5M6 14v2.5" />
+    <rect x="10.2" y="4" width="10.6" height="3" rx="1.5" fill="currentColor" stroke="none" />
+    <rect x="10.2" y="10.5" width="7.6" height="3" rx="1.5" fill="currentColor" stroke="none" />
+    <rect x="10.2" y="17" width="9.6" height="3" rx="1.5" fill="currentColor" stroke="none" />
+  </svg>
+);
 export const NAV_ICONS = {
   brief: { line: IcBrief, fill: IcBriefFill },
+  plan: { line: IcPlan, fill: IcPlanFill },
   personal: { line: IcPersonal, fill: IcPersonalFill },
   train: { line: IcTrain, fill: IcTrainFill },
   creed: { line: IcCreed, fill: IcCreedFill },

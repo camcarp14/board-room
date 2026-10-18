@@ -37,8 +37,13 @@ const UpstreamPage = lazy(() => import("./pages/upstream/UpstreamPage.jsx").then
 // library, a verified chord table and the DSP for the tuner and the synthesised
 // backing tracks. None of it belongs in the bundle that has to paint the Brief.
 const GuitarPage = lazy(() => import("./pages/guitar/GuitarPage.jsx").then(m => ({ default: m.GuitarPage })));
+// Lazy too, though it is small: the Brief's own plan card imports only the pure
+// logic (features/plan/planLogic.js), so the editor and its sheets stay out of
+// the landing chunk.
+const PlanPage = lazy(() => import("./pages/plan/PlanPage.jsx").then(m => ({ default: m.PlanPage })));
 // The same modules, fetched ahead of the first tap (see "WARM THE TABS").
 const PAGE_WARMERS = [
+  () => import("./pages/plan/PlanPage.jsx"),
   () => import("./pages/personal/PersonalPage.jsx"), () => import("./pages/train/TrainPage.jsx"),
   () => import("./pages/grocery/GroceryPage.jsx"), () => import("./pages/finances/FinancesPage.jsx"),
   () => import("./pages/creed/CreedPage.jsx"), () => import("./pages/markets/MarketsPage.jsx"),
@@ -1061,7 +1066,8 @@ export default function App() {
 
   const renderPageInner = (key) => {
     switch (key) {
-      case "brief": return <MorningBriefPage btc={btc} isMobile={isMobile} settings={settings} layout={layout} refreshRef={briefRefreshRef} updateSetting={updateSetting} onOpenCalendar={goToCalendar} onAddEvent={(date) => jumpTo({ page: "personal", sub: "calendar", newEventDate: date })} onOpenNotes={(noteId) => jumpTo({ page: "personal", sub: "notes", noteId })} onOpenBirthdays={() => jumpTo({ page: "personal", sub: "birthdays" })} onOpenAnniversaries={() => jumpTo({ page: "personal", sub: "anniversaries" })} refreshSignal={briefRefreshSignal} />;
+      case "brief": return <MorningBriefPage btc={btc} isMobile={isMobile} settings={settings} layout={layout} refreshRef={briefRefreshRef} updateSetting={updateSetting} onOpenCalendar={goToCalendar} onAddEvent={(date) => jumpTo({ page: "personal", sub: "calendar", newEventDate: date })} onOpenNotes={(noteId) => jumpTo({ page: "personal", sub: "notes", noteId })} onOpenBirthdays={() => jumpTo({ page: "personal", sub: "birthdays" })} onOpenAnniversaries={() => jumpTo({ page: "personal", sub: "anniversaries" })} onOpenPlan={() => goToPage("plan")} refreshSignal={briefRefreshSignal} />;
+      case "plan": return <PlanPage isMobile={isMobile} settings={settings} updateSetting={updateSetting} />;
       case "personal": return <PersonalPage isMobile={isMobile} jumpSignal={personalJumpTo} jump={jump} settings={settings} updateSetting={updateSetting} />;
       case "train": return <TrainPage isMobile={isMobile} settings={settings} updateSetting={updateSetting} jump={jump} />;
       case "creed": return <CreedPage isMobile={isMobile} settings={settings} updateSetting={updateSetting} jump={jump} />;

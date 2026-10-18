@@ -28,6 +28,7 @@ const ids = (cards) => cards.map((c) => c.id).join(",");
 
 // A stand-in for the real set: same shape, same weights, order irrelevant.
 const CARDS = [
+  { id: "plan", w: 2.5 },
   { id: "notes", w: 3 }, { id: "minicalendar", w: 2.5 }, { id: "birthdays", w: 1.5 },
   { id: "markets", w: 2.5 }, { id: "watch", w: 3 }, { id: "wire", w: 4.5 },
   { id: "gsc", w: 2.5 }, { id: "meetings", w: 2 }, { id: "clarify", w: 1.5 },
@@ -41,13 +42,25 @@ check("no saved order leaves the default arrangement alone",
 check("an empty saved order leaves the default alone",
   ids(applyBriefOrder(CARDS, [])) === DEFAULT_IDS);
 
-const moved = ["wire", "markets", "notes", "minicalendar", "birthdays", "watch", "gsc", "meetings", "clarify", "zts"];
+const moved = ["wire", "markets", "notes", "plan", "minicalendar", "birthdays", "watch", "gsc", "meetings", "clarify", "zts"];
 check("a saved order is applied exactly",
   ids(applyBriefOrder(CARDS, moved)) === moved.join(","));
 check("applying an order is idempotent",
   ids(applyBriefOrder(applyBriefOrder(CARDS, moved), moved)) === moved.join(","));
 check("orderOf round-trips through applyBriefOrder",
   ids(applyBriefOrder(CARDS, orderOf(applyBriefOrder(CARDS, moved)))) === moved.join(","));
+// The plan card arrived after most accounts already had a saved order, and its
+// whole job is to be the first thing read in the morning (pages/brief/
+// PlanTile.jsx). It gets there by being first in the catalogue — an id the saved
+// order has never met keeps its DEFAULT index — so pin that it really does land
+// on top of an arrangement written before it existed, and that the rest of that
+// arrangement survives untouched underneath it.
+{
+  const beforePlan = moved.filter((id) => id !== "plan");
+  const drawn = applyBriefOrder(CARDS, beforePlan).map((c) => c.id);
+  check("a saved order from before the plan card gets it on top", drawn[0] === "plan", drawn.join(","));
+  check("…with the saved arrangement intact beneath it", drawn.slice(1).join(",") === beforePlan.join(","), drawn.join(","));
+}
 
 // ── the card set is never corrupted ──────────────────────────────────────────
 // Every reconciliation path has to return each card exactly once. This is the
