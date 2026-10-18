@@ -74,8 +74,8 @@ const kit = readFileSync("src/ui/kit.jsx", "utf8");
 
 const navKeys = [...(nav.match(/export const NAV = \[([\s\S]*?)\n\];/)?.[1] || "")
   .matchAll(/^\s*\{ key: "(\w+)"/gm)].map(m => m[1]);
-check("the nav is Brief, Personal, Train, Creed, Grocery, Markets, Finances, Guitar",
-  navKeys.join(",") === "brief,personal,train,creed,grocery,markets,finances,guitar", navKeys.join(","));
+check("the nav is Brief, Plan, Personal, Train, Creed, Grocery, Markets, Finances, Guitar",
+  navKeys.join(",") === "brief,plan,personal,train,creed,grocery,markets,finances,guitar", navKeys.join(","));
 // A tab with no route renders a blank titled page. The nav entry and the switch
 // case in App are two separate edits and only one of them is visible when you
 // forget the other — the icon/header pairs are already checked per key below,
@@ -98,7 +98,34 @@ check("every tab has a route", navKeys.every(k => new RegExp(`case "${k}":`).tes
 // a label that one day does not fit degrades to an ellipsis instead of a letter
 // sliced down the middle. Twelve is the hard stop below, well past anything that
 // could be read, so a runaway loop still fails.
-check("the tab bar stays at eight or fewer", navKeys.length <= 8, String(navKeys.length));
+//
+// NINE, MEASURED THE SAME WAY. Plan took the ninth slot (second on the bar) after
+// the same Chromium measurement, which reproduced the eight-tab figures above to
+// the tenth of a pixel before it measured nine:
+//
+//   375pt   columns 41.0px · "Finances" 44.5 (flex gives it room) · 0 clipped
+//   390pt   columns 43.2px                                        · 0 clipped
+//   320pt   columns 30.5–44.5px                                   · 0 clipped
+//
+// Zero clipped at all three, which is the bar Guitar was held to — and not
+// enough: with equal columns "Markets" and "Finances" were 0.5px apart at 375pt
+// and rendered as one word. A bar of nine therefore carries .dock-crowded:
+// padding inside each tab, which keeps ≥6px between every pair of labels from
+// 375pt up. The padding MUST be bounded by the viewport — a flat 3px made the
+// nine minimums 356px and pushed the last tab off a 320pt screen, which a
+// "nothing clipped" measurement cannot see. All three halves are pinned below:
+// the class is set from the count, the rule exists, and it is clamped to the
+// viewport rather than a fixed width. There is no room for a tenth.
+check("the tab bar stays at nine or fewer", navKeys.length <= 9, String(navKeys.length));
+{
+  const shell = readFileSync("src/shell/MobileShell.jsx", "utf8");
+  const css = readFileSync("src/design/components.css", "utf8");
+  check("a bar of nine or more is marked crowded", /className=\{`dock\$\{nav\.length > 8 \? " dock-crowded" : ""\}`\}/.test(shell));
+  const crowded = css.match(/\.dock\.dock-crowded \.dock-tab \{([^}]*)\}/)?.[1] || "";
+  check("…and a crowded bar keeps a gap between its labels", /padding-left:/.test(crowded) && /padding-right:/.test(crowded), crowded);
+  check("…bounded by the viewport, so nine tabs never outgrow a 320pt screen",
+    ["left", "right"].every((side) => new RegExp(`padding-${side}: clamp\\(0px, calc\\(\\(100vw - 312px\\) / 18\\), 3px\\);`).test(crowded)), crowded);
+}
 // Dreams is a sub-tab of Creed now. Both halves matter: it must not be a nav
 // destination, and the page must actually mount it — a half-fold leaves a
 // panel nothing can reach.

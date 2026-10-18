@@ -467,7 +467,7 @@ export function MobileShell({ page, navDir, nav = NAV, onNavigate, onOpenSetting
           standalone coordinate system; normal flow at the bottom of the
           flex column cannot be. Hidden entirely while the keyboard is up. */}
       <div className="dock-wrap" style={{ flex: "none", display: keyboardOpen ? "none" : undefined }}>
-        <nav className="dock" aria-label="Primary">
+        <nav className={`dock${nav.length > 8 ? " dock-crowded" : ""}`} aria-label="Primary">
           {nav.map(n => {
             const active = page === n.key;
             const Icon = active ? NAV_ICONS[n.key].fill : NAV_ICONS[n.key].line;

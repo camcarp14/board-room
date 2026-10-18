@@ -9,6 +9,33 @@
 // the fourth tab. Order is the grouping now.
 export const NAV = [
   { key: "brief", label: "Brief" },
+  // PLAN IS THE NINTH, AND SECOND. The note on Guitar below said a ninth needs
+  // its own measurement rather than this paragraph, so here it is — the same
+  // method that produced Guitar's numbers (the real dock CSS and Inter, rendered
+  // in Chromium at 3x, widths read off the DOM; it reproduces the eight-tab
+  // figures below to the tenth of a pixel):
+  //
+  //   375pt   columns 41.0px, "Personal" 43.1 · "Finances" 44.5 · 0 clipped
+  //   390pt   columns 43.2px, "Finances" 44.5                    · 0 clipped
+  //   320pt   columns 30.5–44.5px, flex giving the long ones room · 0 clipped
+  //
+  // Nothing truncates at any of the three widths — the bar Guitar was held to —
+  // and that bar turned out to be the wrong one. With equal columns, "Markets"
+  // and "Finances" sat 0.5px apart at 375pt and the screenshot read
+  // "MarketsFinances". So a bar of nine also gets `.dock-crowded` (MobileShell,
+  // components.css): padding inside each tab, bounded by the viewport so the bar
+  // can never be wider than the screen (a flat 3px pushed the last tab off a
+  // 320pt phone entirely). At 375pt and up every gap between labels is ≥6px; at
+  // 320pt the bar fits exactly with ~1px gaps, which is where eight tabs already
+  // were there. Columns vary (36.7–50.5px at 375pt). Hide a tab in Settings →
+  // Tabs and the bar goes back to even columns. A tenth has no room left to find.
+  //
+  // Second because it is a morning surface like the Brief: the Brief is what the
+  // day holds, the Plan is how it's meant to go. It is also the tab that matters
+  // most on the morning you're least inclined to open it. (A saved order from
+  // Settings → Tabs that predates this key gets it appended at the end, like
+  // every new tab — drag it up there.)
+  { key: "plan", label: "Plan" },
   { key: "personal", label: "Personal" },
   { key: "train", label: "Train" },
   // Creed came out of Personal for the same reason Grocery and Train did: it's
@@ -90,6 +117,9 @@ const DATE_LINE = (d) =>
 // absent rather than an empty line holding space open.
 export const HEADERS = {
   brief: { title: "Brief", sub: (d) => DATE_LINE(d) },
+  // The bar says "Plan" because nine labels share 375 points; the page has the
+  // room to say what it is.
+  plan: { title: "Daily Plan" },
   personal: { title: "Personal" },
   train: { title: "Train" },
   creed: { title: "Creed" },

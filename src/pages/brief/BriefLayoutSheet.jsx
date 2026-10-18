@@ -11,7 +11,7 @@ import { Sheet, Button, Pill, PillRow, SectionHeader, Field, useConfirm } from "
 import { BriefWidgetList } from "../../ui/BriefWidgetList.jsx";
 import {
   activeLayout, layoutColumnCount, defaultColumnCount,
-  dealExplicit, addLayout, renameLayout, removeLayout, moveCard, setLayoutColumns,
+  dealExplicit, addLayout, renameLayout, removeLayout, moveDealtCard, setLayoutColumns,
 } from "../../lib/brief-layouts.js";
 
 const ARROWS = [["up", "↑"], ["down", "↓"], ["left", "←"], ["right", "→"]];
@@ -104,7 +104,7 @@ export function BriefLayoutSheet({ settings, updateSetting, cards, screenColumns
                     <div style={{ display: "flex", gap: 4 }}>
                       {ARROWS.map(([dir, glyph]) => (
                         <button key={dir} aria-label={`Move ${labelOf(card.id)} ${dir}`}
-                          onClick={() => writeProfile(moveCard(active, card.id, dir))}
+                          onClick={() => writeProfile(moveDealtCard(active, columns, card.id, dir))}
                           style={{
                             width: 30, height: 30, borderRadius: 8, border: "none", cursor: "pointer",
                             background: "var(--surface)", color: "var(--sub)", fontSize: 13, lineHeight: 1,

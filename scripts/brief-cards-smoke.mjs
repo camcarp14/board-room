@@ -95,7 +95,7 @@ check("…while still recording the card you actually switched",
 // ── a hidden card keeps its place ────────────────────────────────────────────
 // The scenario in full: an arrangement, one card put away, the rest dragged
 // around, then the card switched back on. It must come back where it was.
-const arrangement = ["wire", "notes", "gsc", "markets", "minicalendar", "birthdays", "watch", "meetings", "clarify", "zts"];
+const arrangement = ["wire", "plan", "notes", "gsc", "markets", "minicalendar", "birthdays", "watch", "meetings", "clarify", "zts"];
 const hidGsc = hiddenBriefCards({ brief_hidden: ["gsc"] });
 const visible = applyBriefOrder(visibleBriefCards(BRIEF_CARDS, hidGsc), arrangement);
 check("the visible cards follow the saved arrangement",
@@ -143,8 +143,12 @@ for (const id of ALL) {
   const hid = hiddenBriefCards({ brief_hidden: ["meetings", "clarify", "zts", "shopify"] });
   const drawn = ids(applyBriefOrder(visibleBriefCards(BRIEF_CARDS, hid), saved));
   check("no card is called shopify any more", !ALL.includes("shopify"));
+  // That saved order also predates the plan card, which is why the plan leads
+  // it: an id the order has never met keeps its default slot, and the plan's is
+  // first (see lib/brief-cards.js). Everything the account did arrange is drawn
+  // in the order it was arranged.
   check("a saved order naming the removed card draws the live ones in order",
-    drawn === "notes,birthdays,minicalendar,markets,wire,watch,gsc", drawn);
+    drawn === "plan,notes,birthdays,minicalendar,markets,wire,watch,gsc", drawn);
 }
 
 // ─── hidden cards don't fetch, and launch paints the saved shape ─────────────

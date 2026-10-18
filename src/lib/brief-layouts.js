@@ -143,6 +143,30 @@ export function moveCard(profile, cardId, dir) {
   return { ...profile, columnLayout: cols, order: flatten(cols), columns: String(n), layoutColumns: n };
 }
 
+/**
+ * moveCard for the card the sheet actually SHOWS, wherever the profile has it.
+ *
+ * A card the profile has never placed — any card a release added after the
+ * profile was saved, the plan card first among them — is drawn by dealExplicit
+ * at the end of the shortest column, and moveCard alone answered every arrow on
+ * it with "not in the layout, nothing to move". The arrows rendered and did
+ * nothing. So the card is first pinned where it is drawn (`dealt` is
+ * dealExplicit's columns, as the sheet renders them), then moved like any other.
+ * Only that one id is added: hidden cards are absent from `dealt`, and writing
+ * the whole dealt arrangement back would drop their authored places.
+ */
+export function moveDealtCard(profile, dealt, cardId, dir) {
+  const placed = (profile?.columnLayout || []).some((col) => Array.isArray(col) && col.includes(cardId));
+  if (placed) return moveCard(profile, cardId, dir);
+  const at = (Array.isArray(dealt) ? dealt : []).findIndex((col) => (col || []).some((c) => (c?.id ?? c) === cardId));
+  if (at === -1) return profile;
+  const n = layoutColumnCount(profile);
+  const cols = Array.from({ length: Math.max(n, profile?.columnLayout?.length || 0) }, (_, i) =>
+    (Array.isArray(profile?.columnLayout?.[i]) ? profile.columnLayout[i] : []).slice());
+  cols[Math.min(at, cols.length - 1)].push(cardId);
+  return moveCard({ ...profile, columnLayout: cols }, cardId, dir);
+}
+
 /** Change a profile's column count, folding or spreading its columns. */
 export function setLayoutColumns(profile, nCols) {
   const n = Math.max(1, Math.min(4, nCols | 0));
