@@ -13,6 +13,11 @@ import { kindMeta, fmtTime, fmtDur } from "./planLogic.js";
 
 const diamond = (size, color) => ({ width: size, height: size, flex: "none", transform: "rotate(45deg)", borderRadius: 1.5, background: color });
 
+// Time LEFT rounds up: with 20 seconds of the workout to go it is "1m left",
+// not "0m left" — a block that says it's over while it's still the current one
+// is the countdown contradicting itself.
+const leftLabel = (mins) => fmtDur(Math.ceil(mins - 1e-6));
+
 /** "6:15 AM" → ["6:15", "AM"], so the meridiem can step back a size. */
 export const splitTime = (mins) => {
   const s = fmtTime(mins);
@@ -34,7 +39,7 @@ export function PlanNow({ where, compact }) {
         <span className={compact ? "t-head" : "t-title2"} style={{ textWrap: "balance" }}>
           Starts at {fmtTime(next.startMin)} with {next.title}
         </span>
-        <span className="t-cap t-num" style={{ color: "var(--faint)" }}>in {fmtDur(minutesLeft)}</span>
+        <span className="t-cap t-num" style={{ color: "var(--faint)" }}>in {leftLabel(minutesLeft)}</span>
       </div>
     );
   }
@@ -51,7 +56,7 @@ export function PlanNow({ where, compact }) {
         </span>
       </div>
       <div style={{ display: "flex", alignItems: "baseline", gap: 10, minWidth: 0 }}>
-        <span aria-hidden style={{ ...diamond(compact ? 7 : 8, k.tone), alignSelf: "center" }} />
+        <span role="img" aria-label={k.label} style={{ ...diamond(compact ? 7 : 8, k.tone), alignSelf: "center" }} />
         <span className={compact ? "t-head" : "t-title2"} style={{ minWidth: 0, textWrap: "balance" }}>{current.title}</span>
       </div>
       {current.note && (
@@ -62,7 +67,7 @@ export function PlanNow({ where, compact }) {
       {current.protected && (
         // Words, not a padlock: "locked" would read as something the app is
         // enforcing, and nothing here can stop a laptop opening. It is a promise
-        // he wrote, said back at the moment he's deciding whether to keep it.
+        // you wrote, said back at the moment you're deciding whether to keep it.
         <span className="t-cap" style={{ color: "var(--ink)", display: "inline-flex", alignItems: "center", gap: 7 }}>
           <span aria-hidden style={diamond(6, k.tone)} />
           Protected — nothing gets scheduled over this.
@@ -73,7 +78,7 @@ export function PlanNow({ where, compact }) {
           {/* transform, not width — DESIGN.md §5 animates transforms only. */}
           <div style={{ height: "100%", width: "100%", borderRadius: 999, background: k.tone, transformOrigin: "left center", transform: `scaleX(${pct / 100})`, transition: "transform var(--dur-3) var(--ease-out)" }} />
         </div>
-        <span className="t-cap t-num" style={{ color: "var(--sub)", flex: "none" }}>{fmtDur(minutesLeft)} left</span>
+        <span className="t-cap t-num" style={{ color: "var(--sub)", flex: "none" }}>{leftLabel(minutesLeft)} left</span>
       </div>
       {next && (
         <div style={{ display: "flex", alignItems: "center", gap: 8, minWidth: 0, paddingTop: compact ? 2 : 4 }}>
@@ -81,7 +86,7 @@ export function PlanNow({ where, compact }) {
           <span className="t-cap t-num" style={{ color: "var(--sub)", flex: "none" }}>
             {next.tomorrow ? "tomorrow " : ""}{fmtTime(next.startMin)}
           </span>
-          <span aria-hidden style={diamond(5, kindMeta(next.kind).tone)} />
+          <span role="img" aria-label={kindMeta(next.kind).label} style={diamond(5, kindMeta(next.kind).tone)} />
           <span className="t-call" style={{ minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{next.title}</span>
         </div>
       )}

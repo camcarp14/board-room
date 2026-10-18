@@ -71,8 +71,8 @@ async function harness() {
   const L = await import("../src/features/plan/planLogic.js");
   const {
     PLAN_SETTING, DAY_TYPES, KINDS, kindMeta, parseHM, toHM, fmtTime, fmtDur, dayTypeOf, normalizePlan, planIsEmpty,
-    withSpans, whereAmI, workWindow, upsertBlock, removeBlock, upsertRule, removeRule, restoreRule, copyDay,
-    blockProblem, STARTER,
+    withSpans, whereAmI, workWindow, upsertBlock, removeBlock, upsertRule, removeRule, restoreRule, restoreBlock, copyDay,
+    blockProblem, firstWriteBase, STARTER,
   } = L;
 
   let failed = 0;
@@ -93,7 +93,10 @@ async function harness() {
   check("parseHM reads a 24-hour HH:MM", parseHM("06:30") === 390 && parseHM("00:00") === 0 && parseHM("23:59") === 1439);
   check("parseHM tolerates a one-digit hour and padding", parseHM("7:05") === 425 && parseHM(" 06:00 ") === 360);
   check("parseHM refuses what isn't a time",
-    [null, undefined, "", "24:00", "12:60", "7:5", "noon", 390, "06:30:00"].every((v) => parseHM(v) === null));
+    [null, undefined, "", "24:00", "12:60", "7:5", "noon", 390, "06:30:61x", "06:30:"].every((v) => parseHM(v) === null));
+  // A time input with a step under a minute reports seconds. Refusing that would
+  // print "Pick a start time." under a time that is plainly picked.
+  check("parseHM accepts seconds and drops them", parseHM("06:30:00") === 390 && parseHM("06:30:45.123") === 390);
   check("toHM is parseHM's inverse", ["00:00", "06:15", "12:00", "23:59"].every((s) => toHM(parseHM(s)) === s));
   check("toHM wraps past midnight", toHM(1440 + 30) === "00:30");
   check("fmtTime says AM and PM the American way",
@@ -106,7 +109,7 @@ async function harness() {
   // ══ 2. which template is today ══════════════════════════════════════════════
   check("Monday through Friday are weekdays", [12, 13, 14, 15, 16].every((d) => dayTypeOf(at(2026, 10, d, 12)) === "weekday"));
   check("Saturday and Sunday are the weekend", dayTypeOf(SAT(9)) === "weekend" && dayTypeOf(SUN(9)) === "weekend");
-  // 23:30 Friday in Chicago is 04:30 Saturday UTC. getUTCDay would hand him the
+  // 23:30 Friday in Chicago is 04:30 Saturday UTC. getUTCDay would hand over the
   // weekend plan a night early.
   check("Friday night is still a weekday (local day, not UTC)",
     dayTypeOf(new Date("2026-10-16T23:30:00-05:00")) === "weekday" && new Date("2026-10-16T23:30:00-05:00").getUTCDay() === 6);
@@ -198,6 +201,22 @@ async function harness() {
       w.current && Number.isFinite(w.minutesLeft) && w.minutesLeft > 0 && w.progress >= 0 && w.progress <= 1, JSON.stringify({ l: w.minutesLeft, p: w.progress }));
   }
 
+  // The night the clocks change. Which block you're in is read off the wall
+  // clock (that's what the plan was written in); how long is LEFT is real time.
+  // Wall-clock arithmetic said "7h 45m" on a night that was 8h 45m long.
+  {
+    const back = whereAmI(plan, at(2026, 10, 31, 23, 45)); // Sat, clocks go back at 2am
+    check("clocks going back: Saturday 11:45pm to Sunday 7:30 is 8h 45m, not 7h 45m",
+      back.current?.title === "Sleep" && Math.round(back.minutesLeft) === 525, String(back.minutesLeft));
+    const backCarry = whereAmI(plan, at(2026, 11, 1, 0, 30)); // 12:30 CDT, before the repeat hour
+    check("…and from 12:30am it is 8h, carried from the night before",
+      backCarry.current?.carried && Math.round(backCarry.minutesLeft) === 480, String(backCarry.minutesLeft));
+    const fwd = whereAmI(plan, at(2027, 3, 14, 1, 30)); // Sun, clocks go forward at 2am
+    check("clocks going forward: Sunday 1:30am to 7:30 is 5h, not 6h",
+      fwd.current?.title === "Sleep" && Math.round(fwd.minutesLeft) === 300, String(fwd.minutesLeft));
+    check("…and progress stays a fraction on both nights", [back, backCarry, fwd].every((w) => w.progress > 0 && w.progress < 1));
+  }
+
   // ══ 5. the work day ═════════════════════════════════════════════════════════
   const ww = workWindow(plan.weekday.blocks);
   check("the suggested weekday works 8:30 to 5:30", ww.start === 510 && ww.end === 1050 && !ww.open, JSON.stringify(ww));
@@ -231,6 +250,36 @@ async function harness() {
   check("copyDay makes the weekend a copy of the weekday", JSON.stringify(copied.weekend) === JSON.stringify(frozen.weekday));
   const tweaked = upsertBlock(copied, "weekend", { ...copied.weekend.blocks[0], title: "Sleep in" });
   check("…and editing the copy leaves the original alone", tweaked.weekday.blocks[0].title === frozen.weekday.blocks[0].title && tweaked.weekend.blocks[0].title === "Sleep in");
+
+  // The Undo after a delete is applied to the plan as it is when tapped, and is
+  // refused if another block has taken that minute in the meantime.
+  {
+    const lunch = frozen.weekday.blocks.find((b) => b.id === "wd-lunch");
+    const gone = removeBlock(frozen, "weekday", "wd-lunch");
+    const later = upsertBlock(gone, "weekday", { id: "nap", start: "15:00", title: "Walk", kind: "body" });
+    const r = restoreBlock(later, "weekday", lunch);
+    check("undo restores onto the CURRENT plan, keeping what was added since",
+      r.plan && r.plan.weekday.blocks.some((b) => b.id === "wd-lunch") && r.plan.weekday.blocks.some((b) => b.id === "nap"));
+    const taken = upsertBlock(gone, "weekday", { id: "call", start: "12:00", title: "Call", kind: "work" });
+    const clash = restoreBlock(taken, "weekday", lunch);
+    check("undo refuses to put a block on a minute something else now has", !clash.plan && /already starts at 12:00 PM/.test(clash.problem || ""), JSON.stringify(clash));
+    check("undo of a block that is still there changes nothing", restoreBlock(frozen, "weekday", lunch).plan.weekday.blocks.length === frozen.weekday.blocks.length);
+  }
+
+  // The first write onto an EMPTY plan builds on what the database has. Settings
+  // can be a stale {} (read before the two-factor step finished), and the first
+  // button an empty plan offers writes the whole document.
+  {
+    const saved = normalizePlan(STARTER);
+    const a = firstWriteBase({}, saved);
+    check("an empty plan on screen with a saved plan in the database builds on the saved one",
+      a.adopted === true && a.plan.weekday.blocks.length === saved.weekday.blocks.length);
+    const b = firstWriteBase(null, null);
+    check("empty on both sides is genuinely empty", b.adopted === false && planIsEmpty(b.plan));
+    const c = firstWriteBase(saved, {});
+    check("a plan already on screen is what gets built on — no adopting", c.adopted === false && c.plan.weekday.blocks.length === saved.weekday.blocks.length);
+    check("a junk database value is not adopted", firstWriteBase({}, "junk").adopted === false);
+  }
 
   // ══ 7. the editor's refusals ════════════════════════════════════════════════
   const day = frozen.weekday;
@@ -275,7 +324,27 @@ async function harness() {
   // has to re-read the time when the app comes back, or the Brief shows last
   // night's block at 7am.
   check("the plan clock re-reads the time on return to the foreground",
-    /visibilitychange/.test(clock) && /pageshow/.test(clock) && /setInterval/.test(clock));
+    /visibilitychange/.test(clock) && /pageshow/.test(clock)
+    && /const onShow = \(\) => \{ if \(document\.visibilityState !== "hidden"\) \{ tick\(\); arm\(\); \} \};/.test(clock));
+  // Blocks start on the minute; an unaligned 30-second tick showed the old block
+  // for up to half a minute after the new one began.
+  check("…and wakes on the minute, not every 30 seconds from whenever",
+    /setTimeout\(\(\) => \{ tick\(\); arm\(\); \}, 60000 - \(Date\.now\(\) % 60000\) \+ 50\)/.test(clock)
+    && !/setInterval/.test(clock.replace(/\/\/[^\n]*/g, "")));
+  // The component wiring the pure functions above can't reach. Source checks,
+  // like section 9's others — each one is a bug a fresh review found by driving
+  // the page in a browser, pinned so it can't come back quietly.
+  const page = readFileSync("src/pages/plan/PlanPage.jsx", "utf8");
+  check("each new day opens on that day's template (the choice lasts until midnight)",
+    /const dayKey = localDayKey\(now\);/.test(page) && /useEffect\(\(\) => \{ setType\(todayType\); \}, \[dayKey\]\);/.test(page) && !/chose\.current/.test(page));
+  check("a form saves into the template it was opened on, not whatever `type` is by then",
+    /const \{ isNew, type: t, \.\.\.block \} = blockForm;/.test(page) && /save\(upsertRule\(res\.plan, ruleForm\.type,/.test(page));
+  check("block and guardrail undo build on the plan as it is when tapped",
+    /restoreBlock\(planRef\.current, t, gone\)/.test(page) && /restoreRule\(planRef\.current, t, gone, at\)/.test(page));
+  check("the starter, a first block and a first guardrail all go through the database check",
+    (page.match(/await baseForWrite\(\)/g) || []).length === 3 && /readRemote\(\)/.test(page) && /db\.loadSetting\(PLAN_SETTING\)/.test(page));
+  check("copying a template reads the plan after the confirm, not before it",
+    /if \(!ok\) return;[\s\S]{0,200}const cur = planRef\.current;/.test(page));
 
   // ══ 10. what the screen claims, rendered ════════════════════════════════════
   // Frozen at Monday 7:05 Central, mid-workout in the suggested day.
@@ -295,12 +364,13 @@ async function harness() {
   const updateSetting = (k, v) => { writes.push([k, v]); return Promise.resolve({ ok: true }); };
   const text = (html) => html.replace(/<!--.*?-->/g, "").replace(/<[^>]+>/g, " ").replace(/&#x27;/g, "'").replace(/&quot;/g, '"').replace(/&amp;/g, "&").replace(/\s+/g, " ");
   const render = (el) => { try { return { html: renderToString(el), err: null }; } catch (e) { return { html: "", err: e }; } };
-  const page = (settings) => render(React.createElement(PlanPage, { isMobile: true, settings, updateSetting }));
+  const readRemote = () => Promise.resolve(null);
+  const pageEl = (settings) => render(React.createElement(PlanPage, { isMobile: true, settings, updateSetting, readRemote }));
   const tile = (settings) => render(React.createElement(PlanTile, { isMobile: true, settings, collapsed: false, onToggle: () => {}, onOpenPlan: () => {} }));
 
   // settings not loaded
   {
-    const p = page(null), t = tile(null);
+    const p = pageEl(null), t = tile(null);
     check("PlanPage renders before settings load", !p.err, p.err?.message);
     check("…and says it is waiting, offering nothing to press", /Waiting for your saved plan/.test(text(p.html)) && !/suggested day|Start blank|Add a block/.test(text(p.html)));
     check("PlanTile renders before settings load", !t.err, t.err?.message);
@@ -308,16 +378,16 @@ async function harness() {
   }
   // loaded, no plan
   {
-    const p = page({}), t = tile({});
+    const p = pageEl({}), t = tile({});
     check("an empty plan renders the first run", !p.err && /Start from a suggested day/.test(text(p.html)) && /Start blank/.test(text(p.html)), p.err?.message);
     check("the Brief card says there's no weekday plan and offers to set one", !t.err && /No weekday plan yet/.test(text(t.html)) && /Set the plan/.test(text(t.html)), t.err?.message);
-    const junk = page({ [PLAN_SETTING]: "garbage" }), junkTile = tile({ [PLAN_SETTING]: { weekday: { blocks: "nope" } } });
+    const junk = pageEl({ [PLAN_SETTING]: "garbage" }), junkTile = tile({ [PLAN_SETTING]: { weekday: { blocks: "nope" } } });
     check("a junk daily_plan renders the first run instead of throwing", !junk.err && /Start from a suggested day/.test(text(junk.html)) && !junkTile.err, junk.err?.message || junkTile.err?.message);
   }
   // loaded, the suggested day, Monday 7:05
   {
     const settings = { [PLAN_SETTING]: STARTER };
-    const p = page(settings), t = tile(settings);
+    const p = pageEl(settings), t = tile(settings);
     const pt = text(p.html), tt = text(t.html);
     check("PlanPage renders the plan", !p.err, p.err?.message);
     check("…opens on weekdays, marked Today", /Weekdays Today/.test(pt), pt.slice(0, 200));

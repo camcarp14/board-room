@@ -23,10 +23,12 @@ export const NAV = [
   // and that bar turned out to be the wrong one. With equal columns, "Markets"
   // and "Finances" sat 0.5px apart at 375pt and the screenshot read
   // "MarketsFinances". So a bar of nine also gets `.dock-crowded` (MobileShell,
-  // components.css): 3px inside each tab, which puts a 6px floor under every gap
-  // between labels at all three widths, still 0 clipped, at the cost of columns
-  // that vary from 36.7 to 50.5px at 375pt. Hide a tab in Settings → Tabs and the
-  // bar goes back to even columns. A tenth has no room left to find.
+  // components.css): padding inside each tab, bounded by the viewport so the bar
+  // can never be wider than the screen (a flat 3px pushed the last tab off a
+  // 320pt phone entirely). At 375pt and up every gap between labels is ≥6px; at
+  // 320pt the bar fits exactly with ~1px gaps, which is where eight tabs already
+  // were there. Columns vary (36.7–50.5px at 375pt). Hide a tab in Settings →
+  // Tabs and the bar goes back to even columns. A tenth has no room left to find.
   //
   // Second because it is a morning surface like the Brief: the Brief is what the
   // day holds, the Plan is how it's meant to go. It is also the tab that matters

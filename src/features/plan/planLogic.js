@@ -68,9 +68,12 @@ export const MAX_RULE = 200;
 
 /** "06:30" → 390. Anything that is not a real HH:MM on a 24-hour clock is null:
  *  a block with no valid start has nowhere to sit in the day, and guessing one
- *  would put it somewhere he never wrote. */
+ *  would put it somewhere nobody wrote. Seconds are accepted and dropped —
+ *  an <input type="time"> with a step under 60 hands back "06:30:00", and
+ *  refusing that would print "Pick a start time." under a time that is
+ *  plainly picked. */
 export function parseHM(s) {
-  const m = typeof s === "string" ? /^(\d{1,2}):(\d{2})$/.exec(s.trim()) : null;
+  const m = typeof s === "string" ? /^(\d{1,2}):(\d{2})(?::\d{2}(?:\.\d+)?)?$/.exec(s.trim()) : null;
   if (!m) return null;
   const h = Number(m[1]), min = Number(m[2]);
   if (h > 23 || min > 59) return null;
@@ -102,6 +105,14 @@ export function fmtDur(mins) {
 }
 
 const minuteOfDay = (d) => d.getHours() * 60 + d.getMinutes() + d.getSeconds() / 60;
+
+// The instant a minute-of-day lands on, counted from `date`'s local midnight —
+// past 1440 is tomorrow, below 0 is yesterday. Built by the Date constructor in
+// LOCAL time, so the night the clocks change comes out right: "Sleep until
+// 7:30" on the night the clocks go back is eight and a half hours, not seven and
+// a half. Which block you're in is still read off the wall clock, because that
+// is what the plan was written in; only durations go through here.
+const instantAt = (date, mins) => new Date(date.getFullYear(), date.getMonth(), date.getDate(), 0, mins).getTime();
 
 // ─── the stored document, read tolerantly ─────────────────────────────────────
 
@@ -229,13 +240,20 @@ export function whereAmI(plan, date = new Date()) {
   const firstToday = parseHM(today[0].start);
   const spans = withSpans(today, tomorrow.length ? parseHM(tomorrow[0].start) : null);
 
+  const t = date.getTime();
+  const left = (endMin) => (instantAt(date, endMin) - t) / 60000;
+  const share = (startMin, endMin) => {
+    const a = instantAt(date, startMin), b = instantAt(date, endMin);
+    return b > a ? Math.min(1, Math.max(0, (t - a) / (b - a))) : 1;
+  };
+
   if (now < firstToday) {
     const next = spans[0];
-    if (!yesterday.length) return { ...empty, next, minutesLeft: firstToday - now };
+    if (!yesterday.length) return { ...empty, next, minutesLeft: left(firstToday) };
     const last = yesterday[yesterday.length - 1];
     const startMin = parseHM(last.start) - 1440; // it began yesterday
     const current = { ...last, startMin, endMin: firstToday, minutes: firstToday - startMin, carried: true };
-    return { type, current, next, minutesLeft: firstToday - now, progress: (now - startMin) / (firstToday - startMin) };
+    return { type, current, next, minutesLeft: left(firstToday), progress: share(startMin, firstToday) };
   }
 
   let idx = 0;
@@ -246,11 +264,10 @@ export function whereAmI(plan, date = new Date()) {
     const t = withSpans(tomorrow)[0];
     next = { ...t, startMin: t.startMin + 1440, tomorrow: true };
   }
-  const span = current.endMin - current.startMin;
   return {
     type, current, next,
-    minutesLeft: current.endMin - now,
-    progress: span > 0 ? Math.min(1, Math.max(0, (now - current.startMin) / span)) : 1,
+    minutesLeft: left(current.endMin),
+    progress: share(current.startMin, current.endMin),
   };
 }
 
@@ -317,6 +334,37 @@ export const copyDay = (plan, from, to) => {
   const p = normalizePlan(plan);
   return { ...p, [to]: { blocks: p[from].blocks.map((b) => ({ ...b })), rules: p[from].rules.map((r) => ({ ...r })) } };
 };
+
+/**
+ * Put a deleted block back — the Undo. Applied to the plan as it is NOW (the
+ * caller passes the current one, not the copy from when the toast went up), and
+ * refused if another block has taken its minute since: restoring it anyway
+ * would leave two blocks at one time, one of them zero minutes long, which is
+ * exactly what the editor refuses. Returns { plan } or { problem }.
+ */
+export function restoreBlock(plan, type, block) {
+  const p = normalizePlan(plan);
+  if (p[type].blocks.some((b) => b.id === block?.id)) return { plan: p };
+  const problem = blockProblem(p[type], block);
+  return problem ? { problem } : { plan: upsertBlock(p, type, block) };
+}
+
+/**
+ * What the first write onto an EMPTY plan should be built on.
+ *
+ * An empty plan on screen is not proof there is no plan. Settings can be a
+ * stale `{}` — read before the two-factor step finished, when the row-level
+ * policy hides every row — and the first thing an empty plan offers is a
+ * one-tap "start from a suggested day" that writes the whole document. So
+ * before that write, the caller re-reads the row (db.loadSetting) and hands it
+ * here: if the database has a plan, that is what gets built on (and painted),
+ * and the starter never lands on top of it.
+ */
+export function firstWriteBase(local, remote) {
+  if (!planIsEmpty(local)) return { plan: normalizePlan(local), adopted: false };
+  if (!planIsEmpty(remote)) return { plan: normalizePlan(remote), adopted: true };
+  return { plan: normalizePlan(local), adopted: false };
+}
 
 /**
  * Why a block can't be saved, or null. Checked in the editor before the write so

@@ -6,7 +6,7 @@
 // breaks here first.
 import {
   activeLayout, layoutColumnCount, defaultColumnCount,
-  dealExplicit, explicitFlatOrder, addLayout, removeLayout, moveCard, setLayoutColumns,
+  dealExplicit, explicitFlatOrder, addLayout, removeLayout, moveCard, moveDealtCard, setLayoutColumns,
 } from "../src/lib/brief-layouts.js";
 
 let failed = 0;
@@ -75,6 +75,27 @@ check("an impossible move is a no-op (same object)", moveCard(MAC, "minicalendar
 check("moving an unknown card is a no-op", moveCard(MAC, "ghost", "left") === MAC);
 const movedDown = moveCard(MAC, "minicalendar", "down");
 check("down swaps within the column", movedDown.columnLayout[0].join(",") === "markets,minicalendar");
+
+// A card the profile has never placed (one a release added after it was saved)
+// is drawn at the end of the shortest column, and its arrows have to work.
+// moveCard alone returned the profile unchanged for it, so every arrow in the
+// layout sheet was dead on exactly the card that most needed moving.
+{
+  const withNew = [...CARDS, { id: "fresh", w: 1 }];
+  const dealt = dealExplicit(withNew, MAC, 3);
+  const col = dealt.findIndex((c) => c.some((x) => x.id === "fresh"));
+  check("an unplaced card is drawn somewhere", col !== -1);
+  const up = moveDealtCard(MAC, dealt, "fresh", "up");
+  check("…and 'up' on it actually moves it",
+    up !== MAC && up.columnLayout[col].indexOf("fresh") === up.columnLayout[col].length - 2, JSON.stringify(up.columnLayout));
+  check("…without dropping or duplicating any authored card",
+    up.columnLayout.flat().filter((id) => id !== "fresh").sort().join(",") === MAC.columnLayout.flat().sort().join(","));
+  const left = moveDealtCard(MAC, dealt, "fresh", col > 0 ? "left" : "right");
+  check("…and it can change columns", left.columnLayout.findIndex((c) => c.includes("fresh")) !== col);
+  check("a placed card still moves exactly as moveCard moves it",
+    JSON.stringify(moveDealtCard(MAC, dealt, "minicalendar", "down")) === JSON.stringify(moveCard(MAC, "minicalendar", "down")));
+  check("a card that isn't drawn at all is a no-op", moveDealtCard(MAC, dealt, "ghost", "up") === MAC);
+}
 
 const shrunk = setLayoutColumns(MAC, 2);
 check("shrinking folds the tail column in, losing nothing",

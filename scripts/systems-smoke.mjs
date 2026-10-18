@@ -109,18 +109,22 @@ check("every tab has a route", navKeys.every(k => new RegExp(`case "${k}":`).tes
 //
 // Zero clipped at all three, which is the bar Guitar was held to — and not
 // enough: with equal columns "Markets" and "Finances" were 0.5px apart at 375pt
-// and rendered as one word. A bar of nine therefore carries .dock-crowded, 3px
-// inside each tab, which measured a 6px minimum gap between every pair of labels
-// at 320, 375 and 390pt with nothing clipped. Both halves are pinned below: the
-// class has to be set from the count, and the rule has to exist, or the bar
-// silently goes back to words running together. There is no room for a tenth.
+// and rendered as one word. A bar of nine therefore carries .dock-crowded:
+// padding inside each tab, which keeps ≥6px between every pair of labels from
+// 375pt up. The padding MUST be bounded by the viewport — a flat 3px made the
+// nine minimums 356px and pushed the last tab off a 320pt screen, which a
+// "nothing clipped" measurement cannot see. All three halves are pinned below:
+// the class is set from the count, the rule exists, and it is clamped to the
+// viewport rather than a fixed width. There is no room for a tenth.
 check("the tab bar stays at nine or fewer", navKeys.length <= 9, String(navKeys.length));
 {
   const shell = readFileSync("src/shell/MobileShell.jsx", "utf8");
   const css = readFileSync("src/design/components.css", "utf8");
   check("a bar of nine or more is marked crowded", /className=\{`dock\$\{nav\.length > 8 \? " dock-crowded" : ""\}`\}/.test(shell));
-  check("…and a crowded bar keeps a gap between its labels",
-    /\.dock\.dock-crowded \.dock-tab \{ padding-left: 3px; padding-right: 3px; \}/.test(css));
+  const crowded = css.match(/\.dock\.dock-crowded \.dock-tab \{([^}]*)\}/)?.[1] || "";
+  check("…and a crowded bar keeps a gap between its labels", /padding-left:/.test(crowded) && /padding-right:/.test(crowded), crowded);
+  check("…bounded by the viewport, so nine tabs never outgrow a 320pt screen",
+    ["left", "right"].every((side) => new RegExp(`padding-${side}: clamp\\(0px, calc\\(\\(100vw - 312px\\) / 18\\), 3px\\);`).test(crowded)), crowded);
 }
 // Dreams is a sub-tab of Creed now. Both halves matter: it must not be a nav
 // destination, and the page must actually mount it — a half-fold leaves a

@@ -15,12 +15,14 @@
 // a second error surface invented here.
 import { useMemo, useRef, useState, useEffect } from "react";
 import { Card, SectionHeader, CellGroup, Cell, Button, Segmented, Field, TextArea, SwitchRow, Sheet, useConfirm, closeSheet } from "../../ui/kit.jsx";
-import { usePlanClock } from "../../features/plan/usePlanClock.js";
+import { db } from "../../data/db.js";
+import { localDayKey } from "../../lib/dates.js";
+import { usePlanClock, useTakingLong } from "../../features/plan/usePlanClock.js";
 import { PlanNow, splitTime } from "../../features/plan/PlanNow.jsx";
 import {
   PLAN_SETTING, DAY_TYPES, KINDS, kindMeta, normalizePlan, planIsEmpty, dayTypeOf, whereAmI, workWindow,
-  withSpans, upsertBlock, removeBlock, upsertRule, removeRule, restoreRule, copyDay, blockProblem,
-  parseHM, toHM, fmtTime, fmtDur, STARTER, MAX_TITLE, MAX_NOTE, MAX_RULE,
+  withSpans, upsertBlock, removeBlock, upsertRule, removeRule, restoreRule, restoreBlock, copyDay, blockProblem,
+  firstWriteBase, parseHM, toHM, fmtTime, fmtDur, STARTER, MAX_TITLE, MAX_NOTE, MAX_RULE,
 } from "../../features/plan/planLogic.js";
 
 // A full-width row button that wears the kit's .cell anatomy (same as Creed's).
@@ -30,7 +32,13 @@ const newId = () => (typeof crypto !== "undefined" && crypto.randomUUID ? crypto
 const otherType = (t) => (t === "weekday" ? "weekend" : "weekday");
 const typeMeta = (t) => DAY_TYPES.find((d) => d.key === t);
 
-export function PlanPage({ isMobile, settings, updateSetting }) {
+// The database's own copy of the plan, read fresh — db.loadSetting, never the
+// settings map. A prop only so the render smoke and the design harness can hand
+// in an answer without a network.
+const readSavedPlan = () => db.loadSetting(PLAN_SETTING);
+const CHECK_FAILED = "Couldn't reach your saved plan to make sure there isn't one already, so nothing was saved. Check the connection and try again.";
+
+export function PlanPage({ isMobile, settings, updateSetting, readRemote = readSavedPlan }) {
   const loaded = settings != null;
   const stored = settings?.[PLAN_SETTING];
   const plan = useMemo(() => normalizePlan(stored), [stored]);
@@ -43,10 +51,14 @@ export function PlanPage({ isMobile, settings, updateSetting }) {
   const now = usePlanClock();
   const todayType = dayTypeOf(now);
   const [type, setType] = useState(todayType);
-  // Follow the day across midnight Friday→Saturday while the tab sits open, but
-  // only if he hasn't chosen to look at the other template himself.
-  const chose = useRef(false);
-  useEffect(() => { if (!chose.current) setType(todayType); }, [todayType]);
+  // EVERY NEW DAY OPENS ON THAT DAY'S TEMPLATE. Looking at the weekend plan on a
+  // Wednesday evening used to leave the tab on it into Thursday morning — no Now
+  // card, on the morning that needed one — because "I chose this" outlived the
+  // day it was chosen on. The choice now lasts until midnight. The clock re-reads
+  // on every return to the foreground, so a resume after midnight counts too.
+  const dayKey = localDayKey(now);
+  useEffect(() => { setType(todayType); }, [dayKey]); // eslint-disable-line react-hooks/exhaustive-deps
+  const slow = useTakingLong(!loaded);
 
   const day = plan[type];
   const isToday = type === todayType;
@@ -55,8 +67,12 @@ export function PlanPage({ isMobile, settings, updateSetting }) {
   const spans = useMemo(() => withSpans(day.blocks), [day]);
   const currentId = isToday && where.current && !where.current.carried ? where.current.id : null;
 
-  const [blockForm, setBlockForm] = useState(null); // { id, start, title, note, kind, protected, isNew }
-  const [ruleForm, setRuleForm] = useState(null);   // { id, text, isNew }
+  // Each form carries the template it was opened on. `type` follows the day, so
+  // a sheet still open at midnight on a Friday would otherwise save a weekday
+  // block into the weekend plan.
+  const [blockForm, setBlockForm] = useState(null); // { type, id, start, title, note, kind, protected, isNew }
+  const [ruleForm, setRuleForm] = useState(null);   // { type, id, text, isNew }
+  const [checking, setChecking] = useState(false);
   const [formErr, setFormErr] = useState(null);
   const blockClose = useRef(null);
   const ruleClose = useRef(null);
@@ -66,7 +82,7 @@ export function PlanPage({ isMobile, settings, updateSetting }) {
   // Deletes are one tap with an Undo after, not a confirm before: a block is a
   // line in a template, cheap to put back, and a confirm on every removal is a
   // tax on the one session where you're reshaping the whole day.
-  const [toast, setToast] = useState(null); // { label, undo }
+  const [toast, setToast] = useState(null); // { label, undo? }
   const toastTimer = useRef(null);
   const showToast = (t) => { clearTimeout(toastTimer.current); setToast(t); toastTimer.current = setTimeout(() => setToast(null), 6000); };
   useEffect(() => () => clearTimeout(toastTimer.current), []);
@@ -74,7 +90,28 @@ export function PlanPage({ isMobile, settings, updateSetting }) {
 
   const save = (next) => updateSetting(PLAN_SETTING, next);
 
-  const pickType = (t) => { chose.current = t !== todayType; setType(t); };
+  const pickType = setType;
+
+  // ─── the first write onto an empty plan ───
+  // An empty plan on screen is not proof there is no plan: settings can be a
+  // stale {} read before the two-factor step finished, and every write here
+  // replaces the whole document. So a write onto an EMPTY plan re-reads the row
+  // first and builds on what the database has (planLogic's firstWriteBase). If
+  // that read fails, nothing is written — "empty" is the one guess that can
+  // destroy a plan. A plan that is already on screen skips the read: from there
+  // it is the ordinary last-write-wins every whole-value setting has.
+  const baseForWrite = async () => {
+    if (!planIsEmpty(stored)) return { plan: planRef.current, adopted: false };
+    setChecking(true);
+    try {
+      return firstWriteBase(stored, await readRemote());
+    } catch {
+      return null;
+    } finally {
+      setChecking(false);
+    }
+  };
+  const adoptedNote = () => showToast({ label: "Your saved plan was already there — it's loaded now" });
 
   // ─── blocks ───
   const openNewBlock = () => {
@@ -83,51 +120,79 @@ export function PlanPage({ isMobile, settings, updateSetting }) {
     // one usually goes when a day is being written top to bottom.
     const last = day.blocks[day.blocks.length - 1];
     const guess = last ? parseHM(last.start) + 60 : 7 * 60;
-    setBlockForm({ id: newId(), start: guess < 1440 ? toHM(guess) : "", title: "", note: "", kind: "work", protected: false, isNew: true });
+    setBlockForm({ type, id: newId(), start: guess < 1440 ? toHM(guess) : "", title: "", note: "", kind: "work", protected: false, isNew: true });
   };
-  const openBlock = (b) => { setFormErr(null); setBlockForm({ ...b, isNew: false }); };
-  const saveBlock = () => {
-    const problem = blockProblem(day, blockForm);
+  const openBlock = (b) => {
+    setFormErr(null);
+    setBlockForm({ type, id: b.id, start: b.start, title: b.title, note: b.note, kind: b.kind, protected: b.protected, isNew: false });
+  };
+  const saveBlock = async () => {
+    const { isNew, type: t, ...block } = blockForm;
+    const problem = blockProblem(planRef.current[t], block);
     if (problem) { setFormErr(problem); return; }
-    const { isNew, ...block } = blockForm;
-    save(upsertBlock(plan, type, block));
+    const res = await baseForWrite();
+    if (!res) { setFormErr(CHECK_FAILED); return; }
+    // The plan it lands in may be one the database just handed back.
+    const clash = blockProblem(res.plan[t], block);
+    if (clash) { setFormErr(clash); return; }
+    save(upsertBlock(res.plan, t, block));
     closeSheet(blockClose, () => setBlockForm(null));
+    if (res.adopted) adoptedNote();
   };
   const deleteBlock = () => {
-    const gone = day.blocks.find((b) => b.id === blockForm.id);
-    const t = type;
-    save(removeBlock(plan, t, blockForm.id));
+    const t = blockForm.type;
+    const gone = planRef.current[t].blocks.find((b) => b.id === blockForm.id);
+    save(removeBlock(planRef.current, t, blockForm.id));
     closeSheet(blockClose, () => setBlockForm(null));
-    if (gone) showToast({ label: `${gone.title} removed`, undo: () => save(upsertBlock(planRef.current, t, gone)) });
+    if (gone) showToast({
+      label: `${gone.title} removed`,
+      // Against the plan as it is when Undo is tapped, and refused if another
+      // block has taken that minute since (planLogic's restoreBlock).
+      undo: () => {
+        const r = restoreBlock(planRef.current, t, gone);
+        if (r.problem) showToast({ label: `Couldn't put ${gone.title} back — ${r.problem}` });
+        else save(r.plan);
+      },
+    });
   };
 
   // ─── guardrails ───
-  const openNewRule = () => { setFormErr(null); setRuleForm({ id: newId(), text: "", isNew: true }); };
-  const openRule = (r) => { setFormErr(null); setRuleForm({ ...r, isNew: false }); };
-  const saveRule = () => {
+  const openNewRule = () => { setFormErr(null); setRuleForm({ type, id: newId(), text: "", isNew: true }); };
+  const openRule = (r) => { setFormErr(null); setRuleForm({ type, id: r.id, text: r.text, isNew: false }); };
+  const saveRule = async () => {
     if (!ruleForm.text.trim()) { setFormErr("Write the line first."); return; }
-    save(upsertRule(plan, type, { id: ruleForm.id, text: ruleForm.text }));
+    const res = await baseForWrite();
+    if (!res) { setFormErr(CHECK_FAILED); return; }
+    save(upsertRule(res.plan, ruleForm.type, { id: ruleForm.id, text: ruleForm.text }));
     closeSheet(ruleClose, () => setRuleForm(null));
+    if (res.adopted) adoptedNote();
   };
   const deleteRule = () => {
-    const at = day.rules.findIndex((r) => r.id === ruleForm.id);
-    const gone = day.rules[at];
-    const t = type;
-    save(removeRule(plan, t, ruleForm.id));
+    const t = ruleForm.type;
+    const at = planRef.current[t].rules.findIndex((r) => r.id === ruleForm.id);
+    const gone = planRef.current[t].rules[at];
+    save(removeRule(planRef.current, t, ruleForm.id));
     closeSheet(ruleClose, () => setRuleForm(null));
     if (gone) showToast({ label: "Guardrail removed", undo: () => save(restoreRule(planRef.current, t, gone, at)) });
   };
 
   // ─── whole templates ───
-  const adoptStarter = () => {
-    // Only ever offered on an empty plan, but the check is here too: a second
-    // device could have saved one since this screen loaded, and the starter must
-    // never land on top of a plan he wrote.
-    if (!planIsEmpty(plan)) return;
+  const adoptStarter = async () => {
+    // Only ever offered on an empty plan — and an empty plan is re-read from the
+    // database first, so the starter can never land on top of a plan already written
+    // that this screen just hasn't been shown yet.
+    const res = await baseForWrite();
+    if (!res) { showToast({ label: CHECK_FAILED }); return; }
+    if (!planIsEmpty(res.plan)) {
+      // There was one. Writing it back unchanged is what paints it here.
+      if (res.adopted) { save(res.plan); adoptedNote(); }
+      return;
+    }
     save(normalizePlan(STARTER));
   };
   const copyFromOther = async () => {
-    const from = otherType(type);
+    const t = type;
+    const from = otherType(t);
     if (day.blocks.length || day.rules.length) {
       const ok = await confirm({
         title: `Replace your ${typeMeta(type).label.toLowerCase()} plan?`,
@@ -136,9 +201,12 @@ export function PlanPage({ isMobile, settings, updateSetting }) {
       });
       if (!ok) return;
     }
-    const before = planRef.current[type];
-    save(copyDay(plan, from, type));
-    showToast({ label: `Copied ${typeMeta(from).label.toLowerCase()}`, undo: () => save({ ...planRef.current, [type]: before }) });
+    // Read after the confirm, not before it: the dialog can sit open while
+    // something else saves.
+    const cur = planRef.current;
+    const before = cur[t];
+    save(copyDay(cur, from, t));
+    showToast({ label: `Copied ${typeMeta(from).label.toLowerCase()}`, undo: () => save({ ...planRef.current, [t]: before }) });
   };
 
   const segOptions = DAY_TYPES.map((d) => ({ key: d.key, label: d.label, sub: d.key === todayType ? "Today" : d.days }));
@@ -155,8 +223,10 @@ export function PlanPage({ isMobile, settings, updateSetting }) {
           <div className="sk" style={{ height: 44, borderRadius: 10 }} />
           <div className="sk sk-card" style={{ height: 150 }} />
           <div className="sk sk-card" style={{ height: 220 }} />
-          <span className="t-cap" style={{ color: "var(--faint)", padding: "0 4px" }}>
-            Waiting for your saved plan. Editing opens once it has loaded.
+          <span className="t-cap" style={{ color: "var(--faint)", padding: "0 4px", lineHeight: 1.5 }}>
+            {slow
+              ? "Your saved settings haven't loaded, so there's no plan to show or edit yet. Pull down to refresh."
+              : "Waiting for your saved plan. Editing opens once it has loaded."}
           </span>
         </div>
       </div>
@@ -170,7 +240,7 @@ export function PlanPage({ isMobile, settings, updateSetting }) {
     <div style={{ display: "flex", flexDirection: "column", flex: 1, padding: isMobile ? "4px 0 24px" : "6px 0 40px" }}>
       <div style={wrap}>
         {empty ? (
-          <FirstRun onStarter={adoptStarter} onBlank={() => { pickType(todayType); openNewBlock(); }} />
+          <FirstRun busy={checking} onStarter={adoptStarter} onBlank={() => { pickType(todayType); openNewBlock(); }} />
         ) : (
           <>
             <Segmented options={segOptions} value={type} onChange={pickType} style={{ flex: "none" }} />
@@ -248,12 +318,12 @@ export function PlanPage({ isMobile, settings, updateSetting }) {
                         return (
                           <button key={b.id} className="cell tappable" onClick={() => openBlock(b)}
                             aria-current={isNow ? "time" : undefined}
-                            style={{ ...rowBtn, background: isNow ? "var(--accent-a08)" : undefined }}>
+                            style={{ ...rowBtn, background: isNow ? "var(--ink-a04)" : undefined }}>
                             <span className="t-num" style={{ width: 62, flex: "none", display: "inline-flex", alignItems: "baseline", gap: 3 }}>
                               <span style={{ fontSize: 15, fontWeight: 600, color: "var(--ink)" }}>{hm}</span>
                               <span style={{ fontSize: 10.5, fontWeight: 600, color: "var(--faint)" }}>{mer}</span>
                             </span>
-                            <span aria-hidden style={diamond(7, k.tone)} />
+                            <span role="img" aria-label={k.label} style={diamond(7, k.tone)} />
                             <span className="cell-body">
                               {/* Two lines before an ellipsis — a block's name is the thing
                                   you read, and "Hard stop — laptop c…" hides the half that matters. */}
@@ -266,7 +336,9 @@ export function PlanPage({ isMobile, settings, updateSetting }) {
                       })}
                     </CellGroup>
                   </div>
-                  <Button kind="tinted" size="md" full onClick={openNewBlock}>Add a block</Button>
+                  {/* Quiet, not tinted: DESIGN.md §1.4 allows gold three times a
+                      screen, and the tab, the live dot and "Add" already have it. */}
+                  <Button kind="quiet" size="md" full onClick={openNewBlock}>Add a block</Button>
                   {otherHas && (
                     // Sub-toned, not gold: it is a rare, whole-template action, and
                     // DESIGN.md §1.4 keeps the accent for the active and the primary.
@@ -290,14 +362,16 @@ export function PlanPage({ isMobile, settings, updateSetting }) {
           footer={
             <>
               {!blockForm.isNew && <Button kind="danger" size="lg" onClick={deleteBlock}>Delete</Button>}
-              <Button kind="primary" size="lg" onClick={saveBlock} style={{ flex: 1 }}>{blockForm.isNew ? "Add it" : "Save"}</Button>
+              <Button kind="primary" size="lg" disabled={checking} onClick={saveBlock} style={{ flex: 1 }}>{checking ? "Checking…" : blockForm.isNew ? "Add it" : "Save"}</Button>
             </>
           }>
           <div style={{ display: "flex", flexDirection: "column", gap: 12, paddingTop: 4 }}>
             <span className="t-cap" style={{ color: "var(--faint)" }}>
-              {typeMeta(type).label} · runs until the next block starts
+              {typeMeta(blockForm.type).label} · runs until the next block starts
             </span>
-            <div style={{ display: "flex", gap: 10, alignItems: "stretch" }}>
+            {/* Wraps on a 320pt phone, where the name beside a 150px time field
+                was left showing "Hard stop —". */}
+            <div style={{ display: "flex", gap: 10, alignItems: "stretch", flexWrap: "wrap" }}>
               <Field type="time" value={blockForm.start} aria-label="Starts at"
                 onChange={(e) => setBlockForm((f) => ({ ...f, start: e.target.value }))}
                 style={{ width: 150, flex: "none" }} />
@@ -305,7 +379,7 @@ export function PlanPage({ isMobile, settings, updateSetting }) {
                 autoFocus={blockForm.isNew}
                 onChange={(e) => setBlockForm((f) => ({ ...f, title: e.target.value }))}
                 onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); saveBlock(); } }}
-                style={{ flex: 1, minWidth: 0 }} />
+                style={{ flex: "1 1 150px", minWidth: 0 }} />
             </div>
             <Segmented options={KINDS.map((k) => ({ key: k.key, label: k.label }))} value={blockForm.kind}
               onChange={(kind) => setBlockForm((f) => ({ ...f, kind }))} />
@@ -314,7 +388,7 @@ export function PlanPage({ isMobile, settings, updateSetting }) {
               onChange={(e) => setBlockForm((f) => ({ ...f, note: e.target.value }))}
               style={{ lineHeight: 1.5, resize: "vertical" }} />
             <CellGroup style={{ boxShadow: "none", background: "var(--surface-2)" }}>
-              <SwitchRow title="Protected" sub="Non-negotiable — the Brief says so"
+              <SwitchRow title="Protected" sub="Non-negotiable"
                 on={blockForm.protected} onToggle={() => setBlockForm((f) => ({ ...f, protected: !f.protected }))} />
             </CellGroup>
             {formErr && <div className="t-foot" style={{ color: "var(--red)" }}>{formErr}</div>}
@@ -328,12 +402,12 @@ export function PlanPage({ isMobile, settings, updateSetting }) {
           footer={
             <>
               {!ruleForm.isNew && <Button kind="danger" size="lg" onClick={deleteRule}>Delete</Button>}
-              <Button kind="primary" size="lg" onClick={saveRule} style={{ flex: 1 }}>{ruleForm.isNew ? "Add it" : "Save"}</Button>
+              <Button kind="primary" size="lg" disabled={checking} onClick={saveRule} style={{ flex: 1 }}>{checking ? "Checking…" : ruleForm.isNew ? "Add it" : "Save"}</Button>
             </>
           }>
           <div style={{ display: "flex", flexDirection: "column", gap: 12, paddingTop: 4 }}>
             <span className="t-cap" style={{ color: "var(--faint)" }}>
-              {typeMeta(type).label} · one line, in your own words
+              {typeMeta(ruleForm.type).label} · one line, in your own words
             </span>
             <TextArea value={ruleForm.text} rows={3} maxLength={MAX_RULE} autoFocus aria-label="Guardrail"
               placeholder="“Laptop stays closed until 8:30.”"
@@ -348,7 +422,7 @@ export function PlanPage({ isMobile, settings, updateSetting }) {
         <div className="toasts">
           <div className="toast">
             <span>{toast.label}</span>
-            <button onClick={runUndo} style={{ background: "none", border: "none", color: "var(--accent)", fontWeight: 600, fontSize: 13.5, cursor: "pointer", padding: "6px 4px", margin: "-6px 0" }}>Undo</button>
+            {toast.undo && <button onClick={runUndo} style={{ background: "none", border: "none", color: "var(--accent)", fontWeight: 600, fontSize: 13.5, cursor: "pointer", padding: "6px 4px", margin: "-6px 0" }}>Undo</button>}
           </div>
         </div>
       )}
@@ -360,7 +434,7 @@ export function PlanPage({ isMobile, settings, updateSetting }) {
 // The first visit. Both templates are empty, and the job of this card is to get
 // a whole day on screen in one tap — a plan you have to build from nothing on the
 // evening you decide you need one doesn't get built.
-function FirstRun({ onStarter, onBlank }) {
+function FirstRun({ busy, onStarter, onBlank }) {
   return (
     <Card pad="lg" style={{ display: "flex", flexDirection: "column", alignItems: "flex-start", gap: 10 }}>
       <span aria-hidden style={{ ...diamond(12, "var(--accent)"), marginBottom: 6, animation: "breathe 4s ease-in-out infinite" }} />
@@ -373,8 +447,8 @@ function FirstRun({ onStarter, onBlank }) {
         The suggested day puts the workout before the laptop, starts work at 8:30 and stops it at 5:30. Change any of it.
       </span>
       <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginTop: 6 }}>
-        <Button kind="primary" size="md" onClick={onStarter}>Start from a suggested day</Button>
-        <Button kind="quiet" size="md" onClick={onBlank}>Start blank</Button>
+        <Button kind="primary" size="md" disabled={busy} onClick={onStarter}>{busy ? "Checking for a saved plan…" : "Start from a suggested day"}</Button>
+        <Button kind="quiet" size="md" disabled={busy} onClick={onBlank}>Start blank</Button>
       </div>
     </Card>
   );

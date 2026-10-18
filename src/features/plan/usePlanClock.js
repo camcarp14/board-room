@@ -9,22 +9,46 @@ import { useEffect, useState } from "react";
 // the one minute of the day this whole feature exists for.
 //
 // So the clock re-reads the time on every return to the foreground (visibility
-// and pageshow, which covers a restore from the back-forward cache), and ticks
-// every 30 seconds while visible. A Date, not a number, because every consumer
-// wants local hours and the day of the week.
-export function usePlanClock(everyMs = 30 * 1000) {
+// and pageshow, which covers a restore from the back-forward cache), and while
+// visible it wakes ON THE MINUTE rather than every 30 seconds from whenever it
+// started. Blocks begin on a minute; an unaligned tick showed "Shower,
+// breakfast · 0m left" for up to half a minute after the 8:30 block had begun.
+// A Date, not a number, because every consumer wants local hours and the day
+// of the week.
+export function usePlanClock() {
   const [now, setNow] = useState(() => new Date());
   useEffect(() => {
+    let timer;
     const tick = () => setNow(new Date());
-    const iv = setInterval(tick, everyMs);
-    const onShow = () => { if (document.visibilityState !== "hidden") tick(); };
+    // 50ms past the boundary, so the Date it reads is unambiguously the new
+    // minute. Seconds roll over at the same instant in every timezone.
+    const arm = () => {
+      clearTimeout(timer);
+      timer = setTimeout(() => { tick(); arm(); }, 60000 - (Date.now() % 60000) + 50);
+    };
+    const onShow = () => { if (document.visibilityState !== "hidden") { tick(); arm(); } };
+    arm();
     document.addEventListener("visibilitychange", onShow);
     window.addEventListener("pageshow", onShow);
     return () => {
-      clearInterval(iv);
+      clearTimeout(timer);
       document.removeEventListener("visibilitychange", onShow);
       window.removeEventListener("pageshow", onShow);
     };
-  }, [everyMs]);
+  }, []);
   return now;
+}
+
+// True once `active` has stayed true for `ms`. The plan surfaces wait for
+// settings, and settings stay null for the whole session if the one read at
+// sign-in failed — so a skeleton that never resolves would be a failed read
+// dressed up as loading. After a few seconds the wait says what it's waiting on.
+export function useTakingLong(active, ms = 8000) {
+  const [long, setLong] = useState(false);
+  useEffect(() => {
+    if (!active) { setLong(false); return undefined; }
+    const t = setTimeout(() => setLong(true), ms);
+    return () => clearTimeout(t);
+  }, [active, ms]);
+  return long;
 }

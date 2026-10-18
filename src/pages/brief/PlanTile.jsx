@@ -1,7 +1,7 @@
 import { useMemo } from "react";
 import { CollapsibleCard, Button } from "../../ui/kit.jsx";
 import { IcChevronRight } from "../../ui/icons.jsx";
-import { usePlanClock } from "../../features/plan/usePlanClock.js";
+import { usePlanClock, useTakingLong } from "../../features/plan/usePlanClock.js";
 import { PlanNow } from "../../features/plan/PlanNow.jsx";
 import { PLAN_SETTING, DAY_TYPES, normalizePlan, whereAmI } from "../../features/plan/planLogic.js";
 
@@ -33,15 +33,20 @@ export function PlanTile({ isMobile, settings, collapsed, onToggle, onOpenPlan }
   const day = plan[where.type];
   const label = DAY_TYPES.find((d) => d.key === where.type);
   const rules = day.rules.slice(0, RULES_SHOWN);
+  const slow = useTakingLong(!loaded);
 
   return (
     <CollapsibleCard collapsed={collapsed} onToggle={onToggle} pad={isMobile ? "md" : "lg"} tight title="Today's Plan"
       trailing={onOpenPlan && (
-        <button className="sec-link" onClick={onOpenPlan} style={{ display: "inline-flex", alignItems: "center", gap: 2 }}>
+        <button className="sec-link" onClick={onOpenPlan} aria-label={`Open the ${label.short.toLowerCase()} plan`} style={{ display: "inline-flex", alignItems: "center", gap: 2 }}>
           {label.short}<IcChevronRight size={12} />
         </button>
       )}>
-      {!loaded ? (
+      {!loaded && slow ? (
+        <div className="t-foot" style={{ color: "var(--faint)", padding: "4px 0", lineHeight: 1.5 }}>
+          Your saved settings haven't loaded, so the plan can't be shown. Pull down to refresh.
+        </div>
+      ) : !loaded ? (
         <div style={{ display: "flex", flexDirection: "column", gap: 8, paddingTop: 2 }}>
           <div className="sk sk-line w60" style={{ margin: 0 }} />
           <div className="sk sk-line w80" style={{ margin: 0 }} />
