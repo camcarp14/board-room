@@ -431,7 +431,15 @@ check("months come back newest first", monthsOf(ALL).join() === "2026-08");
   // Twice in one month is not a pattern across months.
   subs.push({ date: "2026-08-02", amount: -999, description: "ONE OFF THING", category: "other" });
   subs.push({ date: "2026-08-19", amount: -999, description: "ONE OFF THING", category: "other" });
-  const r = recurring(subs);
+  // THE CLOCK IS PINNED, as it already is in the recency section below. These
+  // fixtures stop in August, and recurring() drops anything not billed within
+  // staleDays of `now` — so with the real clock this section passed until
+  // mid-October and then failed for ever, rent first (last billed Aug 1) and
+  // Netflix a few days later. Nothing about subscription detection had changed;
+  // the calendar had, and verify is the deploy gate, so the site stopped
+  // shipping. Two weeks after the last fixture is "now" for every call here.
+  const NOW = Date.parse("2026-08-20T12:00:00");
+  const r = recurring(subs, { now: NOW });
   const keys = r.map((x) => x.key);
   check("a steady monthly charge is found", keys.includes(merchantKey("NETFLIX.COM")));
   check("rent counts too — the big ones matter most", keys.includes(merchantKey("PROPERTY MGMT RENT")));
@@ -441,7 +449,7 @@ check("months come back newest first", monthsOf(ALL).join() === "2026-08");
   check("it says what the year costs", r.find((x) => x.key === merchantKey("NETFLIX.COM")).yearly === 1549 * 12);
   check("biggest first", r.every((x, i, a) => !i || a[i - 1].typical >= x.typical));
   check("income is never a subscription",
-    recurring([...subs, ...months.map((m) => ({ date: `${m}-15`, amount: 540000, description: "PAYROLL" }))])
+    recurring([...subs, ...months.map((m) => ({ date: `${m}-15`, amount: 540000, description: "PAYROLL" }))], { now: NOW })
       .every((x) => x.key !== merchantKey("PAYROLL")));
   check("recurring tolerates an empty ledger", recurring([]).length === 0 && recurring(null).length === 0);
 }
