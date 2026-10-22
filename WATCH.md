@@ -9,6 +9,7 @@ web app, and a web app can't read HealthKit. Both directions go through iOS
 | Words **in** — dictate a note | `/.netlify/functions/note-capture` | Personal → Notes → **Watch** | this file |
 | Workouts **in** — finished exercise | `/.netlify/functions/workout-import` | Train → **Apple Watch** | [WorkoutPanel header](src/WorkoutPanel.jsx) |
 | Calendar **out** — glanceable agenda | `/.netlify/functions/trmnl?view=json` | — | [SCRIPTABLE.md](SCRIPTABLE.md), [TRMNL.md](TRMNL.md) |
+| Notes **out** — Home Screen widget | `/.netlify/functions/trmnl?view=notes` | — | [SCRIPTABLE.md](SCRIPTABLE.md) |
 
 Everything below is the first row.
 
@@ -95,6 +96,10 @@ left in the title as-is rather than silently erased.
 Lines are written as `- …`, which is exactly the bullet syntax the note editor's
 list continuation reads — open the list on the phone, press Enter, and it keeps
 bulleting.
+
+To watch the list fill from the iPhone Home Screen, give the notes widget the
+same template as its parameter — `Captured — {date}` — and it follows today's
+note the way the shortcut does ([SCRIPTABLE.md](SCRIPTABLE.md)).
 
 ## Shortcuts worth having
 

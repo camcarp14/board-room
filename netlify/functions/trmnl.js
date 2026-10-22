@@ -17,6 +17,13 @@
 //                 trmnl/board-brief.liquid) and TRMNL renders a custom
 //                 multi-widget Board Room screen. Default view.
 //
+//   ?view=notes → your notes, for the Scriptable Home Screen widget
+//                 (scriptable/board-room-notes.js). Exactly the notes the
+//                 Brief's Notes tile shows, in the order it shows them — or,
+//                 with &note=<title>, that one note by name (see renderNotes).
+//                 Not part of the default JSON brief: TRMNL polls that shape
+//                 and has no use for note bodies.
+//
 // SECURITY: like export-data.js, this uses the Supabase SERVICE ROLE key, which
 // bypasses RLS — necessary because TRMNL polls with no logged-in session. So the
 // endpoint MUST be gated: it requires a shared secret (TRMNL_TOKEN) passed as
@@ -419,6 +426,149 @@ function renderJson({ events = [], birthdays = [], anniversaries = [], upkeep = 
   };
 }
 
+// ── Notes view (for the Scriptable notes widget) ─────────────────────────────
+// The Home Screen widget is a second homescreen, so by default it shows what the
+// first one does: the Brief's Notes tile. Same set — the active shelf, minus
+// anything taken Off the Brief — in the same manual order, from
+// app_settings.notes_order. A note hidden from the Brief for being too long for a
+// landing page is too long for a widget for the same reason, and a widget that
+// disagreed with the Brief about which notes are on top would be two answers to
+// one question.
+//
+// DUPLICATED, NOT IMPORTED, for the esbuild reason given above the anniversary
+// wording: orderNotes is applyNotesOrder (src/lib/notes-order.js), onBriefNote is
+// onBrief (src/lib/notes-shelf.js), and resolveNoteTitle is resolveTitle
+// (note-capture.js). scripts/notes-widget-smoke.mjs runs each copy beside its
+// original over the same rows and fails the build if they part ways.
+const NOTES_CAP = 12; // more than the largest widget can draw
+const NOTE_BODY_CAP = 600; // per note in the list — a widget row shows a few lines
+const NOTE_ONE_BODY_CAP = 4000; // the single-note widget shows as much as fits
+const NOTE_SEALS = ["brass", "green", "blue", "red"]; // NOTE_SEALS in src/ui/shared.jsx
+
+function orderNotes(notes, orderIds) {
+  const list = Array.isArray(notes) ? notes.filter(Boolean) : [];
+  const order = Array.isArray(orderIds) ? orderIds : [];
+  const rank = new Map();
+  order.forEach((id, i) => { if (!rank.has(id)) rank.set(id, i); });
+  const known = [], unknown = [];
+  for (const n of list) (rank.has(n.id) ? known : unknown).push(n);
+  known.sort((a, b) => rank.get(a.id) - rank.get(b.id));
+  unknown.sort((a, b) => new Date(b.updated_at || 0) - new Date(a.updated_at || 0));
+  return [...unknown, ...known];
+}
+const onBriefNote = (n) => !!n && !n.deleted_at && !n.archived && !n.brief_hidden;
+
+// `&note=` takes the same templates as a watch capture's `into`, so a widget can
+// follow the list the watch is filling today: note=Captured — {date}.
+function resolveNoteTitle(template, now = Date.now()) {
+  const parts = new Intl.DateTimeFormat("en-US", { timeZone: TZ, month: "short", day: "numeric", year: "numeric", weekday: "short" })
+    .formatToParts(new Date(now));
+  const get = (t) => parts.find((p) => p.type === t)?.value || "";
+  const label = `${get("month")} ${get("day")}`;
+  return String(template || "")
+    .replace(/\{date\}/gi, label).replace(/\{today\}/gi, label)
+    .replace(/\{weekday\}/gi, get("weekday")).replace(/\{month\}/gi, get("month"))
+    .replace(/\{day\}/gi, get("day")).replace(/\{year\}/gi, get("year"))
+    .trim();
+}
+
+// Cut on code points, not UTF-16 units, so an emoji at the boundary is dropped
+// whole rather than halved into a character the widget draws as a box.
+function clipText(s, max) {
+  const cps = Array.from(String(s || "").trim());
+  return cps.length <= max ? { text: cps.join(""), clipped: false } : { text: cps.slice(0, max).join("").trimEnd(), clipped: true };
+}
+
+function noteOut(n, cap) {
+  const body = clipText(n.body, cap);
+  return {
+    id: n.id,
+    title: String(n.title || "").trim(),
+    body: body.text,
+    clipped: body.clipped,
+    seal: NOTE_SEALS.includes(n.color) ? n.color : null,
+    pinned: !!n.pinned,
+    updated_at: n.updated_at || null,
+  };
+}
+
+// Two modes, one shape — { mode, total, notes: [...] } — so the widget has one
+// parser:
+//   brief  no `note` asked for: the Brief tile's notes, the first NOTES_CAP of
+//          them. `total` counts every note the Brief would show, for "+N more".
+//   note   `note` asked for: the one note with that title, case-insensitively.
+//          An exact title beats one that merely STARTS with it, so note=Captured
+//          follows the newest daily capture list with no template at all. Ties go
+//          to an active note over an archived one, then to the newest. Searched
+//          across every note not in the bin, Off-the-Brief ones included: the
+//          running list hidden from the Brief for being long is the note most
+//          worth a widget of its own.
+// `now` is a parameter for the same reason renderJson's is.
+function renderNotes({ notes = [], order = null } = {}, { note: wanted = "", now = Date.now() } = {}) {
+  const live = (notes || []).filter((n) => n && !n.deleted_at);
+  const base = {
+    generated_at: new Date(now).toLocaleString("en-US", { timeZone: TZ, month: "short", day: "numeric", hour: "numeric", minute: "2-digit" }),
+    tz: TZ,
+  };
+  const ask = String(wanted || "").trim();
+  if (ask) {
+    const match = resolveNoteTitle(ask, now);
+    const key = match.toLowerCase();
+    const titleOf = (n) => String(n.title || "").trim().toLowerCase();
+    const hit = live
+      .filter((n) => key && titleOf(n).startsWith(key))
+      .sort((a, b) =>
+        (titleOf(a) === key ? 0 : 1) - (titleOf(b) === key ? 0 : 1)
+        || (a.archived ? 1 : 0) - (b.archived ? 1 : 0)
+        || new Date(b.updated_at || 0) - new Date(a.updated_at || 0))[0] || null;
+    return { ...base, mode: "note", match, total: hit ? 1 : 0, notes: hit ? [noteOut(hit, NOTE_ONE_BODY_CAP)] : [] };
+  }
+  const brief = orderNotes(live, order).filter(onBriefNote);
+  return { ...base, mode: "brief", total: brief.length, notes: brief.slice(0, NOTES_CAP).map((n) => noteOut(n, NOTE_BODY_CAP)) };
+}
+
+// The column ladder db.loadNotes climbs down (0042 → 0036 → 0008 → base), for its
+// reason: a migration arrives in the SQL editor by hand and this code arrives on a
+// deploy, in either order. A database without brief_hidden shows every active
+// note, which is what its Brief shows too; one without deleted_at has no bin.
+// Only a MISSING COLUMN steps down a rung. Anything else is a failed read, and
+// stepping past it to a narrower select would quietly put hidden notes back.
+const NOTE_RUNGS = [
+  { cols: "id,title,body,pinned,color,archived,brief_hidden,deleted_at,updated_at", live: true },
+  { cols: "id,title,body,pinned,color,archived,deleted_at,updated_at", live: true },
+  { cols: "id,title,body,pinned,color,updated_at", live: false },
+  { cols: "id,title,body,updated_at", live: false },
+];
+const isMissingColumn = (e) =>
+  /42703|PGRST204/.test(e?.code || "")
+  || /column .* does not exist/i.test(e?.message || "")
+  || /could not find the .*column/i.test(e?.message || "");
+
+async function loadNotes(supabase, userId) {
+  const scope = (q) => (userId ? q.eq("user_id", userId) : q);
+  const errors = [];
+  const readNotes = async () => {
+    for (const rung of NOTE_RUNGS) {
+      let q = scope(supabase.from("personal_notes").select(rung.cols));
+      if (rung.live) q = q.is("deleted_at", null);
+      const r = await q.order("updated_at", { ascending: false });
+      if (!r.error) return r.data || [];
+      if (!isMissingColumn(r.error)) { errors.push(`personal_notes: ${r.error.message}`); return null; }
+    }
+    errors.push("personal_notes: none of the known column sets could be read");
+    return null;
+  };
+  // The order is a failed read too when it fails, not "no order": the widget would
+  // put different notes on top than the Brief, and say nothing.
+  const readOrder = scope(supabase.from("app_settings").select("setting_value").eq("setting_key", "notes_order"))
+    .limit(1).maybeSingle().then((r) => {
+      if (r.error) { errors.push(`app_settings: ${r.error.message}`); return null; }
+      return Array.isArray(r.data?.setting_value) ? r.data.setting_value : null;
+    });
+  const [notes, order] = await Promise.all([readNotes(), readOrder]);
+  return { notes: notes || [], order, errors };
+}
+
 // ── handler ──────────────────────────────────────────────────────────────────
 exports.handler = async (event) => {
   const q = event.queryStringParameters || {};
@@ -458,20 +608,31 @@ exports.handler = async (event) => {
   // exactly one account.
   const userId = process.env.TRMNL_USER_ID || process.env.MINER_USER_ID || String(process.env.BOARD_USER_ID || "").trim() || null;
 
+  const view = (q.view || "json").toLowerCase();
+  // A read that failed is not a day with nothing in it. Refuse to render
+  // rather than publish a confident blank to a device that cannot ask again
+  // until its next hourly refresh; the 15-minute cache header below would
+  // otherwise pin that blank in place long after the blip passed.
+  const readFailed = (errors) => ({
+    statusCode: 502,
+    headers: { "Content-Type": "application/json", "Cache-Control": "no-store" },
+    body: JSON.stringify({ success: false, error: `couldn't read your data — ${errors.join("; ")}` }),
+  });
+
   try {
-    const data = await loadAll(supabase, userId);
-    // A read that failed is not a day with nothing in it. Refuse to render
-    // rather than publish a confident blank to a device that cannot ask again
-    // until its next hourly refresh; the 15-minute cache header below would
-    // otherwise pin that blank in place long after the blip passed.
-    if (data.errors && data.errors.length) {
-      return {
-        statusCode: 502,
-        headers: { "Content-Type": "application/json", "Cache-Control": "no-store" },
-        body: JSON.stringify({ success: false, error: `couldn't read your data — ${data.errors.join("; ")}` }),
-      };
+    // The notes view reads only the notes. A calendar table that cannot be read
+    // is no reason for the notes widget to go blank, and neither is the reverse.
+    if (view === "notes") {
+      const notes = await loadNotes(supabase, userId);
+      if (notes.errors.length) return readFailed(notes.errors);
+      // no-store, unlike the views below: a note edited a minute ago still showing
+      // its old words on the Home Screen is the one staleness a notes widget can't
+      // afford, and iOS already spaces the widget's refreshes out on its own.
+      return jsonRes(200, renderNotes(notes, { note: q.note }), { "Cache-Control": "private, no-store" });
     }
-    const view = (q.view || "json").toLowerCase();
+
+    const data = await loadAll(supabase, userId);
+    if (data.errors && data.errors.length) return readFailed(data.errors);
 
     if (view === "ics" || view === "ical" || view === "calendar") {
       const include = new Set((q.include ? q.include.split(",") : ["events", "birthdays", "anniversaries", "upkeep"]).map(s => s.trim()).filter(Boolean));
@@ -497,8 +658,14 @@ exports.handler = async (event) => {
   }
 };
 
-// Netlify only reads `handler`. The two renderers are exported so
+// Netlify only reads `handler`. The renderers are exported so
 // scripts/anniversaries-smoke.mjs can run them against fixture rows at a chosen
-// instant — the day math above was wrong for a year without a smoke to say so.
+// instant — the day math above was wrong for a year without a smoke to say so —
+// and so scripts/notes-widget-smoke.mjs can hold the notes copies to the app's.
 exports.renderJson = renderJson;
 exports.renderIcs = renderIcs;
+exports.renderNotes = renderNotes;
+exports.orderNotes = orderNotes;
+exports.onBriefNote = onBriefNote;
+exports.resolveNoteTitle = resolveNoteTitle;
+exports.loadNotes = loadNotes;

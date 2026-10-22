@@ -917,6 +917,26 @@ export default function App() {
     goToPage(t.page);
     setJump({ t: Date.now(), ...t });
   };
+  // `?note` opens the Notes tab and `?note=<id>` opens that note: the taps on the
+  // Home Screen notes widget (scriptable/board-room-notes.js). Tabs are state, not
+  // routes, so the URL is read once there is a session — a tap that lands signed
+  // out keeps it through sign-in — and then removed, or every reload would open
+  // the note again. The note itself opens when the list arrives (NotesPanel's
+  // openSignal waits for it).
+  //
+  // AFTER THE SETTINGS, not just the session. The hidden-tab bounce above runs
+  // when settings arrive, and with Personal hidden a jump made before then was
+  // undone a moment later. A settings read that fails leaves the link in the URL
+  // for the next one that succeeds, rather than landing it and losing it.
+  useEffect(() => {
+    if (!session || PREVIEW || settings == null) return;
+    const url = new URL(window.location.href);
+    if (!url.searchParams.has("note")) return;
+    const id = (url.searchParams.get("note") || "").trim();
+    url.searchParams.delete("note");
+    window.history.replaceState(window.history.state, "", url.pathname + url.search + url.hash);
+    jumpTo({ page: "personal", sub: "notes", ...(id ? { noteId: id } : {}) });
+  }, [!!session, settings != null]); // eslint-disable-line react-hooks/exhaustive-deps
   const goToCalendar = () => { setPersonalJumpTo(Date.now()); goToPage("personal"); }; // timestamp so re-tapping still re-triggers even if already on Personal
 
   const send = async (textOverride) => {
