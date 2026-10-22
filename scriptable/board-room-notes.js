@@ -449,13 +449,16 @@ function renderBriefList(w, data, family) {
 }
 
 // ── one note, by name ────────────────────────────────────────────────────────
-// Logical lines of the body that fit each family. A line that wraps uses two, so
-// these are ceilings; iOS ellipsizes whatever still overflows.
+// A widget given to one note is read from across the room, so it is set larger
+// than the list — and it fits fewer lines for it. `lines` is the most logical
+// lines of the body each family holds on the smallest phone at that size; a
+// line that wraps uses two, so these are ceilings, and iOS ellipsizes whatever
+// still overflows.
 const ONE = {
-  small: { title: 13, body: 11, lines: 6 },
-  medium: { title: 15, body: 12, lines: 5 },
-  large: { title: 17, body: 13, lines: 15 },
-  extraLarge: { title: 17, body: 13, lines: 15 },
+  small: { title: 16, body: 13, lines: 5 },
+  medium: { title: 18, body: 15, lines: 4 },
+  large: { title: 21, body: 17, lines: 12 },
+  extraLarge: { title: 21, body: 17, lines: 12 },
 };
 
 function renderOne(w, data, family) {
@@ -471,18 +474,16 @@ function renderOne(w, data, family) {
   }
   w.url = noteUrl(n.id);
 
+  // No "3h" here, unlike the list: a widget pinned to one note is about what it
+  // says, not when it last changed.
   const top = w.addStack();
   top.centerAlignContent();
-  dot(top, sealDot(n.seal) || C.idle, 7);
-  top.addSpacer(7);
+  dot(top, sealDot(n.seal) || C.idle, 8);
+  top.addSpacer(8);
   label(top, n.title || headline(n), Font.boldSystemFont(spec.title), C.ink);
-  if (family !== "small") {
+  if (family !== "small" && n.pinned) {
     top.addSpacer();
-    if (n.pinned) {
-      pin(top, 9);
-      top.addSpacer(4);
-    }
-    label(top, ago(n.updated_at), Font.mediumSystemFont(10), C.faint);
+    pin(top, 10);
   }
   w.addSpacer(family === "small" ? 5 : 7);
   rule(w);
@@ -497,11 +498,8 @@ function renderOne(w, data, family) {
 
   w.addSpacer();
   const hidden = Math.max(0, lines.length - spec.lines);
-  const foot = w.addStack();
-  if (family === "small") label(foot, ago(n.updated_at), Font.mediumSystemFont(9), C.faint);
-  foot.addSpacer();
-  if (hidden) label(foot, `+${hidden} more line${hidden === 1 ? "" : "s"}`, Font.mediumSystemFont(9), C.faint);
-  else if (n.clipped) label(foot, "continues in Board Room", Font.mediumSystemFont(9), C.faint);
+  if (hidden) moreLine(w, `+${hidden} more line${hidden === 1 ? "" : "s"}`);
+  else if (n.clipped) moreLine(w, "continues in Board Room");
 }
 
 // ── Lock Screen ──────────────────────────────────────────────────────────────
