@@ -108,7 +108,8 @@ their color — the same tinted paper and seal dot they have in the app.
 ### One note by name
 
 Set **Edit Widget → Parameter** to a note's title and the widget shows that one
-note, as much of it as the size holds — a grocery list, a packing list, the
+note, in larger type and without the "updated 3h ago" stamp, as much of it as
+the size holds — a grocery list, a packing list, the
 running list you took off the Brief for being long (those work here).
 
 - Case doesn't matter, and a title that only *starts* with what you typed
