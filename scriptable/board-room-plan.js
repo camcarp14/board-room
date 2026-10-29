@@ -752,18 +752,17 @@ function renderLarge(w, plan, where, data) {
   const hasBand = Array.isArray(data.events) || !!data.events_error || "note" in data;
 
   if (cur) {
-    // The countdown rides on the NOW line, where everything beside it is short,
-    // so the block's name gets the full width below — sharing a line with the
-    // timer, a long name like "Work — hardest thing first" squeezed it to "1…".
+    // No countdown on the large widget — asked for by the person who reads it:
+    // "until 9:30 PM" and the bar already say how much of the block is left, and
+    // the day below is what this size is for. (Small, medium and the Lock Screen
+    // keep theirs; there the countdown is most of what they have room to say.)
     const h = w.addStack();
     h.centerAlignContent();
     diamond(h, kindColor(cur.kind), 8);
     h.addSpacer(5);
     label(h, "NOW", Font.semiboldSystemFont(10), kindColor(cur.kind));
-    h.addSpacer(6);
-    label(h, `until ${fmtTime(cur.endMin)}`, Font.mediumSystemFont(9), C.faint);
-    h.addSpacer(8);
-    countdown(h, instantAt(NOW, cur.endMin), timerFont(17), C.ink, "right");
+    h.addSpacer();
+    label(h, `until ${fmtTime(cur.endMin)}`, Font.mediumSystemFont(10), C.faint);
     w.addSpacer(2);
     label(w, cur.title, Font.boldSystemFont(21), C.ink, 1);
     w.addSpacer(7);
@@ -778,8 +777,6 @@ function renderLarge(w, plan, where, data) {
     const t = w.addStack();
     t.centerAlignContent();
     label(t, `Starts ${fmtTime(where.next.startMin)}`, Font.boldSystemFont(21), C.ink, 1);
-    t.addSpacer(10);
-    countdown(t, instantAt(NOW, where.next.startMin), timerFont(21), C.ink, "right");
   } else {
     label(w, `No ${where.type} plan yet.`, Font.semiboldSystemFont(15), C.ink, 1);
     w.addSpacer(2);
@@ -807,9 +804,9 @@ function renderLarge(w, plan, where, data) {
 // or overflowed depending on the band: one event or two, a note of two lines or
 // four, a "TOMORROW" or not. If the layout above changes, these change with it.
 const HT = {
-  nowPanel: 77, // NOW line, name, bar, and the rule under them
-  beforePanel: 58, // "Starts 6:00 AM" and its countdown, and the rule
-  row: 26, // a row of the day and the gap under it
+  nowPanel: 69, // NOW line, name, bar, and the rule under them
+  beforePanel: 58, // "Starts 6:00 AM" under its heading, and the rule
+  row: 24, // a row of the day and the gap under it
   tomorrow: 13, // the TOMORROW label
   bandTop: 9, // the band's rule and the gap under it
   colHead: 16, // CALENDAR / the note's title, and the gap under it
@@ -819,7 +816,7 @@ const HT = {
   message: 27, // a two-line "Nothing in the next week." and its kin
   more: 13, // the "+N more" under a note
   divider: 66, // the rule between the two columns
-  margin: 6, // what's kept in hand for a font that sets a little taller
+  margin: 3, // what's kept in hand for a font that sets a little taller
 };
 
 // The large widget's height, less its padding. Scriptable can't ask a widget how
@@ -895,7 +892,7 @@ function timeline(w, plan, where, budget) {
   // What's left after the last whole row is less than a row. Spread it between
   // the rows (a few points each at most) so it doesn't sit as a strip of blank
   // space above the band.
-  const ease = rows.length ? Math.min(4, Math.max(0, left) / rows.length) : 0;
+  const ease = rows.length ? Math.min(3, Math.max(0, left) / rows.length) : 0;
   for (const r of rows) {
     if (r.withLabel) {
       label(w, "TOMORROW", Font.semiboldSystemFont(8), C.faint);
@@ -1002,7 +999,7 @@ function noteColumn(container, data, lines) {
 function timelineRow(container, b, state) {
   const row = container.addStack();
   row.centerAlignContent();
-  row.setPadding(4, 6, 4, 8);
+  row.setPadding(3, 6, 3, 8);
   row.cornerRadius = 7;
   if (state === "now") row.backgroundColor = kindColor(b.kind, 0.13);
 
