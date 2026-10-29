@@ -44,14 +44,27 @@ const font = (weight) => (size) => {
   if (typeof size !== "number" || !(size > 0)) throw new Error(`font size must be a positive number, got ${size}`);
   return { weight, size };
 };
+const fontFamily = (design) => (weight) => (size) => ({ ...font(weight)(size), design });
+const mono = fontFamily("monospaced"), rounded = fontFamily("rounded");
 export const Font = {
   systemFont: font(400), mediumSystemFont: font(500), semiboldSystemFont: font(600),
   boldSystemFont: font(700), heavySystemFont: font(800), lightSystemFont: font(300),
+  regularMonospacedSystemFont: mono(400), mediumMonospacedSystemFont: mono(500),
+  semiboldMonospacedSystemFont: mono(600), boldMonospacedSystemFont: mono(700),
+  regularRoundedSystemFont: rounded(400), mediumRoundedSystemFont: rounded(500),
+  semiboldRoundedSystemFont: rounded(600), boldRoundedSystemFont: rounded(700),
 };
 
 export class Size { constructor(width, height) { this.width = width; this.height = height; } }
 export class Point { constructor(x, y) { this.x = x; this.y = y; } }
 export class LinearGradient { constructor() { this.colors = []; this.locations = []; this.startPoint = null; this.endPoint = null; } }
+
+const TEXT_PROPS = ["font", "textColor", "lineLimit", "minimumScaleFactor", "textOpacity", "shadowColor", "shadowRadius", "shadowOffset", "url"];
+const aligned = (node) => Object.assign(node, {
+  leftAlignText() { node.align = "left"; },
+  centerAlignText() { node.align = "center"; },
+  rightAlignText() { node.align = "right"; },
+});
 
 const STACK_PROPS = ["backgroundColor", "backgroundImage", "backgroundGradient", "spacing", "size", "cornerRadius", "borderWidth", "borderColor", "url"];
 
@@ -61,8 +74,15 @@ function makeContainer(kind, layout) {
   Object.assign(node, {
     addText(text) {
       if (typeof text !== "string") throw new Error(`addText takes a string, got ${typeof text}`);
-      return add(strict({ kind: "text", text, align: "left" },
-        ["font", "textColor", "lineLimit", "minimumScaleFactor", "textOpacity", "shadowColor", "shadowRadius", "shadowOffset", "url"]));
+      return add(strict(aligned({ kind: "text", text, align: "left" }), TEXT_PROPS));
+    },
+    // WidgetDate: text iOS keeps current by itself — a timer ticks every second
+    // with no refresh. `style` records which apply…Style() was chosen.
+    addDate(date) {
+      if (!(date instanceof Date) || Number.isNaN(date.getTime())) throw new Error("addDate takes a valid Date");
+      const node = aligned({ kind: "date", date, style: "date", align: "left" });
+      for (const st of ["Timer", "Relative", "Offset", "Time", "Date"]) node[`apply${st}Style`] = () => { node.style = st.toLowerCase(); };
+      return add(strict(node, TEXT_PROPS));
     },
     addStack() { return add(makeStack()); },
     addSpacer(length) {
@@ -94,6 +114,16 @@ function makeStack() {
   return strict(node, STACK_PROPS);
 }
 
+// A Date whose "now" is fixed. Subclassed rather than faked so `instanceof Date`,
+// local-time constructors and DST all behave exactly as the real one does.
+function frozenDate(now) {
+  const RealDate = Date;
+  return class FrozenDate extends RealDate {
+    constructor(...a) { if (a.length) super(...a); else super(now); }
+    static now() { return now; }
+  };
+}
+
 export class SFSymbol {
   static named(name) {
     return { name, applyFont() {}, image: { symbol: name } };
@@ -105,6 +135,12 @@ export function texts(node) {
   if (!node) return [];
   if (node.kind === "text") return [node.text];
   return (node.children || []).flatMap(texts);
+}
+/** Every live date (WidgetDate) under `node`, in drawing order. */
+export function dates(node) {
+  if (!node) return [];
+  if (node.kind === "date") return [node];
+  return (node.children || []).flatMap(dates);
 }
 /** Every url set on `node` or anything under it. */
 export function urls(node) {
@@ -122,8 +158,11 @@ export function urls(node) {
  *   files         initial FileManager contents, path → string
  *   respond(url)  what Request#loadJSON resolves to for `url`; throw to fail
  *   alertAnswers  for in-app runs: [{ action, value }] per Alert presented
+ *   now           freeze the script's clock at this epoch ms: `new Date()` and
+ *                 `Date.now()` both read it, and every other Date call works as
+ *                 normal. Leave it out to run on the real clock.
  */
-export async function runWidget(file, { family = "medium", param = "", inApp = false, keychain = {}, files = {}, respond, alertAnswers = [] } = {}) {
+export async function runWidget(file, { family = "medium", param = "", inApp = false, keychain = {}, files = {}, respond, alertAnswers = [], now } = {}) {
   const out = { widget: null, presented: null, requests: [], alerts: [], keychain: new Map(Object.entries(keychain)), files: new Map(Object.entries(files)), completed: false };
 
   function ListWidget() {
@@ -179,6 +218,7 @@ export async function runWidget(file, { family = "medium", param = "", inApp = f
   const globals = {
     ListWidget,
     Color, Font, Size, Point, LinearGradient, SFSymbol, Request, Alert, Keychain, FileManager, Script,
+    Date: now == null ? Date : frozenDate(now),
     // In the app, Scriptable's widgetFamily is null and a script falls back to
     // its own PREVIEW size. Passing family: null reproduces that exactly; any
     // other value lets an in-app run be checked at a chosen size.

@@ -337,6 +337,23 @@ const PARAMS = ["", "Groceries", "Captured — {date}", "Nope"];
     t.includes("Groceries") && t.some((s) => s === "• eggs\n• milk\n\n• bread") && r.widget.url === `${SITE}/?note=a`);
 }
 {
+  // Asked for by the person who reads it: a widget given to one note is set large
+  // and says nothing about when the note changed. The list keeps its stamps.
+  const stamp = /^(now|\d+[mhd])$/;
+  const nodes = (n) => (n ? [n, ...(n.children || []).flatMap(nodes)] : []);
+  let noStamp = true, big = true;
+  for (const family of ["small", "medium", "large", "extraLarge"]) {
+    const r = await runWidget(WIDGET, { family, param: "Groceries", keychain: { [KEY]: TOKEN }, respond: feed() });
+    if (texts(r.widget).some((s) => stamp.test(s))) noStamp = false;
+    const body = nodes(r.widget).find((x) => x.kind === "text" && x.text.startsWith("• eggs"));
+    if (!body || body.font.size < 13) big = false;
+  }
+  check("a widget given to one note draws no age stamp, at any size", noStamp);
+  check("…and sets the note's text larger than the list's, at 13pt or more", big);
+  const list = await runWidget(WIDGET, { family: "medium", keychain: { [KEY]: TOKEN }, respond: feed() });
+  check("…while the list still says how old each note is", texts(list.widget).some((s) => stamp.test(s)));
+}
+{
   const r = await runWidget(WIDGET, { family: "medium", param: "Nope", keychain: { [KEY]: TOKEN }, respond: feed() });
   check("a name with no note says so, by name", texts(r.widget).includes("No note titled “Nope” yet."));
 }
@@ -397,12 +414,12 @@ const PARAMS = ["", "Groceries", "Captured — {date}", "Nope"];
 {
   const app = code(read("src/App.jsx"));
   check("App reads ?note once there is a session AND settings — after the hidden-tab bounce, not before it",
-    /if \(!session \|\| PREVIEW \|\| settings == null\) return;\s*const url = new URL\(window\.location\.href\);\s*if \(!url\.searchParams\.has\("note"\)\) return;/.test(app)
+    /if \(!session \|\| PREVIEW \|\| settings == null\) return;\s*const url = new URL\(window\.location\.href\);\s*const toNote = url\.searchParams\.has\("note"\)/.test(app)
     && /\}, \[!!session, settings != null\]\);/.test(app));
   check("…jumps to the Notes tab, and to the note when there is an id",
-    /jumpTo\(\{ page: "personal", sub: "notes", \.\.\.\(id \? \{ noteId: id \} : \{\}\) \}\)/.test(app));
+    /if \(toNote\) jumpTo\(\{ page: "personal", sub: "notes", \.\.\.\(id \? \{ noteId: id \} : \{\}\) \}\)/.test(app));
   check("…and takes the parameter back out, so a reload doesn't reopen it",
-    /url\.searchParams\.delete\("note"\);\s*window\.history\.replaceState\(/.test(app));
+    /url\.searchParams\.delete\("note"\);\s*url\.searchParams\.delete\("plan"\);\s*window\.history\.replaceState\(/.test(app));
   check("Personal maps the notes jump onto the tab that holds them",
     /notes: "notescal"/.test(code(read("src/pages/personal/PersonalPage.jsx"))));
   check("the service worker answers /?note=… with the app shell, offline too",

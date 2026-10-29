@@ -1,19 +1,77 @@
 # Board Room on the iPhone Home Screen
 
-Two [Scriptable](https://scriptable.app) widgets put Board Room on the Home
+Three [Scriptable](https://scriptable.app) widgets put Board Room on the Home
 Screen and Lock Screen:
 
 | Widget | Shows | Reads |
 |---|---|---|
+| [`board-room-plan.js`](scriptable/board-room-plan.js) | Your Daily Plan — the block you're in, a live countdown, the day hour by hour | `trmnl?view=plan` |
 | [`board-room-notes.js`](scriptable/board-room-notes.js) | Your notes — the Brief's, or one note by name | `trmnl?view=notes` |
 | [`board-room-calendar.js`](scriptable/board-room-calendar.js) | Events, birthdays, and upkeep | `trmnl?view=json` |
 
-Both read the endpoint the TRMNL bridge already uses
+All three read the endpoint the TRMNL bridge already uses
 (`/.netlify/functions/trmnl`), so they inherit that function's auth, its
 Supabase service-role read, and its America/Chicago formatting — **no Netlify
 settings to add**. They also share one keychain entry, so the token is entered
 once per device, whichever widget you set up first. See [TRMNL.md](TRMNL.md)
 for how that endpoint works.
+
+---
+
+## Plan
+
+### Setup
+
+Scriptable → **+** → paste [`scriptable/board-room-plan.js`](scriptable/board-room-plan.js)
+→ name it **Board Room Plan** → tap **▶** once. If either other widget is on the
+phone it asks for nothing. Then add a Scriptable widget and point **Edit Widget →
+Script** at it.
+
+### What it shows
+
+It follows the **Plan** tab: the weekday template Monday to Friday, the weekend
+one on Saturday and Sunday, and the same idea of "now" — a block runs until the
+next one starts, and the night belongs to the day before, so at 5:40am on a
+Monday you're still in Sunday's Sleep.
+
+| Family | Shows |
+|---|---|
+| **Small** | Now, a progress bar, the countdown, what's next |
+| **Medium** | Now and the countdown on the left; Next and Then on the right |
+| **Large / XL** | Now with its note, then the day hour by hour — past blocks quiet, the current one on its color, tomorrow's morning once today runs out |
+| **Lock Screen** | Rectangular: now, until when, a countdown, next. Inline: now · until. Circular: the kind's symbol and the countdown |
+
+Before the first block with nothing carried from last night it says when the day
+starts; a day type with no blocks says so and points at the Plan tab. Tapping
+opens the Plan tab (`/?plan`).
+
+### How it stays current
+
+**iOS doesn't let a widget refresh every few minutes** — each one gets a daily
+budget of roughly 40–70 redraws, spent when iOS decides. So the widget is built
+not to need it:
+
+- **The countdown is a live timer.** iOS ticks it every second by itself; no
+  refresh is involved.
+- **It asks to redraw at the exact minute the next block starts** (a second
+  after), and every `REFRESH_MINUTES` (15) in between so the progress bar keeps
+  up. Asking for every 5 minutes would spend the day's budget by mid-afternoon,
+  and the redraw that went missing would be the one at your hard stop.
+- **It works out "now" on the phone.** The feed only sends the two templates;
+  the block, the countdown and what's next come from the phone's clock, so a
+  redraw needs no network and is right on a plane. The templates are cached for
+  a week (a set-once plan is the same plan), and marked `plan from <date>` once
+  the copy is over a day old.
+
+### Changing it
+
+The widget carries a copy of `normalizePlan`, `withSpans` and `whereAmI` from
+[`src/features/plan/planLogic.js`](src/features/plan/planLogic.js) — it can't
+import the app, and it has to run offline. `scripts/plan-widget-smoke.mjs` runs
+the widget at a frozen clock every ten minutes from a Friday to the Monday after
+(including the night the clocks go back, in America/Chicago) and fails the build
+if it disagrees with the original about the block, its end, the countdown's
+target, what's next, or when it asks to redraw. Change one, change both.
 
 ---
 
@@ -50,7 +108,8 @@ their color — the same tinted paper and seal dot they have in the app.
 ### One note by name
 
 Set **Edit Widget → Parameter** to a note's title and the widget shows that one
-note, as much of it as the size holds — a grocery list, a packing list, the
+note, in larger type and without the "updated 3h ago" stamp, as much of it as
+the size holds — a grocery list, a packing list, the
 running list you took off the Brief for being long (those work here).
 
 - Case doesn't matter, and a title that only *starts* with what you typed
