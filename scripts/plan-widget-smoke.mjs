@@ -266,8 +266,11 @@ await sweep("no plan saved at all is the empty state, all day", null, new Date(2
     && txt.includes("THEN") && txt.includes("1:00 PM") && txt.indexOf("NEXT") < txt.indexOf("THEN"));
   const l = await runWidget(WIDGET, { family: "large", now: t, keychain: { [KEY]: TOKEN }, respond: feed(STARTER) });
   const lt = texts(l.widget);
+  // The first time on the list is the current block's — 7:30 AM may come later,
+  // as tomorrow's, but never before it.
+  const firstTime = lt.find((x) => /^\d{1,2}:\d{2} [AP]M$/.test(x));
   check("large lists the day hour by hour from the current block, which it marks",
-    ["8:30 AM", "12:00 PM", "1:00 PM", "5:30 PM"].every((s) => lt.includes(s)) && !lt.includes("7:30 AM") && lt.includes("now"));
+    firstTime === "8:30 AM" && ["12:00 PM", "1:00 PM", "5:30 PM"].every((s) => lt.includes(s)) && lt.includes("now"), firstTime);
   const eve = await runWidget(WIDGET, { family: "large", now: new Date(2026, 9, 29, 21, 0).getTime(), keychain: { [KEY]: TOKEN }, respond: feed(STARTER) });
   check("…and once today runs out, carries on into tomorrow's morning",
     texts(eve.widget).includes("TOMORROW") && texts(eve.widget).includes("Up — phone stays down"));
@@ -366,11 +369,10 @@ function wantWhen(e, now) {
     && txt.includes("CALENDAR") && txt.indexOf("CALENDAR") < txt.indexOf("DEVELOPMENT"));
   check("…with two events beside a note (three without one — the sweep above)",
     txt.slice(txt.indexOf("CALENDAR") + 1, txt.indexOf("DEVELOPMENT")).length === 4);
-  check("…and the countdown on the NOW line, clear of the block's name", (() => {
-    const nodes = (n) => (n ? [n, ...(n.children || []).flatMap(nodes)] : []);
-    const nowLine = nodes(r.widget).find((x) => x.kind === "stack" && x.children.some((c) => c.kind === "text" && c.text === "NOW"));
-    return !!nowLine && nowLine.children.some((c) => c.kind === "date" && c.style === "timer");
-  })());
+  // Asked for by the person who reads it: no countdown on the large widget —
+  // "until 9:30 PM" and the bar say it. Small, medium and the Lock Screen keep one.
+  check("…and no countdown on the large widget, just when the block ends",
+    dates(r.widget).length === 0 && txt.includes("until 9:30 PM"));
   check("…and the hour-by-hour list keeps the current block and what follows",
     txt.includes("Evening") && txt.includes("Wind down — screens off") && txt.includes("now"));
   const missing = await runWidget(WIDGET, { family: "large", now: t, param: "Nope", keychain: { [KEY]: TOKEN }, respond: feed(STARTER, { events: CAL, note: null, noteMatch: "Nope" }) });
