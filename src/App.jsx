@@ -928,14 +928,20 @@ export default function App() {
   // when settings arrive, and with Personal hidden a jump made before then was
   // undone a moment later. A settings read that fails leaves the link in the URL
   // for the next one that succeeds, rather than landing it and losing it.
+  //
+  // `?plan` is the plan widget's tap (scriptable/board-room-plan.js), read the
+  // same way and for the same reasons: it opens the Plan tab.
   useEffect(() => {
     if (!session || PREVIEW || settings == null) return;
     const url = new URL(window.location.href);
-    if (!url.searchParams.has("note")) return;
+    const toNote = url.searchParams.has("note"), toPlan = url.searchParams.has("plan");
+    if (!toNote && !toPlan) return;
     const id = (url.searchParams.get("note") || "").trim();
     url.searchParams.delete("note");
+    url.searchParams.delete("plan");
     window.history.replaceState(window.history.state, "", url.pathname + url.search + url.hash);
-    jumpTo({ page: "personal", sub: "notes", ...(id ? { noteId: id } : {}) });
+    if (toNote) jumpTo({ page: "personal", sub: "notes", ...(id ? { noteId: id } : {}) });
+    else goToPage("plan");
   }, [!!session, settings != null]); // eslint-disable-line react-hooks/exhaustive-deps
   const goToCalendar = () => { setPersonalJumpTo(Date.now()); goToPage("personal"); }; // timestamp so re-tapping still re-triggers even if already on Personal
 

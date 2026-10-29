@@ -24,6 +24,10 @@
 //                 Not part of the default JSON brief: TRMNL polls that shape
 //                 and has no use for note bodies.
 //
+//   ?view=plan  → the Daily Plan tab's two templates, for the Scriptable plan
+//                 widget (scriptable/board-room-plan.js). Sent as stored; the
+//                 widget works out where the day is on the phone (renderPlan).
+//
 // SECURITY: like export-data.js, this uses the Supabase SERVICE ROLE key, which
 // bypasses RLS — necessary because TRMNL polls with no logged-in session. So the
 // endpoint MUST be gated: it requires a shared secret (TRMNL_TOKEN) passed as
@@ -569,6 +573,38 @@ async function loadNotes(supabase, userId) {
   return { notes: notes || [], order, errors };
 }
 
+// ── Plan view (for the Scriptable plan widget) ───────────────────────────────
+// The Daily Plan tab's templates, as stored in app_settings.daily_plan, and
+// nothing worked out from them. That is deliberate. A plan is set once and edited
+// a few times a year; "now" changes every minute. So the widget keeps the
+// templates and decides where the day is on the phone, from the phone's clock —
+// which is what lets it redraw at 6:15 sharp with no network at all, and still be
+// right on a plane. Worked out here, every redraw would need a fetch, and the
+// one at the hard stop is exactly the one a weak signal would lose.
+//
+// Sent raw rather than normalized because the widget has to carry its own copy
+// of normalizePlan/whereAmI anyway (src/features/plan/planLogic.js — it runs
+// offline), and one copy is easier to hold to the original than two:
+// scripts/plan-widget-smoke.mjs runs the widget against whereAmI at hundreds of
+// instants. A missing row is `plan: null`, which the widget draws as "no plan
+// yet" — the same thing the Plan tab says about the same row.
+async function loadPlan(supabase, userId) {
+  const scope = (q) => (userId ? q.eq("user_id", userId) : q);
+  const r = await scope(supabase.from("app_settings").select("setting_value,updated_at").eq("setting_key", "daily_plan"))
+    .limit(1).maybeSingle();
+  if (r.error) return { plan: null, updated_at: null, errors: [`app_settings: ${r.error.message}`] };
+  return { plan: r.data?.setting_value ?? null, updated_at: r.data?.updated_at ?? null, errors: [] };
+}
+
+function renderPlan({ plan = null, updated_at = null } = {}, now = Date.now()) {
+  return {
+    generated_at: new Date(now).toLocaleString("en-US", { timeZone: TZ, month: "short", day: "numeric", hour: "numeric", minute: "2-digit" }),
+    tz: TZ,
+    updated_at,
+    plan,
+  };
+}
+
 // ── handler ──────────────────────────────────────────────────────────────────
 exports.handler = async (event) => {
   const q = event.queryStringParameters || {};
@@ -630,6 +666,12 @@ exports.handler = async (event) => {
       // afford, and iOS already spaces the widget's refreshes out on its own.
       return jsonRes(200, renderNotes(notes, { note: q.note }), { "Cache-Control": "private, no-store" });
     }
+    // The plan view, likewise, reads one settings row and nothing else.
+    if (view === "plan") {
+      const plan = await loadPlan(supabase, userId);
+      if (plan.errors.length) return readFailed(plan.errors);
+      return jsonRes(200, renderPlan(plan), { "Cache-Control": "private, no-store" });
+    }
 
     const data = await loadAll(supabase, userId);
     if (data.errors && data.errors.length) return readFailed(data.errors);
@@ -661,7 +703,8 @@ exports.handler = async (event) => {
 // Netlify only reads `handler`. The renderers are exported so
 // scripts/anniversaries-smoke.mjs can run them against fixture rows at a chosen
 // instant — the day math above was wrong for a year without a smoke to say so —
-// and so scripts/notes-widget-smoke.mjs can hold the notes copies to the app's.
+// and so scripts/notes-widget-smoke.mjs can hold the notes copies to the app's,
+// and scripts/plan-widget-smoke.mjs can feed the plan widget the real payload.
 exports.renderJson = renderJson;
 exports.renderIcs = renderIcs;
 exports.renderNotes = renderNotes;
@@ -669,3 +712,5 @@ exports.orderNotes = orderNotes;
 exports.onBriefNote = onBriefNote;
 exports.resolveNoteTitle = resolveNoteTitle;
 exports.loadNotes = loadNotes;
+exports.renderPlan = renderPlan;
+exports.loadPlan = loadPlan;

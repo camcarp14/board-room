@@ -113,15 +113,15 @@ stays simple. Tweak the markup freely — TRMNL's CSS framework is at
 
 ## How it works / notes
 
-- **One function, three views:** `netlify/functions/trmnl.js` — `?view=ics`
+- **One function, four views:** `netlify/functions/trmnl.js` — `?view=ics`
   returns `text/calendar`, `?view=json` returns the brief. Both are GET (TRMNL
-  polls with GET). The third, `?view=notes`, isn't for TRMNL: it feeds the
-  iPhone notes widget ([SCRIPTABLE.md](SCRIPTABLE.md)).
+  polls with GET). The other two, `?view=notes` and `?view=plan`, aren't for
+  TRMNL: they feed the iPhone notes and plan widgets ([SCRIPTABLE.md](SCRIPTABLE.md)).
 - **Security:** the token is required on every request; a wrong/missing token
   returns 401. Keep the URL private — the token in the query string is the only
   thing guarding your data (same "secret address" model as a private Google
   Calendar ICS link). The same token also reads your **notes** through
-  `?view=notes`. TRMNL only polls the `view=json`/`view=ics` URL you gave it,
+  `?view=notes` and your Daily Plan through `?view=plan`. TRMNL only polls the `view=json`/`view=ics` URL you gave it,
   but its servers hold the token, so anyone with that URL could swap the view
   and read notes. That is the trade for the notes widget needing no setup of its
   own; it is the same exposure your calendar events' notes already have.

@@ -397,12 +397,12 @@ const PARAMS = ["", "Groceries", "Captured — {date}", "Nope"];
 {
   const app = code(read("src/App.jsx"));
   check("App reads ?note once there is a session AND settings — after the hidden-tab bounce, not before it",
-    /if \(!session \|\| PREVIEW \|\| settings == null\) return;\s*const url = new URL\(window\.location\.href\);\s*if \(!url\.searchParams\.has\("note"\)\) return;/.test(app)
+    /if \(!session \|\| PREVIEW \|\| settings == null\) return;\s*const url = new URL\(window\.location\.href\);\s*const toNote = url\.searchParams\.has\("note"\)/.test(app)
     && /\}, \[!!session, settings != null\]\);/.test(app));
   check("…jumps to the Notes tab, and to the note when there is an id",
-    /jumpTo\(\{ page: "personal", sub: "notes", \.\.\.\(id \? \{ noteId: id \} : \{\}\) \}\)/.test(app));
+    /if \(toNote\) jumpTo\(\{ page: "personal", sub: "notes", \.\.\.\(id \? \{ noteId: id \} : \{\}\) \}\)/.test(app));
   check("…and takes the parameter back out, so a reload doesn't reopen it",
-    /url\.searchParams\.delete\("note"\);\s*window\.history\.replaceState\(/.test(app));
+    /url\.searchParams\.delete\("note"\);\s*url\.searchParams\.delete\("plan"\);\s*window\.history\.replaceState\(/.test(app));
   check("Personal maps the notes jump onto the tab that holds them",
     /notes: "notescal"/.test(code(read("src/pages/personal/PersonalPage.jsx"))));
   check("the service worker answers /?note=… with the app shell, offline too",
