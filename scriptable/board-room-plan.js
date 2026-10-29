@@ -741,21 +741,14 @@ function renderMedium(w, plan, where) {
   right.addSpacer();
 }
 
-// Large: the now panel, then the day hour by hour — past blocks quiet, the
-// current one on its own colored wash, and tomorrow's morning once today runs out.
 // Large: a compact "now" — the block and its countdown on one line, the bar under
 // them — then the day hour by hour from the current block, then a band: the next
 // calendar events beside the note named in the widget's parameter. The panel is
 // tighter than it was so the band fits under it on the smallest phone.
+// No date line on top: the Lock Screen and the clock already say what day it is,
+// and the NOW line is the thing to read first.
 function renderLarge(w, plan, where, data) {
   const cur = where.current;
-  const head = w.addStack();
-  head.centerAlignContent();
-  label(head, `TODAY · ${where.type === "weekend" ? "WEEKEND" : "WEEKDAY"}`, Font.semiboldSystemFont(10), C.accent);
-  head.addSpacer();
-  label(head, NOW.toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric" }), Font.mediumSystemFont(10), C.faint);
-  w.addSpacer(9);
-
   const hasBand = Array.isArray(data.events) || !!data.events_error || "note" in data;
 
   if (cur) {
@@ -797,36 +790,119 @@ function renderLarge(w, plan, where, data) {
     w.addSpacer(10);
     rule(w);
     w.addSpacer(7);
-    timeline(w, plan, where, hasBand ? 5 : 6);
+    // The day gets whatever height is left once the now panel and the band have
+    // theirs, so the widget is full on every phone and no day overflows it.
+    const top = cur ? HT.nowPanel : HT.beforePanel;
+    timeline(w, plan, where, largeRoom() - top - (hasBand ? bandHeight(data) : 0) - HT.margin);
   }
 
   w.addSpacer();
   if (hasBand) band(w, data);
 }
 
+// HEIGHTS, IN POINTS, of the large layout's pieces as they draw — measured off the
+// rendered widget and checked against a phone's screenshot (the gap a Pro Max
+// left above the band was the gap these predict). They let the day fill the
+// height that's left instead of a fixed count of rows, which either left a gap
+// or overflowed depending on the band: one event or two, a note of two lines or
+// four, a "TOMORROW" or not. If the layout above changes, these change with it.
+const HT = {
+  nowPanel: 77, // NOW line, name, bar, and the rule under them
+  beforePanel: 58, // "Starts 6:00 AM" and its countdown, and the rule
+  row: 26, // a row of the day and the gap under it
+  tomorrow: 13, // the TOMORROW label
+  bandTop: 9, // the band's rule and the gap under it
+  colHead: 16, // CALENDAR / the note's title, and the gap under it
+  eventNarrow: 28, eventNarrowGap: 6, // "when" over "what", beside a note
+  eventWide: 15, eventWideGap: 4, // one line each, on its own
+  textLine: 14.4, // one line of 12-point text
+  message: 27, // a two-line "Nothing in the next week." and its kin
+  more: 13, // the "+N more" under a note
+  divider: 66, // the rule between the two columns
+  margin: 6, // what's kept in hand for a font that sets a little taller
+};
+
+// The large widget's height, less its padding. Scriptable can't ask a widget how
+// tall it is, but the large size follows the screen's, so the screen picks from
+// Apple's sizes. Anything unrecognized — an iPad, a phone not out yet — is given
+// the smallest phone's, which only ever costs empty space, never clipped text.
+function largeRoom() {
+  let large = 324;
+  try {
+    if (!Device.isPad()) {
+      const sz = Device.screenSize();
+      const h = Math.max(sz.width, sz.height);
+      large = h >= 926 ? 382 : h >= 896 ? 379 : h >= 844 ? 354 : h >= 812 ? 345 : h >= 736 ? 357 : h >= 667 ? 324 : 311;
+    }
+  } catch {}
+  return large - 29; // setPadding(15, 15, 14, 15)
+}
+
+// What the band will draw, decided once so band() and bandHeight() can't disagree.
+function bandPlan(data) {
+  const hasCal = Array.isArray(data.events) || !!data.events_error;
+  const hasNote = "note" in data;
+  return { hasCal, hasNote, wide: !hasNote, calMax: hasNote ? 2 : 3, noteLines: hasCal ? 4 : 5 };
+}
+
+function bandHeight(data) {
+  const bp = bandPlan(data);
+  let cal = 0, note = 0;
+  if (bp.hasCal) {
+    const n = Array.isArray(data.events) ? upcomingEvents(data.events, NOW, bp.calMax).length : 0;
+    cal = HT.colHead + (!n ? HT.message
+      : bp.wide ? n * HT.eventWide + (n - 1) * HT.eventWideGap
+      : n * HT.eventNarrow + (n - 1) * HT.eventNarrowGap);
+  }
+  if (bp.hasNote) {
+    const n = data.note;
+    if (!n) note = HT.colHead + HT.message;
+    else {
+      // Lines as they'll wrap: about 20 characters of 12-point text fit half the
+      // width on the narrowest phone, 42 the whole of it.
+      const per = bp.hasCal ? 20 : 42;
+      const body = displayBody(n.body).split("\n");
+      const visual = body.reduce((sum, l) => sum + Math.max(1, Math.ceil(l.length / per)), 0);
+      note = HT.colHead + Math.min(visual, bp.noteLines) * HT.textLine + (body.length > bp.noteLines ? HT.more : 0);
+    }
+  }
+  return HT.bandTop + Math.max(cal, note, bp.hasCal && bp.hasNote ? HT.divider : 0);
+}
+
 // The day from the current block on (or from the first, before the day starts),
 // running into tomorrow's morning once today runs out.
-function timeline(w, plan, where, rows) {
+function timeline(w, plan, where, budget) {
   const cur = where.current;
   const run = dayRun(plan, NOW);
   const curAt = cur ? run.findIndex((b) => b.startMin === cur.startMin && b.title === cur.title) : -1;
   const nextAt = !cur && where.next ? run.findIndex((b) => b.startMin === where.next.startMin) : -1;
   const from = Math.max(0, curAt >= 0 ? curAt : nextAt);
-  let used = 0;
+  // Which rows fit, first; then draw them.
+  const rows = [];
+  let left = budget;
   let saidTomorrow = false;
-  for (let i = from; i < run.length && used < rows; i++) {
+  for (let i = from; i < run.length; i++) {
     const b = run[i];
     if (b.carried && i !== curAt) continue; // last night is only worth a row while it's still running
-    if (b.tomorrow && !saidTomorrow) {
-      if (used >= rows - 1) break;
-      saidTomorrow = true;
+    // The TOMORROW label only ever arrives with a row under it.
+    const withLabel = b.tomorrow && !saidTomorrow;
+    const cost = HT.row + (withLabel ? HT.tomorrow : 0);
+    if (cost > left) break;
+    if (withLabel) saidTomorrow = true;
+    rows.push({ b, withLabel, state: i === curAt ? "now" : "later" });
+    left -= cost;
+  }
+  // What's left after the last whole row is less than a row. Spread it between
+  // the rows (a few points each at most) so it doesn't sit as a strip of blank
+  // space above the band.
+  const ease = rows.length ? Math.min(4, Math.max(0, left) / rows.length) : 0;
+  for (const r of rows) {
+    if (r.withLabel) {
       label(w, "TOMORROW", Font.semiboldSystemFont(8), C.faint);
       w.addSpacer(3);
-      used += 0.5;
     }
-    timelineRow(w, b, i === curAt ? "now" : "later");
-    w.addSpacer(2);
-    used++;
+    timelineRow(w, r.b, r.state);
+    w.addSpacer(2 + ease);
   }
 }
 
@@ -834,21 +910,20 @@ function timeline(w, plan, where, rows) {
 // columns hold rows with a flexible spacer, so iOS splits the width evenly — or
 // the whole width when the widget has no note to show.
 function band(w, data) {
+  const bp = bandPlan(data);
   rule(w);
   w.addSpacer(8);
   const row = w.addStack();
   row.topAlignContent();
-  const hasCal = Array.isArray(data.events) || !!data.events_error;
-  const hasNote = "note" in data;
-  if (hasCal) calendarColumn(row, data, hasNote ? 2 : 3, !hasNote);
-  if (hasCal && hasNote) {
+  if (bp.hasCal) calendarColumn(row, data, bp.calMax, bp.wide);
+  if (bp.hasCal && bp.hasNote) {
     row.addSpacer(12);
     const div = row.addStack();
-    div.size = new Size(1, 66);
+    div.size = new Size(1, HT.divider);
     div.backgroundColor = C.line;
     row.addSpacer(12);
   }
-  if (hasNote) noteColumn(row, data, hasCal ? 4 : 5);
+  if (bp.hasNote) noteColumn(row, data, bp.noteLines);
 }
 
 function columnHead(col, text, dotColor) {
