@@ -387,6 +387,31 @@ function wantWhen(e, now) {
   check("a widget with a parameter keeps its own cache", files.length === 1 && /board-room-plan-development\.json$/.test(files[0]));
 }
 
+// ─── 3c. the large widget fits the phone it's on ─────────────────────────────
+// Asked for by the person who reads it: no date line on top (the Lock Screen has
+// one), and no strip of blank space above the band. The day takes the height
+// that's left, so a bigger phone shows more of it; an unrecognized device gets
+// the smallest phone's share rather than a guess that could clip.
+{
+  const t = new Date(2026, 9, 28, 20, 20).getTime();
+  const DEV = { events: CAL, note: { id: "n1", title: "Development", body: "- Gym/Body/Nutrition\n- Career/Experience", seal: "red" }, noteMatch: "Development" };
+  const rowsOn = async (screen, pad = false, extra = DEV) => {
+    const r = await runWidget(WIDGET, { family: "large", now: t, param: "Development", screen, pad, keychain: { [KEY]: TOKEN }, respond: feed(STARTER, extra) });
+    return { n: texts(r.widget).filter((x) => /^\d{1,2}:\d{2} [AP]M$/.test(x)).length, txt: texts(r.widget) };
+  };
+  const proMax = await rowsOn({ width: 430, height: 932 });
+  const pro = await rowsOn({ width: 393, height: 852 });
+  const se = await rowsOn({ width: 375, height: 667 });
+  const ipad = await rowsOn({ width: 1024, height: 1366 }, true);
+  check("no date line on top of the large widget",
+    !proMax.txt.some((x) => /^TODAY · /.test(x)) && !proMax.txt.some((x) => /^(Mon|Tue|Wed|Thu|Fri|Sat|Sun), [A-Z][a-z]{2} \d+$/.test(x)));
+  check("the day fills the height it has: more rows on a bigger phone", proMax.n > pro.n && pro.n >= se.n && se.n >= 3,
+    `Pro Max ${proMax.n}, 16 Pro ${pro.n}, SE ${se.n}`);
+  check("…and a device it doesn't recognize gets the smallest phone's share", ipad.n === se.n, `iPad ${ipad.n}, SE ${se.n}`);
+  const long = await rowsOn({ width: 375, height: 667 }, false, { events: CAL, note: { id: "n1", title: "Development", body: "- one\n- two\n- three\n- four\n- five\n- six", seal: "red" }, noteMatch: "Development" });
+  check("…and a taller band takes rows from the day rather than running off the bottom", long.n < se.n, `long note ${long.n}, short ${se.n}`);
+}
+
 // ─── 4. token, network, cache ────────────────────────────────────────────────
 {
   const t = new Date(2026, 9, 29, 10, 0).getTime();

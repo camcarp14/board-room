@@ -161,8 +161,10 @@ export function urls(node) {
  *   now           freeze the script's clock at this epoch ms: `new Date()` and
  *                 `Date.now()` both read it, and every other Date call works as
  *                 normal. Leave it out to run on the real clock.
+ *   screen        Device.screenSize() in points (default an iPhone 16 Pro's);
+ *                 pad: true makes Device.isPad() say so.
  */
-export async function runWidget(file, { family = "medium", param = "", inApp = false, keychain = {}, files = {}, respond, alertAnswers = [], now } = {}) {
+export async function runWidget(file, { family = "medium", param = "", inApp = false, keychain = {}, files = {}, respond, alertAnswers = [], now, screen = { width: 393, height: 852 }, pad = false } = {}) {
   const out = { widget: null, presented: null, requests: [], alerts: [], keychain: new Map(Object.entries(keychain)), files: new Map(Object.entries(files)), completed: false };
 
   function ListWidget() {
@@ -219,6 +221,7 @@ export async function runWidget(file, { family = "medium", param = "", inApp = f
     ListWidget,
     Color, Font, Size, Point, LinearGradient, SFSymbol, Request, Alert, Keychain, FileManager, Script,
     Date: now == null ? Date : frozenDate(now),
+    Device: { screenSize: () => new Size(screen.width, screen.height), isPad: () => !!pad, isPhone: () => !pad },
     // In the app, Scriptable's widgetFamily is null and a script falls back to
     // its own PREVIEW size. Passing family: null reproduces that exactly; any
     // other value lets an in-app run be checked at a chosen size.

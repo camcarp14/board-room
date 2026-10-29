@@ -62,6 +62,12 @@ calendar alone.
 If the calendar or the note can't be read, that column says so and the plan above
 it still draws; only the plan's own read failing falls back to the cache.
 
+The large widget has no date line (the Lock Screen has one), and the day takes
+whatever height the now panel and the band leave — more rows on a Pro Max than
+on an SE, fewer when the note runs long — with the remainder spread between the
+rows rather than left as a gap. The heights it budgets with are the `HT` table in
+the script; change the layout, change those.
+
 ### How it stays current
 
 **iOS doesn't let a widget refresh every few minutes** — each one gets a daily
