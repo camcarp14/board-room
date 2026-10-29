@@ -5,7 +5,7 @@ Screen and Lock Screen:
 
 | Widget | Shows | Reads |
 |---|---|---|
-| [`board-room-plan.js`](scriptable/board-room-plan.js) | Your Daily Plan — the block you're in, a live countdown, the day hour by hour | `trmnl?view=plan` |
+| [`board-room-plan.js`](scriptable/board-room-plan.js) | Your Daily Plan — the block you're in, a live countdown, the day hour by hour, your next events and a note | `trmnl?view=plan` |
 | [`board-room-notes.js`](scriptable/board-room-notes.js) | Your notes — the Brief's, or one note by name | `trmnl?view=notes` |
 | [`board-room-calendar.js`](scriptable/board-room-calendar.js) | Events, birthdays, and upkeep | `trmnl?view=json` |
 
@@ -38,12 +38,29 @@ Monday you're still in Sunday's Sleep.
 |---|---|
 | **Small** | Now, a progress bar, the countdown, what's next |
 | **Medium** | Now and the countdown on the left; Next and Then on the right |
-| **Large / XL** | Now with its note, then the day hour by hour — past blocks quiet, the current one on its color, tomorrow's morning once today runs out |
+| **Large / XL** | Now and its countdown, the day hour by hour from the current block (into tomorrow's morning once today runs out), and a band beneath: your next calendar events beside a note of your choosing |
 | **Lock Screen** | Rectangular: now, until when, a countdown, next. Inline: now · until. Circular: the kind's symbol and the countdown |
 
 Before the first block with nothing carried from last night it says when the day
 starts; a day type with no blocks says so and points at the Plan tab. Tapping
 opens the Plan tab (`/?plan`).
+
+### The band: calendar and a note
+
+The large widget ends with a band. **Calendar** is the Calendar tab's own events
+for the next week — two beside a note, three on their own — with repeating ones
+expanded on the phone exactly as the tab expands them in your browser (a copy of
+`src/lib/recurrence.js`, held to the original by the smoke). An event already
+under way stays listed until it ends.
+
+Set **Edit Widget → Parameter** to a note's title (e.g. `Development`) and that
+note's lines sit beside the calendar. It's matched the way the notes widget
+matches — case doesn't matter, and the start of a title is enough — so a note
+that had a widget of its own can move in here. Leave the parameter blank for the
+calendar alone.
+
+If the calendar or the note can't be read, that column says so and the plan above
+it still draws; only the plan's own read failing falls back to the cache.
 
 ### How it stays current
 
@@ -57,7 +74,8 @@ not to need it:
   after), and every `REFRESH_MINUTES` (15) in between so the progress bar keeps
   up. Asking for every 5 minutes would spend the day's budget by mid-afternoon,
   and the redraw that went missing would be the one at your hard stop.
-- **It works out "now" on the phone.** The feed only sends the two templates;
+- **It works out "now" on the phone.** The feed only sends the two templates
+  (plus the raw calendar rows and the note, for the band);
   the block, the countdown and what's next come from the phone's clock, so a
   redraw needs no network and is right on a plane. The templates are cached for
   a week (a set-once plan is the same plan), and marked `plan from <date>` once

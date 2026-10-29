@@ -21,8 +21,19 @@
 // SIZES
 //   small            now, the countdown, and what's next
 //   medium           now on the left; next and then on the right
-//   large / XL       now, then the day hour by hour
+//   large / XL       now, the day hour by hour, and a band beneath: your next
+//                    calendar events beside a note of your choosing
 //   Lock Screen      inline / circular / rectangular
+//
+// WIDGET PARAMETER (optional, Edit Widget → Parameter)
+//   a note's title    e.g. "Development" — that note's lines sit in the large
+//                     widget's band, beside the calendar. Matched the way the
+//                     notes widget matches: case doesn't matter, and the start
+//                     of a title is enough. Leave it blank for the calendar alone.
+//
+// THE CALENDAR is the Calendar tab's own events, repeating ones included — they
+// are expanded here, on the phone, exactly as the tab expands them in your
+// browser (a copy of src/lib/recurrence.js; see "calendar" below).
 //
 // HOW IT STAYS CURRENT — without asking iOS for the impossible:
 //   · The countdown is a live timer. iOS ticks it every second on its own; the
@@ -71,6 +82,13 @@ const KIND_HEX = {
 };
 const KIND_SYMBOL = { work: "briefcase.fill", body: "figure.run", life: "leaf.fill", rest: "moon.fill" };
 const kindKey = (k) => (KIND_HEX[k] ? k : "life");
+
+// The Calendar tab's category colors (EVENT_CATEGORIES), and the notes' four
+// seals (NOTE_SEALS) — the same values the calendar and notes widgets use.
+const CAT_HEX = { personal: ["#3568D4", "#4C82E8"], work: ["#B36514", "#BC7F24"], health: ["#278A4C", "#34A56E"], bills: ["#C93B32", "#E05548"] };
+const catColor = (k) => dyn(...(CAT_HEX[k] || CAT_HEX.personal));
+const SEAL_HEX = { brass: ["#87671D", "#D7AA42"], green: ["#278A4C", "#34A56E"], blue: ["#3568D4", "#4C82E8"], red: ["#C93B32", "#E05548"] };
+const sealDot = (seal) => (SEAL_HEX[seal] ? dyn(...SEAL_HEX[seal]) : null);
 const kindColor = (k, alpha) => dyn(KIND_HEX[kindKey(k)][0], KIND_HEX[kindKey(k)][1], alpha);
 
 // ── token ────────────────────────────────────────────────────────────────────
@@ -100,8 +118,11 @@ async function resolveToken() {
 }
 
 // ── data ─────────────────────────────────────────────────────────────────────
+// One cache per parameter, so a widget showing one note never falls back to
+// another widget's note.
 const fm = FileManager.local();
-const CACHE_PATH = fm.joinPath(fm.cacheDirectory(), "board-room-plan.json");
+const cacheSlug = String(args.widgetParameter || "").trim().toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "").slice(0, 40);
+const CACHE_PATH = fm.joinPath(fm.cacheDirectory(), `board-room-plan${cacheSlug ? `-${cacheSlug}` : ""}.json`);
 
 function cacheRead() {
   try {
@@ -121,8 +142,12 @@ function cacheWrite(data) {
   }
 }
 
+const PARAM = String(args.widgetParameter || "").trim();
+
 async function fetchPlan(token) {
-  const req = new Request(`${SITE}/.netlify/functions/trmnl?view=plan&token=${encodeURIComponent(token)}`);
+  let url = `${SITE}/.netlify/functions/trmnl?view=plan&token=${encodeURIComponent(token)}`;
+  if (PARAM) url += `&note=${encodeURIComponent(PARAM)}`;
+  const req = new Request(url);
   req.timeoutInterval = 10;
   const data = await req.loadJSON();
   if (data && data.success === false) {
@@ -313,6 +338,186 @@ function dayRun(plan, date) {
   return run;
 }
 
+// ── calendar ─────────────────────────────────────────────────────────────────
+// The Calendar tab's events, repeating ones expanded HERE. A series is one stored
+// row with an rrule, and "every Tuesday at 9" is 9 in the zone you live in —
+// local-calendar math, done with Date(y, m, d) constructors, which is why the feed
+// can't do it (it runs in UTC) and the phone can: it is where the tab does it too.
+//
+// A copy of normalizeRule, occurrenceDays and expandEvents from
+// src/lib/recurrence.js, trimmed to what a read-only list needs.
+// scripts/plan-widget-smoke.mjs runs this widget's Upcoming list against the
+// original's expansion over every rule shape and fails the build if they part.
+// Change one, change both.
+
+const FREQS = ["daily", "weekly", "monthly", "yearly"];
+const MAX_OCCURRENCES = 750;
+const MAX_SPAN_DAYS = 400;
+
+function dayKey(d) {
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+}
+function parseDayKey(key) {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(key || ""));
+  if (!m) return null;
+  const d = new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]));
+  return Number.isNaN(d.getTime()) ? null : d;
+}
+const startOfDay = (d) => new Date(d.getFullYear(), d.getMonth(), d.getDate());
+const addDays = (d, n) => new Date(d.getFullYear(), d.getMonth(), d.getDate() + n);
+function addMonthsClamped(d, n, anchorDay) {
+  const want = anchorDay ?? d.getDate();
+  const y = d.getFullYear();
+  const m = d.getMonth() + n;
+  const lastOfTarget = new Date(y, m + 1, 0).getDate();
+  return new Date(y, m, Math.min(want, lastOfTarget));
+}
+
+function normalizeRule(rrule) {
+  if (!rrule || typeof rrule !== "object") return null;
+  const freq = FREQS.includes(rrule.freq) ? rrule.freq : null;
+  if (!freq) return null;
+  const interval = Math.max(1, Math.min(365, Math.floor(Number(rrule.interval) || 1)));
+  const byWeekday = Array.isArray(rrule.byWeekday)
+    ? [...new Set(rrule.byWeekday.map((n) => Math.floor(Number(n))).filter((n) => n >= 0 && n <= 6))].sort((a, b) => a - b)
+    : [];
+  const count = Number.isFinite(Number(rrule.count)) && Number(rrule.count) > 0
+    ? Math.min(MAX_OCCURRENCES, Math.floor(Number(rrule.count))) : null;
+  const until = parseDayKey(rrule.until) ? String(rrule.until) : null;
+  return { freq, interval, byWeekday: freq === "weekly" ? byWeekday : [], until, count };
+}
+
+function occurrenceDays(master, from, to) {
+  const rule = normalizeRule(master && master.rrule);
+  const start = master && master.start_time ? new Date(master.start_time) : null;
+  if (!start || Number.isNaN(start.getTime())) return [];
+  const startDay = startOfDay(start);
+  const spanDays = (() => {
+    const end = master && master.end_time ? new Date(master.end_time) : null;
+    if (!end || Number.isNaN(end.getTime())) return 0;
+    const d = Math.round((startOfDay(end) - startDay) / 86400000);
+    return Number.isFinite(d) && d > 0 ? Math.min(d, MAX_SPAN_DAYS) : 0;
+  })();
+  const widen = (d) => (spanDays ? new Date(d.getFullYear(), d.getMonth(), d.getDate() - spanDays) : d);
+
+  if (!rule) {
+    const k = dayKey(startDay);
+    return startDay >= widen(startOfDay(from)) && startDay <= startOfDay(to) ? [k] : [];
+  }
+
+  const exdates = new Set(Array.isArray(master.exdates) ? master.exdates.map(String) : []);
+  const untilDay = rule.until ? parseDayKey(rule.until) : null;
+  const lo = widen(startOfDay(from));
+  const hi = startOfDay(to);
+  const out = [];
+  let emitted = 0;
+  const consider = (d) => {
+    if (untilDay && d > untilDay) return false;
+    if (rule.count != null && emitted >= rule.count) return false;
+    emitted += 1;
+    if (d >= lo && d <= hi) {
+      const k = dayKey(d);
+      if (!exdates.has(k)) out.push(k);
+    }
+    return true;
+  };
+  const daysBetween = (a, b) => Math.round((b - a) / 86400000);
+
+  if (rule.freq === "weekly") {
+    const days = rule.byWeekday.length ? rule.byWeekday : [startDay.getDay()];
+    let weekStart = addDays(startDay, -startDay.getDay());
+    const blocks = lo > weekStart ? Math.floor(Math.floor(daysBetween(weekStart, lo) / 7) / rule.interval) : 0;
+    if (blocks > 0) {
+      const firstBlock = days.filter((wd) => addDays(weekStart, wd) >= startDay).length;
+      emitted = firstBlock + (blocks - 1) * days.length;
+      weekStart = addDays(weekStart, 7 * rule.interval * blocks);
+    }
+    while (out.length < MAX_OCCURRENCES && weekStart <= hi) {
+      let alive = true;
+      for (const wd of days) {
+        const d = addDays(weekStart, wd);
+        if (d < startDay) continue;
+        if (!consider(d)) { alive = false; break; }
+      }
+      if (!alive) break;
+      weekStart = addDays(weekStart, 7 * rule.interval);
+    }
+    return out;
+  }
+
+  const anchorDom = startDay.getDate();
+  let d = startDay;
+  if (rule.freq === "daily" && lo > startDay) {
+    const steps = Math.ceil(daysBetween(startDay, lo) / rule.interval);
+    emitted = steps;
+    d = addDays(startDay, steps * rule.interval);
+  }
+  while (out.length < MAX_OCCURRENCES && d <= hi) {
+    if (!consider(d)) break;
+    if (rule.freq === "daily") d = addDays(d, rule.interval);
+    else if (rule.freq === "monthly") d = addMonthsClamped(d, rule.interval, anchorDom);
+    else d = addMonthsClamped(d, 12 * rule.interval, anchorDom);
+  }
+  return out;
+}
+
+function expandEvents(rows, from, to) {
+  const out = [];
+  for (const ev of Array.isArray(rows) ? rows : []) {
+    if (!ev || !ev.start_time) continue;
+    const start = new Date(ev.start_time);
+    if (Number.isNaN(start.getTime())) continue;
+    const days = occurrenceDays(ev, from, to);
+    if (!days.length) continue;
+    const end = ev.end_time ? new Date(ev.end_time) : null;
+    const durationMs = end && !Number.isNaN(end.getTime()) ? Math.max(0, end - start) : null;
+    for (const day of days) {
+      const base = parseDayKey(day);
+      if (!base) continue;
+      const s = new Date(base.getFullYear(), base.getMonth(), base.getDate(), start.getHours(), start.getMinutes(), 0, 0);
+      const e = durationMs == null ? null : new Date(s.getTime() + durationMs);
+      out.push({ ...ev, occurrenceDay: day, start_time: s.toISOString(), end_time: e ? e.toISOString() : null });
+    }
+  }
+  out.sort((a, b) => new Date(a.start_time) - new Date(b.start_time));
+  return out;
+}
+
+// What's still ahead in the next week, soonest first: a timed event until it
+// ends (an hour, when it has no end), an all-day one until its last day is over.
+// An event already under way is ahead of you in the sense that matters — you're
+// meant to be at it.
+function upcomingEvents(rows, now, max) {
+  const today = startOfDay(now);
+  const out = [];
+  for (const e of expandEvents(rows || [], today, addDays(today, 7))) {
+    const s = new Date(e.start_time);
+    if (e.all_day) {
+      const last = e.end_time ? startOfDay(new Date(e.end_time)) : startOfDay(s);
+      if (last < today) continue;
+    } else {
+      const end = e.end_time ? new Date(e.end_time) : new Date(s.getTime() + 3600000);
+      if (end <= now) continue;
+    }
+    out.push(e);
+    if (out.length >= max) break;
+  }
+  return out;
+}
+
+// "Today 2:00 PM", "Tomorrow · All day", "Fri 9:30 AM" — a week ahead at most,
+// so a weekday is never ambiguous. Something that began before today and is
+// still running is today's.
+function eventWhen(e, now) {
+  const s = new Date(e.start_time);
+  const day = startOfDay(s);
+  const today = startOfDay(now);
+  const label = day <= today ? "Today"
+    : day.getTime() === addDays(today, 1).getTime() ? "Tomorrow"
+    : s.toLocaleDateString("en-US", { weekday: "short" });
+  return e.all_day ? `${label} · All day` : `${label} ${fmtTime(s.getHours() * 60 + s.getMinutes())}`;
+}
+
 // ── drawing primitives ───────────────────────────────────────────────────────
 function label(container, text, font, color, lines = 1) {
   const t = container.addText(text);
@@ -339,6 +544,21 @@ function diamond(container, color, size = 7) {
     d.backgroundColor = color;
     return d;
   }
+}
+
+function dot(container, color, size = 6) {
+  const d = container.addStack();
+  d.size = new Size(size, size);
+  d.cornerRadius = size / 2;
+  d.backgroundColor = color;
+  return d;
+}
+
+// A note in the editor's list syntax reads as bullets, the way the notes widget
+// draws it; runs of blank lines fold to one.
+function displayBody(text) {
+  const lines = String(text || "").split("\n").map((l) => l.replace(/^(\s*)[-*]\s+/, "$1• ").trimEnd());
+  return lines.filter((l, i) => l.trim() || (i > 0 && lines[i - 1].trim())).join("\n").trim();
 }
 
 function rule(container) {
@@ -523,48 +743,75 @@ function renderMedium(w, plan, where) {
 
 // Large: the now panel, then the day hour by hour — past blocks quiet, the
 // current one on its own colored wash, and tomorrow's morning once today runs out.
-function renderLarge(w, plan, where, rows) {
+// Large: a compact "now" — the block and its countdown on one line, the bar under
+// them — then the day hour by hour from the current block, then a band: the next
+// calendar events beside the note named in the widget's parameter. The panel is
+// tighter than it was so the band fits under it on the smallest phone.
+function renderLarge(w, plan, where, data) {
   const cur = where.current;
   const head = w.addStack();
   head.centerAlignContent();
   label(head, `TODAY · ${where.type === "weekend" ? "WEEKEND" : "WEEKDAY"}`, Font.semiboldSystemFont(10), C.accent);
   head.addSpacer();
   label(head, NOW.toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric" }), Font.mediumSystemFont(10), C.faint);
-  w.addSpacer(10);
+  w.addSpacer(9);
 
-  if (!cur) {
-    if (!where.next) return emptyDay(w, where);
-    const panel = w.addStack();
-    panel.layoutVertically();
-    beforeDay(panel, where, "large");
-    w.addSpacer(12);
-  } else {
-    nowHeader(w, cur, 11);
-    w.addSpacer(5);
-    label(w, cur.title, Font.boldSystemFont(22), C.ink, 2);
-    if (cur.note) {
-      w.addSpacer(3);
-      label(w, cur.note, Font.systemFont(12), C.sub, 2);
-    } else if (cur.protected) {
-      w.addSpacer(4);
-      protectedLine(w, cur, 10);
-    }
-    w.addSpacer(10);
-    progressBar(w, where.progress, kindColor(cur.kind), 5);
+  const hasBand = Array.isArray(data.events) || !!data.events_error || "note" in data;
+
+  if (cur) {
+    // The countdown rides on the NOW line, where everything beside it is short,
+    // so the block's name gets the full width below — sharing a line with the
+    // timer, a long name like "Work — hardest thing first" squeezed it to "1…".
+    const h = w.addStack();
+    h.centerAlignContent();
+    diamond(h, kindColor(cur.kind), 8);
+    h.addSpacer(5);
+    label(h, "NOW", Font.semiboldSystemFont(10), kindColor(cur.kind));
+    h.addSpacer(6);
+    label(h, `until ${fmtTime(cur.endMin)}`, Font.mediumSystemFont(9), C.faint);
+    h.addSpacer(8);
+    countdown(h, instantAt(NOW, cur.endMin), timerFont(17), C.ink, "right");
+    w.addSpacer(2);
+    label(w, cur.title, Font.boldSystemFont(21), C.ink, 1);
     w.addSpacer(7);
+    progressBar(w, where.progress, kindColor(cur.kind), 5);
+  } else if (where.next) {
+    const h = w.addStack();
+    h.centerAlignContent();
+    label(h, "BEFORE YOUR DAY", Font.semiboldSystemFont(10), C.accent);
+    h.addSpacer();
+    label(h, `then ${where.next.title}`, Font.mediumSystemFont(9), C.faint);
+    w.addSpacer(3);
     const t = w.addStack();
     t.centerAlignContent();
-    countdown(t, instantAt(NOW, cur.endMin), timerFont(24), C.ink);
-    w.addSpacer(12);
+    label(t, `Starts ${fmtTime(where.next.startMin)}`, Font.boldSystemFont(21), C.ink, 1);
+    t.addSpacer(10);
+    countdown(t, instantAt(NOW, where.next.startMin), timerFont(21), C.ink, "right");
+  } else {
+    label(w, `No ${where.type} plan yet.`, Font.semiboldSystemFont(15), C.ink, 1);
+    w.addSpacer(2);
+    label(w, "Set the day once on the Plan tab, and this keeps you to it.", Font.systemFont(11), C.faint, 2);
   }
 
-  rule(w);
-  w.addSpacer(8);
+  if (cur || where.next) {
+    w.addSpacer(10);
+    rule(w);
+    w.addSpacer(7);
+    timeline(w, plan, where, hasBand ? 5 : 6);
+  }
 
+  w.addSpacer();
+  if (hasBand) band(w, data);
+}
+
+// The day from the current block on (or from the first, before the day starts),
+// running into tomorrow's morning once today runs out.
+function timeline(w, plan, where, rows) {
+  const cur = where.current;
   const run = dayRun(plan, NOW);
   const curAt = cur ? run.findIndex((b) => b.startMin === cur.startMin && b.title === cur.title) : -1;
   const nextAt = !cur && where.next ? run.findIndex((b) => b.startMin === where.next.startMin) : -1;
-  const from = Math.max(0, (curAt >= 0 ? curAt : nextAt) - 1);
+  const from = Math.max(0, curAt >= 0 ? curAt : nextAt);
   let used = 0;
   let saidTomorrow = false;
   for (let i = from; i < run.length && used < rows; i++) {
@@ -577,11 +824,104 @@ function renderLarge(w, plan, where, rows) {
       w.addSpacer(3);
       used += 0.5;
     }
-    timelineRow(w, b, i === curAt ? "now" : i < curAt || (curAt < 0 && i < nextAt) ? "past" : "later");
+    timelineRow(w, b, i === curAt ? "now" : "later");
     w.addSpacer(2);
     used++;
   }
-  w.addSpacer();
+}
+
+// The band under the day: Calendar | Note, each taking half the width — both
+// columns hold rows with a flexible spacer, so iOS splits the width evenly — or
+// the whole width when the widget has no note to show.
+function band(w, data) {
+  rule(w);
+  w.addSpacer(8);
+  const row = w.addStack();
+  row.topAlignContent();
+  const hasCal = Array.isArray(data.events) || !!data.events_error;
+  const hasNote = "note" in data;
+  if (hasCal) calendarColumn(row, data, hasNote ? 2 : 3, !hasNote);
+  if (hasCal && hasNote) {
+    row.addSpacer(12);
+    const div = row.addStack();
+    div.size = new Size(1, 66);
+    div.backgroundColor = C.line;
+    row.addSpacer(12);
+  }
+  if (hasNote) noteColumn(row, data, hasCal ? 4 : 5);
+}
+
+function columnHead(col, text, dotColor) {
+  const h = col.addStack();
+  h.centerAlignContent();
+  if (dotColor) {
+    dot(h, dotColor, 6);
+    h.addSpacer(5);
+  }
+  label(h, text.toUpperCase(), Font.semiboldSystemFont(9), C.faint);
+  h.addSpacer();
+  col.addSpacer(5);
+}
+
+function calendarColumn(container, data, max, wide) {
+  const col = container.addStack();
+  col.layoutVertically();
+  columnHead(col, "Calendar");
+  if (!Array.isArray(data.events)) {
+    label(col, "Couldn't read the calendar.", Font.systemFont(11), C.faint, 2);
+    return;
+  }
+  const list = upcomingEvents(data.events, NOW, max);
+  if (!list.length) label(col, "Nothing in the next week.", Font.systemFont(11), C.faint, 2);
+  list.forEach((e, i) => {
+    // Half the width: when over what. The whole width: one line each.
+    if (wide) {
+      if (i) col.addSpacer(4);
+      const row = col.addStack();
+      row.centerAlignContent();
+      dot(row, catColor(e.category), 6);
+      row.addSpacer(6);
+      label(row, eventWhen(e, NOW), Font.semiboldSystemFont(10), C.sub);
+      row.addSpacer(8);
+      label(row, e.title || "(untitled)", Font.systemFont(12), C.ink, 1);
+      row.addSpacer();
+      return;
+    }
+    if (i) col.addSpacer(6);
+    const when = col.addStack();
+    when.centerAlignContent();
+    dot(when, catColor(e.category), 6);
+    when.addSpacer(5);
+    label(when, eventWhen(e, NOW), Font.semiboldSystemFont(10), C.sub);
+    when.addSpacer();
+    col.addSpacer(1);
+    label(col, e.title || "(untitled)", Font.systemFont(12), C.ink, 1);
+  });
+}
+
+function noteColumn(container, data, lines) {
+  const col = container.addStack();
+  col.layoutVertically();
+  const n = data.note;
+  if (data.note_error && !n) {
+    columnHead(col, PARAM || "Note");
+    label(col, "Couldn't read your notes.", Font.systemFont(11), C.faint, 2);
+    return;
+  }
+  if (!n) {
+    columnHead(col, data.note_match || PARAM || "Note");
+    label(col, "No note by that name yet.", Font.systemFont(11), C.faint, 2);
+    return;
+  }
+  columnHead(col, n.title || "Note", sealDot(n.seal) || C.faint);
+  const body = displayBody(n.body).split("\n");
+  const shown = body.slice(0, lines);
+  if (!shown.join("").trim()) label(col, "Nothing in it yet.", Font.systemFont(11), C.faint);
+  else label(col, shown.join("\n"), Font.systemFont(12), C.ink, lines);
+  if (body.length > lines) {
+    col.addSpacer(2);
+    label(col, `+${body.length - lines} more`, Font.mediumSystemFont(9), C.faint);
+  }
 }
 
 function timelineRow(container, b, state) {
@@ -702,10 +1042,8 @@ function buildWidget(result, family) {
     case "accessoryCircular": renderAccessoryCircular(w, plan, where); break;
     case "accessoryRectangular": renderAccessoryRectangular(w, plan, where); break;
     case "small": renderSmall(w, plan, where); break;
-    // Six rows of the day, or five when the current block's note takes two
-    // lines above them — what fits the smallest phone's large widget.
     case "large":
-    case "extraLarge": renderLarge(w, plan, where, where.current && where.current.note ? 5 : 6); break;
+    case "extraLarge": renderLarge(w, plan, where, result.data); break;
     default: renderMedium(w, plan, where); break;
   }
 

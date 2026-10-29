@@ -26,6 +26,7 @@ import { createRequire } from "node:module";
 import { resolve } from "node:path";
 import esbuild from "esbuild";
 import { whereAmI, normalizePlan, fmtTime, STARTER } from "../src/features/plan/planLogic.js";
+import { expandEvents } from "../src/lib/recurrence.js";
 import { runWidget, texts, dates, urls } from "./scriptable-mock.mjs";
 
 let failed = 0;
@@ -71,7 +72,7 @@ try {
 } finally {
   rmSync(DIR, { recursive: true, force: true });
 }
-check("trmnl.js exports the plan pieces for this smoke", ["renderPlan", "loadPlan", "handler"].every((k) => typeof fn?.[k] === "function"));
+check("trmnl.js exports the plan pieces for this smoke", ["renderPlan", "loadPlan", "planEventsWindow", "handler"].every((k) => typeof fn?.[k] === "function"));
 if (!fn) {
   console.log(`\n${failed} check(s) failed`);
   process.exit(1);
@@ -93,26 +94,74 @@ const call = async (qs, answer) => {
   try { body = JSON.parse(res.body); } catch {}
   return { res, body, queries: globalThis.__fakeSupabase.queries };
 };
+// Each table answers for itself: the plan row, two calendar rows (one a series
+// begun long ago, one a one-off a year back that the window must drop), and
+// the note rows the notes widget's matcher picks from.
+const EV_SERIES = { id: "s", title: "Standup", start_time: "2025-01-06T15:00:00Z", end_time: "2025-01-06T15:15:00Z", all_day: false, category: "work", rrule: { freq: "weekly", byWeekday: [1, 3, 5] }, exdates: [], notes: "private", location: "Room 4" };
+const EV_OLD = { id: "o", title: "Long gone", start_time: "2025-10-01T15:00:00Z", end_time: null, all_day: false, category: "personal", rrule: null, exdates: null };
+const NOTE_ROWS = [{ id: "n1", title: "Development", body: "- Gym/Body/Nutrition\n- Career/Experience", color: "red", pinned: false, updated_at: "2026-10-28T12:00:00Z" }];
+const tables = (over = {}) => (q) => {
+  if (q.table in over) return over[q.table](q);
+  if (q.table === "app_settings") return has(q, "eq", "setting_key", "notes_order") ? { data: null, error: null } : { data: ROW, error: null };
+  if (q.table === "personal_events") return { data: [EV_SERIES, EV_OLD], error: null };
+  if (q.table === "personal_notes") return { data: NOTE_ROWS, error: null };
+  return { data: null, error: { message: `unexpected table ${q.table}` } };
+};
 try {
   {
-    const { res, queries } = await call({ view: "plan" }, () => ({ data: ROW, error: null }));
+    const { res, queries } = await call({ view: "plan" }, tables());
     check("the plan view refuses a caller with no token, before any read", res.statusCode === 401 && queries.length === 0);
   }
   {
-    const { res, body, queries } = await call({ view: "plan", token: ENV.TRMNL_TOKEN }, () => ({ data: ROW, error: null }));
+    const { res, body, queries } = await call({ view: "plan", token: ENV.TRMNL_TOKEN }, tables());
     check("with the token it answers the stored templates, as stored", res.statusCode === 200 && same(body?.plan, STARTER) && body?.updated_at === ROW.updated_at);
-    check("…from one read: the owner's daily_plan setting, and nothing else",
-      queries.length === 1 && queries[0].table === "app_settings"
-      && has(queries[0], "eq", "setting_key", "daily_plan") && has(queries[0], "eq", "user_id", UID));
+    const settings = queries.find((q) => q.table === "app_settings");
+    const events = queries.find((q) => q.table === "personal_events");
+    check("…reading the owner's daily_plan setting and calendar, and no notes when none is asked for",
+      queries.length === 2 && has(settings, "eq", "setting_key", "daily_plan") && has(settings, "eq", "user_id", UID)
+      && !!events && has(events, "eq", "user_id", UID) && !queries.some((q) => q.table === "personal_notes"));
+    check("…sending every series however old, and dropping the one-off a year back",
+      same(body?.events?.map((e) => e.id), ["s"]) && !("note" in (body || {})));
+    check("…with the fields the widget draws and nothing else (no event notes, no locations)",
+      same(Object.keys(body?.events?.[0] || {}).sort(), ["all_day", "category", "end_time", "exdates", "id", "rrule", "start_time", "title"]));
     check("…never cached", /no-store/.test(res.headers?.["Cache-Control"] || ""));
   }
   {
-    const { res, body } = await call({ view: "plan", token: ENV.TRMNL_TOKEN }, () => ({ data: null, error: null }));
+    const { body, queries } = await call({ view: "plan", token: ENV.TRMNL_TOKEN, note: "development" }, tables());
+    check("&note= adds that note, matched the way the notes widget matches",
+      body?.note?.id === "n1" && body?.note_match === "development" && queries.some((q) => q.table === "personal_notes"));
+    const none = await call({ view: "plan", token: ENV.TRMNL_TOKEN, note: "Nope" }, tables());
+    check("…and a name with no note is note: null — asked for, not found", "note" in (none.body || {}) && none.body.note === null && none.body.note_match === "Nope");
+  }
+  {
+    const { res, body } = await call({ view: "plan", token: ENV.TRMNL_TOKEN, note: "Development" },
+      tables({ personal_events: () => ({ data: null, error: { message: "calendar down" } }), personal_notes: () => ({ data: null, error: { code: "XX000", message: "notes down" } }) }));
+    check("a calendar or notes failure is reported in the answer, and the plan still arrives",
+      res.statusCode === 200 && same(body?.plan, STARTER) && body?.events === null && /calendar down/.test(body?.events_error || "")
+      && body?.note === null && /notes down/.test(body?.note_error || ""));
+  }
+  {
+    const { res, body } = await call({ view: "plan", token: ENV.TRMNL_TOKEN }, tables({ app_settings: () => ({ data: null, error: null }) }));
     check("no plan saved is plan: null, not an error", res.statusCode === 200 && body?.plan === null);
   }
   {
-    const { res, body } = await call({ view: "plan", token: ENV.TRMNL_TOKEN }, () => ({ data: null, error: { message: "db down" } }));
-    check("a failed read is a 502 saying why — not 'no plan yet'", res.statusCode === 502 && /db down/.test(body?.error || ""));
+    const { res, body } = await call({ view: "plan", token: ENV.TRMNL_TOKEN }, tables({ app_settings: () => ({ data: null, error: { message: "db down" } }) }));
+    check("a failed PLAN read is a 502 saying why — not 'no plan yet'", res.statusCode === 502 && /db down/.test(body?.error || ""));
+  }
+  {
+    const NOW = Date.parse("2026-10-28T15:00:00Z");
+    const day = 86400000;
+    const rows = [
+      { id: "series", start_time: "2020-01-01T15:00:00Z", rrule: { freq: "yearly" } },
+      { id: "today", start_time: new Date(NOW + 3600000).toISOString() },
+      { id: "endsInWindow", start_time: new Date(NOW - 10 * day).toISOString(), end_time: new Date(NOW - day).toISOString() },
+      { id: "endedBefore", start_time: new Date(NOW - 10 * day).toISOString(), end_time: new Date(NOW - 3 * day).toISOString() },
+      { id: "twoWeeks", start_time: new Date(NOW + 15 * day).toISOString() },
+      { id: "tooFar", start_time: new Date(NOW + 17 * day).toISOString() },
+      { id: "noStart" },
+    ];
+    check("the window: every series, and one-offs touching two days back to sixteen ahead",
+      same(fn.planEventsWindow(rows, NOW).map((e) => e.id), ["series", "today", "endsInWindow", "twoWeeks"]));
   }
 } finally {
   for (const k of ENV_KEYS) { if (savedEnv[k] == null) delete process.env[k]; else process.env[k] = savedEnv[k]; }
@@ -124,10 +173,10 @@ const WIDGET = "scriptable/board-room-plan.js";
 const SITE = "https://board-room.netlify.app";
 const KEY = "boardroom.trmnl.token";
 const TOKEN = "phone-token-0123456789";
-const feed = (plan) => (url) => {
+const feed = (plan, extra = {}) => (url) => {
   const u = new URL(url);
   if (u.searchParams.get("token") !== TOKEN) return { success: false, error: "Missing or incorrect token." };
-  return fn.renderPlan({ plan, updated_at: null });
+  return fn.renderPlan({ plan, updated_at: null, ...extra });
 };
 const run = (plan, now, extra = {}) => runWidget(WIDGET, { family: "small", now, keychain: { [KEY]: TOKEN }, respond: feed(plan), ...extra });
 // The instant a minute-of-day lands on from `t`'s local midnight — planLogic's
@@ -217,8 +266,8 @@ await sweep("no plan saved at all is the empty state, all day", null, new Date(2
     && txt.includes("THEN") && txt.includes("1:00 PM") && txt.indexOf("NEXT") < txt.indexOf("THEN"));
   const l = await runWidget(WIDGET, { family: "large", now: t, keychain: { [KEY]: TOKEN }, respond: feed(STARTER) });
   const lt = texts(l.widget);
-  check("large lists the day hour by hour from the block before this one",
-    ["7:30 AM", "8:30 AM", "12:00 PM", "1:00 PM", "5:30 PM"].every((s) => lt.includes(s)) && lt.includes("now"));
+  check("large lists the day hour by hour from the current block, which it marks",
+    ["8:30 AM", "12:00 PM", "1:00 PM", "5:30 PM"].every((s) => lt.includes(s)) && !lt.includes("7:30 AM") && lt.includes("now"));
   const eve = await runWidget(WIDGET, { family: "large", now: new Date(2026, 9, 29, 21, 0).getTime(), keychain: { [KEY]: TOKEN }, respond: feed(STARTER) });
   check("…and once today runs out, carries on into tomorrow's morning",
     texts(eve.widget).includes("TOMORROW") && texts(eve.widget).includes("Up — phone stays down"));
@@ -252,6 +301,90 @@ await sweep("no plan saved at all is the empty state, all day", null, new Date(2
     }
   }
   check(`it builds at every size (${FAMILIES.length}) in every state of the day (${CASES.length}), and a tap opens the Plan tab`, !crashed, crashed);
+}
+
+// ─── 3b. the band: the calendar, held to recurrence.js; and the note ─────────
+// The rows below cover every rule shape the Calendar tab writes, placed around
+// the night the clocks go back. The widget expands them itself; what it lists
+// is held to expandEvents() from src/lib/recurrence.js, the Calendar tab's own
+// expansion, every four hours for two weeks.
+const L = (y, m, d, h = 0, min = 0) => new Date(y, m - 1, d, h, min).toISOString(); // local wall time → stored ISO
+const CAL = [
+  { id: "c1", title: "Standup", start_time: L(2025, 1, 6, 9), end_time: L(2025, 1, 6, 9, 15), all_day: false, category: "work",
+    rrule: { freq: "weekly", byWeekday: [1, 3, 5] }, exdates: ["2026-10-30", "2026-11-04"] },
+  { id: "c2", title: "Rent", start_time: L(2026, 1, 31), end_time: null, all_day: true, category: "bills", rrule: { freq: "monthly" }, exdates: [] },
+  { id: "c3", title: "Pills", start_time: L(2026, 10, 27, 8), end_time: null, all_day: false, category: "health", rrule: { freq: "daily", count: 5 }, exdates: [] },
+  { id: "c4", title: "Book club", start_time: L(2026, 10, 1, 19), end_time: L(2026, 10, 1, 20, 30), all_day: false, category: "personal",
+    rrule: { freq: "weekly", interval: 2, until: "2026-11-20" }, exdates: [] },
+  { id: "c5", title: "Trip", start_time: L(2026, 10, 29), end_time: L(2026, 11, 1), all_day: true, category: "personal", rrule: null, exdates: [] },
+  { id: "c6", title: "Dentist", start_time: L(2026, 10, 30, 14), end_time: L(2026, 10, 30, 15), all_day: false, category: "health", rrule: null, exdates: [] },
+  { id: "c7", title: "Old thing", start_time: L(2026, 10, 1, 10), end_time: null, all_day: false, category: "personal", rrule: null, exdates: [] },
+  { id: "c8", title: "Late call", start_time: L(2026, 11, 2, 20), end_time: null, all_day: false, category: "work", rrule: null, exdates: [] },
+  { id: "c9", title: "Anniversary dinner", start_time: L(2020, 11, 3, 18), end_time: L(2020, 11, 3, 20), all_day: false, category: "personal", rrule: { freq: "yearly" }, exdates: [] },
+];
+const sod = (d) => new Date(d.getFullYear(), d.getMonth(), d.getDate());
+// What the band should list: recurrence.js's occurrences for the next week, less
+// what's over — a timed event once it ends (an hour if it has no end), an
+// all-day one once its last day has passed.
+function wantUpcoming(rows, now, max) {
+  const today = sod(now);
+  return expandEvents(rows, today, new Date(today.getFullYear(), today.getMonth(), today.getDate() + 7)).filter((e) => {
+    const s = new Date(e.start_time);
+    if (e.all_day) return (e.end_time ? sod(new Date(e.end_time)) : sod(s)) >= today;
+    return (e.end_time ? new Date(e.end_time) : new Date(s.getTime() + 3600000)) > now;
+  }).slice(0, max);
+}
+function wantWhen(e, now) {
+  const s = new Date(e.start_time), today = sod(now), day = sod(s);
+  const tomorrow = new Date(today.getFullYear(), today.getMonth(), today.getDate() + 1);
+  const label = day <= today ? "Today" : day.getTime() === tomorrow.getTime() ? "Tomorrow" : s.toLocaleDateString("en-US", { weekday: "short" });
+  return e.all_day ? `${label} · All day` : `${label} ${fmtTime(s.getHours() * 60 + s.getMinutes())}`;
+}
+{
+  let bad = "", n = 0;
+  for (let t = new Date(2026, 9, 26, 6, 0).getTime(); t <= new Date(2026, 10, 25, 6, 0).getTime() && !bad; t += 4 * 3600000) {
+    n++;
+    const r = await runWidget(WIDGET, { family: "large", now: t, keychain: { [KEY]: TOKEN }, respond: feed(STARTER, { events: CAL }) });
+    const txt = texts(r.widget);
+    const at = txt.indexOf("CALENDAR");
+    const want = wantUpcoming(CAL, new Date(t), 3).flatMap((e) => [wantWhen(e, new Date(t)), e.title]);
+    const got = at < 0 ? null : txt.slice(at + 1, at + 1 + Math.max(want.length, 1));
+    if (!want.length ? !(got && got[0] === "Nothing in the next week.") : !same(got, want)) {
+      bad = `${new Date(t).toString().slice(0, 21)}: listed ${JSON.stringify(got)}, recurrence.js says ${JSON.stringify(want)}`;
+    }
+  }
+  check(`the band lists the calendar's next three exactly as recurrence.js expands it — every rule shape, a month of instants, through the clock change and a 30-day month (${n} instants)`, !bad, bad);
+}
+{
+  const t = new Date(2026, 9, 28, 20, 20).getTime(); // Wed evening, as in the screenshot
+  const r = await runWidget(WIDGET, { family: "large", now: t, param: "Development", keychain: { [KEY]: TOKEN },
+    respond: feed(STARTER, { events: CAL, note: { id: "n1", title: "Development", body: "- Gym/Body/Nutrition\n- Career/Experience", seal: "red" }, noteMatch: "Development" }) });
+  const txt = texts(r.widget);
+  check("with a note named in the parameter, it asks for it and draws it beside the calendar",
+    new URL(r.requests[0] || "about:blank").searchParams.get("note") === "Development"
+    && txt.includes("DEVELOPMENT") && txt.includes("• Gym/Body/Nutrition\n• Career/Experience")
+    && txt.includes("CALENDAR") && txt.indexOf("CALENDAR") < txt.indexOf("DEVELOPMENT"));
+  check("…with two events beside a note (three without one — the sweep above)",
+    txt.slice(txt.indexOf("CALENDAR") + 1, txt.indexOf("DEVELOPMENT")).length === 4);
+  check("…and the countdown on the NOW line, clear of the block's name", (() => {
+    const nodes = (n) => (n ? [n, ...(n.children || []).flatMap(nodes)] : []);
+    const nowLine = nodes(r.widget).find((x) => x.kind === "stack" && x.children.some((c) => c.kind === "text" && c.text === "NOW"));
+    return !!nowLine && nowLine.children.some((c) => c.kind === "date" && c.style === "timer");
+  })());
+  check("…and the hour-by-hour list keeps the current block and what follows",
+    txt.includes("Evening") && txt.includes("Wind down — screens off") && txt.includes("now"));
+  const missing = await runWidget(WIDGET, { family: "large", now: t, param: "Nope", keychain: { [KEY]: TOKEN }, respond: feed(STARTER, { events: CAL, note: null, noteMatch: "Nope" }) });
+  check("a name with no note says so in the band", texts(missing.widget).includes("No note by that name yet."));
+  const broken = await runWidget(WIDGET, { family: "large", now: t, param: "Development", keychain: { [KEY]: TOKEN },
+    respond: feed(STARTER, { events: null, eventsError: "x", note: null, noteMatch: "Development", noteError: "y" }) });
+  check("a calendar or notes failure says so in its own column, under a plan that still draws",
+    texts(broken.widget).includes("Couldn't read the calendar.") && texts(broken.widget).includes("Couldn't read your notes.") && texts(broken.widget).includes("Evening"));
+  const older = await runWidget(WIDGET, { family: "large", now: t, keychain: { [KEY]: TOKEN }, respond: feed(STARTER) });
+  check("a payload from before the band (an older cache) draws the day without one",
+    !texts(older.widget).includes("CALENDAR") && texts(older.widget).includes("Evening"));
+  const pin = await runWidget(WIDGET, { family: "large", now: t, param: "Development", keychain: { [KEY]: TOKEN }, respond: feed(STARTER, { events: CAL }) });
+  const files = [...pin.files.keys()];
+  check("a widget with a parameter keeps its own cache", files.length === 1 && /board-room-plan-development\.json$/.test(files[0]));
 }
 
 // ─── 4. token, network, cache ────────────────────────────────────────────────

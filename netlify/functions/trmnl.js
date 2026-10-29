@@ -25,8 +25,10 @@
 //                 and has no use for note bodies.
 //
 //   ?view=plan  → the Daily Plan tab's two templates, for the Scriptable plan
-//                 widget (scriptable/board-room-plan.js). Sent as stored; the
-//                 widget works out where the day is on the phone (renderPlan).
+//                 widget (scriptable/board-room-plan.js), with the calendar rows
+//                 for its Upcoming band and, with &note=<title>, one note. All
+//                 sent as stored; the widget works out where the day is, and
+//                 expands repeating events, on the phone (renderPlan).
 //
 // SECURITY: like export-data.js, this uses the Supabase SERVICE ROLE key, which
 // bypasses RLS — necessary because TRMNL polls with no logged-in session. So the
@@ -596,13 +598,61 @@ async function loadPlan(supabase, userId) {
   return { plan: r.data?.setting_value ?? null, updated_at: r.data?.updated_at ?? null, errors: [] };
 }
 
-function renderPlan({ plan = null, updated_at = null } = {}, now = Date.now()) {
-  return {
+// The calendar rows the plan widget's Upcoming list is drawn from — RAW, for the
+// same reason the plan is. A repeating event is one stored row with an rrule, and
+// expanding it is local-calendar math (src/lib/recurrence.js: "EVERYTHING HERE IS
+// LOCAL-CALENDAR MATH"): "every Tuesday at 9" lands at 9 in the zone the person
+// lives in, through the night the clocks change. This function runs in UTC; the
+// phone runs where the Calendar tab does. So the widget expands, with its own copy
+// of recurrence.js held to the original by scripts/plan-widget-smoke.mjs, and this
+// only narrows what it is sent: every series (a weekly meeting begun in 2024 is
+// still this week's), and each one-off that touches the next two weeks, with two
+// days' slack either side for wherever the phone places it.
+const PLAN_EVENT_COLS = "id,title,start_time,end_time,all_day,category,rrule,exdates";
+function planEventsWindow(rows, now = Date.now()) {
+  const lo = now - 2 * 86400000, hi = now + 16 * 86400000;
+  return (rows || [])
+    .filter((e) => {
+      if (!e || !e.start_time) return false;
+      if (e.rrule) return true;
+      const s = Date.parse(e.start_time);
+      if (Number.isNaN(s) || s > hi) return false;
+      const end = Date.parse(e.end_time || "");
+      return (Number.isNaN(end) ? s : end) >= lo;
+    })
+    .map((e) => ({
+      id: e.id, title: e.title || "(untitled)", start_time: e.start_time, end_time: e.end_time || null,
+      all_day: !!e.all_day, category: e.category || "personal", rrule: e.rrule || null,
+      exdates: Array.isArray(e.exdates) ? e.exdates : [],
+    }));
+}
+async function loadPlanEvents(supabase, userId, now = Date.now()) {
+  const scope = (q) => (userId ? q.eq("user_id", userId) : q);
+  const r = await scope(supabase.from("personal_events").select(PLAN_EVENT_COLS));
+  if (r.error) return { events: null, error: `personal_events: ${r.error.message}` };
+  return { events: planEventsWindow(r.data, now), error: null };
+}
+
+// THE PLAN IS THE WIDGET; THE CALENDAR AND THE NOTE ARE ITS COMPANY. A failure
+// reading either of them is reported inside the payload (events_error,
+// note_error) and the widget says so in that band, rather than the whole answer
+// becoming a 502 — a calendar blip is no reason for the day's plan to go blank.
+// Only the plan's own read failing is a 502, which is the case the widget's
+// cache exists for.
+function renderPlan({ plan = null, updated_at = null, events, eventsError, note, noteMatch, noteError } = {}, now = Date.now()) {
+  const out = {
     generated_at: new Date(now).toLocaleString("en-US", { timeZone: TZ, month: "short", day: "numeric", hour: "numeric", minute: "2-digit" }),
     tz: TZ,
     updated_at,
     plan,
   };
+  if (events !== undefined) out.events = events;
+  if (eventsError) out.events_error = eventsError;
+  // `note` is only in the answer when one was asked for (&note=), so "asked and
+  // not found" (null) and "never asked" (absent) stay different things.
+  if (note !== undefined) { out.note = note; out.note_match = noteMatch || ""; }
+  if (noteError) out.note_error = noteError;
+  return out;
 }
 
 // ── handler ──────────────────────────────────────────────────────────────────
@@ -668,9 +718,25 @@ exports.handler = async (event) => {
     }
     // The plan view, likewise, reads one settings row and nothing else.
     if (view === "plan") {
-      const plan = await loadPlan(supabase, userId);
+      // &note=<title> adds one note (the same match the notes widget makes);
+      // without it, personal_notes is never read.
+      const wantNote = String(q.note || "").trim();
+      const [plan, cal, notes] = await Promise.all([
+        loadPlan(supabase, userId),
+        loadPlanEvents(supabase, userId),
+        wantNote ? loadNotes(supabase, userId) : null,
+      ]);
       if (plan.errors.length) return readFailed(plan.errors);
-      return jsonRes(200, renderPlan(plan), { "Cache-Control": "private, no-store" });
+      const picked = notes && !notes.errors.length ? renderNotes(notes, { note: wantNote }) : null;
+      return jsonRes(200, renderPlan({
+        ...plan,
+        events: cal.events, eventsError: cal.error,
+        ...(wantNote ? {
+          note: picked ? picked.notes[0] || null : null,
+          noteMatch: picked ? picked.match : wantNote,
+          noteError: notes.errors.length ? notes.errors.join("; ") : null,
+        } : {}),
+      }), { "Cache-Control": "private, no-store" });
     }
 
     const data = await loadAll(supabase, userId);
@@ -714,3 +780,4 @@ exports.resolveNoteTitle = resolveNoteTitle;
 exports.loadNotes = loadNotes;
 exports.renderPlan = renderPlan;
 exports.loadPlan = loadPlan;
+exports.planEventsWindow = planEventsWindow;
