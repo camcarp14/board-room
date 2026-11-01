@@ -483,14 +483,17 @@ function expandEvents(rows, from, to) {
   return out;
 }
 
-// What's still ahead in the next week, soonest first: a timed event until it
+// What's still ahead, soonest first, looking a month out: a timed event until it
 // ends (an hour, when it has no end), an all-day one until its last day is over.
 // An event already under way is ahead of you in the sense that matters — you're
-// meant to be at it.
+// meant to be at it. A month, not a week: with a quiet week the band used to show
+// one event and a gap, while the trip two weeks out — the thing worth seeing
+// coming — wasn't on it at all.
+const LOOKAHEAD_DAYS = 30;
 function upcomingEvents(rows, now, max) {
   const today = startOfDay(now);
   const out = [];
-  for (const e of expandEvents(rows || [], today, addDays(today, 7))) {
+  for (const e of expandEvents(rows || [], today, addDays(today, LOOKAHEAD_DAYS))) {
     const s = new Date(e.start_time);
     if (e.all_day) {
       const last = e.end_time ? startOfDay(new Date(e.end_time)) : startOfDay(s);
@@ -505,16 +508,17 @@ function upcomingEvents(rows, now, max) {
   return out;
 }
 
-// "Today 2:00 PM", "Tomorrow · All day", "Fri 9:30 AM" — a week ahead at most,
-// so a weekday is never ambiguous. Something that began before today and is
-// still running is today's.
+// "Today 2:00 PM", "Tomorrow · All day", "Fri 9:30 AM" within the week — and a
+// date past it, "Sat, Nov 14", where a weekday alone would mean this one.
+// Something that began before today and is still running is today's.
 function eventWhen(e, now) {
   const s = new Date(e.start_time);
   const day = startOfDay(s);
   const today = startOfDay(now);
   const label = day <= today ? "Today"
     : day.getTime() === addDays(today, 1).getTime() ? "Tomorrow"
-    : s.toLocaleDateString("en-US", { weekday: "short" });
+    : day < addDays(today, 7) ? s.toLocaleDateString("en-US", { weekday: "short" })
+    : s.toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric" });
   return e.all_day ? `${label} · All day` : `${label} ${fmtTime(s.getHours() * 60 + s.getMinutes())}`;
 }
 
@@ -813,7 +817,7 @@ const HT = {
   eventNarrow: 28, eventNarrowGap: 6, // "when" over "what", beside a note
   eventWide: 15, eventWideGap: 4, // one line each, on its own
   textLine: 14.4, // one line of 12-point text
-  message: 27, // a two-line "Nothing in the next week." and its kin
+  message: 27, // a two-line "Nothing in the next month." and its kin
   more: 13, // the "+N more" under a note
   divider: 66, // the rule between the two columns
   margin: 3, // what's kept in hand for a font that sets a little taller
@@ -944,7 +948,7 @@ function calendarColumn(container, data, max, wide) {
     return;
   }
   const list = upcomingEvents(data.events, NOW, max);
-  if (!list.length) label(col, "Nothing in the next week.", Font.systemFont(11), C.faint, 2);
+  if (!list.length) label(col, "Nothing in the next month.", Font.systemFont(11), C.faint, 2);
   list.forEach((e, i) => {
     // Half the width: when over what. The whole width: one line each.
     if (wide) {

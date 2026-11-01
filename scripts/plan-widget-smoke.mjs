@@ -156,12 +156,12 @@ try {
       { id: "today", start_time: new Date(NOW + 3600000).toISOString() },
       { id: "endsInWindow", start_time: new Date(NOW - 10 * day).toISOString(), end_time: new Date(NOW - day).toISOString() },
       { id: "endedBefore", start_time: new Date(NOW - 10 * day).toISOString(), end_time: new Date(NOW - 3 * day).toISOString() },
-      { id: "twoWeeks", start_time: new Date(NOW + 15 * day).toISOString() },
-      { id: "tooFar", start_time: new Date(NOW + 17 * day).toISOString() },
+      { id: "aMonth", start_time: new Date(NOW + 31 * day).toISOString() },
+      { id: "tooFar", start_time: new Date(NOW + 33 * day).toISOString() },
       { id: "noStart" },
     ];
-    check("the window: every series, and one-offs touching two days back to sixteen ahead",
-      same(fn.planEventsWindow(rows, NOW).map((e) => e.id), ["series", "today", "endsInWindow", "twoWeeks"]));
+    check("the window: every series, and one-offs touching two days back to thirty-two ahead",
+      same(fn.planEventsWindow(rows, NOW).map((e) => e.id), ["series", "today", "endsInWindow", "aMonth"]));
   }
 } finally {
   for (const k of ENV_KEYS) { if (savedEnv[k] == null) delete process.env[k]; else process.env[k] = savedEnv[k]; }
@@ -331,7 +331,7 @@ const sod = (d) => new Date(d.getFullYear(), d.getMonth(), d.getDate());
 // all-day one once its last day has passed.
 function wantUpcoming(rows, now, max) {
   const today = sod(now);
-  return expandEvents(rows, today, new Date(today.getFullYear(), today.getMonth(), today.getDate() + 7)).filter((e) => {
+  return expandEvents(rows, today, new Date(today.getFullYear(), today.getMonth(), today.getDate() + 30)).filter((e) => {
     const s = new Date(e.start_time);
     if (e.all_day) return (e.end_time ? sod(new Date(e.end_time)) : sod(s)) >= today;
     return (e.end_time ? new Date(e.end_time) : new Date(s.getTime() + 3600000)) > now;
@@ -340,7 +340,10 @@ function wantUpcoming(rows, now, max) {
 function wantWhen(e, now) {
   const s = new Date(e.start_time), today = sod(now), day = sod(s);
   const tomorrow = new Date(today.getFullYear(), today.getMonth(), today.getDate() + 1);
-  const label = day <= today ? "Today" : day.getTime() === tomorrow.getTime() ? "Tomorrow" : s.toLocaleDateString("en-US", { weekday: "short" });
+  const weekOut = new Date(today.getFullYear(), today.getMonth(), today.getDate() + 7);
+  const label = day <= today ? "Today" : day.getTime() === tomorrow.getTime() ? "Tomorrow"
+    : day < weekOut ? s.toLocaleDateString("en-US", { weekday: "short" })
+    : s.toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric" });
   return e.all_day ? `${label} · All day` : `${label} ${fmtTime(s.getHours() * 60 + s.getMinutes())}`;
 }
 {
@@ -352,7 +355,7 @@ function wantWhen(e, now) {
     const at = txt.indexOf("CALENDAR");
     const want = wantUpcoming(CAL, new Date(t), 3).flatMap((e) => [wantWhen(e, new Date(t)), e.title]);
     const got = at < 0 ? null : txt.slice(at + 1, at + 1 + Math.max(want.length, 1));
-    if (!want.length ? !(got && got[0] === "Nothing in the next week.") : !same(got, want)) {
+    if (!want.length ? !(got && got[0] === "Nothing in the next month.") : !same(got, want)) {
       bad = `${new Date(t).toString().slice(0, 21)}: listed ${JSON.stringify(got)}, recurrence.js says ${JSON.stringify(want)}`;
     }
   }
@@ -387,6 +390,22 @@ function wantWhen(e, now) {
   const pin = await runWidget(WIDGET, { family: "large", now: t, param: "Development", keychain: { [KEY]: TOKEN }, respond: feed(STARTER, { events: CAL }) });
   const files = [...pin.files.keys()];
   check("a widget with a parameter keeps its own cache", files.length === 1 && /board-room-plan-development\.json$/.test(files[0]));
+}
+
+{
+  // The owner's week that prompted the month: a monthly bill on the 1st and a
+  // trip two weeks out. Looking a week ahead, the band showed the bill and a gap.
+  const t = new Date(2026, 9, 31, 19, 9).getTime(); // Sat Oct 31, 7:09 PM
+  const rows = [
+    { id: "rent", title: "Rent Due", start_time: L(2026, 8, 1), end_time: null, all_day: true, category: "personal", rrule: { freq: "monthly", interval: 1 }, exdates: [] },
+    { id: "trip", title: "Drive to La Crosse", start_time: L(2026, 11, 14), end_time: null, all_day: true, category: "personal", rrule: null, exdates: [] },
+  ];
+  const r = await runWidget(WIDGET, { family: "large", now: t, param: "Development", keychain: { [KEY]: TOKEN },
+    respond: feed(STARTER, { events: fn.planEventsWindow(rows, t), note: { id: "n1", title: "Development", body: "- Gym/Body/Nutrition\n- Career/Experience", seal: "red" }, noteMatch: "Development" }) });
+  const txt = texts(r.widget);
+  const at = txt.indexOf("CALENDAR");
+  check("a trip two weeks out makes the band, dated, beside tomorrow's bill",
+    same(txt.slice(at + 1, at + 5), ["Tomorrow · All day", "Rent Due", "Sat, Nov 14 · All day", "Drive to La Crosse"]), JSON.stringify(txt.slice(at + 1, at + 5)));
 }
 
 // ─── 3c. the large widget fits the phone it's on ─────────────────────────────

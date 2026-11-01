@@ -47,8 +47,9 @@ opens the Plan tab (`/?plan`).
 
 ### The band: calendar and a note
 
-The large widget ends with a band. **Calendar** is the Calendar tab's own events
-for the next week — two beside a note, three on their own — with repeating ones
+The large widget ends with a band. **Calendar** is the Calendar tab's next events,
+looking a month ahead (dated once they're more than a week out) — two beside a
+note, three on their own — with repeating ones
 expanded on the phone exactly as the tab expands them in your browser (a copy of
 `src/lib/recurrence.js`, held to the original by the smoke). An event already
 under way stays listed until it ends.

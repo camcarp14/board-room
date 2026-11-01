@@ -606,11 +606,12 @@ async function loadPlan(supabase, userId) {
 // phone runs where the Calendar tab does. So the widget expands, with its own copy
 // of recurrence.js held to the original by scripts/plan-widget-smoke.mjs, and this
 // only narrows what it is sent: every series (a weekly meeting begun in 2024 is
-// still this week's), and each one-off that touches the next two weeks, with two
-// days' slack either side for wherever the phone places it.
+// still this week's), and each one-off that touches the next month — the widget
+// looks 30 days ahead — with two days' slack either side for wherever the phone
+// places it.
 const PLAN_EVENT_COLS = "id,title,start_time,end_time,all_day,category,rrule,exdates";
 function planEventsWindow(rows, now = Date.now()) {
-  const lo = now - 2 * 86400000, hi = now + 16 * 86400000;
+  const lo = now - 2 * 86400000, hi = now + 32 * 86400000;
   return (rows || [])
     .filter((e) => {
       if (!e || !e.start_time) return false;
