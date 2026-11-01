@@ -129,3 +129,17 @@ stays simple. Tweak the markup freely — TRMNL's CSS framework is at
   in `markets.js`-style quotes or grocery items) and add a column to the Liquid.
 - **Health check:** `POST {"ping":true}` to the function reports whether the env
   vars are set, matching the other Board Room functions.
+
+## If the screen stops updating
+
+TRMNL's calendar plugin **stops refreshing after a single failed fetch** and
+waits for you: the plugin page says *"Plugin experiencing an error"* (hover the
+calendar for the reason, e.g. *"ICS feed returned HTTP 502"*). Once the cause is
+fixed, press **Reset Health** on that page and the refresh resumes.
+
+The feed answers 502 only when it couldn't read your data. The one cause seen
+so far: Supabase occasionally refusing a request that carried the new
+`sb_secret_` key as a Bearer token (PostgREST `PGRST303`). The function now
+sends that key on `apikey` only and retries that refusal once — see
+`keyOnlyFetch` in `trmnl.js`. If it happens again, Netlify's function log and
+Supabase's API logs (`/rest/v1/…` with status 401) will show which read failed.

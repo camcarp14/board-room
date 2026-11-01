@@ -168,6 +168,43 @@ try {
   delete globalThis.__fakeSupabase;
 }
 
+// ─── 1b. the service key, sent the way the gateway wants it ──────────────────
+// The TRMNL froze for five days on one refused read: supabase-js sent the new
+// sb_secret_ key as a Bearer too, PostgREST refused the swapped token (PGRST303),
+// the ICS view answered 502, and TRMNL halted its refresh. Supabase's logs that
+// week: 2 of 342 Bearer-carrying requests refused, 0 of 1,687 sent apikey-only.
+{
+  check("trmnl.js exports keyOnlyFetch for this smoke", typeof fn.keyOnlyFetch === "function");
+  const calls = [];
+  const stub = (answers) => async (input, init) => {
+    const h = new Headers(init.headers);
+    calls.push({ auth: h.get("Authorization"), apikey: h.get("apikey"), signal: init.signal instanceof AbortSignal });
+    const a = answers.shift() || {};
+    return new Response(a.body ?? "[]", { status: a.status ?? 200, headers: a.headers ?? {} });
+  };
+  const NEW = "sb_secret_smoke0123456789", OLD = "eyJhbGciOiJIUzI1NiJ9.smoke.sig";
+  const asSupabaseSends = (k) => ({ headers: { apikey: k, Authorization: `Bearer ${k}` } });
+  const URL_ = "https://smoke.invalid/rest/v1/upkeep_items";
+
+  await fn.keyOnlyFetch(NEW, stub([{}]))(URL_, asSupabaseSends(NEW));
+  check("a new secret key goes on apikey only — no Bearer", calls[0]?.auth === null && calls[0]?.apikey === NEW);
+  check("…and every try carries a deadline", calls[0]?.signal === true);
+  calls.length = 0;
+  await fn.keyOnlyFetch(OLD, stub([{}]))(URL_, asSupabaseSends(OLD));
+  check("a legacy JWT key keeps both headers, as apiKeyHeaders does", calls[0]?.auth === `Bearer ${OLD}` && calls[0]?.apikey === OLD);
+  calls.length = 0;
+  const r = await fn.keyOnlyFetch(NEW, stub([{ status: 401, headers: { "proxy-status": "PostgREST; error=PGRST303" } }, { status: 200 }]))(URL_, asSupabaseSends(NEW));
+  check("a PGRST303 refusal is tried once more, and the second answer stands", calls.length === 2 && r.status === 200);
+  calls.length = 0;
+  const r2 = await fn.keyOnlyFetch(NEW, stub([{ status: 401, headers: { "proxy-status": "PostgREST; error=PGRST303" } }, { status: 401, headers: { "proxy-status": "PostgREST; error=PGRST303" } }, { status: 200 }]))(URL_, asSupabaseSends(NEW));
+  check("…once, not forever", calls.length === 2 && r2.status === 401);
+  calls.length = 0;
+  const r3 = await fn.keyOnlyFetch(NEW, stub([{ status: 401, headers: { "proxy-status": "PostgREST; error=PGRST301" } }, { status: 200 }]))(URL_, asSupabaseSends(NEW));
+  check("…and no other refusal is retried: a wrong key stays a wrong key", calls.length === 1 && r3.status === 401);
+  check("the handler's client sends through it",
+    /createClient\(process\.env\.SUPABASE_URL, process\.env\.SUPABASE_SERVICE_ROLE_KEY, \{\s*db: \{ schema: "boardroom" \},\s*global: \{ fetch: keyOnlyFetch\(process\.env\.SUPABASE_SERVICE_ROLE_KEY\) \},/.test(code(read("netlify/functions/trmnl.js"))));
+}
+
 // ─── 2. the widget, against the Plan tab, all weekend long ───────────────────
 const WIDGET = "scriptable/board-room-plan.js";
 const SITE = "https://board-room.netlify.app";

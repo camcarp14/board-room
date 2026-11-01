@@ -655,6 +655,37 @@ function renderPlan({ plan = null, updated_at = null, events, eventsError, note,
   return out;
 }
 
+// ── the service key, sent the way the gateway wants it ───────────────────────
+// THE KEY GOES ON `apikey` ONLY, the rule every other function here follows
+// (apiKeyHeaders in note-capture.js and its kin; audit-fixes-smoke checks them).
+// supabase-js sends its key twice — as `apikey` and as `Authorization: Bearer` —
+// and a new sb_secret_ key is not a JWT: the gateway swaps it for one, and now and
+// then PostgREST refuses the swapped token (PGRST303, a 401).
+//
+// That is what stopped the TRMNL on 26 Oct 2026. One of the ICS view's four reads
+// came back 401, the feed answered 502, and TRMNL's calendar plugin halted its
+// refresh until someone pressed Reset Health — five days of a frozen screen from
+// one refused read. Supabase's own logs the week it was found: 2 of 342 requests
+// carrying the Bearer refused, 0 of 1,687 sent apikey-only.
+//
+// So for an sb_ key the Bearer is dropped, and — because one refusal costs a
+// device that cannot ask again — a PGRST303 that still arrives is retried once.
+// A legacy JWT key keeps both headers, exactly as apiKeyHeaders does. Each try
+// gets its own eight-second deadline (functions-smoke: no fetch without one) —
+// a read that hangs would otherwise hold the device's answer until Netlify kills
+// the function, which TRMNL counts as an error just the same.
+function keyOnlyFetch(key, f = (...a) => fetch(...a)) {
+  const newKey = /^sb_(secret|publishable)_/.test(String(key || ""));
+  return async (input, init = {}) => {
+    const headers = new Headers(init.headers || {});
+    if (newKey && headers.get("Authorization") === `Bearer ${key}`) headers.delete("Authorization");
+    const go = () => f(input, { ...init, headers, signal: init.signal || AbortSignal.timeout(8000) });
+    const res = await go();
+    if (res.status === 401 && /PGRST303/.test(res.headers.get("proxy-status") || "")) return go();
+    return res;
+  };
+}
+
 // ── handler ──────────────────────────────────────────────────────────────────
 exports.handler = async (event) => {
   const q = event.queryStringParameters || {};
@@ -688,7 +719,10 @@ exports.handler = async (event) => {
     return jsonRes(500, { success: false, error: "SUPABASE_SERVICE_ROLE_KEY isn't set in Netlify yet — see the comment at the top of this file." });
   }
 
-  const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SERVICE_ROLE_KEY, { db: { schema: "boardroom" } });
+  const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SERVICE_ROLE_KEY, {
+    db: { schema: "boardroom" },
+    global: { fetch: keyOnlyFetch(process.env.SUPABASE_SERVICE_ROLE_KEY) },
+  });
   // BOARD_USER_ID last, never null: a null here read EVERY user's rows with the
   // service key, which is harmless only for as long as the shared project has
   // exactly one account.
@@ -778,6 +812,7 @@ exports.orderNotes = orderNotes;
 exports.onBriefNote = onBriefNote;
 exports.resolveNoteTitle = resolveNoteTitle;
 exports.loadNotes = loadNotes;
+exports.keyOnlyFetch = keyOnlyFetch;
 exports.renderPlan = renderPlan;
 exports.loadPlan = loadPlan;
 exports.planEventsWindow = planEventsWindow;
